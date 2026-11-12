@@ -137,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     parser.add_argument("--longhouse-cli", type=Path, default=None)
     parser.add_argument("--viewport", default="1280x900", help="WIDTHxHEIGHT; 390x844 for a phone")
+    parser.add_argument("--text-before-tool", action="store_true", help="the tool scenario streams a sentence before the tool call")
+    parser.add_argument("--engine-delay-ms", type=int, default=0, help="delay each way between engine and host")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     if not (ROOT / "web" / "dist" / "index.html").exists():
@@ -155,6 +157,8 @@ def main(argv: list[str] | None = None) -> int:
                 engine=args.engine,
                 longhouse_cli=args.longhouse_cli,
                 warm_session=True,
+                text_before_tool=args.text_before_tool,
+                engine_delay_ms=args.engine_delay_ms,
                 observer_factory=lambda s: BrowserObserver(s, args.out_dir, (width, height)),
                 log=lambda m: print(m, file=sys.stderr, flush=True),
             )
