@@ -337,7 +337,7 @@ class RuntimeApi:
         self.workspace = workspace.resolve() if workspace is not None else None
         self.pinned_sessions: list[str] = []
         self.known_sessions: set[str] = set()  # every id this cell's lanes ever read
-        self.legacy_stream = False  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter)
+        self.legacy_stream = True  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter); the live-kinds scenarios set False so thinking frames arrive
 
     def _headers(self, browser: bool) -> dict[str, str]:
         headers = {"Accept": "application/json", "User-Agent": "longhouse-terminal-truth/1"}
