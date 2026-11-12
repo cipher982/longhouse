@@ -104,7 +104,7 @@ class WorkflowTests(unittest.TestCase):
         rerun_make = next(line for line in text.splitlines() if "make terminal-truth" in line and "$again.json" in line)
         self.assertIn("< /dev/null", rerun_make)
 
-    def test_the_mutation_tests_run_weekly_on_their_own_queue_and_never_on_a_push_or_the_nightly(self):
+    def test_the_mutation_tests_run_weekly_alone_and_never_on_a_push_or_the_nightly(self):
         text = WORKFLOW.read_text()
         crons = re.findall(r'^\s+- cron: "([^"]+)"$', text, re.M)
         self.assertEqual(len(crons), 2, crons)
@@ -114,9 +114,9 @@ class WorkflowTests(unittest.TestCase):
         on_weekly = f"github.event.schedule == '{weekly}'"
         # Mutation tests: the weekly schedule or a hand-started run that asks for them. Nothing else.
         self.assertIn(f"TT_MUTATIONS: ${{{{ ({on_weekly} || inputs.mutations) && '1' || '0' }}}}", text)
-        # They queue apart from the passes, so about 85 minutes of rebuilds never holds a push run.
+        # One queue for every run: a mutation run beside a pass on the same host disk made the pass fail (2026-11-12).
         group = next(line for line in text.splitlines() if line.strip().startswith("group:"))
-        self.assertIn(f"({on_weekly} || inputs.mutations) && '-mutations' || ''", group)
+        self.assertEqual(group.strip(), "group: terminal-truth-${{ github.repository }}")
         # Only a hand-started run keeps the long limit; the weekly run is the only schedule above an hour.
         limit = next(line for line in text.splitlines() if line.strip().startswith("timeout-minutes:"))
         self.assertIn(
