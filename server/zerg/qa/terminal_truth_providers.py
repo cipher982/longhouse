@@ -201,12 +201,14 @@ class ProviderDriver:
             raise ValueError(f"{self.provider}: a driver must name text that proves a ready prompt (an empty string checks nothing)")
 
 
-# Codex's shell sandbox in Helm. On macOS it is Seatbelt and read-only works. On Linux it is bubblewrap, which an
-# unprivileged container cannot start: on the CI runner every command the scripted model asked for failed with
-# "bwrap: Failed to make / slave: Permission denied", so the tool result never carried the tool token and the second
-# message of the two-message scenario was never served (codex/helm, 4 of 8 markers, run 43296023463, 2026-11-12).
-# The only commands here are the `echo` lines of the scripted model, in a scratch home, so Linux runs them unsandboxed.
-CODEX_HELM_SANDBOX = "read-only" if sys.platform == "darwin" else "danger-full-access"
+# Codex's shell sandbox. On macOS it is Seatbelt and works. On Linux it is bubblewrap, which an unprivileged container
+# cannot start: on the CI runner every command the scripted model asked for failed with "bwrap: Failed to make / slave:
+# Permission denied", so the tool result never carried the tool token and the second message of the two-message scenario
+# was never served (codex/helm, 4 of 8 markers, runs 43296023463 and 43306143036, 2026-11-12). The only commands in these
+# cells are the scripted model's `echo` lines, in a scratch home, so where the sandbox cannot start they run without it.
+CODEX_SANDBOX_WORKS = sys.platform == "darwin"
+# Helm starts Codex through `longhouse codex`, which takes this flag and no other sandbox setting.
+CODEX_HELM_FLAGS: tuple[str, ...] = () if CODEX_SANDBOX_WORKS else ("--dangerously-bypass-approvals-and-sandbox",)
 
 PROVIDERS: dict[str, ProviderDriver] = {
     "claude": ProviderDriver(
@@ -220,7 +222,16 @@ PROVIDERS: dict[str, ProviderDriver] = {
         "codex",
         "codex",
         "Ask Codex",
-        lambda b, w: [str(b), "--no-alt-screen", "--ask-for-approval", "never", "--sandbox", CODEX_HELM_SANDBOX, "-C", str(w)],
+        lambda b, w: [
+            str(b),
+            "--no-alt-screen",
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "read-only" if CODEX_SANDBOX_WORKS else "danger-full-access",
+            "-C",
+            str(w),
+        ],
     ),
     "opencode": ProviderDriver(
         "opencode",

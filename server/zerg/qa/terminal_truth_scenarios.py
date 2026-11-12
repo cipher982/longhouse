@@ -34,6 +34,7 @@ from zerg.qa.terminal_truth_lanes import TeeProxy
 from zerg.qa.terminal_truth_lanes import host_publishes
 from zerg.qa.terminal_truth_lanes import lane_stats
 from zerg.qa.terminal_truth_lanes import pacing_error
+from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import ScratchRuntimeHost
@@ -354,6 +355,8 @@ def run_cell_in(
                 helm_argv += ["--model", "longhouse-mock/mock-model"]
             if provider == "pi":
                 helm_argv += ["--provider", "longhouse-mock", "--model", "mock-model"]
+            if provider == "codex":
+                helm_argv += CODEX_HELM_FLAGS
             t0 = time.monotonic()
             session = ProviderPtySession.start(
                 argv=driver.argv(Path(binary), workspace) if mode == "shadow" else helm_argv,

@@ -44,6 +44,7 @@ from zerg.qa.terminal_truth_lanes import StreamWatcher
 from zerg.qa.terminal_truth_lanes import WokenStateReader
 from zerg.qa.terminal_truth_lanes import host_publishes
 from zerg.qa.terminal_truth_lanes import woken_view_lags
+from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import _version
@@ -629,6 +630,8 @@ def _helm_argv(cli: Path, provider: str, workspace: Path, binary: str, url: str,
         argv += ["--model", "longhouse-mock/mock-model"]
     if provider == "pi":
         argv += ["--provider", "longhouse-mock", "--model", "mock-model"]
+    if provider == "codex":
+        argv += CODEX_HELM_FLAGS
     return argv
 
 
