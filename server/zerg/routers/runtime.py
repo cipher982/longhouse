@@ -40,6 +40,7 @@ from zerg.services.session_live_previews import admit_preview_publication
 from zerg.services.session_live_previews import bounded_tail
 from zerg.services.session_live_previews import is_claude_print_live_text_event
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
+from zerg.services.session_live_previews import preview_kind
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
 from zerg.services.session_live_previews import reasoning_step
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -540,12 +541,14 @@ def _live_transcript_preview_payload(event, *, now: datetime, thinking_text: str
     thread_id = str(payload.get("thread_id") or event.thread_id or "unknown-thread").strip() or "unknown-thread"
     turn_id = str(payload.get("turn_id") or "unknown-turn").strip() or "unknown-turn"
     cursor_seq = str(seq) if seq is not None else "unknown-seq"
+    tool_name = (str(payload.get("tool_name") or "").strip() or "exec") if is_tool else None
     return {
         "event_id": seq or 0,
         "text": text,
         "role": "assistant",
-        "tool_name": (str(payload.get("tool_name") or "").strip() or "exec") if is_tool else None,
-        "kind": "tool" if is_tool else "reply",
+        "tool_name": tool_name,
+        # A subagent-spawning tool (Codex's collaboration call) is a subagent, like every other provider's.
+        "kind": preview_kind(tool_name) if is_tool else "reply",
         "tool_input_json": {"command": command} if is_tool else None,
         "tool_output_text": bounded_tail(output) if is_tool and output else None,
         "tool_call_id": str(payload.get("item_id") or "") or None,

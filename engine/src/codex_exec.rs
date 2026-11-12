@@ -445,6 +445,8 @@ enum ProjectedAppServerEvent {
     },
     ToolItem {
         item_id: String,
+        /// The tool's real name (`shell`, `spawn_agent`, an MCP tool); the host derives the preview kind from it.
+        tool_name: String,
         command: String,
         output: String,
         status: String,
@@ -529,6 +531,7 @@ impl AppServerProjection {
                     },
                     ProjectedAppServerEvent::ToolItem {
                         item_id,
+                        tool_name: "shell".to_string(),
                         command,
                         output: String::new(),
                         status: "inProgress".to_string(),
@@ -552,6 +555,7 @@ impl AppServerProjection {
                 *seq += 1;
                 vec![ProjectedAppServerEvent::ToolItem {
                     item_id: item_id.to_string(),
+                    tool_name: "shell".to_string(),
                     command: self.tool_command.get(item_id).cloned().unwrap_or_default(),
                     output: output.clone(),
                     status: "inProgress".to_string(),
@@ -593,6 +597,7 @@ impl AppServerProjection {
                 let seq = *seq;
                 let projected = ProjectedAppServerEvent::ToolItem {
                     item_id: item_id.clone(),
+                    tool_name: "shell".to_string(),
                     command,
                     output,
                     status,
@@ -654,6 +659,51 @@ impl AppServerProjection {
                 self.item_text.remove(&item_id);
                 self.item_seq.remove(&item_id);
                 vec![projected]
+            }
+            "item/started" | "item/completed"
+                if params
+                    .get("item")
+                    .and_then(crate::codex_live_kinds::live_tool_item)
+                    .is_some() =>
+            {
+                // A tool that is not a shell command (a subagent, an MCP call, a file edit): the same live
+                // item, under the tool's own name.
+                let Some(item) = params.get("item") else {
+                    return Vec::new();
+                };
+                let Some(tool) = crate::codex_live_kinds::live_tool_item(item) else {
+                    return Vec::new();
+                };
+                let completed = method == "item/completed";
+                let seq = self.tool_seq.entry(tool.item_id.clone()).or_default();
+                *seq += 1;
+                let seq = *seq;
+                let mut events = Vec::new();
+                if completed {
+                    self.tool_seq.remove(&tool.item_id);
+                } else {
+                    let item_type = json_string(params, &["item", "type"]).unwrap_or_default();
+                    events.push(ProjectedAppServerEvent::Phase {
+                        phase: "running",
+                        tool_name: Some(app_server_tool_token(&item_type, params)),
+                    });
+                }
+                events.push(ProjectedAppServerEvent::ToolItem {
+                    status: json_string(params, &["item", "status"]).unwrap_or_else(|| {
+                        if completed { "completed" } else { "inProgress" }.to_string()
+                    }),
+                    output: if completed {
+                        crate::codex_live_kinds::item_output(item).unwrap_or_default()
+                    } else {
+                        String::new()
+                    },
+                    item_id: tool.item_id,
+                    tool_name: tool.name,
+                    command: tool.summary,
+                    seq,
+                    completed,
+                });
+                events
             }
             "turn/started" => vec![ProjectedAppServerEvent::Phase {
                 phase: "thinking",
@@ -3603,14 +3653,17 @@ impl CodexExecRuntimeSink {
                 }
                 ProjectedAppServerEvent::ToolItem {
                     item_id,
+                    tool_name,
                     command,
                     output,
                     status,
                     seq,
                     completed,
                 } => {
-                    self.post_live_tool_item(&item_id, &command, &output, &status, seq, completed)
-                        .await;
+                    self.post_live_tool_item(
+                        &item_id, &tool_name, &command, &output, &status, seq, completed,
+                    )
+                    .await;
                 }
             }
         }
@@ -3619,6 +3672,7 @@ impl CodexExecRuntimeSink {
     async fn post_live_tool_item(
         &self,
         item_id: &str,
+        tool_name: &str,
         command: &str,
         output: &str,
         status: &str,
@@ -3643,6 +3697,7 @@ impl CodexExecRuntimeSink {
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "item_id": item_id,
+                "tool_name": tool_name,
                 "command": command,
                 "output": output,
                 "status": status,
@@ -5280,6 +5335,34 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn a_subagent_call_is_a_live_tool_item_named_spawn_agent() {
+        let mut projection = AppServerProjection::default();
+        let started = projection.apply(&json!({"method":"item/started","params":{"item":{"id":"c1","type":"collabAgentToolCall","tool":"spawnAgent","prompt":"count the files","status":"inProgress"}}}));
+        assert!(started.contains(&ProjectedAppServerEvent::Phase {
+            phase: "running",
+            tool_name: Some("spawnAgent".to_string()),
+        }));
+        assert!(started.contains(&ProjectedAppServerEvent::ToolItem {
+            item_id: "c1".to_string(),
+            tool_name: "spawn_agent".to_string(),
+            command: "count the files".to_string(),
+            output: String::new(),
+            status: "inProgress".to_string(),
+            seq: 1,
+            completed: false,
+        }));
+        let done = projection.apply(&json!({"method":"item/completed","params":{"item":{"id":"c1","type":"collabAgentToolCall","tool":"spawnAgent","prompt":"count the files","status":"completed"}}}));
+        assert!(matches!(
+            done.as_slice(),
+            [ProjectedAppServerEvent::ToolItem {
+                completed: true,
+                seq: 2,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
     fn real_app_server_shapes_keep_message_boundaries_and_failed_tools() {
         let mut projection = AppServerProjection::default();
         let events = [
@@ -5313,6 +5396,7 @@ for line in sys.stdin:
         }));
         assert!(projected.contains(&ProjectedAppServerEvent::ToolItem {
             item_id: "exec_a".to_string(),
+            tool_name: "shell".to_string(),
             command: "printf ok".to_string(),
             output: "parse error\n".to_string(),
             status: "failed".to_string(),

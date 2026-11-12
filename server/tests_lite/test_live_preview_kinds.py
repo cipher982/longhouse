@@ -307,3 +307,41 @@ def test_omp_print_task_event_with_live_text_is_a_subagent_not_a_reply() -> None
     event = _event("omp", "omp_print", "omp_print_stream", raw, seq=3, live_text="earlier reply text")
     cand = lp.live_preview_candidate_from_runtime_event(event, observation_id="o1")
     assert cand is not None and cand.kind == "subagent" and cand.preview_text == "TtSub"
+
+
+def test_codex_helm_tool_and_collab_items_are_a_tool_and_a_subagent_under_their_own_names() -> None:
+    sid = uuid4()
+
+    def helm(name: str, seq: int, **payload) -> RuntimeEventIngest:
+        return RuntimeEventIngest(
+            runtime_key=f"codex:{sid}",
+            session_id=sid,
+            provider="codex",
+            device_id="cinder",
+            source="codex_bridge_live",
+            kind="progress_signal",
+            occurred_at=NOW,
+            dedupe_key=f"b:{seq}",
+            payload={
+                "progress_kind": "console_live_tool_item",
+                "turn_id": "turn-1",
+                "item_id": f"i{seq}",
+                "tool_name": name,
+                "seq": seq,
+                **payload,
+            },
+        )
+
+    shell = runtime_router._live_transcript_preview_payload(helm("shell", 1, command="ls", output="a\nb", status="inProgress"), now=NOW)
+    assert shell and (shell["kind"], shell["tool_name"], shell["tool_output_text"], shell["tool_call_state"]) == (
+        "tool",
+        "shell",
+        "a\nb",
+        "running",
+    )
+    spawn = runtime_router._live_transcript_preview_payload(helm("spawn_agent", 2, command="count the files", status="inProgress"), now=NOW)
+    assert spawn and (spawn["kind"], spawn["tool_name"], spawn["text"]) == ("subagent", "spawn_agent", "count the files")
+    done = runtime_router._live_transcript_preview_payload(
+        helm("shell", 3, command="ls", output="a", status="completed", completed=True), now=NOW
+    )
+    assert done and done["tool_call_state"] == "completed"

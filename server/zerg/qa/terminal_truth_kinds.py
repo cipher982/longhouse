@@ -228,7 +228,24 @@ def plan_kind_cell(spec: CellSpec, mutation: str | None = None) -> KindPlan:
             turns[2] = {"id": f"{spec.key}:a", "match": f"TTRUTH{nonce}", "match_scope": scope, "pace": _pace(reply)}
         signals = [Signal("subagent_started", "subagent_started", _marker(spawn, 0))] + sub_signals + reply_signals
         ids = [f"{spec.key}:a", f"{spec.key}:sub", f"{spec.key}:b"]
-        return KindPlan(spec, nonce, turns, signals, prompt, ids, ("subagent_text", "reply"), SUB_TOKENS / SUB_RATE + 60)
+        groups = ("subagent_text", "reply")
+        if spec.provider == "codex":
+            # Codex's spawn_agent returns at once (`{"agent_id": ...}`) and the parent answers then; the child's result reaches the
+            # parent only as a notification after its turn, which asks the model for nothing. So the parent's turn is keyed on the
+            # spawn result, and delayed, so the stream still shows the spawn when the answer begins.
+            turns = [
+                {**t, "match": "agent_id", "match_scope": "any_input", "pace": _pace(dataclasses.replace(reply, initial_delay=2.0))}
+                if t["id"] == f"{spec.key}:b"
+                else t
+                for t in turns
+            ]
+            if spec.mode == "console":
+                # Codex interrupts a Console child when the parent's turn ends (its rollout ends `turn_aborted`, reason `interrupted`,
+                # before any model request), so the child writes nothing: only the spawn is measurable.
+                turns = [t for t in turns if t["id"] != f"{spec.key}:sub"]
+                signals = [s for s in signals if s.group != "subagent_text"]
+                ids, groups = [f"{spec.key}:a", f"{spec.key}:b"], ("reply",)
+        return KindPlan(spec, nonce, turns, signals, prompt, ids, groups, SUB_TOKENS / SUB_RATE + 60)
     raise ValueError(f"unknown scenario {scenario!r}")
 
 
@@ -774,7 +791,9 @@ def run_kind_cell_in(
         else:
             assert session is not None
             session.submit_line(plan.prompt)
-        final_marker = plan.group("reply")[-1].marker
+        final_marker = (plan.group("subagent_text") or plan.group("reply"))[
+            -1
+        ].marker  # the last thing the scenario writes  # Codex has no parent reply after a spawn
         events_lane = next(w for w in watchers if isinstance(w, LaneWatcher) and w.lane.name.startswith("events"))
         deadline = submitted + plan.max_seconds
         done_at: float | None = None
@@ -1301,6 +1320,9 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
     # Codex (2026-11-12): the bridge forwards reasoning, tool and subagent items; Console names its tools. Run Helm with --warm-session.
     ("codex/helm", "thinking"): ("thinking", "thinking"),
     ("codex/helm", "tool"): ("tool_started", "tool"),
+    ("codex/console", "tool"): ("tool_output", "tool"),
+    ("codex/helm", "subagent"): ("subagent_started", "subagent"),
+    ("codex/console", "subagent"): ("subagent_started", "subagent"),
 }
 
 
