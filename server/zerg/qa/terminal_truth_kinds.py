@@ -242,9 +242,17 @@ def plan_kind_cell(spec: CellSpec, mutation: str | None = None, *, text_before_t
         if spec.provider == "codex":
             # Codex's spawn_agent returns at once (`{"agent_id": ...}`) and the parent answers then; the child's result reaches the
             # parent only as a notification after its turn, which asks the model for nothing. So the parent's turn is keyed on the
-            # spawn result, and delayed, so the stream still shows the spawn when the answer begins.
+            # spawn result, and delayed, so the stream still shows the spawn when the answer begins. Every Codex spawn result
+            # has that key, so the turn also needs this cell's prompt in the request: two Codex cells share one scripted model
+            # in a run, and without it the second cell's parent got the first cell's answer (2026-11-13, twice in two runs).
             turns = [
-                {**t, "match": "agent_id", "match_scope": "any_input", "pace": _pace(dataclasses.replace(reply, initial_delay=2.0))}
+                {
+                    **t,
+                    "match": "agent_id",
+                    "match_also": f"TTRUTH{nonce}",
+                    "match_scope": "any_input",
+                    "pace": _pace(dataclasses.replace(reply, initial_delay=2.0)),
+                }
                 if t["id"] == f"{spec.key}:b"
                 else t
                 for t in turns
@@ -777,6 +785,7 @@ def run_kind_cell_in(
     anchor_marker = plan.group(ANCHOR_GROUP[spec.scenario])[0].marker
     # Read after the try: a cell that fails before the prompt has neither.
     streams_open, streams_wanted, stream_wait_s = 0, 0, 0.0
+    launched_listed = True
     woken_worst: dict[str, Any] | None = None
     try:
         if mode != "console":
@@ -825,6 +834,7 @@ def run_kind_cell_in(
         time.sleep(
             0.5
         )  # the facts lane reads a few idle baselines before the prompt: a state it shows later is the scenario's, not left over
+        launched_listed = api.wait_for_launched_session(STREAM_OPEN_WAIT_S)
         streams_open, streams_wanted, stream_wait_s = _wait_for_open_streams(api)
         if observer is not None:
             observer.before_submit(pas.host.url, api.session_ids(), plan)
@@ -837,9 +847,12 @@ def run_kind_cell_in(
         else:
             assert session is not None
             session.submit_line(plan.prompt)
-        final_marker = (plan.group("subagent_text") or plan.group("reply"))[
-            -1
-        ].marker  # the last thing the scenario writes  # Codex has no parent reply after a spawn
+        # The scenario is over when the scripted model has written everything it was scripted to write and the durable
+        # events carry the end of a message: the parent's reply, or the child's last words. Either, because not both
+        # always come: Codex's parent answers before its child finishes, and Claude's child text is never served, so
+        # waiting for that one marker held every Claude subagent cell to its 72 s deadline (2026-11-13).
+        last_markers = {group[-1].marker for group in (plan.group("subagent_text"), plan.group("reply")) if group}
+        model_markers = [s.marker for s in plan.signals if s.group in plan.model_groups]
         events_lane = next(w for w in watchers if isinstance(w, LaneWatcher) and w.lane.name.startswith("events"))
         deadline = submitted + plan.max_seconds
         done_at: float | None = None
@@ -850,7 +863,7 @@ def run_kind_cell_in(
                 if anchored is not None and now >= anchored + PRESS_AFTER_ANCHOR_S[spec.scenario]:
                     obs.press_t = now
                     session.write(key)
-            if done_at is None and final_marker in events_lane.first_seen:
+            if done_at is None and last_markers & set(events_lane.first_seen) and None not in pas.model.sent_times(model_markers).values():
                 done_at = now
             if done_at is not None and now > done_at + 5:
                 break
@@ -929,7 +942,13 @@ def run_kind_cell_in(
         out["sse_frames"] = [{**f, "t": round(f["t"] - submitted, 3)} for f in stream.frames]
         out["sse_event_counts"] = stream.event_counts
         # A frame published before the stream subscribed went to nobody: the host does not replay previews to a first connection.
-        out["stream_open_before_prompt"] = {"open": streams_open, "sessions": streams_wanted, "waited_s": round(stream_wait_s, 3)}
+        out["stream_open_before_prompt"] = {
+            "open": streams_open,
+            "sessions": streams_wanted,
+            "waited_s": round(stream_wait_s, 3),
+            "launched_session_listed": launched_listed,
+            "launched_session_waited_s": None if api.launched_listed_s is None else round(api.launched_listed_s, 3),
+        }
         out["lane_errors"] = {w.lane.name: w.errors for w in watchers if w.errors}
         out["file_scan_gap_s"] = files.resolution_s
         out["file_paths"] = sorted(set(files.first_path.values()))
@@ -959,6 +978,15 @@ def run_kind_cell_in(
                 False,
                 f"the host served {woken_worst['headline']!r} for {woken_worst['served_for_s']:.1f} s and a woken-only client {shown} "
                 f"({woken_worst['lag_s']:.1f} s behind, budget {WOKEN_STATE_BUDGET_S:.1f} s)",
+            )
+        )
+    if not launched_listed:
+        # The live frames go to the launched session; a cell that only ever saw the file's session would blame the host.
+        checks.append(
+            (
+                "the launched session was listed before the prompt",
+                False,
+                f"only a session discovered from the provider's file was listed after {STREAM_OPEN_WAIT_S:.0f} s",
             )
         )
     if streams_open < streams_wanted:
@@ -1428,6 +1456,15 @@ KIND_EXPECTATIONS: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 
+# Cells where a served state shown late is known and reported, not failed: cell -> why. Everywhere else a late state fails.
+# Read by the all-checks run (terminal_truth_parallel); the mutation tests have their own rule for it (judge_unmutated).
+KNOWN_LATE_STATE: dict[str, str] = {
+    "opencode/console": "OpenCode Console can take over 15 s to its first model output on a loaded machine; the host then changes "
+    "'Thinking' to 'Last observed thinking' by expiry and sends no frame, so a woken-only client shows the old state for about "
+    "2 s (control-plane docs/specs/terminal-truth-ci-gate.md, 'Mutation tests on the Linux runner', observation 1). Not fixed.",
+}
+
+
 def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
     """Did this cell's live item reach the stream, with the right kind, and where did it stop if not.
 
@@ -1485,6 +1522,41 @@ def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
         "stage": stage,
         "ok": stage == "-",
     }
+
+
+def kinds_verdict(result: dict[str, Any]) -> tuple[str, str | None, str]:
+    """(outcome, first failed stage, reason) of one live-kinds cell, judged by its published-kind check.
+
+    ``pass``: the scenario happened, its live item reached the stream under the right kind and every served state was shown.
+    ``fail`` names the first stage down the path that lost it: ``preflight`` (the scenario did not happen), one of
+    ``kinds_expectation``'s stages, or ``state_shown`` (the host served a state and woke nobody). ``measured``: the cell ran
+    and has no published-kind expectation. ``not_measured``: the provider has no such thing to run.
+    """
+
+    if result["outcome"] == "not_measured":
+        return "not_measured", None, str(result.get("reason", ""))
+    if result["outcome"] != "measured":
+        failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
+        reason = str(result.get("reason", ""))
+        if failed != [WOKEN_STATE_CHECK]:
+            return "fail", "preflight", reason
+        # The one failure that is about the product rather than the run: the host served a state and woke nobody. It is
+        # the last stage down the path. A live item that was lost or mislabelled upstream wakes nobody either, so when
+        # the published-kind check also fails, that stage is the first failure and the unshown state its consequence
+        # (codex-helm-thinking-as-reply on the runner, 2026-11-12: reasoning sent as the reply, "Thinking" never shown).
+        upstream = kinds_expectation({**result, "outcome": "measured"})
+        if upstream is not None and not upstream["ok"]:
+            return "fail", upstream["stage"], f"{json.dumps({k: upstream[k] for k in ('engine_posted', 'stream')})}; then {reason}"
+        intact = "" if upstream is None else f" (published-kind check ok: kinds on the stream {upstream.get('kinds_on_stream')})"
+        return "fail", "state_shown", f"{reason}{intact}"
+    check = kinds_expectation(result)
+    if check is None:
+        return "measured", None, "the cell has no published-kind expectation"
+    return (
+        ("pass" if check["ok"] else "fail"),
+        (None if check["ok"] else check["stage"]),
+        json.dumps({k: check[k] for k in ("engine_posted", "stream")}),
+    )
 
 
 def render_expectations(results: Sequence[dict[str, Any]]) -> str:

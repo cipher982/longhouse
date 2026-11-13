@@ -257,6 +257,9 @@ def load_script(path: Path) -> tuple[list[dict], str]:
         seen_ids.add(turn_id)
         if not isinstance(marker, str) or not marker:
             raise ValueError(f"turn {turn_id!r} needs a non-empty match marker")
+        also = turn.get("match_also")
+        if also is not None and (not isinstance(also, str) or not also):
+            raise ValueError(f"turn {turn_id!r} match_also must be a non-empty string")
         reply = turn.get("reply")
         if reply is not None and not isinstance(reply, str):
             raise ValueError(f"turn {turn_id!r} reply must be a string")
@@ -687,6 +690,10 @@ def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
         scope = turn.get("match_scope")
         haystack = any_user if scope == "any_user" else _all_input_text(payload) if scope == "any_input" else latest
         if turn["match"] not in haystack:
+            continue
+        # A marker that is not the cell's own (a provider's tool result, the same for every cell in the script) names
+        # the cell with a second one that must be somewhere in the request.
+        if turn.get("match_also") and turn["match_also"] not in _all_input_text(payload):
             continue
         reply = turn.get("reply")
         history = turn.get("reply_from_history")

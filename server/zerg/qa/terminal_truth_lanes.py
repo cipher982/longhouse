@@ -337,6 +337,8 @@ class RuntimeApi:
         self.workspace = workspace.resolve() if workspace is not None else None
         self.pinned_sessions: list[str] = []
         self.known_sessions: set[str] = set()  # every id this cell's lanes ever read
+        self.launched_sessions: set[str] = set()  # listed in the workspace WITH launch information: the session a launch made
+        self.launched_listed_s: float | None = None  # how long wait_for_launched_session waited for one
         self.subscribed_streams: set[str] = set()  # sessions whose workspace stream the host has subscribed (first workspace_changed seen)
         self.on_wake: Callable[[str], None] | None = None  # called with the session id for every workspace_changed frame
         self.legacy_stream = True  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter); the live-kinds scenarios set False so thinking frames arrive
@@ -380,10 +382,40 @@ class RuntimeApi:
             if status == 200:
                 for item in json.loads(body).get("sessions") or []:
                     cwd = item.get("cwd")
-                    if cwd and Path(str(cwd)).resolve() == self.workspace and str(item["id"]) not in ids:
-                        ids.append(str(item["id"]))
+                    if cwd and Path(str(cwd)).resolve() == self.workspace:
+                        if item.get("launch_surface"):
+                            self.launched_sessions.add(str(item["id"]))
+                        if str(item["id"]) not in ids:
+                            ids.append(str(item["id"]))
         self.known_sessions.update(ids)
         return ids
+
+    def wait_for_launched_session(self, timeout: float = 15.0) -> bool:
+        """For a cell found by its workspace, with a session already listed: wait until the LAUNCHED session is listed.
+
+        A Helm launch makes its session on the host at once, and the provider then writes a transcript file. Until the Machine
+        Agent's next periodic scan ties the two together, the list shows only a session discovered from that file, under the
+        provider's own id and with no launch information; the launched session then appears and the other goes. Live frames are
+        published on the launched session all along. Measured 2026-11-13 on a Linux bench, Codex Helm alone on a new host: the
+        file's session listed at 4.0 s, the launched one at 10.4 s, the file's gone at 10.6 s. A cell that subscribed to the
+        first and sent its prompt at 10.0 s lost a subagent start published 0.4 s later, and read it as a host drop.
+        Returns False when a session is listed and the launched one did not join it in time; True otherwise (also for a cell
+        with nothing listed yet, or found by id). The wait is kept in ``launched_listed_s``.
+        """
+
+        started = time.monotonic()
+        if self.workspace is None or self.pinned_sessions:
+            return True
+        while time.monotonic() - started < timeout:
+            with contextlib.suppress(Exception):
+                sessions = set(self.session_ids())
+                if not sessions:
+                    return True
+                if sessions & self.launched_sessions:
+                    self.launched_listed_s = time.monotonic() - started
+                    return True
+            time.sleep(0.05)
+        return False
 
     def wait_for_session_stream(self, timeout: float = 15.0) -> tuple[float | None, float | None]:
         """Wait for this cell's session to be listed and its workspace stream subscribed: (seconds to listed, seconds to subscribed).
@@ -404,7 +436,12 @@ class RuntimeApi:
                 sessions = set(self.session_ids())
                 if sessions and listed is None:
                     listed = time.monotonic() - started
-                if sessions and sessions <= self.subscribed_streams:
+                # Found by its workspace, the cell waits for the session the launch made, not only one found from a file
+                # (see wait_for_launched_session).
+                launched = self.workspace is None or bool(self.pinned_sessions) or bool(sessions & self.launched_sessions)
+                if launched and sessions and self.launched_listed_s is None:
+                    self.launched_listed_s = time.monotonic() - started
+                if sessions and launched and sessions <= self.subscribed_streams:
                     return listed, time.monotonic() - started
             time.sleep(0.05)
         return listed, None

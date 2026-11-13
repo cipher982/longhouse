@@ -57,6 +57,10 @@ class ScratchRuntimeHost:
         environment = scripted_model_profiles.credential_free_environment(reject_ambient_credentials=False)
         environment.update(HOME=str(home), LLM_DISABLED="1", SKIP_DEMO_SEED="1", ENVIRONMENT="test:e2e")
         scrub_ambient_environment(environment)
+        # Recall is not what a cell measures, and its embedding lane costs every host a 600 MB model, 0.9 GiB of memory
+        # and four inference threads from its first session (measured 2026-11-13: host 184 MiB without, 1.1 GiB with).
+        # ``--host-env LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED=0`` runs a host with it, as one shard of the gate does.
+        environment["LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED"] = "1"
         environment.update(self.extra_environment)
         executable = Path(sys.executable).parent / "longhouse-server"
         log = (self.root / "runtime-host.log").open("wb")

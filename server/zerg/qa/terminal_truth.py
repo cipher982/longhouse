@@ -22,6 +22,7 @@ schemas/managed_providers.yml, read through ``server/zerg/config/managed_provide
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import shutil
@@ -222,6 +223,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("--engine", type=Path, default=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or shutil.which("longhouse-engine") or ""))
     run.add_argument("--mode", action="append", choices=["shadow", "helm", "console"], help="repeatable; default console and helm")
+    run.add_argument(
+        "--cell",
+        action="append",
+        metavar="PROVIDER/MODE",
+        help="repeatable; run exactly these cells (instead of every --provider in every --mode)",
+    )
+    run.add_argument(
+        "--host-env",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="repeatable; added to the scratch Runtime Host's environment only (a mutation test shadows the server package this way)",
+    )
+    run.add_argument(
+        "--ready-text",
+        action="append",
+        default=[],
+        metavar="PROVIDER=TEXT",
+        help="repeatable; wait for this text instead of the driver's own ready text (negative control: a reworded prompt must fail preflight)",
+    )
     run.add_argument("--longhouse-cli", type=Path, default=None, help="native longhouse CLI for helm mode (default: PATH)")
     run.add_argument(
         "--cold-cell", default="first", help="the cell run alone in its own host, engine and HOME: 'first', 'none' or provider/mode"
@@ -277,6 +298,17 @@ def main(argv: list[str] | None = None) -> int:
         for provider in providers
         if mode == "shadow" or (provider, mode) in expectations
     ]
+    if args.cell:
+        named = [tuple(cell.split("/", 1)) for cell in args.cell]
+        unknown = [f"{p}/{m}" for p, m in named if m != "shadow" and (p, m) not in expectations]
+        if unknown or args.provider or args.mode:
+            parser.error(f"--cell names undeclared cells: {unknown}" if unknown else "--cell replaces --provider and --mode")
+        declared = [CellSpec(provider, mode, args.scenario) for provider, mode in named]
+    host_environment = dict(item.split("=", 1) for item in args.host_env) or None
+    drivers = dict(PROVIDERS)
+    for item in args.ready_text:
+        provider, _, text = item.partition("=")
+        drivers[provider] = dataclasses.replace(drivers[provider], ready_text=text)
     if args.scenario in SCENARIOS:  # the live-kinds scenarios: measurements with preflight checks, no budgets yet
         kind_results = run_kinds_suite(
             declared,
@@ -284,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
             longhouse_cli=args.longhouse_cli,
             keep=args.keep,
             ready_timeout=args.ready_timeout,
+            drivers=drivers,
+            host_environment=host_environment,
             mutation=args.kinds_mutation,
             old_client=args.old_client,
             warm_session=args.warm_session,
@@ -309,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
         cold=None if args.cold_cell == "none" else args.cold_cell,
         expectations=expectations,
         ready_timeout=args.ready_timeout,
+        drivers=drivers,
+        host_environment=host_environment,
         log=lambda message: print(message, file=sys.stderr, flush=True),
     )
     code = exit_code(results, declared)

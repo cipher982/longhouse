@@ -392,6 +392,7 @@ def run_cell_in(
             # The launch made the session; the prompt waits until a client could be attached to it (see wait_for_session_stream).
             listed_s, subscribed_s = api.wait_for_session_stream()
             result.timing["session_listed_after_ready_s"] = listed_s
+            result.timing["launched_session_listed_after_ready_s"] = api.launched_listed_s
             result.timing["stream_subscribed_after_ready_s"] = subscribed_s
         submitted = time.monotonic()
         if mode == "console":

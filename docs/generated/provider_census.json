@@ -2221,6 +2221,15 @@
       "path": "server/tests_lite/test_terminal_truth_kinds.py",
       "providers": [
         "claude",
+        "codex",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_terminal_truth_parallel.py",
+      "providers": [
+        "codex",
+        "omp",
         "pi"
       ]
     },
@@ -2564,6 +2573,18 @@
       "providers": [
         "claude",
         "codex",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/terminal_truth_parallel.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
         "omp",
         "opencode",
         "pi"

@@ -181,6 +181,27 @@ def test_any_input_scope_finds_a_gemini_tool_result_that_arrives_in_a_model_role
     assert server_module._scripted_plan(payload, turns).turn_id == "b"
 
 
+def test_two_codex_subagent_cells_in_one_script_each_get_their_own_answer_to_the_spawn_result() -> None:
+    def request(nonce: str) -> dict:
+        return {
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": f"TTRUTH{nonce} spawn a subagent"}]},
+                {"type": "function_call", "name": "spawn_agent", "call_id": "c1", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": '{"agent_id": "019a"}'},
+            ]
+        }
+
+    console = kinds.plan_kind_cell(CellSpec("codex", "console", "subagent"))
+    helm = kinds.plan_kind_cell(CellSpec("codex", "helm", "subagent"))
+    assert console.nonce != helm.nonce
+    turns = [*console.turns, *helm.turns]
+    assert server_module._scripted_plan(request(console.nonce), turns).turn_id == "codex/console:b"
+    assert server_module._scripted_plan(request(helm.nonce), turns).turn_id == "codex/helm:b"
+    for plan in (console, helm):
+        (b,) = [t for t in plan.turns if t["id"].endswith(":b")]
+        assert (b["match"], b["match_also"], b["match_scope"]) == ("agent_id", f"TTRUTH{plan.nonce}", "any_input")
+
+
 def test_a_responses_tool_offered_inside_a_namespace_is_found_and_called_with_its_namespace() -> None:
     payload = {
         "tools": [
@@ -277,6 +298,67 @@ def test_a_helm_reply_cell_holds_its_prompt_until_its_session_is_listed_and_subs
     finally:
         stop.set()
         _SseHandler.release.set()
+        host.shutdown()
+        host.server_close()
+
+
+class _ListHandler(http.server.BaseHTTPRequestHandler):
+    """A host whose session list is whatever the test put in ``sessions``."""
+
+    sessions: list[dict] = []
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server's name
+        body = json.dumps({"sessions": self.sessions}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+
+def test_a_helm_cell_waits_for_the_launched_session_and_not_only_the_one_found_from_the_providers_file(tmp_path) -> None:
+    """Bench, 2026-11-13, Codex Helm alone: the file's session was listed at 4.0 s and the launched one at 10.4 s; a prompt at
+    10.0 s lost the subagent start that the host published on the launched session."""
+
+    from_file = {"id": "thread-1", "cwd": str(tmp_path), "launch_surface": None}
+    launched = {"id": "managed-1", "cwd": str(tmp_path), "launch_surface": "terminal"}
+    elsewhere = {"id": "other", "cwd": str(tmp_path / "x"), "launch_surface": "terminal"}
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ListHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{host.server_address[1]}"
+        _ListHandler.sessions = [elsewhere]
+        assert RuntimeApi(url, "token", workspace=tmp_path).wait_for_launched_session(timeout=5)  # nothing of its own listed: no wait
+
+        _ListHandler.sessions = [from_file, elsewhere]
+        api = RuntimeApi(url, "token", workspace=tmp_path)
+        started = time.monotonic()
+        assert not api.wait_for_launched_session(timeout=0.3) and time.monotonic() - started >= 0.3
+        assert api.launched_listed_s is None
+
+        threading.Timer(0.2, lambda: setattr(_ListHandler, "sessions", [launched, from_file])).start()
+        assert api.wait_for_launched_session(timeout=5)
+        assert api.launched_listed_s is not None and 0.1 <= api.launched_listed_s < 3
+        assert api.launched_sessions == {"managed-1"}
+
+        pinned = RuntimeApi(url, "token", workspace=tmp_path)
+        pinned.pinned_sessions = ["console-1"]  # a Console cell is found by id and has nothing to wait for
+        _ListHandler.sessions = [from_file]
+        assert pinned.wait_for_launched_session(timeout=5)
+
+        # the reply cells' wait: listed is not enough while only the file's session is listed
+        _ListHandler.sessions = [from_file]
+        reply = RuntimeApi(url, "token", workspace=tmp_path)
+        reply.subscribed_streams = {"thread-1", "managed-1"}
+        listed, subscribed = reply.wait_for_session_stream(timeout=0.3)
+        assert listed is not None and subscribed is None
+        _ListHandler.sessions = [launched]
+        listed, subscribed = reply.wait_for_session_stream(timeout=5)
+        assert subscribed is not None and reply.launched_listed_s is not None
+    finally:
         host.shutdown()
         host.server_close()
 

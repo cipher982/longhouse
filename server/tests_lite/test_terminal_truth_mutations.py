@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from zerg.qa import terminal_truth_kinds as kinds
 from zerg.qa import terminal_truth_mutations as mutations
+from zerg.qa.terminal_truth_kinds import WOKEN_STATE_CHECK
 from zerg.qa.terminal_truth_mutations import MUTATIONS
 
 
@@ -86,7 +88,7 @@ def test_a_row_that_is_not_ok_says_which_cell_went_wrong_and_why() -> None:
     baseline = {"check": "mutation x", "expected_stage": "kind", "baseline": "fail", "baseline_stage": "preflight",
                 "baseline_reason": "the provider\nnever became ready", "observed": "not run", "ok": False}  # fmt: skip
     assert mutations.why_not(baseline) == (
-        "the unmutated cell came out fail at preflight, so the mutated one was not run: the provider never became ready"
+        "the unmutated cell came out fail at preflight, so the mutation cannot be judged: the provider never became ready"
     )
     mutated = {"check": "mutation x", "expected_stage": "kind", "baseline": "pass", "observed_outcome": "fail",
                "observed_stage": "state_shown", "reason": "woke nobody", "ok": False}  # fmt: skip
@@ -182,7 +184,7 @@ def _run_one_engine_mutation(monkeypatch, tmp_path, results, expectation):
     monkeypatch.setattr(mutations, "_build_engine", lambda *a, **k: (tmp_path / "engine", tmp_path / "cli"))
     queue = list(results)
     monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [queue.pop(0)])
-    monkeypatch.setattr(mutations, "kinds_expectation", expectation)
+    monkeypatch.setattr(kinds, "kinds_expectation", expectation)
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
         engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[mutation.name],
@@ -194,8 +196,8 @@ def _run_one_engine_mutation(monkeypatch, tmp_path, results, expectation):
 
 _WOKEN_ONLY = {
     "outcome": "fail",
-    "reason": f"{mutations.WOKEN_STATE_CHECK}: the host served 'Thinking' for 10.5 s and a woken-only client never showed it",
-    "checks": [{"name": mutations.WOKEN_STATE_CHECK, "ok": False}],
+    "reason": f"{WOKEN_STATE_CHECK}: the host served 'Thinking' for 10.5 s and a woken-only client never showed it",
+    "checks": [{"name": WOKEN_STATE_CHECK, "ok": False}],
 }
 
 
@@ -273,7 +275,7 @@ def test_a_late_state_stops_the_one_mutation_that_is_about_that_stage(monkeypatc
     monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
     calls = []
     monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [calls.append(1) or _WOKEN_ONLY])
-    monkeypatch.setattr(mutations, "kinds_expectation", lambda _r: {"ok": True, "stage": "-", "engine_posted": "live", "stream": "live"})
+    monkeypatch.setattr(kinds, "kinds_expectation", lambda _r: {"ok": True, "stage": "-", "engine_posted": "live", "stream": "live"})
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
         engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[mutation.name],

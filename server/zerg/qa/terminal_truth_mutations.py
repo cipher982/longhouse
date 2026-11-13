@@ -24,19 +24,22 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import terminal_truth as tt
 from zerg.qa.scripted_model_server import parse_pacing
-from zerg.qa.terminal_truth_kinds import WOKEN_STATE_CHECK
-from zerg.qa.terminal_truth_kinds import kinds_expectation
+from zerg.qa.terminal_truth_kinds import kinds_verdict
 from zerg.qa.terminal_truth_kinds import run_kinds_suite
 
 REPO_ROOT = tt.REPO_ROOT
@@ -584,13 +587,20 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None, ti
     )
 
 
+BINARIES = ("longhouse-engine", "longhouse")
+
+
+def _build_env(**extra: str) -> dict[str, str]:
+    """The environment of an engine build: no hook URL or token reaches it."""
+
+    rust = Path.home() / ".rustup" / "toolchains" / "1.93.0-aarch64-apple-darwin" / "bin"
+    return tt.clean_environ(PATH=f"{rust}{os.pathsep}{os.environ['PATH']}", **extra)
+
+
 def _build_engine(worktree: Path, target: Path, out: Path) -> tuple[Path, Path]:
     """Build the engine and CLI of ``worktree`` into ``target`` (a clone of a warm cargo target) and copy both binaries to ``out``."""
 
-    rust = Path.home() / ".rustup" / "toolchains" / "1.93.0-aarch64-apple-darwin" / "bin"
-    env = tt.clean_environ(
-        LONGHOUSE_CARGO_TARGET_DIR=str(target), PATH=f"{rust}{os.pathsep}{os.environ['PATH']}"
-    )  # no hook URL or token reaches a build
+    env = _build_env(LONGHOUSE_CARGO_TARGET_DIR=str(target))
     _run([sys.executable, "scripts/build/generate_build_identity.py"], cwd=worktree, env=env)
     build = [
         sys.executable, "scripts/build/cargo.py", "exec", "--", "build", "--manifest-path", "engine/Cargo.toml",
@@ -599,9 +609,9 @@ def _build_engine(worktree: Path, target: Path, out: Path) -> tuple[Path, Path]:
     lock = shutil.which("lockf")
     _run([lock, "/tmp/agents/longhouse-heavy-build.lock", *build] if lock else build, cwd=worktree, env=env)
     out.mkdir(parents=True, exist_ok=True)
-    for name in ("longhouse-engine", "longhouse"):
+    for name in BINARIES:
         shutil.copy2(target / "ci-test" / name, out / name)
-    return out / "longhouse-engine", out / "longhouse"
+    return out / BINARIES[0], out / BINARIES[1]
 
 
 def _clone_dir(source: Path, destination: Path) -> None:
@@ -615,6 +625,126 @@ def _clone_dir(source: Path, destination: Path) -> None:
         destination.mkdir(parents=True)
 
 
+# What a mutated engine binary is made from: the engine sources and the two directories its `include_str!` reaches
+# (server/tests_lite/test_terminal_truth_mutations.py fails when an include leaves these), the compiler and the build flags.
+ENGINE_INPUT_DIRS = ("engine", "config", "schemas")
+BUILD_FLAGS = "--profile ci-test --features qa-fault-injection --bin longhouse-engine --bin longhouse"
+
+
+def engine_inputs_digest(repo_root: Path = REPO_ROOT, flags: str = BUILD_FLAGS) -> str:
+    """One hash of everything an engine binary is built from at HEAD (the scratch worktree is a checkout of HEAD).
+
+    The engine sources and what they embed, the build wrapper, the compiler, the build flags and the release version the
+    binary reports. Not the commit: a binary built from the same inputs at an earlier commit is the same engine with an
+    older build label, which the scratch host records and does not act on.
+    """
+
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "HEAD", "--", *ENGINE_INPUT_DIRS, "scripts/build"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    rustc = subprocess.run(["rustc", "--version"], capture_output=True, text=True, check=False, env=_build_env()).stdout.strip()
+    version = re.search(r'^version\s*=\s*"([^"]+)"', (repo_root / "server" / "pyproject.toml").read_text(), re.M)
+    return hashlib.sha256(f"{tree}\n{rustc}\n{flags}\n{version.group(1) if version else ''}\n".encode()).hexdigest()
+
+
+def mutated_engine_key(mutation: Mutation, inputs_digest: str) -> str:
+    edit = f"{inputs_digest}\0{mutation.file}\0{mutation.old}\0{mutation.new}"
+    return hashlib.sha256(edit.encode()).hexdigest()[:24]
+
+
+def build_mutated_engines(
+    selected: Sequence[Mutation], *, cache: Path, cargo_target: Path, log: Callable[[str], None] = lambda _m: None
+) -> tuple[dict[str, tuple[Path, Path]], dict[str, Any]]:
+    """Every engine mutation's binaries, from ``cache`` when the engine's inputs and the edit are unchanged, built otherwise.
+
+    A mutated binary depends on the engine sources at HEAD and on its one edit, so a push that does not touch the engine
+    rebuilds nothing. Returns (name -> (engine, cli), {"hits", "built", "seconds", "inputs_digest"}). Entries of other
+    input digests are deleted: the cache holds one engine version.
+    """
+
+    started = time.monotonic()
+    digest = engine_inputs_digest()
+    cache.mkdir(parents=True, exist_ok=True)
+    engines: dict[str, tuple[Path, Path]] = {}
+    keys = {m.name: mutated_engine_key(m, digest) for m in selected if m.side == "engine"}
+    missing = [m for m in selected if m.side == "engine" and not all((cache / keys[m.name] / b).is_file() for b in BINARIES)]
+    worktree = SCRATCH / "worktree"
+    if missing:
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        try:
+            if not worktree.exists():
+                _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
+            _clone_dir(cargo_target.resolve(), SCRATCH / "target")
+            for m in missing:
+                if all((cache / keys[m.name] / b).is_file() for b in BINARIES):
+                    continue  # the same edit as a mutation built a moment ago (one defect, tested on two cells)
+                t0 = time.monotonic()
+                path = worktree / m.file
+                path.write_text(mutated_text(m, path.read_text()))
+                staging = cache / f".{keys[m.name]}.{os.getpid()}"
+                shutil.rmtree(staging, ignore_errors=True)
+                try:
+                    _build_engine(worktree, SCRATCH / "target", staging)
+                finally:
+                    _run(["git", "checkout", "--", "."], cwd=worktree)
+                shutil.rmtree(cache / keys[m.name], ignore_errors=True)
+                staging.rename(cache / keys[m.name])  # a reader sees a whole entry or none
+                log(f"built {m.name} in {time.monotonic() - t0:.0f} s")
+        finally:
+            if worktree.exists():
+                subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False, env=tt.clean_environ())
+            shutil.rmtree(SCRATCH, ignore_errors=True)
+    for name, key in keys.items():
+        engines[name] = (cache / key / BINARIES[0], cache / key / BINARIES[1])
+    keep = set(keys.values())
+    # Only names this function writes (24 hex digits, or a dot-prefixed staging name) are ever removed, and only when
+    # every selected mutation is present: a narrowed run (--only) must not empty the cache of the rest.
+    if len(selected) == len(MUTATIONS):
+        for entry in cache.iterdir():
+            if entry.is_dir() and re.fullmatch(r"\.?[0-9a-f]{24}(\.\d+)?", entry.name) and entry.name not in keep:
+                shutil.rmtree(entry, ignore_errors=True)
+    built = len({keys[m.name] for m in missing})
+    stats = {
+        "hits": len(set(keys.values())) - built,
+        "built": built,
+        "seconds": round(time.monotonic() - started, 1),
+        "inputs_digest": digest,
+    }
+    return engines, stats
+
+
+def prepare_server_copy(mutation: Mutation, copy: Path) -> Path:
+    """A patched copy of the server package for one server-side mutation; returns the PYTHONPATH entry for the scratch host."""
+
+    shutil.rmtree(copy, ignore_errors=True)
+    # The host finds config/ relative to the package, so the copy keeps the repository's layout.
+    shutil.copytree(tt.SERVER_ROOT / "zerg", copy / "server" / "zerg", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(REPO_ROOT / "config", copy / "config")
+    target_file = copy / "server" / "zerg" / Path(mutation.file).relative_to("server/zerg")
+    target_file.write_text(mutated_text(mutation, target_file.read_text()))
+    return copy / "server"
+
+
+def judge_unmutated(mutation: Mutation, verdict: tuple[str, str | None, str]) -> tuple[str, str | None, str, str | None]:
+    """The unmutated cell as this mutation needs it: (outcome, stage, reason, state finding or None).
+
+    A mutation is judged on the stage it puts a defect in. When the only thing wrong with the unmutated cell is a served
+    state a woken-only client showed late, and the mutation is not about that stage, the item's path is intact and the
+    mutation can be judged; the late state is kept as a finding of its own. (Runner, 2026-11-12: OpenCode Console took
+    19 s to its first model output, "Thinking" expired at 15 s with no frame, and three mutations about reasoning and
+    tool output could not be run.)
+    """
+
+    outcome, stage, reason = verdict
+    if mutation.scenario and outcome == "fail" and stage == "state_shown" and "state_shown" not in mutation.stages:
+        return "pass", None, "", reason
+    return outcome, stage, reason, None
+
+
 def _verdict(results: list[tt.CellResult]) -> tuple[str, str | None, str]:
     cell = results[0]
     return cell.outcome, cell.first_failed_stage, (cell.reason or "").strip()
@@ -626,7 +756,7 @@ def why_not(row: dict[str, Any]) -> str:
     if row.get("note"):
         return str(row["note"])
     if row.get("baseline", "pass") != "pass":
-        said = f"the unmutated cell came out {row['baseline']} at {row.get('baseline_stage') or '-'}, so the mutated one was not run"
+        said = f"the unmutated cell came out {row['baseline']} at {row.get('baseline_stage') or '-'}, so the mutation cannot be judged"
         reason = row.get("baseline_reason")
     else:
         wanted = "a pass" if row["expected_stage"] == "(pass)" else f"a failure at {row['expected_stage']}"
@@ -634,6 +764,32 @@ def why_not(row: dict[str, Any]) -> str:
         reason = row.get("reason")
     first_line = " ".join(str(reason or "no reason recorded").split())
     return f"{said}: {first_line[:600]}"
+
+
+def render_rows(rows: Sequence[dict[str, Any]]) -> list[str]:
+    """The mutation table, then a line for each row that is not ok (NO), each late state an unmutated cell showed
+    (FINDING) and each unmutated cell that needed a second try (RETRIED)."""
+
+    lines = ["| check | cell | baseline | expected | observed | stage | ok |", "|---|---|---|---|---|---|---|"]
+    for row in rows:
+        notes = [note for note, on in (("second try", row.get("baseline_retried")), ("state finding", row.get("state_finding"))) if on]
+        baseline = f"{row.get('baseline', '-')}{' (' + ', '.join(notes) + ')' if notes else ''}"
+        lines.append(
+            f"| {row['check']} | {row['cell']} | {baseline} | {row['expected_stage']} | "
+            f"{row.get('observed_outcome', row.get('observed'))} | {row.get('observed_stage') or '-'} | {'yes' if row['ok'] else 'NO'} |"
+        )
+    for row in rows:
+        if not row["ok"]:
+            lines.append(f"NO {row['check']}: {why_not(row)}")
+    # Not misses: the gate caught the defect. They are what the unmutated cells showed on the way.
+    for row in rows:
+        if row.get("state_finding"):
+            lines.append(f"FINDING {row['cell']}, unmutated: {' '.join(str(row['state_finding']).split())[:600]}")
+        if row.get("baseline_retried") and row.get("baseline") == "pass":
+            lines.append(
+                f"RETRIED {row['check']}: the unmutated cell failed once at {' '.join(row['baseline_first_failure'].split())[:600]}"
+            )
+    return lines
 
 
 def run_mutations(args: argparse.Namespace) -> int:
@@ -673,28 +829,10 @@ def run_mutations(args: argparse.Namespace) -> int:
             last_kinds["sse_frames"] = [
                 {k: f.get(k) for k in ("t", "kind", "tool_name", "text_len", "text_tail")} for f in result["sse_frames"][:200]
             ]
-        if result["outcome"] != "measured":
-            failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
-            reason = str(result.get("reason", ""))
-            if failed != [WOKEN_STATE_CHECK]:
-                return "fail", "preflight", reason
-            # The one failure that is about the product rather than the run: the host served a state and woke nobody. It is
-            # the last stage down the path. A live item that was lost or mislabelled upstream wakes nobody either, so when
-            # the published-kind check also fails, that stage is the first failure and the unshown state its consequence
-            # (codex-helm-thinking-as-reply on the runner, 2026-11-12: reasoning sent as the reply, "Thinking" never shown).
-            upstream = kinds_expectation({**result, "outcome": "measured"})
-            if upstream is not None and not upstream["ok"]:
-                return "fail", upstream["stage"], f"{json.dumps({k: upstream[k] for k in ('engine_posted', 'stream')})}; then {reason}"
-            intact = "" if upstream is None else f" (published-kind check ok: kinds on the stream {upstream.get('kinds_on_stream')})"
-            return "fail", "state_shown", f"{reason}{intact}"
-        check = kinds_expectation(result)
-        if check is None:
+        outcome, stage, reason = kinds_verdict(result)
+        if outcome in {"measured", "not_measured"}:
             return "fail", "preflight", "the cell has no published-kind expectation"
-        return (
-            ("pass" if check["ok"] else "fail"),
-            (None if check["ok"] else check["stage"]),
-            json.dumps({k: check[k] for k in ("engine_posted", "stream")}),
-        )
+        return outcome, stage, reason
 
     def cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tt.CellResult:
         result = tt.run_suite([spec], pace=extra.pop("pace", pace), engine=engine, longhouse_cli=cli, expectations=expectations, **extra)[0]
@@ -719,19 +857,8 @@ def run_mutations(args: argparse.Namespace) -> int:
                 )
 
             def judged_unmutated() -> tuple[str, str | None, str, dict[str, Any] | None]:
-                """The unmutated cell as this mutation needs it: (outcome, stage, reason, state finding).
-
-                A mutation is judged on the stage it puts a defect in. When the only thing wrong with the unmutated cell is
-                a served state a woken-only client showed late, and the mutation is not about that stage, the item's path
-                is intact and the mutation can be judged; the late state is kept as a finding of its own. (Runner,
-                2026-11-12: OpenCode Console took 19 s to its first model output, "Thinking" expired at 15 s with no frame,
-                and three mutations about reasoning and tool output could not be run.)
-                """
-
-                outcome, stage, reason = unmutated()
-                if m.scenario and outcome == "fail" and stage == "state_shown" and "state_shown" not in m.stages:
-                    return "pass", None, "", {"reason": reason, "evidence": dict(last_kinds)}
-                return outcome, stage, reason, None
+                outcome, stage, reason, finding = judge_unmutated(m, unmutated())
+                return outcome, stage, reason, ({"reason": finding, "evidence": dict(last_kinds)} if finding else None)
 
             baseline_outcome, baseline_stage, baseline_reason, state_finding = judged_unmutated()
             first_failure = ""
@@ -760,19 +887,11 @@ def run_mutations(args: argparse.Namespace) -> int:
                 continue
             started = time.monotonic()
             if m.side == "server":
-                copy = SCRATCH / f"server-{m.name}"
-                shutil.rmtree(copy, ignore_errors=True)
-                # The host finds config/ relative to the package, so the copy keeps the repository's layout.
-                shutil.copytree(tt.SERVER_ROOT / "zerg", copy / "server" / "zerg", ignore=shutil.ignore_patterns("__pycache__"))
-                shutil.copytree(REPO_ROOT / "config", copy / "config")
-                target_file = copy / "server" / "zerg" / Path(m.file).relative_to("server/zerg")
-                target_file.write_text(mutated_text(m, target_file.read_text()))
+                shadow = {"PYTHONPATH": str(prepare_server_copy(m, SCRATCH / f"server-{m.name}"))}
                 if m.scenario:
-                    mutated_kinds = kinds_cell(
-                        spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")}, **m.run_options
-                    )
+                    mutated_kinds = kinds_cell(spec, base_engine, base_cli, host_environment=shadow, **m.run_options)
                 else:
-                    mutated = cell(spec, base_engine, base_cli, host_environment={"PYTHONPATH": str(copy / "server")})
+                    mutated = cell(spec, base_engine, base_cli, host_environment=shadow)
             elif args.skip_engine:
                 row.update(observed="skipped", ok=False, note="--skip-engine")
                 record(row)
@@ -814,25 +933,7 @@ def run_mutations(args: argparse.Namespace) -> int:
         if worktree.exists():
             subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False, env=tt.clean_environ())
         shutil.rmtree(SCRATCH, ignore_errors=True)
-    print("| check | cell | baseline | expected | observed | stage | ok |")
-    print("|---|---|---|---|---|---|---|")
-    for row in rows:
-        notes = [note for note, on in (("second try", row.get("baseline_retried")), ("state finding", row.get("state_finding"))) if on]
-        baseline = f"{row.get('baseline', '-')}{' (' + ', '.join(notes) + ')' if notes else ''}"
-        print(
-            f"| {row['check']} | {row['cell']} | {baseline} | {row['expected_stage']} | "
-            f"{row.get('observed_outcome', row.get('observed'))} | {row.get('observed_stage') or '-'} | {'yes' if row['ok'] else 'NO'} |"
-        )
-    for row in rows:
-        if not row["ok"]:
-            print(f"NO {row['check']}: {why_not(row)}")
-    # Not misses: the gate caught the defect. They are what the unmutated cells showed on the way, and this run is the
-    # only one that puts the live-kinds cells on the Linux runner, so they are printed where the misses are.
-    for row in rows:
-        if row.get("state_finding"):
-            print(f"FINDING {row['cell']}, unmutated: {' '.join(str(row['state_finding']).split())[:600]}")
-        if row.get("baseline_retried") and row.get("baseline") == "pass":
-            print(f"RETRIED {row['check']}: the unmutated cell failed once at {' '.join(row['baseline_first_failure'].split())[:600]}")
+    print("\n".join(render_rows(rows)))
     return 0 if rows and all(row["ok"] for row in rows) else 1
 
 
