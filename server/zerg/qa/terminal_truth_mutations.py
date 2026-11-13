@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -597,10 +598,14 @@ def _build_env(**extra: str) -> dict[str, str]:
     return tt.clean_environ(PATH=f"{rust}{os.pathsep}{os.environ['PATH']}", **extra)
 
 
-def _build_engine(worktree: Path, target: Path, out: Path) -> tuple[Path, Path]:
-    """Build the engine and CLI of ``worktree`` into ``target`` (a clone of a warm cargo target) and copy both binaries to ``out``."""
+def _build_engine(worktree: Path, target: Path, out: Path, *, incremental: bool = False) -> tuple[Path, Path]:
+    """Build the engine and CLI of ``worktree`` into ``target`` (a clone of a warm cargo target) and copy both binaries to ``out``.
 
-    env = _build_env(LONGHOUSE_CARGO_TARGET_DIR=str(target))
+    ``incremental`` keeps the compiler's incremental state in ``target``, so the next build there recompiles only what
+    changed since this one.
+    """
+
+    env = _build_env(LONGHOUSE_CARGO_TARGET_DIR=str(target), **({"CARGO_INCREMENTAL": "1"} if incremental else {}))
     _run([sys.executable, "scripts/build/generate_build_identity.py"], cwd=worktree, env=env)
     build = [
         sys.executable, "scripts/build/cargo.py", "exec", "--", "build", "--manifest-path", "engine/Cargo.toml",
@@ -656,8 +661,78 @@ def mutated_engine_key(mutation: Mutation, inputs_digest: str) -> str:
     return hashlib.sha256(edit.encode()).hexdigest()[:24]
 
 
+# Mutated engines are built this many at a time, each worker in its own worktree and its own copy of the cargo target,
+# with the compiler's incremental state kept in that copy: a worker's first build compiles the whole engine crate and
+# each one after it only what the next edit reaches. Measured 2026-11-13 on a Linux bench: 29 s for a plain rebuild,
+# 8 to 14 s for an incremental one. 33 plain rebuilds one after another were 18 minutes on the CI runner.
+BUILD_WORKERS = 3
+
+
+def _build_missing(todo: dict[str, Mutation], *, cache: Path, cargo_target: Path, workers: int | None, log: Callable[[str], None]) -> None:
+    """Build every entry of ``todo`` (cache key -> mutation) into ``cache``. The first failure stops the rest and is raised."""
+
+    count = max(1, min(workers or BUILD_WORKERS, len(todo)))
+    slots = [SCRATCH / f"w{i}" for i in range(count)]
+    queue = list(todo.items())
+    lock = threading.Lock()
+    failures: list[BaseException] = []
+
+    def build_all(slot: Path) -> None:
+        worktree = slot / "worktree"
+        while True:
+            with lock:
+                if failures or not queue:
+                    return
+                key, m = queue.pop(0)
+            t0 = time.monotonic()
+            path = worktree / m.file
+            staging = cache / f".{key}.{os.getpid()}"
+            shutil.rmtree(staging, ignore_errors=True)
+            try:
+                path.write_text(mutated_text(m, path.read_text()))
+                try:
+                    _build_engine(worktree, slot / "target", staging, incremental=True)
+                finally:
+                    _run(["git", "checkout", "--", "."], cwd=worktree)
+                shutil.rmtree(cache / key, ignore_errors=True)
+                staging.rename(cache / key)  # a reader sees a whole entry or none
+            except BaseException as exc:  # noqa: BLE001 - reported by the caller's thread
+                with lock:
+                    failures.append(exc)
+                return
+            log(f"built {m.name} in {time.monotonic() - t0:.0f} s")
+
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    try:
+        for slot in slots:
+            slot.mkdir(parents=True, exist_ok=True)
+            if not (slot / "worktree").exists():
+                _run(["git", "worktree", "add", "--detach", str(slot / "worktree"), "HEAD"], cwd=REPO_ROOT)
+            _clone_dir(cargo_target.resolve(), slot / "target")
+        log(f"{len(todo)} mutated engines to build, {count} at a time")
+        threads = [threading.Thread(target=build_all, args=(slot,), name=f"build-{slot.name}") for slot in slots]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if failures:
+            raise failures[0]
+    finally:
+        for slot in slots:
+            if (slot / "worktree").exists():
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(slot / "worktree")], cwd=REPO_ROOT, check=False, env=tt.clean_environ()
+                )
+        shutil.rmtree(SCRATCH, ignore_errors=True)
+
+
 def build_mutated_engines(
-    selected: Sequence[Mutation], *, cache: Path, cargo_target: Path, log: Callable[[str], None] = lambda _m: None
+    selected: Sequence[Mutation],
+    *,
+    cache: Path,
+    cargo_target: Path,
+    log: Callable[[str], None] = lambda _m: None,
+    workers: int | None = None,
 ) -> tuple[dict[str, tuple[Path, Path]], dict[str, Any]]:
     """Every engine mutation's binaries, from ``cache`` when the engine's inputs and the edit are unchanged, built otherwise.
 
@@ -672,32 +747,11 @@ def build_mutated_engines(
     engines: dict[str, tuple[Path, Path]] = {}
     keys = {m.name: mutated_engine_key(m, digest) for m in selected if m.side == "engine"}
     missing = [m for m in selected if m.side == "engine" and not all((cache / keys[m.name] / b).is_file() for b in BINARIES)]
-    worktree = SCRATCH / "worktree"
-    if missing:
-        SCRATCH.mkdir(parents=True, exist_ok=True)
-        try:
-            if not worktree.exists():
-                _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
-            _clone_dir(cargo_target.resolve(), SCRATCH / "target")
-            for m in missing:
-                if all((cache / keys[m.name] / b).is_file() for b in BINARIES):
-                    continue  # the same edit as a mutation built a moment ago (one defect, tested on two cells)
-                t0 = time.monotonic()
-                path = worktree / m.file
-                path.write_text(mutated_text(m, path.read_text()))
-                staging = cache / f".{keys[m.name]}.{os.getpid()}"
-                shutil.rmtree(staging, ignore_errors=True)
-                try:
-                    _build_engine(worktree, SCRATCH / "target", staging)
-                finally:
-                    _run(["git", "checkout", "--", "."], cwd=worktree)
-                shutil.rmtree(cache / keys[m.name], ignore_errors=True)
-                staging.rename(cache / keys[m.name])  # a reader sees a whole entry or none
-                log(f"built {m.name} in {time.monotonic() - t0:.0f} s")
-        finally:
-            if worktree.exists():
-                subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False, env=tt.clean_environ())
-            shutil.rmtree(SCRATCH, ignore_errors=True)
+    todo: dict[str, Mutation] = {}  # one build per edit: one defect tested on two cells is one binary
+    for m in missing:
+        todo.setdefault(keys[m.name], m)
+    if todo:
+        _build_missing(todo, cache=cache, cargo_target=cargo_target, workers=workers, log=log)
     for name, key in keys.items():
         engines[name] = (cache / key / BINARIES[0], cache / key / BINARIES[1])
     keep = set(keys.values())
@@ -707,7 +761,7 @@ def build_mutated_engines(
         for entry in cache.iterdir():
             if entry.is_dir() and re.fullmatch(r"\.?[0-9a-f]{24}(\.\d+)?", entry.name) and entry.name not in keep:
                 shutil.rmtree(entry, ignore_errors=True)
-    built = len({keys[m.name] for m in missing})
+    built = len(todo)
     stats = {
         "hits": len(set(keys.values())) - built,
         "built": built,

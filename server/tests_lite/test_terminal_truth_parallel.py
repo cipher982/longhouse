@@ -491,6 +491,70 @@ def test_cached_engines_are_not_rebuilt_and_a_full_run_drops_entries_of_another_
     assert not stale.exists() and unrelated.exists()
 
 
+def _fake_builds(monkeypatch, tmp_path, fail_on: str | None = None) -> list[tuple[str, str, bool]]:
+    """Replace git, the target copy and cargo; returns the list each build is recorded in as (slot, edited file, incremental)."""
+
+    engine_side = [m for m in mutations.MUTATIONS if m.side == "engine"]
+    monkeypatch.setattr(mutations, "engine_inputs_digest", lambda: "d" * 64)
+    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
+    monkeypatch.setattr(mutations.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(mutations, "_clone_dir", lambda _source, destination: destination.mkdir(parents=True))
+    builds: list[tuple[str, str, bool]] = []
+
+    def fake_run(command, *, cwd, env=None, timeout=0):
+        if command[:3] == ["git", "worktree", "add"]:
+            for m in engine_side:  # a checkout of HEAD: the files the mutations edit
+                target = Path(command[4]) / m.file
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text((mutations.REPO_ROOT / m.file).read_text())
+        elif command[:2] == ["git", "checkout"]:
+            for m in engine_side:
+                (Path(cwd) / m.file).write_text((mutations.REPO_ROOT / m.file).read_text())
+
+    def fake_build(worktree: Path, target: Path, out: Path, *, incremental: bool = False):
+        assert target == worktree.parent / "target" and target.is_dir()
+        edited = [m.file for m in engine_side if (worktree / m.file).read_text() != (mutations.REPO_ROOT / m.file).read_text()]
+        assert len(set(edited)) == 1, "a build saw another build's edit, or none"
+        builds.append((worktree.parent.name, edited[0], incremental))
+        if fail_on and fail_on == worktree.parent.name:
+            raise RuntimeError("cargo failed")
+        out.mkdir(parents=True)
+        for binary in mutations.BINARIES:
+            (out / binary).write_text("")
+        return out / mutations.BINARIES[0], out / mutations.BINARIES[1]
+
+    monkeypatch.setattr(mutations, "_run", fake_run)
+    monkeypatch.setattr(mutations, "_build_engine", fake_build)
+    return builds
+
+
+def test_missing_engines_are_built_once_per_edit_by_several_workers_each_in_its_own_worktree_and_target(monkeypatch, tmp_path) -> None:
+    builds = _fake_builds(monkeypatch, tmp_path)
+    engine_side = [m for m in mutations.MUTATIONS if m.side == "engine"]
+    distinct = {mutations.mutated_engine_key(m, "d" * 64) for m in engine_side}
+    logged: list[str] = []
+    engines, stats = mutations.build_mutated_engines(
+        list(mutations.MUTATIONS), cache=tmp_path / "cache", cargo_target=tmp_path / "t", log=logged.append
+    )
+    assert stats["built"] == len(builds) == len(distinct) < len(engine_side) and stats["hits"] == 0
+    assert {slot for slot, _file, _incremental in builds} <= {"w0", "w1", "w2"} and all(incremental for *_rest, incremental in builds)
+    assert set(engines) == {m.name for m in engine_side} and all(e.is_file() and c.is_file() for e, c in engines.values())
+    assert sorted(p.name for p in (tmp_path / "cache").iterdir()) == sorted(distinct)  # no staging directory is left
+    assert not (tmp_path / "tt-mut").exists()
+    assert f"{len(distinct)} mutated engines to build, 3 at a time" in logged
+
+    one, stats = mutations.build_mutated_engines(engine_side[:1], cache=tmp_path / "cache-2", cargo_target=tmp_path / "t")
+    assert stats["built"] == 1 and {slot for slot, *_rest in builds[len(distinct) :]} == {"w0"}  # one build, one worker
+
+
+def test_a_build_that_fails_stops_the_others_and_fails_the_run(monkeypatch, tmp_path) -> None:
+    builds = _fake_builds(monkeypatch, tmp_path, fail_on="w0")
+    with pytest.raises(RuntimeError, match="cargo failed"):
+        mutations.build_mutated_engines(list(mutations.MUTATIONS), cache=tmp_path / "cache", cargo_target=tmp_path / "t", workers=1)
+    assert len(builds) == 1 and not (tmp_path / "tt-mut").exists()
+    assert not any((tmp_path / "cache").iterdir())
+
+
 def test_everything_the_engine_embeds_at_build_time_is_inside_the_directories_the_cache_key_hashes() -> None:
     """The key hashes engine/, config/ and schemas/ at HEAD. An include that reaches elsewhere would let a stale binary through."""
 
