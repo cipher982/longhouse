@@ -418,6 +418,19 @@ function SessionDetailWorkspaceRoute({
   const usageLabel = displaySession.usage_latest?.label ?? null;
   const runtime = resolveSessionRuntimeState(displaySession);
   const headerState = getSessionHeaderState(displaySession, nowMs, turnStartMs);
+  const hasPlumbingWarning =
+    !streamConnected ||
+    displaySession.session_state.host.state !== "online" ||
+    displaySession.session_state.transcript.convergence === "lagging";
+  // When the session is live and plumbing is healthy, the bottom composer dock
+  // already owns the turn state and clock; keep the top-right quiet unless
+  // attention, uncertainty, idle/ended, control-only mode, or a plumbing issue
+  // needs top-level visibility.
+  const showHeaderState =
+    controlOnly ||
+    Boolean(composerDisabledReason) ||
+    headerState.tone !== "live" ||
+    hasPlumbingWarning;
   // Plain items, " · "-joined. Counts prefer the session's own totals so a
   // partly loaded transcript does not shrink them.
   const metaItems = buildSessionMetaItems({
@@ -737,12 +750,14 @@ function SessionDetailWorkspaceRoute({
           headerLeft={headerLeft}
           headerTarget={headerSlot}
           headerState={
-            <SessionStateBadge
-              tone={headerState.tone}
-              text={headerState.text}
-              ended={displaySession.session_state.disposition.state === "closed"}
-              testId="session-header-state"
-            />
+            showHeaderState ? (
+              <SessionStateBadge
+                tone={headerState.tone}
+                text={headerState.text}
+                ended={displaySession.session_state.disposition.state === "closed"}
+                testId="session-header-state"
+              />
+            ) : null
           }
           headerRight={headerRight}
           outline={sessionRail ? undefined : turnOutline}
@@ -832,6 +847,7 @@ function SessionDetailWorkspaceRoute({
                       displaySession.capabilities?.can_steer_active_turn,
                     )}
                     timelineItems={items}
+                    activityFeed={activityFeed ?? null}
                     onOutboxChange={setOutboxEntries}
                     composerHeaderAccessory={
                       <SessionRuntimeStrip

@@ -329,6 +329,7 @@ function mockWorkspaceState({
       selectKey: setSelectedKey,
       handleVisibleSelectionChange: vi.fn(),
       registerTimelineList: vi.fn(),
+      streamConnected: true,
     };
   });
 }
@@ -1799,5 +1800,48 @@ describe("SessionDetailPage — header affordances", () => {
     expect(
       screen.queryByTestId("session-branched-from"),
     ).not.toBeInTheDocument();
+  });
+
+  it("omits the redundant top-right header pill when live and plumbing is healthy", () => {
+    const now = Date.parse("2026-03-22T22:04:30Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const liveFacts = makeSessionStateFacts({
+        access: "live_control",
+        activity: "thinking",
+        observedAt: new Date(now - 10_000).toISOString(),
+        activityValidUntil: new Date(now + 60_000).toISOString(),
+      });
+      liveFacts.host.state = "online";
+      renderSessionDetailPageAt("/timeline/session-codex", {
+        session: makeSession({
+          ended_at: null,
+          capabilities: makeCapabilities({
+            live_control_available: true,
+            reply_to_live_session_available: true,
+          }),
+          session_state: liveFacts,
+        }),
+      });
+      expect(screen.queryByTestId("session-header-state")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the top-right header pill visible while live when host plumbing is degraded", () => {
+    const now = Date.parse("2026-03-22T22:04:30Z");
+    const liveFacts = makeSessionStateFacts({
+      access: "live_control",
+      activity: "thinking",
+      observedAt: new Date(now - 10_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    liveFacts.host.state = "offline";
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      session: makeSession({ session_state: liveFacts }),
+    });
+    expect(screen.getByTestId("session-header-state")).toBeInTheDocument();
   });
 });

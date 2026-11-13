@@ -4371,4 +4371,106 @@ describe("SessionChat composer status", () => {
     expect(composerHead()).toHaveTextContent("Activity uncertain");
     expect(composerHead()).not.toHaveTextContent("Using Shell");
   });
+
+  it("shows the shared working clock from observed_at even without timelineItems", () => {
+    const now = Date.now();
+    renderSessionChat(
+      {
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            access: "live_control",
+            interruptAvailable: true,
+            activity: "thinking",
+            observedAt: new Date(now - 65_000).toISOString(),
+            activityValidUntil: new Date(now + 60_000).toISOString(),
+          }),
+        }),
+      },
+      { queryClient: lockedClient() },
+    );
+
+    expect(composerHead()).toHaveTextContent("Thinking");
+    expect(composerHead()).toHaveTextContent("1:05");
+  });
+
+  it("flashes the composer leaf on real activityFeed frames and quiets it during delegated wait", async () => {
+    const { SessionActivityFeed } = await import("../../sessionActivityFeed");
+    const now = Date.now();
+    const feed = new SessionActivityFeed();
+
+    const { container, rerender } = renderSessionChat(
+      {
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            access: "live_control",
+            interruptAvailable: true,
+            activity: "thinking",
+            observedAt: new Date(now - 5_000).toISOString(),
+            activityValidUntil: new Date(now + 60_000).toISOString(),
+          }),
+        }),
+        activityFeed: feed,
+      },
+      { queryClient: lockedClient() },
+    );
+
+    const leaf = container.querySelector(
+      ".session-chat-composer__leaf",
+    ) as HTMLSpanElement;
+    expect(leaf).not.toBeNull();
+    expect(leaf.style.opacity).toBe("0.22");
+
+    const animateMock = vi.fn(() => ({ cancel: vi.fn() }));
+    leaf.animate = animateMock as unknown as typeof leaf.animate;
+
+    feed.push("state");
+    expect(animateMock).not.toHaveBeenCalled();
+
+    feed.push("tool_start");
+    expect(animateMock).toHaveBeenCalledTimes(1);
+
+    const delegatedFacts = makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+      activity: "thinking",
+      observedAt: new Date(now - 5_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    delegatedFacts.presentation.primary = {
+      key: "delegated_work",
+      tone: "live",
+      label: "Background · 1 command",
+      observed_at: new Date(now - 5_000).toISOString(),
+      valid_until: new Date(now + 60_000).toISOString(),
+    };
+    delegatedFacts.delegation = {
+      state: "active",
+      count: 1,
+      kinds: { bash: 1 },
+      items: [
+        {
+          id: "bg-1",
+          kind: "bash",
+          description: "Run ceiling probe",
+          status: "running",
+        },
+      ],
+      recent_items: [],
+      observed_at: new Date(now - 5_000).toISOString(),
+      valid_until: new Date(now + 60_000).toISOString(),
+      source: "native",
+    };
+
+    rerender(
+      <QueryClientProvider client={lockedClient()}>
+        <SessionChat
+          session={makeSession({ session_state: delegatedFacts })}
+          chatMode="managed_local"
+          activityFeed={feed}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(leaf.style.opacity).toBe("0");
+  });
 });

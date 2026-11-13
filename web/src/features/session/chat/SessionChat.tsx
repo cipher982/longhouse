@@ -9,6 +9,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -51,7 +52,9 @@ import {
   formatClockTime,
   formatElapsedClock,
   getSessionHeaderState,
+  getWorkingElapsedSeconds,
 } from "../sessionHeaderState";
+import type { SessionActivityFeed } from "../sessionActivityFeed";
 import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useWallClock } from "@/shared/hooks/useWallClock";
@@ -190,6 +193,8 @@ interface SessionChatProps {
    * user row with matching input identity arrives.
    */
   timelineItems?: TimelineItem[];
+  /** Live per-frame stream feed; drives the composer top-edge pulse on real packets. */
+  activityFeed?: SessionActivityFeed | null;
   /**
    * The runtime strip's evidence-disclosure icon. It
    * rides along the input's bottom edge, and in the head row while the
@@ -652,6 +657,7 @@ export function SessionChat({
   canQueueNextInput = false,
   canSteerActiveTurn = false,
   timelineItems,
+  activityFeed = null,
   composerHeaderAccessory,
   onOutboxChange,
 }: SessionChatProps) {
@@ -2522,8 +2528,8 @@ export function SessionChat({
     turnStartMs,
   );
   const composerElapsedSeconds =
-    composerState.tone === "live" && turnStartMs != null
-      ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))
+    composerState.tone === "live"
+      ? getWorkingElapsedSeconds(session, activityNowMs, turnStartMs)
       : null;
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
@@ -2532,6 +2538,52 @@ export function SessionChat({
     composerState.tone === "live"
       ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
       : null;
+  const leafRef = useRef<HTMLSpanElement | null>(null);
+  const leafAnimationRef = useRef<Animation | null>(null);
+  const leafLive = composerState.tone === "live" && !composerDelegatedDetail;
+
+  useLayoutEffect(() => {
+    const node = leafRef.current;
+    if (!node) return;
+    leafAnimationRef.current?.cancel();
+    leafAnimationRef.current = null;
+    if (!leafLive) {
+      node.style.opacity = "0";
+      node.style.boxShadow = "none";
+      return;
+    }
+    const reduceMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      node.style.opacity = "0.75";
+      node.style.boxShadow = "0 0 8px rgba(240, 138, 36, 0.45)";
+      return;
+    }
+    node.style.opacity = "0.22";
+    node.style.boxShadow = "none";
+    if (!activityFeed) return;
+    return activityFeed.subscribe((frame) => {
+      if (!frame || frame.kind === "state") return;
+      leafAnimationRef.current?.cancel();
+      if (typeof node.animate !== "function") return;
+      leafAnimationRef.current = node.animate(
+        [
+          { opacity: 0.22, boxShadow: "none" },
+          {
+            opacity: 1,
+            boxShadow: "0 0 12px 1px rgba(240, 138, 36, 0.6)",
+            offset: 0.14,
+          },
+          { opacity: 0.22, boxShadow: "none" },
+        ],
+        {
+          duration: 550,
+          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        },
+      );
+    });
+  }, [activityFeed, leafLive]);
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
   // decision; at rest on an open session the placeholder carries it ("Idle
@@ -2853,7 +2905,7 @@ export function SessionChat({
         onDragOver={attachmentInputEnabled ? handleComposerDragOver : undefined}
       >
         <>
-            <span className="session-chat-composer__leaf" aria-hidden="true" />
+            <span ref={leafRef} className="session-chat-composer__leaf" aria-hidden="true" />
             <span
               className="session-chat-composer__point session-chat-composer__point--tl"
               aria-hidden="true"

@@ -66,6 +66,26 @@ export function formatElapsedClock(totalSeconds: number): string {
  * "how long since the last observed tool signal", not "how long has this
  * turn run" — the three-clocks-disagree bug this parameter exists to avoid.
  */
+/**
+ * Shared working-elapsed seconds for both the session header and composer Nixie
+ * clock. Prefers `turnStartMs` when the thread has an active turn anchor, and
+ * falls back to `facts.activity.observed_at` so header and composer never
+ * disagree about whether a working clock exists.
+ */
+export function getWorkingElapsedSeconds(
+  session: Pick<AgentSession, "session_state">,
+  nowMs: number,
+  turnStartMs?: number | null,
+): number | null {
+  const facts = session.session_state;
+  const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
+  const anchorMs =
+    turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);
+  return anchorMs != null
+    ? Math.max(0, Math.floor((nowMs - anchorMs) / 1_000))
+    : null;
+}
+
 export function getSessionHeaderState(
   session: Pick<AgentSession, "session_state">,
   nowMs: number,
@@ -94,11 +114,7 @@ export function getSessionHeaderState(
     // Delegated work names the work, not the elapsed turn.
     const delegated = delegatedWorkLabel(facts, nowMs);
     if (delegated) return { tone: "live", text: delegated };
-    const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
-    const anchorMs = turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);
-    const elapsedSeconds = anchorMs != null
-      ? Math.max(0, Math.floor((nowMs - anchorMs) / 1_000))
-      : null;
+    const elapsedSeconds = getWorkingElapsedSeconds(session, nowMs, turnStartMs);
     // The server's label, verbatim; the client adds only the duration.
     const label = workingStatusLabel(facts);
     return {
