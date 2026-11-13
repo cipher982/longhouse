@@ -724,6 +724,10 @@ class UsageLatestResponse(BaseModel):
     effort: Optional[str] = Field(None, description="Reasoning effort the provider reported")
     context_tokens: int = Field(..., description="The provider's own context size after the last turn-ending response")
     context_window: Optional[int] = Field(None, description="The model's context window, when the provider reports it")
+    context_window_source: Optional[Literal["native", "derived"]] = Field(
+        None,
+        description="How context_window was resolved: 'native' when provider telemetry supplies it or 'derived' from a non-ambiguous lookup, else null",
+    )
     output_tokens: int = Field(..., description="Output tokens on that response")
     thinking_tokens: Optional[int] = Field(None, description="Thinking tokens on that response, when reported")
     at: datetime = Field(..., description="When that response was written")

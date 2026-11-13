@@ -201,11 +201,13 @@ def usage_latest(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
     model = payload.get("model") if isinstance(payload.get("model"), str) else None
     effort = payload.get("effort") if isinstance(payload.get("effort"), str) else None
     context_window = int(payload["context_window"]) if type(payload.get("context_window")) is int else None
+    context_window_source = "native" if context_window is not None else None
     return {
         "model": model,
         "effort": effort,
         "context_tokens": context_tokens,
         "context_window": context_window,
+        "context_window_source": context_window_source,
         "output_tokens": int(payload["output_tokens"]),
         "thinking_tokens": int(payload["thinking_tokens"]) if type(payload.get("thinking_tokens")) is int else None,
         "at": latest["at"].isoformat(),

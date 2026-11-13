@@ -477,6 +477,7 @@ struct APIUsageLatestResponse: Codable, Hashable, Sendable {
     let effort: String?
     let contextTokens: Int
     let contextWindow: Int?
+    let contextWindowSource: String?
     let outputTokens: Int
     let thinkingTokens: Int?
     let at: String

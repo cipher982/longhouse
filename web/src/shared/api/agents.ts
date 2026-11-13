@@ -73,6 +73,8 @@ export interface AgentSession {
     context_tokens: number;
     /** The model's context window when the provider reports it (Codex does). */
     context_window?: number | null;
+    /** How context_window was resolved: native provider telemetry or derived lookup. */
+    context_window_source?: "native" | "derived" | null;
     output_tokens: number;
     thinking_tokens?: number | null;
     at: string;

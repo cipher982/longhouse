@@ -10122,6 +10122,11 @@ export interface components {
              */
             context_window?: number | null;
             /**
+             * Context Window Source
+             * @description How context_window was resolved: 'native' when provider telemetry supplies it or 'derived' from a non-ambiguous lookup, else null
+             */
+            context_window_source?: ("native" | "derived") | null;
+            /**
              * Output Tokens
              * @description Output tokens on that response
              */
