@@ -18,7 +18,18 @@ Every shard's Runtime Host runs without the embedding lane (recall is not what a
 four inference threads per host) except the one shard named by ``EMBEDDING_SHARD``, so that a change which lets that
 lane hold up live delivery still fails a cell. ``--jobs`` is lowered to what the memory limit holds (``fit_jobs``).
 
-Scratch must be on a filesystem where ``fsync`` is cheap (the CI job points TT_SCRATCH_ROOT at its RAM-backed work
+Each shard has its own host because one host does not carry many cells. ``--shared-host`` starts one Runtime Host for
+the run and every shard's Machine Agent connects to it under its own device id, as machines do in production. Measured
+2026-11-13 on a Linux bench with the Codex and Claude cells (a cell asks its host about 20 reads a second): one shard at
+a time, every cell passed and a session read took 51 ms at the median and 117 ms at the 90th percentile; two at a
+time, every cell passed, 289 ms at the 90th and 15 requests refused; three at a time, 4 of 20 cells failed (state shown
+1 to 2.6 s late), 612 ms at the 90th and 22 refused; six at a time, 4 of 20 failed and 4 in 10 reads took over half a
+second. The refusals are the catalog's own limit of two reads at once ("catalog read lane is full"). The option stays as
+the way to measure what one host carries.
+
+Scratch paths must be short: Codex binds ``<home>/.longhouse/managed-local/codex-bridge/<uuid>.sock`` and a socket path
+holds 107 bytes on Linux, which leaves the home 27 (``short_scratch``; a CI run on 2026-11-13 failed every Codex Helm
+cell with a home of 34). Scratch must also be on a filesystem where ``fsync`` is cheap (the CI job points TT_SCRATCH_ROOT at its RAM-backed work
 volume). Measured 2026-11-13 on a Linux bench, six shards at once, twelve reply cells: on a busy NVMe three Console cells
 failed with the Machine Agent holding live text for 3 to 10 seconds; with scratch in memory all twelve passed with live
 medians of 0.02 to 0.21 s.
@@ -36,6 +47,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import hashlib
 import json
 import os
 import secrets
@@ -58,6 +70,7 @@ from zerg.qa.terminal_truth_kinds import KIND_EXPECTATIONS
 from zerg.qa.terminal_truth_kinds import KNOWN_LATE_STATE
 from zerg.qa.terminal_truth_kinds import SCENARIOS as KIND_SCENARIOS
 from zerg.qa.terminal_truth_kinds import kinds_verdict
+from zerg.qa.terminal_truth_providers import ScratchRuntimeHost
 from zerg.qa.terminal_truth_pty import REPO_ROOT
 from zerg.qa.terminal_truth_pty import SCRATCH_ROOT
 from zerg.qa.terminal_truth_scenarios import leaked_processes
@@ -81,6 +94,14 @@ EMBEDDING_LOADED = "Local embedder loaded"  # the host's log line once the model
 # and 2.16 GiB with the embedding lane. ``fit_jobs`` budgets a little more per shard and sets aside the lane's extra.
 SHARD_MEMORY_GIB = 1.5
 RESERVED_MEMORY_GIB = 1.5
+# With --shared-host a shard has no host of its own (0.9 GiB less) and the one host has the embedding model.
+SHARED_HOST_SHARD_MEMORY_GIB = 0.6
+SHARED_HOST_RESERVED_MEMORY_GIB = 2.5
+# The longest socket path a provider binds under its home is Codex's bridge: this much after the home directory.
+SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
+CODEX_SOCKET_TAIL = len("/.longhouse/managed-local/codex-bridge/") + 36 + len(".sock")
+HOME_TAIL = len("/00000/0000/h")  # under the scratch root: the shard's directory, the pass's, the home
+SCRATCH_ROOT_MAX = SOCKET_PATH_MAX - CODEX_SOCKET_TAIL - HOME_TAIL
 SHARD_TIMEOUT_S = 900.0
 EXTRA_CHECKS = {
     # name -> (what the table calls it, cell, flags, the verdict it must have)
@@ -292,6 +313,7 @@ class Runner:
         self._serial = 0
         self._token = secrets.token_hex(1)  # two runs on one machine never share a shard directory
         self.epoch = time.monotonic()
+        self.child_environment: dict[str, str] = {}  # TT_RUNTIME_HOST and its log, when the run has one host
         self.stopped = threading.Event()  # set by SIGINT, SIGTERM or SIGHUP: start nothing more
 
     def argv(self, shard: Shard, out: Path) -> list[str]:
@@ -325,7 +347,7 @@ class Runner:
             )
         scratch.mkdir(parents=True, exist_ok=True)
         out.unlink(missing_ok=True)
-        environment = {**os.environ, "TT_SCRATCH_ROOT": str(scratch)}
+        environment = {**os.environ, "TT_SCRATCH_ROOT": str(scratch), **self.child_environment}
         started = time.monotonic()
         note = ""
         with log_path.open("wb") as log_file:
@@ -396,14 +418,79 @@ def _host_log_has(scratch: Path, text: str) -> bool:
     return False
 
 
+def _log_has(log_path: Path, text: str) -> bool:
+    with contextlib.suppress(OSError):
+        return text.encode() in log_path.read_bytes()
+    return False
+
+
+def short_scratch(root: Path, tmp: Path = Path("/tmp")) -> tuple[Path, Path | None]:
+    """(the scratch root the shards are given, the symlink made for it or None).
+
+    A root that leaves a provider home longer than a socket path allows gets a short symlink in /tmp named by a hash of
+    the root, so two runs with different roots never share one. The caller removes the symlink; the files stay in the root.
+    """
+
+    if len(str(root)) <= SCRATCH_ROOT_MAX:
+        return root, None
+    alias = tmp / f"tt{hashlib.sha256(str(root).encode()).hexdigest()[:4]}"
+    if len(str(alias)) > SCRATCH_ROOT_MAX:
+        raise SystemExit(f"no scratch path short enough: {alias} is over {SCRATCH_ROOT_MAX} bytes (Codex's socket path limit)")
+    root.mkdir(parents=True, exist_ok=True)
+    if alias.is_symlink():
+        alias.unlink()
+    alias.symlink_to(root, target_is_directory=True)
+    return alias, alias
+
+
+def start_shared_host(root: Path, embed_model_dir: Path | None, *, embedding: bool = True) -> ScratchRuntimeHost:
+    """One Runtime Host for the whole run (--shared-host), with the embedding lane on as a real host has it."""
+
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    environment = {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "0" if embedding else "1"}
+    if embed_model_dir is not None:
+        environment["LONGHOUSE_EMBED_MODEL_DIR"] = str(embed_model_dir)
+    host = ScratchRuntimeHost(root, environment)
+    host.start()
+    return host
+
+
+def _memory_in_use() -> int | None:
+    """Bytes of this cgroup's memory that cannot be given back (cgroup v2): what ``memory_room_gib`` counts as used."""
+
+    with contextlib.suppress(OSError, ValueError, KeyError):
+        stat = dict(line.split() for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines())
+        return int(stat["anon"]) + int(stat["shmem"])
+    return None
+
+
+class MemoryWatch(threading.Thread):
+    """The most memory in use while the shards ran, for the record: the number ``SHARD_MEMORY_GIB`` is checked against."""
+
+    def __init__(self) -> None:
+        super().__init__(daemon=True, name="memory-watch")
+        self.before, self.peak = _memory_in_use(), 0
+        self._done = threading.Event()
+
+    def run(self) -> None:
+        while self.before is not None and not self._done.wait(2.0):
+            self.peak = max(self.peak, _memory_in_use() or 0)
+
+    def finish(self) -> dict[str, float] | None:
+        self._done.set()
+        if self.before is None or not self.peak:
+            return None
+        return {"before_gib": round(self.before / 2**30, 2), "peak_gib": round(self.peak / 2**30, 2)}
+
+
 def memory_room_gib() -> tuple[float, str] | None:
     """Memory this process tree may still take, and where the number came from. None when it cannot be read."""
 
     with contextlib.suppress(OSError, ValueError):
         limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
-        if limit != "max":
-            stat = dict(line.split() for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines())
-            used = int(stat["anon"]) + int(stat["shmem"])  # file cache is given back under pressure; these are not
+        used = _memory_in_use()  # file cache is given back under pressure; anonymous and shared memory are not
+        if limit != "max" and used is not None:
             return (int(limit) - used) / 2**30, f"a limit of {int(limit) / 2**30:.1f} GiB with {used / 2**30:.1f} GiB in use"
     with contextlib.suppress(OSError, ValueError, StopIteration):
         line = next(row for row in Path("/proc/meminfo").read_text().splitlines() if row.startswith("MemAvailable:"))
@@ -412,7 +499,9 @@ def memory_room_gib() -> tuple[float, str] | None:
     return None
 
 
-def fit_jobs(requested: int, room: tuple[float, str] | None) -> tuple[int, str]:
+def fit_jobs(
+    requested: int, room: tuple[float, str] | None, per_shard: float = SHARD_MEMORY_GIB, set_aside: float = RESERVED_MEMORY_GIB
+) -> tuple[int, str]:
     """Shards to run at once: what was asked for, or fewer when memory holds fewer. Never fewer than one.
 
     2026-11-13: eight shards at 2.3 GiB each ran on a shared server that was already short of memory, and the server
@@ -422,10 +511,10 @@ def fit_jobs(requested: int, room: tuple[float, str] | None) -> tuple[int, str]:
     if room is None:
         return max(1, requested), ""
     gib, source = room
-    fits = max(1, int((gib - RESERVED_MEMORY_GIB) / SHARD_MEMORY_GIB))
+    fits = max(1, int((gib - set_aside) / per_shard))
     if fits >= requested:
         return max(1, requested), ""
-    return fits, f"{fits} at a time, not {requested}: {source}, and a shard is budgeted {SHARD_MEMORY_GIB} GiB"
+    return fits, f"{fits} at a time, not {requested}: {source}, and a shard is budgeted {per_shard} GiB"
 
 
 def _kill_group(child: subprocess.Popen[bytes]) -> None:
@@ -608,10 +697,20 @@ def run_all(args: argparse.Namespace) -> int:
         mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
     )  # fmt: skip
     args.jobs_asked = args.jobs
-    args.jobs, why = fit_jobs(args.jobs, memory_room_gib())
+    budget = (
+        (SHARED_HOST_SHARD_MEMORY_GIB, SHARED_HOST_RESERVED_MEMORY_GIB) if args.shared_host else (SHARD_MEMORY_GIB, RESERVED_MEMORY_GIB)
+    )
+    args.jobs, why = fit_jobs(args.jobs, memory_room_gib(), *budget)
     if why:
         log(why)
-    runner = Runner(out_dir, SCRATCH_ROOT, log)
+    scratch_root, alias = short_scratch(SCRATCH_ROOT)
+    if alias is not None:
+        log(f"scratch is {alias}, a link to {SCRATCH_ROOT}: provider socket paths have to fit in {SOCKET_PATH_MAX} bytes")
+    runner = Runner(out_dir, scratch_root, log)
+    shared_host: ScratchRuntimeHost | None = None
+    args.shared_host_state = None
+    watch = MemoryWatch()
+    watch.start()
     by_name = {m.name: m for m in plan.selected}
 
     def run_shard(shard: Shard, attempt: str = "") -> ShardRun:
@@ -640,6 +739,11 @@ def run_all(args: argparse.Namespace) -> int:
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             previous_handlers[number] = signal.signal(number, on_signal)
     try:
+        if args.shared_host:
+            boot = time.monotonic()
+            shared_host = start_shared_host(scratch_root / "shared-host", args.embed_model_cache, embedding=args.embedding_lane)
+            runner.child_environment = {"TT_RUNTIME_HOST": shared_host.url, "TT_RUNTIME_HOST_LOG": str(shared_host.log_path)}
+            log(f"one Runtime Host for the run, up in {time.monotonic() - boot:.1f} s at {shared_host.url}")
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             runs = list(pool.map(run_shard, sorted(shards, key=lambda s: -s.weight)))
         for run in runs:
@@ -664,20 +768,37 @@ def run_all(args: argparse.Namespace) -> int:
         elif judged.wrong and args.rerun:
             log(f"{len(judged.wrong)} rows came out wrong, more than {MAX_RERUNS}: none is run again")
     finally:
+        args.memory = watch.finish()
         runner.kill_all()
+        if shared_host is not None:
+            args.shared_host_state = {
+                "exited_during_the_run": shared_host.process.poll() if shared_host.process is not None else None,
+                "embedding_model_loaded": _log_has(shared_host.log_path, EMBEDDING_LOADED),
+                "root": str(SCRATCH_ROOT / "shared-host"),
+            }
+            shared_host.stop()
+        if alias is not None:
+            with contextlib.suppress(OSError):
+                alias.unlink()
         shutil.rmtree(copies_root, ignore_errors=True)
         for number, handler in previous_handlers.items():
             signal.signal(number, handler)
     args.stopped = runner.stopped.is_set()
+    host_exit = (args.shared_host_state or {}).get("exited_during_the_run")
+    if host_exit is not None:
+        log(f"the run's Runtime Host exited before the run ended (status {host_exit}): the run fails")
+    args.ok = judged.ok and host_exit is None
     kept = _write(args, plan, judged, rows, runs, reruns, builds, shards, parallel_s, time.monotonic() - started)
+    if args.shared_host_state and args.shared_host_state["root"] not in kept:
+        shutil.rmtree(args.shared_host_state["root"], ignore_errors=True)
     print(render(plan, judged, rows, reruns))
     wall = time.monotonic() - started
     print(
-        f"\nterminal truth, all checks: {'PASS' if judged.ok else 'FAIL'} "
+        f"\nterminal truth, all checks: {'PASS' if args.ok else 'FAIL'} "
         f"({len(plan.units)} cells, {len(judged.mutation_rows)} mutation checks, {len(shards)} shards {args.jobs} at a time, "
         f"{wall:.0f} s; one after another the shards are {sum(r.seconds for r in runs):.0f} s; {len(kept)} scratch kept)"
     )
-    return 0 if judged.ok else 1
+    return 0 if args.ok else 1
 
 
 def _all_units(plan: Plan) -> dict[str, Unit]:
@@ -725,14 +846,24 @@ def _write(
         (out_dir / "mutations.json").write_text(json.dumps(table, indent=2) + "\n")
     for run in runs:
         if not run.keep:  # a provider process on its way out can write into its HOME after the first removal
-            shutil.rmtree(run.scratch, ignore_errors=True)
-    kept = [str(run.scratch) for run in runs if run.keep]
+            shutil.rmtree(SCRATCH_ROOT / run.scratch.name, ignore_errors=True)
+    # By the scratch root's own name: a short link the run made for it (``short_scratch``) is gone by now.
+    kept = [str(SCRATCH_ROOT / run.scratch.name) for run in runs if run.keep]
+    host = getattr(args, "shared_host_state", None)
+    if host and (kept or host["exited_during_the_run"] is not None):
+        kept.append(host["root"])  # the host's log is the other half of every kept shard's evidence
     fleet = {
-        "state": "success" if judged.ok else "failure",
+        "state": "success" if getattr(args, "ok", judged.ok) else "failure",
         # False only for the whole gate: every scenario, provider and mode, every mutation test, the gate's stream.
         "stopped": getattr(args, "stopped", False),
         "narrowed": bool(
-            args.scenario or args.provider or args.mode or args.only or not args.mutations or (args.tokens, args.rate) != (100, 20.0)
+            args.scenario
+            or args.provider
+            or args.mode
+            or args.only
+            or not args.mutations
+            or (args.tokens, args.rate) != (100, 20.0)
+            or getattr(args, "shared_host", False)
         ),
         "reruns_allowed": bool(args.rerun),
         "jobs": args.jobs,
@@ -747,6 +878,10 @@ def _write(
             ),
             None,
         ),
+        # With --shared-host: whether the run's one host was still up at the end and whether its embedding model loaded.
+        "shared_host": host,
+        # Memory in use (anonymous and shared, as fit_jobs counts it) before the shards started and at its highest.
+        "memory": getattr(args, "memory", None),
         "wall_s": round(wall_s, 1),
         "parallel_phase_s": round(parallel_s, 1),
         "one_after_another_s": round(sum(r.seconds for r in runs), 1),
@@ -784,6 +919,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--longhouse-cli", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 4, 8), help="shards running at once")
+    parser.add_argument(
+        "--shared-host",
+        action="store_true",
+        help="one Runtime Host for the whole run instead of one per shard: measures what one host carries; not the gate",
+    )
+    parser.add_argument(
+        "--no-embedding-lane", dest="embedding_lane", action="store_false", help="with --shared-host: that host without the embedding lane"
+    )
     parser.add_argument("--providers-per-shard", type=int, default=2, help="providers whose unmutated cells share one host, per scenario")
     parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS, help="repeatable; default all five")
     parser.add_argument("--provider", action="append", help="repeatable; default every declared provider")

@@ -768,7 +768,7 @@ def run_kind_cell_in(
     obs = KindObservation(plan)
     workspace = pas.root / "w" / provider / f"{mode}-{plan.nonce}"
     workspace.mkdir(parents=True)
-    api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace)
+    api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace, device_id=pas.host.device_id)
     api.legacy_stream = old_client
     stop = threading.Event()
     session: ProviderPtySession | None = None
@@ -952,7 +952,7 @@ def run_kind_cell_in(
         out["lane_errors"] = {w.lane.name: w.errors for w in watchers if w.errors}
         out["file_scan_gap_s"] = files.resolution_s
         out["file_paths"] = sorted(set(files.first_path.values()))
-        publishes, longest, runtime_requests = host_publishes(pas.root, api.known_sessions)
+        publishes, longest, runtime_requests = host_publishes(pas.host.log_path, api.known_sessions)
         out["host_publish_lines"] = publishes
         out["host_runtime_events_requests_pass_total"] = runtime_requests
         out["sessions_after"] = _session_facts(api)

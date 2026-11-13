@@ -161,8 +161,8 @@ jobs:
       TT_MUTATIONS: ${{ (github.event_name == 'workflow_dispatch' && !inputs.mutations) && '0' || '1' }}
       TT_MUTATION_NAMES: ${{ inputs.mutation_names || '' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
-      # The pod's work volume is RAM-backed and /tmp is the host's shared disk. Short: providers bind unix sockets
-      # under it and a socket path is capped at 108 bytes.
+      # The pod's work volume is RAM-backed and /tmp is the host's shared disk. The path is too long for Codex's
+      # bridge socket (107 bytes), so the run gives its shards a short link to it (short_scratch).
       TT_SCRATCH_ROOT: /home/runner/_work/tt
       GH_TOKEN: ${{ github.token }}
       CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
@@ -439,6 +439,14 @@ jobs:
           if [[ -n "${TT_ENGINE:-}" ]]; then pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null || true; fi
           if [[ -n "${TT_CACHE:-}" ]]; then pkill -f "$TT_CACHE/mutants/" 2>/dev/null || true; fi
           pkill -f "$TT_SCRATCH_ROOT/" 2>/dev/null || true
+          # The run gives its shards a short link to the scratch root (/tmp/tt<4 hex>: Codex's socket path has to fit
+          # in 107 bytes) and removes it at its end; a run that was killed leaves the link and processes named by it.
+          for link in /tmp/tt[0-9a-f][0-9a-f][0-9a-f][0-9a-f]; do
+            if [[ -L "$link" && "$(readlink "$link")" == "$TT_SCRATCH_ROOT" ]]; then
+              pkill -f "$link/" 2>/dev/null || true
+              rm -f -- "$link"
+            fi
+          done
           for dir in "$TT_SCRATCH_ROOT" "$(dirname "$TT_SCRATCH_ROOT")/tt-mut"; do
             if [[ "$dir" == /home/runner/_work/tt* ]]; then
               chmod -R u+w "$dir" 2>/dev/null || true

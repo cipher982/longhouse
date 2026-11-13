@@ -306,8 +306,10 @@ class _ListHandler(http.server.BaseHTTPRequestHandler):
     """A host whose session list is whatever the test put in ``sessions``."""
 
     sessions: list[dict] = []
+    paths: list[str] = []
 
     def do_GET(self) -> None:  # noqa: N802 - http.server's name
+        self.paths.append(self.path)
         body = json.dumps({"sessions": self.sessions}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -358,6 +360,23 @@ def test_a_helm_cell_waits_for_the_launched_session_and_not_only_the_one_found_f
         _ListHandler.sessions = [launched]
         listed, subscribed = reply.wait_for_session_stream(timeout=5)
         assert subscribed is not None and reply.launched_listed_s is not None
+    finally:
+        host.shutdown()
+        host.server_close()
+
+
+def test_a_cell_on_a_host_shared_by_a_run_lists_only_its_own_machines_sessions(tmp_path) -> None:
+    """The list returns 100 sessions at most and a run's one host holds more: each cell asks for its own device's."""
+
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ListHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{host.server_address[1]}"
+        _ListHandler.sessions, _ListHandler.paths = [], []
+        RuntimeApi(url, "token", workspace=tmp_path).session_ids()
+        RuntimeApi(url, "token", workspace=tmp_path, device_id="tt-a1001-0f3c").session_ids()
+        own, scoped = _ListHandler.paths
+        assert "device_id" not in own and scoped == own + "&device_id=tt-a1001-0f3c"
     finally:
         host.shutdown()
         host.server_close()

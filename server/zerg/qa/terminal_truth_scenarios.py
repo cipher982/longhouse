@@ -36,6 +36,7 @@ from zerg.qa.terminal_truth_lanes import lane_stats
 from zerg.qa.terminal_truth_lanes import pacing_error
 from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
 from zerg.qa.terminal_truth_providers import PROVIDERS
+from zerg.qa.terminal_truth_providers import AttachedRuntimeHost
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import ScratchRuntimeHost
 from zerg.qa.terminal_truth_providers import ScriptedModel
@@ -140,7 +141,7 @@ class Pass:
     """Infrastructure the cells of one pass share: Runtime Host, tee proxy, scripted model, Machine Agent and HOME."""
 
     root: Path
-    host: ScratchRuntimeHost
+    host: ScratchRuntimeHost | AttachedRuntimeHost
     proxy: TeeProxy
     model: ScriptedModel
     shipper: Any
@@ -153,6 +154,18 @@ class Pass:
     binaries: dict[str, str] = field(default_factory=dict)
     # provider -> the environment only that provider's launches (Helm PTY) get; the engine's `environment` is the union
     provider_environments: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+def pass_host(root: Path, host_environment: dict[str, str] | None) -> ScratchRuntimeHost | AttachedRuntimeHost:
+    """The host a pass talks to: the one named by ``TT_RUNTIME_HOST`` as one more machine, or a scratch host of its own.
+
+    A pass with a host environment of its own (a mutation test's patched server) always starts its own.
+    """
+
+    shared = os.environ.get("TT_RUNTIME_HOST")
+    if shared and not host_environment:
+        return AttachedRuntimeHost(shared, Path(os.environ["TT_RUNTIME_HOST_LOG"]), f"tt-{root.parent.name}-{root.name}")
+    return ScratchRuntimeHost(root, host_environment)
 
 
 def build_pass(
@@ -175,7 +188,7 @@ def build_pass(
     for spec in specs:
         turns += plans[spec.key].turns
     model = ScriptedModel(root, turns, log_all_frames=log_all_frames)
-    host = ScratchRuntimeHost(root, host_environment)
+    host = pass_host(root, host_environment)
     proxy: TeeProxy | None = None
     shipper = None
     try:
@@ -335,7 +348,7 @@ def run_cell_in(
     )
     workspace = pas.root / "w" / provider / f"{mode}-{plan.nonce}"
     workspace.mkdir(parents=True)
-    api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace)
+    api = RuntimeApi(pas.host.url, pas.host.token, workspace=workspace, device_id=pas.host.device_id)
     stop = threading.Event()
     session: ProviderPtySession | None = None
     recording, timing_file = pas.root / f"terminal-{provider}-{mode}.raw", pas.root / f"terminal-{provider}-{mode}.timing"
@@ -494,7 +507,7 @@ def run_cell_in(
         result.file_first_seen_s = {m: (files.first_seen[m] - submitted if m in files.first_seen else None) for m in markers}
         result.file_paths = sorted(set(files.first_path.values()))
         result.file_scan_gap_s = files.resolution_s
-        publishes, longest, runtime_requests = host_publishes(pas.root, api.known_sessions)
+        publishes, longest, runtime_requests = host_publishes(pas.host.log_path, api.known_sessions)
         obs.reference, obs.model_sent = reference, sent
         obs.host_publishes, obs.host_publish_max_len = publishes, longest
         wanted = set(markers)

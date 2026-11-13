@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -234,6 +238,7 @@ class FakeRunner:
 
     def __init__(self, script: dict[str, list[tuple[str, str | None, str]]], scratch: Path) -> None:
         self.script, self.scratch, self.calls, self.epoch = script, scratch, [], 0.0
+        self.child_environment: dict[str, str] = {}
         self.stopped = parallel.threading.Event()
 
     def run(self, shard: parallel.Shard, attempt: str = "") -> parallel.ShardRun:
@@ -269,6 +274,7 @@ def run_with(monkeypatch, tmp_path, script, *extra: str) -> tuple[int, dict, Fak
     monkeypatch.setattr(parallel, "verdict_of", verdict_of)
     monkeypatch.setattr(parallel, "SCRATCH_ROOT", tmp_path / "scratch")
     monkeypatch.setattr(parallel, "memory_room_gib", lambda: None)
+    monkeypatch.setattr(parallel, "short_scratch", lambda root: (root, None))
     built = {"hits": 0, "built": 0, "seconds": 0.0, "inputs_digest": "x"}
     engines = {m.name: (ENGINE, CLI) for m in mutations.MUTATIONS if m.side == "engine"}
     monkeypatch.setattr(
@@ -568,3 +574,206 @@ def test_the_engine_and_the_mutated_engines_are_keyed_by_different_flags_over_th
     assert mutated != measured
     listing = next(command for command in seen if command[:2] == ["git", "ls-tree"])
     assert [*mutations.ENGINE_INPUT_DIRS, "scripts/build"] == listing[-4:]
+
+
+# ----- scratch paths short enough for a provider's socket
+
+
+def test_a_scratch_root_that_leaves_room_for_codexs_socket_is_used_as_it_is(tmp_path) -> None:
+    root = Path("/tmp/tt")
+    assert parallel.short_scratch(root, tmp_path) == (root, None)
+    longest_home = f"{'x' * parallel.SCRATCH_ROOT_MAX}/a1001/0f3c/h"
+    socket = f"{longest_home}/.longhouse/managed-local/codex-bridge/896ee7fe-04a9-4e26-b166-abd5fdeb2f7a.sock"
+    assert len(socket) == parallel.SOCKET_PATH_MAX
+
+
+def test_the_shard_and_pass_directories_are_as_long_as_the_budget_assumes(tmp_path) -> None:
+    runner = parallel.Runner(tmp_path / "out", tmp_path, lambda _m: None)
+    assert len(f"/{runner._token}{1:03d}/0f3c/h") == parallel.HOME_TAIL
+
+
+def test_a_long_scratch_root_gets_a_short_link_named_by_the_root(tmp_path) -> None:
+    """CI, 2026-11-13: scratch under /home/runner/_work/tt made every Codex Helm cell fail before it was ready."""
+
+    short = Path("/tmp") / f"q{os.getpid() % 10}"  # stands in for /tmp: the test's own directory is too long to be one
+    short.mkdir(exist_ok=True)
+    try:
+        root = Path("/home/runner/_work/tt")
+        assert len(str(root)) > parallel.SCRATCH_ROOT_MAX
+        real = tmp_path / "a-scratch-root-that-is-far-too-long-for-a-socket"
+        given, link = parallel.short_scratch(real, short)
+        assert link == given and given.is_symlink() and given.resolve() == real.resolve() and real.is_dir()
+        assert len(str(given)) <= parallel.SCRATCH_ROOT_MAX
+        again, _ = parallel.short_scratch(real, short)  # a link a killed run left is replaced
+        other, _ = parallel.short_scratch(tmp_path / "another-root-that-is-also-far-too-long", short)
+        assert again == given and other != given
+        with pytest.raises(SystemExit, match="no scratch path short enough"):
+            parallel.short_scratch(real, tmp_path)
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
+
+
+def test_a_run_with_a_long_scratch_root_gives_shards_the_link_and_records_and_removes_by_the_root(monkeypatch, tmp_path) -> None:
+    link = tmp_path / "ln"
+    made: list[Path] = []
+
+    def fake_short(root: Path) -> tuple[Path, Path]:
+        link.symlink_to(root, target_is_directory=True)
+        made.append(root)
+        return link, link
+
+    bad = ("fail", "stream_delivered", "0 of 8 markers")
+    plan_names = {m.name: m for m in mutations.MUTATIONS}
+    fake = FakeRunner({"long_reply:claude/console": [bad, bad]}, link)
+    seen_base: list[Path] = []
+    monkeypatch.setattr(parallel, "Runner", lambda _out, base, _log: seen_base.append(base) or fake)
+    monkeypatch.setattr(
+        parallel,
+        "verdict_of",
+        lambda unit, row: tuple(row["verdict"])
+        if row.get("verdict")
+        else (("fail", plan_names[unit.mutation].stages[0], "x") if unit.mutation else ("pass", None, "")),
+    )
+    root = tmp_path / "scratch"
+    root.mkdir()
+    monkeypatch.setattr(parallel, "SCRATCH_ROOT", root)
+    monkeypatch.setattr(parallel, "memory_room_gib", lambda: None)
+    monkeypatch.setattr(parallel, "short_scratch", fake_short)
+    engine = tmp_path / "longhouse-engine"
+    engine.write_text("")
+    out = tmp_path / "out"
+    code = parallel.main(["--engine", str(engine), "--longhouse-cli", str(engine), "--out-dir", str(out), "--jobs", "4", "--no-mutations"])
+    fleet = json.loads((out / "fleet.json").read_text())
+    assert code == 1 and seen_base == [link] and made == [root]
+    assert not link.is_symlink() and not link.exists()  # the run removed its link
+    kept = [Path(k) for k in fleet["kept_scratch"]]
+    assert kept and all(k.parent == root and k.is_dir() for k in kept)  # named by the root, and still there
+    assert sorted(p.name for p in root.iterdir() if p.name != "server-copies") == sorted(k.name for k in kept)
+
+
+# ----- one host for the whole run (--shared-host)
+
+
+class FakeHost:
+    def __init__(self, root: Path, exit_status: int | None = None) -> None:
+        self.root, self.log_path, self.url = root, root / "runtime-host.log", "http://127.0.0.1:1"
+        self.process = SimpleNamespace(poll=lambda: exit_status)
+        self.stopped = False
+        root.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text("INFO [ZERG.SERVICES.LOCAL_EMBEDDER] Local embedder loaded model=/m threads=4\n")
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_each_shard_has_its_own_host_unless_one_is_asked_for(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(parallel, "start_shared_host", lambda *a, **k: pytest.fail("a host was started for the run"))
+    code, fleet, fake = run_with(monkeypatch, tmp_path, {})
+    assert code == 0 and fleet["shared_host"] is None and fake.child_environment == {} and fleet["narrowed"] is False
+
+
+def test_a_shared_host_run_starts_one_host_points_every_shard_at_it_and_is_not_the_gate(monkeypatch, tmp_path) -> None:
+    hosts: list[FakeHost] = []
+    asked: list[tuple] = []
+
+    def start(root: Path, model_dir, *, embedding: bool = True) -> FakeHost:
+        asked.append((root, model_dir, embedding))
+        hosts.append(FakeHost(root))
+        return hosts[-1]
+
+    monkeypatch.setattr(parallel, "start_shared_host", start)
+    code, fleet, fake = run_with(monkeypatch, tmp_path, {}, "--shared-host", "--embed-model-cache", str(tmp_path / "model"))
+    (host,) = hosts
+    assert asked == [(tmp_path / "scratch" / "shared-host", tmp_path / "model", True)]
+    assert fake.child_environment == {"TT_RUNTIME_HOST": host.url, "TT_RUNTIME_HOST_LOG": str(host.log_path)}
+    assert code == 0 and host.stopped and fleet["narrowed"] is True
+    assert fleet["shared_host"] == {"exited_during_the_run": None, "embedding_model_loaded": True, "root": str(host.root)}
+    assert not host.root.exists() and fleet["kept_scratch"] == []  # nothing came out wrong: its scratch goes too
+
+
+def test_a_shared_host_that_exited_fails_the_run_and_its_log_is_kept(monkeypatch, tmp_path) -> None:
+    hosts: list[FakeHost] = []
+    monkeypatch.setattr(parallel, "start_shared_host", lambda root, _m, **_k: hosts.append(FakeHost(root, exit_status=-9)) or hosts[-1])
+    code, fleet, _fake = run_with(monkeypatch, tmp_path, {}, "--shared-host")
+    assert code == 1 and fleet["state"] == "failure" and fleet["shared_host"]["exited_during_the_run"] == -9
+    assert fleet["kept_scratch"] == [str(hosts[0].root)] and hosts[0].log_path.is_file()
+
+
+def test_a_wrong_row_under_a_shared_host_keeps_the_hosts_log_beside_the_shards(monkeypatch, tmp_path) -> None:
+    hosts: list[FakeHost] = []
+    monkeypatch.setattr(parallel, "start_shared_host", lambda root, _m, **_k: hosts.append(FakeHost(root)) or hosts[-1])
+    bad = ("fail", "state_shown", "2.6 s behind")
+    code, fleet, _fake = run_with(monkeypatch, tmp_path, {"thinking:claude/console": [bad, bad]}, "--shared-host")
+    assert code == 1 and str(hosts[0].root) in fleet["kept_scratch"] and len(fleet["kept_scratch"]) >= 2 and hosts[0].root.is_dir()
+
+
+def test_the_shared_host_starts_with_the_embedding_lane_and_the_model_directory(monkeypatch, tmp_path) -> None:
+    started: list[tuple[Path, dict]] = []
+
+    class Host:
+        def __init__(self, root: Path, environment: dict[str, str]) -> None:
+            started.append((root, environment))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(parallel, "ScratchRuntimeHost", Host)
+    (tmp_path / "h" / "left-over").mkdir(parents=True)
+    parallel.start_shared_host(tmp_path / "h", tmp_path / "model")
+    parallel.start_shared_host(tmp_path / "h", None, embedding=False)
+    assert started == [
+        (tmp_path / "h", {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "0", "LONGHOUSE_EMBED_MODEL_DIR": str(tmp_path / "model")}),
+        (tmp_path / "h", {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "1"}),
+    ]
+    assert list((tmp_path / "h").iterdir()) == []
+
+
+def test_a_pass_attaches_to_the_runs_host_unless_it_has_a_host_environment_of_its_own(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_providers as providers
+    from zerg.qa import terminal_truth_scenarios as scenarios
+
+    root = tmp_path / "a1001" / "0f3c"
+    monkeypatch.delenv("TT_RUNTIME_HOST", raising=False)
+    assert isinstance(scenarios.pass_host(root, None), providers.ScratchRuntimeHost)
+    monkeypatch.setenv("TT_RUNTIME_HOST", "http://127.0.0.1:1/")
+    monkeypatch.setenv("TT_RUNTIME_HOST_LOG", str(tmp_path / "shared-host" / "runtime-host.log"))
+    attached = scenarios.pass_host(root, None)
+    assert isinstance(attached, providers.AttachedRuntimeHost)
+    assert (attached.url, attached.log_path, attached.device_id) == (
+        "http://127.0.0.1:1",
+        tmp_path / "shared-host" / "runtime-host.log",
+        "tt-a1001-0f3c",
+    )
+    patched = scenarios.pass_host(root, {"PYTHONPATH": "/a/patched/server"})  # a mutation test's server: its own host
+    assert isinstance(patched, providers.ScratchRuntimeHost) and patched.device_id == "terminal-truth"
+
+
+def test_an_attached_host_takes_a_token_for_its_own_device_and_is_not_stopped_by_the_pass(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_providers as providers
+
+    minted: list[tuple[str, dict]] = []
+    monkeypatch.setattr(providers.urllib.request, "urlopen", lambda url, timeout=0: contextlib.nullcontext())
+    monkeypatch.setattr(providers, "_post_json", lambda url, payload: minted.append((url, payload)) or {"token": "t-1"})
+    host = providers.AttachedRuntimeHost("http://127.0.0.1:1", tmp_path / "runtime-host.log", "tt-a1001-0f3c")
+    host.start()
+    host.stop()
+    assert host.token == "t-1" and minted == [
+        ("http://127.0.0.1:1/api/devices/tokens", {"device_id": "tt-a1001-0f3c", "name": "tt-a1001-0f3c"})
+    ]
+
+
+def test_fewer_shards_fit_with_a_host_each_than_with_one_host_for_the_run() -> None:
+    room = (7.6, "a limit of 8.0 GiB with 0.4 GiB in use")
+    own = parallel.fit_jobs(12, room)[0]
+    shared = parallel.fit_jobs(12, room, parallel.SHARED_HOST_SHARD_MEMORY_GIB, parallel.SHARED_HOST_RESERVED_MEMORY_GIB)[0]
+    assert (own, shared) == (4, 8)
+
+
+def test_the_memory_watch_records_the_highest_use_it_saw_and_nothing_where_it_cannot_read(monkeypatch) -> None:
+    readings = iter([1 * 2**30, 3 * 2**30, 2 * 2**30])
+    monkeypatch.setattr(parallel, "_memory_in_use", lambda: next(readings, 2 * 2**30))
+    watch = parallel.MemoryWatch()
+    watch.peak = max(parallel._memory_in_use() or 0, parallel._memory_in_use() or 0)
+    assert watch.finish() == {"before_gib": 1.0, "peak_gib": 3.0}
+    monkeypatch.setattr(parallel, "_memory_in_use", lambda: None)
+    assert parallel.MemoryWatch().finish() is None

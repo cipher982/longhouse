@@ -22,6 +22,7 @@ from dataclasses import field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from urllib.parse import urlsplit
 
 
@@ -330,11 +331,14 @@ class RuntimeApi:
     workspace directory (a Helm launch creates a managed session beside the file-discovered one, both in that cwd).
     """
 
-    def __init__(self, api_url: str, token: str, *, workspace: Path | None = None) -> None:
+    def __init__(self, api_url: str, token: str, *, workspace: Path | None = None, device_id: str | None = None) -> None:
         parsed = urlsplit(api_url)
         self.host, self.port = parsed.hostname or "127.0.0.1", parsed.port or 80
         self.token = token
         self.workspace = workspace.resolve() if workspace is not None else None
+        # The list is asked for this machine's sessions only: a host shared by a whole run holds hundreds, and the list
+        # returns at most 100.
+        self.device_id = device_id
         self.pinned_sessions: list[str] = []
         self.known_sessions: set[str] = set()  # every id this cell's lanes ever read
         self.launched_sessions: set[str] = set()  # listed in the workspace WITH launch information: the session a launch made
@@ -378,7 +382,8 @@ class RuntimeApi:
 
         ids = list(self.pinned_sessions)
         if self.workspace is not None:
-            status, body = self.get("/api/agents/sessions?limit=100&include_test=true")
+            scope = f"&device_id={quote(self.device_id)}" if self.device_id else ""
+            status, body = self.get(f"/api/agents/sessions?limit=100&include_test=true{scope}")
             if status == 200:
                 for item in json.loads(body).get("sessions") or []:
                     cwd = item.get("cwd")
@@ -983,11 +988,13 @@ class TeeProxy(threading.Thread):
 _PUBLISH_LINE = re.compile(r"live_transcript publish session=(\S+) seq=\S+ age_ms=\S+ text_len=(\d+)")
 
 
-def host_publishes(root: Path, sessions: Iterable[str]) -> tuple[int, int, int]:
-    """(publish lines, longest text_len, runtime-events requests) the host logged for this cell's sessions."""
+def host_publishes(log: Path, sessions: Iterable[str]) -> tuple[int, int, int]:
+    """(publish lines, longest text_len, runtime-events requests) the host logged for this cell's sessions.
+
+    The requests are every machine's on a host shared by a run: a count of the host's load, not of this cell.
+    """
 
     wanted = set(sessions)
-    log = root / "runtime-host.log"
     if not log.exists():
         return 0, 0, 0
     count, longest, requests = 0, 0, 0

@@ -106,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
         elif verdict.get("outcome") == "finding":
             findings.append(f"{key}: {one_line(verdict.get('reason'))}")
         elif verdict.get("outcome") not in GOOD_CELL:
-            failing[key] = f"{verdict.get('verdict') or verdict.get('outcome')} at {verdict.get('stage')}: {one_line(verdict.get('reason'), 200)}"
+            failing[key] = (
+                f"{verdict.get('verdict') or verdict.get('outcome')} at {verdict.get('stage')}: {one_line(verdict.get('reason'), 200)}"
+            )
 
     # Every planned mutation check needs an ok row.
     table = read_json(directory / "mutations.json") if planned_mutations else []
@@ -156,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
 
     for item in fleet.get("reruns") or []:
         scenario, _, cell = str(item.get("id", "")).partition(":")
-        passed_on_rerun.append({"id": item.get("id"), "cell": f"{cell} [{scenario}]", "first": item.get("first"), "again": item.get("again")})
+        passed_on_rerun.append(
+            {"id": item.get("id"), "cell": f"{cell} [{scenario}]", "first": item.get("first"), "again": item.get("again")}
+        )
 
     notes: list[str] = []
     lane = fleet.get("embedding_lane")
@@ -184,7 +188,11 @@ def main(argv: list[str] | None = None) -> int:
     for cell_id in planned_cells:
         by_scenario.setdefault(cell_id.partition(":")[0], []).append(cell_id)
     lines = [f"## Terminal truth: {state}", ""]
-    lines += [f"{len(planned_cells)} cells and {len(planned_mutations)} mutation checks{took}, {fleet.get('jobs', '?')} shards at a time."]
+    memory = fleet.get("memory") or {}
+    peak = f" Memory in use went from {memory.get('before_gib')} to {memory.get('peak_gib')} GiB." if memory.get("peak_gib") else ""
+    lines += [
+        f"{len(planned_cells)} cells and {len(planned_mutations)} mutation checks{took}, {fleet.get('jobs', '?')} shards at a time.{peak}"
+    ]
     builds = fleet.get("mutated_engine_builds") or {}
     if builds:
         lines += [f"Mutated engines: {builds.get('hits')} from the cache, {builds.get('built')} built ({builds.get('seconds')} s)."]

@@ -43,8 +43,10 @@ def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
 class ScratchRuntimeHost:
     """A loopback ``longhouse-server serve`` on its own database and HOME. Auth is off on loopback."""
 
-    def __init__(self, root: Path, extra_environment: dict[str, str] | None = None) -> None:
+    def __init__(self, root: Path, extra_environment: dict[str, str] | None = None, *, device_id: str = "terminal-truth") -> None:
         self.root = root
+        self.log_path = root / "runtime-host.log"
+        self.device_id = device_id
         self.extra_environment = dict(extra_environment or {})  # a mutation test shadows ``zerg`` with a patched copy here
         self.process: subprocess.Popen[bytes] | None = None
         self.url = ""
@@ -63,7 +65,7 @@ class ScratchRuntimeHost:
         environment["LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED"] = "1"
         environment.update(self.extra_environment)
         executable = Path(sys.executable).parent / "longhouse-server"
-        log = (self.root / "runtime-host.log").open("wb")
+        log = self.log_path.open("wb")
         self.process = subprocess.Popen(
             [str(executable), "serve", "--port", str(port), "--db", f"sqlite:///{self.root / 'runtime-host.db'}"],
             cwd=SERVER_ROOT,
@@ -84,11 +86,35 @@ class ScratchRuntimeHost:
             time.sleep(0.2)
         else:
             raise RuntimeError("scratch Runtime Host did not answer /api/health")
-        minted = _post_json(f"{self.url}/api/devices/tokens", {"device_id": "terminal-truth", "name": "terminal-truth"})
-        self.token = str(minted["token"])
+        self.token = mint_device_token(self.url, self.device_id)
 
     def stop(self) -> None:
         _stop_group(self.process)
+
+
+def mint_device_token(url: str, device_id: str) -> str:
+    return str(_post_json(f"{url}/api/devices/tokens", {"device_id": device_id, "name": device_id})["token"])
+
+
+class AttachedRuntimeHost:
+    """A Runtime Host somebody else started (``terminal_truth_parallel`` starts one for a whole run), used as one more machine.
+
+    Production is one host carrying many sessions from many machines, and so is a run: every shard's Machine Agent connects
+    to the same host under its own device id. Starting a host per shard cost 0.9 GiB and about 10 s each, 61 times a run.
+    """
+
+    def __init__(self, url: str, log_path: Path, device_id: str) -> None:
+        self.url, self.log_path, self.device_id = url.rstrip("/"), log_path, device_id
+        self.root = log_path.parent
+        self.token = ""
+
+    def start(self) -> None:
+        with urllib.request.urlopen(f"{self.url}/api/health", timeout=5):
+            pass
+        self.token = mint_device_token(self.url, self.device_id)
+
+    def stop(self) -> None:
+        pass  # not this pass's to stop
 
 
 def _stop_group(process: subprocess.Popen[Any] | None) -> None:
