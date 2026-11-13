@@ -823,6 +823,7 @@
   min-width: 0;
   align-self: stretch;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: var(--space-2) var(--space-4) var(--space-4);
   background:
     radial-gradient(
@@ -1620,8 +1621,6 @@
   font-family: var(--tl-prose-font, inherit);
   text-wrap: pretty;
   word-break: break-word;
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 6lh;
 }
 .tl-msg__body p {
   margin: 0 0 var(--tl-para-gap, 0.6em);

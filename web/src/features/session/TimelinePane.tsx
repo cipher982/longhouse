@@ -1421,27 +1421,33 @@ export const TimelinePane = memo(function TimelinePane({
     const currentAnchorTop = timelineRowTop(prevFirstRowIdRef.current);
     let prependedCount = 0;
     let appendedCount = 0;
+    let tailReplaced = false;
 
     // Identify which end changed from stable item identity and order. The
     // loaded entry count also rises for live appends, so it cannot identify a
     // pagination prepend by itself. One scan handles a mixed prepend+append
-    // update without copying the item list.
+    // (or prepend + live-preview promotion) update without copying the list.
     if (
       previousCount > 0 &&
       items.length > previousCount &&
-      previousFirstKey !== null &&
-      previousLastKey !== null
+      previousFirstKey !== null
     ) {
       let previousFirstIndex = -1;
       let previousLastIndex = -1;
       for (let index = 0; index < items.length; index += 1) {
         const key = timelineItemIdentity(items[index]);
         if (key === previousFirstKey && previousFirstIndex < 0) previousFirstIndex = index;
-        if (key === previousLastKey && previousLastIndex < 0) previousLastIndex = index;
+        if (previousLastKey !== null && key === previousLastKey && previousLastIndex < 0) {
+          previousLastIndex = index;
+        }
       }
-      if (previousFirstIndex >= 0 && previousLastIndex >= previousFirstIndex) {
+      if (previousFirstIndex >= 0) {
         prependedCount = previousFirstIndex;
-        appendedCount = items.length - previousLastIndex - 1;
+        if (previousLastIndex >= previousFirstIndex) {
+          appendedCount = items.length - previousLastIndex - 1;
+        } else if (previousLastKey !== null) {
+          tailReplaced = true;
+        }
       }
     }
 
@@ -1453,18 +1459,22 @@ export const TimelinePane = memo(function TimelinePane({
     } else {
       if (prependedCount > 0) {
         const heightDelta = newScrollHeight - prevScrollHeightRef.current;
-        // A mixed update also adds tail height. Anchor the first previously
+        // A mixed update also changes tail height. Anchor the first previously
         // visible row when its geometry is available so only the prepended
         // displacement is applied; pagination-only updates retain the
         // existing scrollHeight delta behavior.
         const diff =
-          appendedCount > 0 && previousFirstTop !== null && currentAnchorTop !== null
+          (appendedCount > 0 || tailReplaced) && previousFirstTop !== null && currentAnchorTop !== null
             ? currentAnchorTop - previousFirstTop
             : heightDelta;
         if (diff > 0) container.scrollTop += diff;
       }
-      if (wasAtBottomRef.current && (appendedCount > 0 || (prependedCount === 0 && newScrollHeight > prevScrollHeightRef.current))) {
-        // A growing reply or tool group can add height without adding a row.
+      if (
+        wasAtBottomRef.current &&
+        (appendedCount > 0 || (prependedCount === 0 && newScrollHeight !== prevScrollHeightRef.current))
+      ) {
+        // A growing reply, tool group, or shrinking preview promotion updates
+        // height at the tail without necessarily adding a row.
         container.scrollTop = container.scrollHeight;
       } else if (appendedCount > 0) {
         setUnreadCount((prev) => prev + appendedCount);
