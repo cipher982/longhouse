@@ -986,6 +986,8 @@ export function buildTimelineModel(
       }
     } else if (event.interaction_kind === "provider_reasoning") {
       eventIdToSelectionKey.set(event.id, `reasoning:${event.id}`);
+    } else if (event.interaction_kind === "compaction_boundary") {
+      eventIdToSelectionKey.set(event.id, `compaction:${event.id}`);
     } else if (event.interaction_kind === "provider_notification") {
       eventIdToSelectionKey.set(event.id, `provider_notification:${event.id}`);
     } else {
@@ -1013,6 +1015,10 @@ export function buildTimelineModel(
     if (!event) continue;
     if (event.interaction_kind === "provider_reasoning") {
       items.push({ kind: "reasoning", event });
+      continue;
+    }
+    if (event.interaction_kind === "compaction_boundary") {
+      items.push({ kind: "compaction", event });
       continue;
     }
     if (event.interaction_kind === "provider_notification") {
@@ -1140,7 +1146,7 @@ export function buildTimelineModel(
   const eventIdToRowId = new Map<AgentEventId, string>();
 
   for (const item of groupedItems) {
-    if (item.kind === "seam" || item.kind === "action") continue;
+    if (item.kind === "seam" || item.kind === "action" || item.kind === "compaction") continue;
 
     if (item.kind === "provider_notification") {
       const key = `provider_notification:${item.event.id}`;
@@ -1229,6 +1235,7 @@ export function buildTimelineModel(
 export function getPreferredSelectionKey(item: TimelineItem): string | null {
   if (item.kind === "seam") return null;
   if (item.kind === "action") return null;
+  if (item.kind === "compaction") return null;
   if (item.kind === "provider_notification") return null;
   if (item.kind === "reasoning") return `reasoning:${item.event.id}`;
   if (item.kind === "message") return `message:${item.event.id}`;
@@ -1240,6 +1247,7 @@ export function timelineItemContainsSelection(item: TimelineItem, selectionKey: 
   if (!selectionKey) return false;
   if (item.kind === "seam") return false;
   if (item.kind === "action") return false;
+  if (item.kind === "compaction") return false;
   if (item.kind === "provider_notification") return selectionKey === `provider_notification:${item.event.id}`;
   if (item.kind === "reasoning") return selectionKey === `reasoning:${item.event.id}`;
   if (item.kind === "message") return selectionKey === `message:${item.event.id}`;

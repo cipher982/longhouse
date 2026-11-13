@@ -392,6 +392,9 @@ struct CodexPayload {
     call_id: Option<String>,
     /// event_msg: provider reason for lifecycle/control artifacts.
     reason: Option<String>,
+    /// compacted / event_msg: optional compaction notice string (kept raw so
+    /// non-string payload.message fields on other event types never fail).
+    message: Option<Box<RawValue>>,
     /// function_call_output: result. Codex emits a plain string for text tool
     /// results, but an array of content items for image-bearing results (e.g.
     /// `view_image` -> [{type: input_image, image_url: data:...}]). Accept both
@@ -4712,6 +4715,34 @@ fn extract_compaction_metadata_event(
                 tool_call_id: None,
                 source_offset: line_offset,
                 raw_type: subtype.to_string(),
+                raw_line: Some(raw_line.to_string()),
+            })
+        }
+        "compacted" => {
+            let content = obj
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.message.as_ref())
+                .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "Conversation compacted".to_string());
+            Some(ParsedEvent {
+                parent_uuid: None,
+                uuid: obj
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| format!("meta-compacted-{line_offset}")),
+                session_id: session_id.to_string(),
+                timestamp: metadata_timestamp(obj),
+                role: Role::System,
+                content_text: Some(content),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: "compacted".to_string(),
                 raw_line: Some(raw_line.to_string()),
             })
         }

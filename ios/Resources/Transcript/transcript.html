@@ -186,6 +186,14 @@ body {
   font-weight: 650;
 }
 
+.compaction-detail {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turn-end {
   margin-top: 8px;
   color: var(--secondary);
@@ -1003,6 +1011,40 @@ summary::-webkit-details-marker {
 			body: rest.join("\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd()
 		};
 	}
+	function formatCompactTokenCount(rawCount) {
+		const value = Number(rawCount);
+		if (!Number.isFinite(value) || value <= 0) return `${rawCount} tokens`;
+		if (value >= 1e3) return `${(value / 1e3).toFixed(1).replace(/\.0$/, "")}k tokens`;
+		return `${Math.round(value)} tokens`;
+	}
+	function summarizeCompactionNotice(text) {
+		const trimmed = (text ?? "").trim();
+		if (!trimmed || trimmed === "Conversation compacted") return {
+			title: "Context compacted",
+			detail: null
+		};
+		const bracketMatch = trimmed.match(/^Conversation compacted\s+\[(.+)\]$/i);
+		if (bracketMatch) {
+			const tokens = [];
+			for (const part of bracketMatch[1].split(/\s+/)) {
+				const [key, rawValue] = part.split("=", 2);
+				if (!rawValue) continue;
+				if (key === "trigger") tokens.push(rawValue.charAt(0).toUpperCase() + rawValue.slice(1));
+				else if (key === "pre_tokens") tokens.push(formatCompactTokenCount(rawValue));
+				else if (key === "duration_ms") tokens.push(`${rawValue}ms`);
+				else tokens.push(`${key}=${rawValue}`);
+			}
+			return {
+				title: "Context compacted",
+				detail: tokens.length > 0 ? tokens.join(" · ") : null
+			};
+		}
+		const firstLine = trimmed.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).find((line) => line.length > 0);
+		return {
+			title: "Context compacted",
+			detail: firstLine ? ellipsize(firstLine, TITLE_MAX_CHARS) : null
+		};
+	}
 	//#endregion
 	//#region src/embeds/ios-transcript/diffs.ts
 	function renderDiff(lines) {
@@ -1201,6 +1243,17 @@ summary::-webkit-details-marker {
         </div>
       `;
 	}
+	function compaction(item) {
+		const { title, detail } = summarizeCompactionNotice(item.body);
+		const subtitle = detail ? `<span class="compaction-detail">${escapeHtml(detail)}</span>` : "";
+		return `
+        <div class="row action compaction" data-testid="session-compaction-boundary">
+          <span class="action-rule"></span>
+          <span class="action-title">${escapeHtml(title)}</span>
+          ${subtitle}
+        </div>
+      `;
+	}
 	function providerNotification(item) {
 		const wakeAttribute = item.wake ? " data-wake=\"true\"" : "";
 		if (item.origin === "longhouse") return `
@@ -1238,6 +1291,7 @@ summary::-webkit-details-marker {
 		if (item.kind === "message") return message(item, index);
 		if (item.kind === "submitted") return submitted(item);
 		if (item.kind === "action") return action(item);
+		if (item.kind === "compaction") return compaction(item);
 		if (item.kind === "providerNotification") return providerNotification(item);
 		if (item.kind === "reasoning") return reasoning(item);
 		if (item.kind === "question") return question(item);

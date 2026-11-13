@@ -2618,7 +2618,7 @@ def _object_projection_hash(**value: object) -> str:
 
 
 def _is_fts_indexable_event(*, role: str, interaction_kind: str | None, title_eligible: bool) -> bool:
-    if interaction_kind == "provider_notification":
+    if interaction_kind in ("provider_notification", "compaction_boundary"):
         return False
     if interaction_kind in ("provider_system", "provider_reasoning") and role in ("user", "system"):
         return False
@@ -2629,6 +2629,7 @@ def _is_fts_indexable_event(*, role: str, interaction_kind: str | None, title_el
             "local_control",
             "local_control_output",
             "conversation_boundary",
+            "compaction_boundary",
             "provider_system",
             "provider_reasoning",
             "provider_notification",

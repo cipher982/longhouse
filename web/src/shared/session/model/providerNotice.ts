@@ -54,3 +54,51 @@ export function summarizeProviderNotice(text: string | null | undefined): Provid
     body: rest.join("\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd(),
   };
 }
+
+export interface CompactionNoticeSummary {
+  title: string;
+  detail: string | null;
+}
+
+function formatCompactTokenCount(rawCount: string): string {
+  const value = Number(rawCount);
+  if (!Number.isFinite(value) || value <= 0) return `${rawCount} tokens`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k tokens`;
+  return `${Math.round(value)} tokens`;
+}
+
+export function summarizeCompactionNotice(text: string | null | undefined): CompactionNoticeSummary {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed || trimmed === "Conversation compacted") {
+    return { title: "Context compacted", detail: null };
+  }
+
+  const bracketMatch = trimmed.match(/^Conversation compacted\s+\[(.+)\]$/i);
+  if (bracketMatch) {
+    const tokens: string[] = [];
+    for (const part of bracketMatch[1].split(/\s+/)) {
+      const [key, rawValue] = part.split("=", 2);
+      if (!rawValue) continue;
+      if (key === "trigger") {
+        tokens.push(rawValue.charAt(0).toUpperCase() + rawValue.slice(1));
+      } else if (key === "pre_tokens") {
+        tokens.push(formatCompactTokenCount(rawValue));
+      } else if (key === "duration_ms") {
+        tokens.push(`${rawValue}ms`);
+      } else {
+        tokens.push(`${key}=${rawValue}`);
+      }
+    }
+    return { title: "Context compacted", detail: tokens.length > 0 ? tokens.join(" · ") : null };
+  }
+
+  const firstLine = trimmed
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return {
+    title: "Context compacted",
+    detail: firstLine ? ellipsize(firstLine, TITLE_MAX_CHARS) : null,
+  };
+}

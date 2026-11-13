@@ -77,4 +77,9 @@ export {
   type EditStat,
 } from "./editSummary";
 
-export { summarizeProviderNotice, type ProviderNoticeSummary } from "./providerNotice";
+export {
+  summarizeCompactionNotice,
+  summarizeProviderNotice,
+  type CompactionNoticeSummary,
+  type ProviderNoticeSummary,
+} from "./providerNotice";

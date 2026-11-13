@@ -1526,4 +1526,23 @@ describe("TimelinePane outbox", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("a steer");
   });
+
+  it("renders compaction boundary system rows as timeline dividers", () => {
+    const compactionItem: TimelineItem = {
+      kind: "compaction",
+      event: {
+        ...messageItem.event,
+        id: 88,
+        role: "system",
+        content_text: "Conversation compacted [trigger=auto pre_tokens=155708]",
+        interaction_kind: "compaction_boundary",
+        timestamp: "2026-03-19T16:49:00Z",
+      },
+    };
+    renderPane([compactionItem]);
+
+    const divider = screen.getByTestId("session-compaction-boundary");
+    expect(divider).toHaveTextContent("Context compacted");
+    expect(divider).toHaveTextContent("Auto · 155.7k tokens");
+  });
 });

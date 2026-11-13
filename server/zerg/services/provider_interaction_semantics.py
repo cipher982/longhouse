@@ -24,6 +24,7 @@ INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
 INTERACTION_PROVIDER_SYSTEM = "provider_system"
 INTERACTION_PROVIDER_REASONING = "provider_reasoning"
 INTERACTION_PROVIDER_NOTIFICATION = "provider_notification"
+INTERACTION_COMPACTION_BOUNDARY = "compaction_boundary"
 INTERACTION_CONVERSATION_BOUNDARY = "conversation_boundary"
 INTERACTION_UNKNOWN_USER_INPUT = "unknown_user_input"
 
@@ -78,6 +79,7 @@ VALID_INTERACTION_KINDS = frozenset(
         INTERACTION_PROVIDER_SYSTEM,
         INTERACTION_PROVIDER_REASONING,
         INTERACTION_PROVIDER_NOTIFICATION,
+        INTERACTION_COMPACTION_BOUNDARY,
         INTERACTION_CONVERSATION_BOUNDARY,
         INTERACTION_UNKNOWN_USER_INPUT,
     }
@@ -885,6 +887,28 @@ def seed_persisted_provider_interaction_context(
         set_field(event, "title_eligible", 0)
 
 
+def _compaction_boundary_record(
+    provider: str,
+    *,
+    role: str,
+    raw: Mapping[str, Any] | None,
+) -> bool:
+    """Return True for full compaction boundaries rendered as timeline dividers."""
+
+    if role != "system" or raw is None:
+        return False
+    row_type = raw.get("type")
+    if row_type == "summary" and provider in {"claude", ""}:
+        return True
+    if row_type == "system" and raw.get("subtype") == "compact_boundary" and provider in {"claude", ""}:
+        return True
+    if row_type == "compacted" and provider in {"codex", ""}:
+        return True
+    if row_type == "compaction" and provider in {"pi", "omp", ""}:
+        return True
+    return False
+
+
 def classify_provider_interaction(
     provider: str | None,
     *,
@@ -930,8 +954,13 @@ def classify_provider_interaction(
     claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
     provider_reasoning = provider_reasoning_record(normalized_provider, role=normalized_role, raw_json=raw)
     provider_display_message = provider_display_message_record(normalized_provider, role=normalized_role, raw_json=raw)
+    compaction_boundary = _compaction_boundary_record(normalized_provider, role=normalized_role, raw=raw)
     if codex_provider_system or claude_provider_system:
         kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif compaction_boundary:
+        kind = INTERACTION_COMPACTION_BOUNDARY
         changes_provider_state = False
         starts_model_turn = False
     elif provider_reasoning:
@@ -971,7 +1000,9 @@ def classify_provider_interaction(
     # Longhouse semantic override from provider raw JSON: raw provider text is
     # evidence to classify, not an authority that can demote itself.
     explicit_kind = (
-        None if codex_provider_system or claude_provider_system or provider_reasoning or provider_display_message else interaction_kind
+        None
+        if codex_provider_system or claude_provider_system or compaction_boundary or provider_reasoning or provider_display_message
+        else interaction_kind
     )
     if explicit_kind in _INTERACTION_KINDS:
         kind = str(explicit_kind)
@@ -984,7 +1015,7 @@ def classify_provider_interaction(
         elif kind == INTERACTION_PROVIDER_SYSTEM:
             changes_provider_state = False
             starts_model_turn = False
-        elif kind == INTERACTION_PROVIDER_NOTIFICATION:
+        elif kind in {INTERACTION_PROVIDER_NOTIFICATION, INTERACTION_COMPACTION_BOUNDARY}:
             changes_provider_state = False
             starts_model_turn = False
 
@@ -1111,7 +1142,7 @@ def semantic_event_included(
     excluded. Only the timeline projection opts in with ``include_reasoning``.
     """
 
-    if interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
+    if interaction_kind in {INTERACTION_PROVIDER_NOTIFICATION, INTERACTION_COMPACTION_BOUNDARY}:
         return False
     if interaction_kind == INTERACTION_PROVIDER_REASONING:
         return include_reasoning
@@ -1172,6 +1203,7 @@ def interaction_contract_snapshot(provider: str) -> tuple[dict[str, Any], ...]:
 
 
 __all__ = [
+    "INTERACTION_COMPACTION_BOUNDARY",
     "INTERACTION_CONVERSATION_BOUNDARY",
     "INTERACTION_DURABLE_USER_MESSAGE",
     "INTERACTION_LOCAL_CONTROL",

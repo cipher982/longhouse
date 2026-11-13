@@ -22,8 +22,8 @@
       "surface_proof": "web/src/shared/session/model/__tests__/sessionWorkspace.test.ts"
     },
     "context.compaction": {
-      "disposition": "not_implemented",
-      "owner_action": "Emit Role::System event for Codex compacted, project compaction_boundary on full compactions, and render timeline divider in Web and iOS"
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_agents_storage_v2.py"
     },
     "turn.api_error": {
       "disposition": "not_implemented",

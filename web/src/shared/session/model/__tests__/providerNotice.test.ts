@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeProviderNotice } from "../providerNotice";
+import { summarizeCompactionNotice, summarizeProviderNotice } from "../providerNotice";
 
 // Served text: what `provider_display_message_text` and Claude's task
 // notification summary put in `content_text` of a provider_notification row.
@@ -73,5 +73,32 @@ describe("summarizeProviderNotice", () => {
     for (const empty of [null, undefined, "", " \n "]) {
       expect(summarizeProviderNotice(empty)).toEqual({ title: "Provider update", hint: null, body: null });
     }
+  });
+});
+
+describe("summarizeCompactionNotice", () => {
+  it("formats Claude compact metadata hints concisely", () => {
+    expect(summarizeCompactionNotice("Conversation compacted [trigger=auto pre_tokens=155708]")).toEqual({
+      title: "Context compacted",
+      detail: "Auto · 155.7k tokens",
+    });
+  });
+
+  it("handles bare default compaction text without extra chrome", () => {
+    expect(summarizeCompactionNotice("Conversation compacted")).toEqual({
+      title: "Context compacted",
+      detail: null,
+    });
+    expect(summarizeCompactionNotice(null)).toEqual({
+      title: "Context compacted",
+      detail: null,
+    });
+  });
+
+  it("preserves provider-authored compaction summary text", () => {
+    expect(summarizeCompactionNotice("Earlier work focused on parser migration.\nSecond line.")).toEqual({
+      title: "Context compacted",
+      detail: "Earlier work focused on parser migration.",
+    });
   });
 });

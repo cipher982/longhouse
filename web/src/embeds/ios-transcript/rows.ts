@@ -3,7 +3,7 @@ import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { mediaStrip } from "./media";
 import { thoughtProse } from "../../shared/session/model/thoughtProse";
-import { summarizeProviderNotice } from "../../shared/session/model/providerNotice";
+import { summarizeCompactionNotice, summarizeProviderNotice } from "../../shared/session/model/providerNotice";
 import { activityGroup, question, toolDetails } from "./toolCards";
 import type { TranscriptItem } from "./types";
 
@@ -110,6 +110,18 @@ export function action(item: TranscriptItem): string {
       `;
 }
 
+export function compaction(item: TranscriptItem): string {
+  const { title, detail } = summarizeCompactionNotice(item.body);
+  const subtitle = detail ? `<span class="compaction-detail">${escapeHtml(detail)}</span>` : "";
+  return `
+        <div class="row action compaction" data-testid="session-compaction-boundary">
+          <span class="action-rule"></span>
+          <span class="action-title">${escapeHtml(title)}</span>
+          ${subtitle}
+        </div>
+      `;
+}
+
 /// A background job's notice, as a tool-shaped row: the header is the title,
 /// the first line of output the hint, the full text behind a tap. A notice
 /// that is only its header has nothing to open, so it is a plain row.
@@ -162,6 +174,7 @@ export function renderItemBody(item: TranscriptItem, index: number): string {
   if (item.kind === "message") return message(item, index);
   if (item.kind === "submitted") return submitted(item);
   if (item.kind === "action") return action(item);
+  if (item.kind === "compaction") return compaction(item);
   if (item.kind === "providerNotification") return providerNotification(item);
   if (item.kind === "reasoning") return reasoning(item);
   if (item.kind === "question") return question(item);

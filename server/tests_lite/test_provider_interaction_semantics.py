@@ -1315,3 +1315,46 @@ def test_notification_display_text_keeps_the_claude_summary_contract() -> None:
 
     assert provider_notification_display_text("claude", claude) == "Command finished"
     assert provider_notification_display_text("codex", "plain text") == "plain text"
+
+
+def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of_semantic_context() -> None:
+    from zerg.services.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
+    from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
+    from zerg.services.provider_interaction_semantics import classify_provider_interaction
+    from zerg.services.provider_interaction_semantics import semantic_event_included
+
+    cases = [
+        ("claude", {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}),
+        ("claude", {"type": "summary", "summary": "Conversation compacted at checkpoint"}),
+        ("codex", {"type": "compacted", "payload": {"message": "", "replacement_history": []}}),
+        ("pi", {"type": "compaction", "summary": "Earlier work"}),
+        ("omp", {"type": "compaction", "summary": "Conversation compacted"}),
+    ]
+    for provider, raw_json in cases:
+        classified = classify_provider_interaction(
+            provider,
+            role="system",
+            content_text="Conversation compacted",
+            raw_json=raw_json,
+        )
+        assert classified["interaction_kind"] == INTERACTION_COMPACTION_BOUNDARY, provider
+        assert classified["title_eligible"] is False
+        assert classified["starts_model_turn"] is False
+        assert (
+            semantic_event_included(
+                provider,
+                role="system",
+                content_text="Conversation compacted",
+                raw_json=raw_json,
+                interaction_kind=INTERACTION_COMPACTION_BOUNDARY,
+            )
+            is False
+        )
+
+    micro = classify_provider_interaction(
+        "claude",
+        role="system",
+        content_text="Context microcompacted",
+        raw_json={"type": "system", "subtype": "microcompact_boundary", "content": "Context microcompacted"},
+    )
+    assert micro["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM

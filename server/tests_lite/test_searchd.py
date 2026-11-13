@@ -3457,6 +3457,7 @@ def test_fts_indexes_tool_input_text_and_prunes_provider_system_rows():
     from zerg.searchd.store import _is_fts_indexable_event
 
     assert _is_fts_indexable_event(role="system", interaction_kind="provider_system", title_eligible=False) is False
+    assert _is_fts_indexable_event(role="system", interaction_kind="compaction_boundary", title_eligible=False) is False
     assert _is_fts_indexable_event(role="user", interaction_kind="provider_system", title_eligible=False) is False
     assert _is_fts_indexable_event(role="assistant", interaction_kind="durable_assistant_message", title_eligible=False) is True
     assert _is_fts_indexable_event(role="tool", interaction_kind="provider_system", title_eligible=False) is True

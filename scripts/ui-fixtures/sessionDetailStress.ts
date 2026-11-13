@@ -1574,7 +1574,11 @@ export function buildSessionBackgroundNoticesFixture(): SessionDetailFixture {
     }),
     notice(3013, "2026-04-15T16:04:00Z", PROVIDER_NOTICE_TEXT.CLAUDE_TASK),
     notice(3014, "2026-04-15T16:04:10Z", PROVIDER_NOTICE_TEXT.OMP_SHORT),
-    makeEvent(3015, "assistant", "2026-04-15T16:05:00Z", {
+    makeEvent(3015, "system", "2026-04-15T16:04:30Z", {
+      interaction_kind: "compaction_boundary",
+      content_text: "Conversation compacted [trigger=auto pre_tokens=155708]",
+    }),
+    makeEvent(3016, "assistant", "2026-04-15T16:05:00Z", {
       content_text: "None of the three alerting jobs is broken: the registry is healthy and the factory deploy finished green.",
       turn_end: { duration_ms: 300_000, ended_at: "2026-04-15T16:05:01Z", message_count: 14 },
     }),

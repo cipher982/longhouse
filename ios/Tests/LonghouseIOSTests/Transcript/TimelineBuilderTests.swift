@@ -27,6 +27,34 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items[0].id, "provider-notification:42")
     }
 
+    func testCompactionBoundaryIsAStandaloneTimelineRowAndPayload() {
+        let compaction = event(
+            id: 43,
+            role: "system",
+            text: "Conversation compacted [trigger=auto pre_tokens=155708]",
+            interactionKind: "compaction_boundary"
+        )
+        let hiddenSystem = event(
+            id: 44,
+            role: "system",
+            text: "Context microcompacted",
+            interactionKind: "provider_system"
+        )
+
+        let items = TimelineBuilder.build(events: [compaction, hiddenSystem])
+
+        XCTAssertEqual(items.count, 1)
+        guard case .compactionBoundary(let boundary) = items[0] else {
+            return XCTFail("expected compaction boundary row")
+        }
+        XCTAssertEqual(boundary.contentText, compaction.contentText)
+        XCTAssertEqual(items[0].id, "compaction-boundary:43")
+
+        let payloadItems = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
+        XCTAssertEqual(payloadItems.map(\.kind), ["compaction"])
+        XCTAssertEqual(payloadItems.first?.body, compaction.contentText)
+    }
+
     func testProviderReasoningIsAVisibleRowBetweenToolCalls() {
         // Gemini through OMP writes no prose between tool calls; its reasoning
         // summary is the only narration, so it must not vanish with other

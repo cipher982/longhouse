@@ -39,6 +39,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import provider_notification_display_text
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -2039,8 +2040,11 @@ async def _read_storage_v2_session_events_page_admitted(
                     # only fall back to the stored fact when replay has no
                     # answer because evidence is unavailable.
                     interaction_kind = recovered_kind if recovered_kind is not None else getattr(record, "interaction_kind", None)
-                    is_provider_notification = interaction_kind == INTERACTION_PROVIDER_NOTIFICATION
-                    if not is_provider_notification and not semantic_event_included(
+                    is_timeline_surface_system = interaction_kind in {
+                        INTERACTION_PROVIDER_NOTIFICATION,
+                        INTERACTION_COMPACTION_BOUNDARY,
+                    }
+                    if not is_timeline_surface_system and not semantic_event_included(
                         spec.provider,
                         role=record.role,
                         content_text=record.content_text,

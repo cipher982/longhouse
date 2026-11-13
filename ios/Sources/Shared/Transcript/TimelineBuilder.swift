@@ -16,6 +16,7 @@ enum ToolPairing: String, Sendable {
 enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
+    case compactionBoundary(SessionEvent)
     case providerNotification(SessionEvent)
     /// A provider's own reasoning summary. Providers that narrate only here
     /// (Gemini via OMP emits thinking plus tool calls, never prose) would
@@ -30,6 +31,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e): return "user:\(e.id)"
         case .assistant(let e): return "prose:\(e.id)"
+        case .compactionBoundary(let e): return "compaction-boundary:\(e.id)"
         case .providerNotification(let e): return "provider-notification:\(e.id)"
         case .reasoning(let e): return "reasoning:\(e.id)"
         case .action(let action, _): return action.id
@@ -45,7 +47,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e), .assistant(let e), .orphanTool(let e):
             return e.timestamp
-        case .providerNotification(let e), .reasoning(let e):
+        case .compactionBoundary(let e), .providerNotification(let e), .reasoning(let e):
             return e.timestamp
         case .action(_, let timestamp):
             return timestamp
@@ -459,6 +461,10 @@ enum TimelineBuilder {
         var answerIndexes: Set<Int> = []
 
         for event in events {
+            if event.interactionKind == "compaction_boundary" {
+                raw.append(.compactionBoundary(event))
+                continue
+            }
             if event.interactionKind == "provider_notification" {
                 raw.append(.providerNotification(event))
                 continue

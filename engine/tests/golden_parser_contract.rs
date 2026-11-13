@@ -404,9 +404,20 @@ fn golden_codex_turn_signal_facts() {
     assert!(
         events.events.iter().all(|event| !matches!(
             event.raw_type.as_str(),
-            "task_complete" | "token_count" | "turn_context" | "compacted" | "stream_error"
+            "task_complete" | "token_count" | "turn_context" | "stream_error"
         )),
-        "signal lines must not become render events"
+        "turn signal lines must not become render events"
+    );
+    let compacted_events: Vec<_> = events
+        .events
+        .iter()
+        .filter(|event| event.raw_type == "compacted")
+        .collect();
+    assert_eq!(compacted_events.len(), 1);
+    assert_eq!(compacted_events[0].role, "system");
+    assert_eq!(
+        compacted_events[0].content_text.as_deref(),
+        Some("Conversation compacted")
     );
     // The third turn was stopped before any model call reported tokens: it
     // closes with a duration and no usage, never the previous turn's counts

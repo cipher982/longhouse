@@ -1369,6 +1369,161 @@ async def test_storage_v2_serves_an_omp_background_job_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_serves_full_compaction_boundaries_and_hides_microcompact(monkeypatch):
+    """Full compactions are served with cursor pagination; microcompact stays hidden."""
+
+    tempdir = TemporaryDirectory(prefix="lh2-compaction-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(root / "objects")
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+
+    tenant_id = get_settings().archive_primary_tenant_id
+    session_id = str(uuid4())
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-723456789abc")
+    raw_values = (
+        {"type": "user", "message": {"role": "user", "content": "First question"}},
+        {"type": "system", "subtype": "microcompact_boundary", "content": "Context microcompacted"},
+        {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "content": "Conversation compacted",
+            "compactMetadata": {"trigger": "auto", "preTokens": 155708},
+        },
+        {"type": "assistant", "message": {"role": "assistant", "content": "After compaction"}},
+    )
+    raw_records: list[tuple[int, bytes]] = []
+    position = 0
+    for value in raw_values:
+        data = json.dumps(value, separators=(",", ":")).encode("utf-8") + b"\n"
+        raw_records.append((position, data))
+        position += len(data)
+    payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=epoch)
+    payload["provider"] = "claude"
+    payload["session_id"] = session_id
+    payload["range_end"] = position
+    payload["records"] = [
+        {"source_position": source_position, "data_b64": base64.b64encode(data).decode("ascii")} for source_position, data in raw_records
+    ]
+    payload["render"]["records"] = [
+        {
+            "event_id": "u-1",
+            "order_time_us": 1_720_780_400_000_001,
+            "source_position": raw_records[0][0],
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "First question",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 0,
+        },
+        {
+            "event_id": "sys-micro",
+            "order_time_us": 1_720_780_400_000_002,
+            "source_position": raw_records[1][0],
+            "event_subordinal": 0,
+            "role": "system",
+            "content_text": "Context microcompacted",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 1,
+        },
+        {
+            "event_id": "sys-compact",
+            "order_time_us": 1_720_780_400_000_003,
+            "source_position": raw_records[2][0],
+            "event_subordinal": 0,
+            "role": "system",
+            "content_text": "Conversation compacted [trigger=auto pre_tokens=155708]",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 2,
+        },
+        {
+            "event_id": "a-2",
+            "order_time_us": 1_720_780_400_000_004,
+            "source_position": raw_records[3][0],
+            "event_subordinal": 0,
+            "role": "assistant",
+            "content_text": "After compaction",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+            "raw_record_ordinal": 3,
+        },
+    ]
+    identity = EnvelopeIdentity(
+        tenant_id=tenant_id,
+        machine_id="cinder",
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=epoch,
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=position,
+        record_hashes=hash_records(tuple(data for _source_position, data in raw_records)),
+    )
+    payload["expected_envelope_id"] = envelope_id(identity)
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert response.status_code == 200, response.text
+
+            page1 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=2&anchor=start")
+            assert page1.status_code == 200, page1.text
+            body1 = page1.json()
+            assert [event["event_id"] for event in body1["events"]] == ["u-1", "sys-compact"]
+            assert body1["events"][1]["role"] == "system"
+            assert body1["events"][1]["interaction_kind"] == "compaction_boundary"
+            assert body1["has_more"] is True
+
+            page2 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=2&anchor=start&cursor={body1['next_cursor']}")
+            assert page2.status_code == 200, page2.text
+            assert [event["event_id"] for event in page2.json()["events"]] == ["a-2"]
+
+        session = await catalog.call("storage.session.read.v2", {"session_id": session_id})
+        assert session["session"]["user_messages"] == 1
+        assert session["session"]["assistant_messages"] == 1
+        assert session["session"]["first_user_message_preview"] == "First question"
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypatch):
     tempdir = TemporaryDirectory(prefix="lh2-media-", dir="/tmp")
     root = Path(tempdir.name)

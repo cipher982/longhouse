@@ -180,6 +180,14 @@ body {
   font-weight: 650;
 }
 
+.compaction-detail {
+  color: var(--secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turn-end {
   margin-top: 8px;
   color: var(--secondary);

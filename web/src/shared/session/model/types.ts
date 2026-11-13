@@ -64,6 +64,7 @@ export type TimelineAction = {
 export type TimelineItem =
   | { kind: "seam"; seam: TimelineSeam }
   | { kind: "action"; action: TimelineAction }
+  | { kind: "compaction"; event: AgentEvent }
   | { kind: "provider_notification"; event: AgentEvent }
   | { kind: "reasoning"; event: AgentEvent }
   | { kind: "message"; event: AgentEvent }

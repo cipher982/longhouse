@@ -1297,7 +1297,7 @@ def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
     manifest = managed_provider_contract_manifest()
     surfaces = transcript_signal_surfaces()
     assert set(surfaces) == TRANSCRIPT_SIGNAL_IDS
-    assert surfaces["context.compaction"]["disposition"] == "not_implemented"
+    assert surfaces["context.compaction"]["disposition"] == "implemented"
     assert surfaces["turn.usage"]["disposition"] == "implemented"
 
     for contract in all_managed_provider_contracts():
@@ -1309,7 +1309,8 @@ def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
             assert "fields" not in usage_cell, contract.provider
 
     open_surfaces = {row["operation"] for row in outstanding_factory_work() if row["operation"].startswith("transcript_signal_surface:")}
-    assert {"transcript_signal_surface:context.compaction", "transcript_signal_surface:turn.api_error"} <= open_surfaces
+    assert "transcript_signal_surface:turn.api_error" in open_surfaces
+    assert "transcript_signal_surface:context.compaction" not in open_surfaces
 
     with pytest.raises(ValueError, match="transcript_signal_surfaces missing"):
         _validate_transcript_signal_surfaces({"transcript_signal_surfaces": {}}, manifest["providers"])

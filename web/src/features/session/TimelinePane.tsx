@@ -51,6 +51,7 @@ import {
   isToolInteractionRunning,
   parseLonghouseOutput,
   splitExplorationOverflow,
+  summarizeCompactionNotice,
   timelineItemContainsSelection,
   subagentLabel,
   summarizeSubagents,
@@ -213,12 +214,28 @@ const SeamRow = memo(function SeamRow({ seam }: { seam: TimelineSeam }) {
   );
 });
 
+const CompactionRow = memo(function CompactionRow({ event }: { event: AgentEvent }) {
+  const { title, detail } = summarizeCompactionNotice(event.content_text);
+  return (
+    <div id={`event-${event.id}`} className="tl-seam tl-seam--compaction" data-testid="session-compaction-boundary">
+      <div className="tl-seam__rule" />
+      <div className="tl-seam__body">
+        <span className="tl-seam__label">{title}</span>
+        {detail ? <span className="tl-seam__description">{detail}</span> : null}
+      </div>
+      <div className="tl-seam__stamp">{formatContinuationStamp(event.timestamp)}</div>
+    </div>
+  );
+});
+
 function timelineItemIdentity(item: TimelineItem): string {
   switch (item.kind) {
     case "seam":
       return `seam:${item.seam.key}`;
     case "action":
       return `action:${item.action.key}`;
+    case "compaction":
+      return `compaction:${item.event.id}`;
     case "reasoning":
       return `reasoning:${item.event.id}`;
     case "provider_notification":
@@ -238,6 +255,7 @@ function timelineItemRowId(item: TimelineItem): string | null {
       return `seam-${item.seam.key}`;
     case "action":
       return `action-${item.action.action.event_id ?? item.action.key}`;
+    case "compaction":
     case "reasoning":
     case "provider_notification":
     case "message":
@@ -1455,7 +1473,7 @@ export const TimelinePane = memo(function TimelinePane({
           (item.action.action.provider || "").toLowerCase().includes(query)
         );
       }
-      if (item.kind === "provider_notification") {
+      if (item.kind === "provider_notification" || item.kind === "compaction") {
         return item.event.content_text?.toLowerCase().includes(query) ?? false;
       }
       const interactions =
@@ -1649,6 +1667,9 @@ export const TimelinePane = memo(function TimelinePane({
 
     if (item.kind === "action") {
       return <ActionRow key={item.action.key} action={item.action} />;
+    }
+    if (item.kind === "compaction") {
+      return <CompactionRow key={item.event.id} event={item.event} />;
     }
     if (item.kind === "reasoning") {
       return (

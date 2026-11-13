@@ -240,7 +240,7 @@ extension WebTranscriptView {
         switch item {
         case .user(let event), .assistant(let event), .orphanTool(let event):
             turnEnd = event.turnEnd
-        case .providerNotification, .reasoning:
+        case .compactionBoundary, .providerNotification, .reasoning:
             turnEnd = nil
         case .tool(let call, let result, _):
             turnEnd = result?.turnEnd ?? call.turnEnd
@@ -290,6 +290,8 @@ extension WebTranscriptView {
                 origin: nil,
                 mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
             )
+        case .compactionBoundary(let event):
+            return compactionPayload(id: item.id, text: event.contentText ?? "")
         case .providerNotification(let event):
             return providerNotificationPayload(id: item.id, text: event.contentText ?? "")
         case .reasoning(let event):
@@ -348,6 +350,26 @@ extension WebTranscriptView {
             media: mediaRefs,
             attachedImages: split.imageCount,
             attachmentThumbs: attachmentThumbs?.isEmpty == false ? attachmentThumbs : nil
+        )
+    }
+
+    private nonisolated static func compactionPayload(id: String, text: String) -> WebTranscriptPayloadItem {
+        WebTranscriptPayloadItem(
+            id: id,
+            kind: "compaction",
+            role: nil,
+            title: nil,
+            subtitle: nil,
+            body: text,
+            fullBody: nil,
+            collapsed: false,
+            status: nil,
+            duration: nil,
+            input: nil,
+            output: nil,
+            calls: [],
+            origin: nil,
+            media: nil
         )
     }
 

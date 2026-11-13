@@ -522,3 +522,22 @@ describe("the document entry", () => {
     expect(typeof window.waitForTranscriptFrame).toBe("function");
   });
 });
+
+describe("compaction boundaries", () => {
+  it("renders compaction boundaries as divider rows", () => {
+    render({
+      items: [
+        {
+          id: "compaction-boundary:1",
+          kind: "compaction",
+          body: "Conversation compacted [trigger=auto pre_tokens=155708]",
+        },
+      ],
+    });
+
+    const row = root().querySelector('[data-testid="session-compaction-boundary"]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("Context compacted");
+    expect(row?.textContent).toContain("Auto · 155.7k tokens");
+  });
+});
