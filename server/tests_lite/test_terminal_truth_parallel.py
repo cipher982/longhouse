@@ -427,19 +427,6 @@ def test_the_log_line_the_run_looks_for_is_the_one_the_embedder_writes() -> None
     assert f'logger.info("{parallel.EMBEDDING_LOADED} ' in source
 
 
-def test_the_model_cache_holds_one_directory_named_by_the_pin(tmp_path) -> None:
-    from zerg.embedding_space import EMBEDDING_ARTIFACT_DIRECTORY
-
-    assert parallel.embedding_model_dir(None) is None
-    (tmp_path / "cache" / "an-older-pin").mkdir(parents=True)
-    (tmp_path / "cache" / "an-older-pin" / "model.onnx").write_text("x")
-    current = parallel.embedding_model_dir(tmp_path / "cache")
-    assert current == tmp_path / "cache" / EMBEDDING_ARTIFACT_DIRECTORY
-    current.mkdir()
-    assert parallel.embedding_model_dir(tmp_path / "cache") == current
-    assert [d.name for d in (tmp_path / "cache").iterdir()] == [EMBEDDING_ARTIFACT_DIRECTORY]
-
-
 def test_fewer_shards_run_at_once_when_the_memory_limit_holds_fewer_and_never_none() -> None:
     assert parallel.fit_jobs(8, None) == (8, "")
     assert parallel.fit_jobs(8, (64.0, "a limit of 64.0 GiB")) == (8, "")

@@ -605,7 +605,7 @@ def run_all(args: argparse.Namespace) -> int:
                 server_copies[m.name] = mutations.prepare_server_copy(m, copies_root / m.name)
     shards = make_shards(
         plan, engine=engine, cli=cli, providers_per_shard=args.providers_per_shard, tokens=args.tokens, rate=args.rate,
-        mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=embedding_model_dir(args.embed_model_cache),
+        mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
     )  # fmt: skip
     args.jobs_asked = args.jobs
     args.jobs, why = fit_jobs(args.jobs, memory_room_gib())
@@ -678,20 +678,6 @@ def run_all(args: argparse.Namespace) -> int:
         f"{wall:.0f} s; one after another the shards are {sum(r.seconds for r in runs):.0f} s; {len(kept)} scratch kept)"
     )
     return 0 if judged.ok else 1
-
-
-def embedding_model_dir(cache: Path | None) -> Path | None:
-    """The model's directory under a cache that outlives the checkout, named by its pin; older pins are removed."""
-
-    if cache is None:
-        return None
-    from zerg.embedding_space import EMBEDDING_ARTIFACT_DIRECTORY
-
-    cache.mkdir(parents=True, exist_ok=True)
-    for other in cache.iterdir():
-        if other.is_dir() and other.name != EMBEDDING_ARTIFACT_DIRECTORY:
-            shutil.rmtree(other, ignore_errors=True)
-    return cache / EMBEDDING_ARTIFACT_DIRECTORY
 
 
 def _all_units(plan: Plan) -> dict[str, Unit]:
@@ -807,7 +793,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-rerun", dest="rerun", action="store_false", help="judge the first try only (the nightly's raw rate)")
     parser.add_argument("--mutation-cache", type=Path, default=SCRATCH_ROOT.parent / "tt-mutants", help="mutated engine binaries")
     parser.add_argument("--cargo-target", type=Path, default=REPO_ROOT / ".build" / "cargo-target", help="warm cargo target to clone")
-    parser.add_argument("--embed-model-cache", type=Path, help="keeps the embedding model for the one shard that loads it")
+    parser.add_argument(
+        "--embed-model-cache",
+        type=Path,
+        help="where the one shard that runs the embedding lane keeps the model (the host verifies it by checksum and downloads what is missing)",
+    )
     parser.add_argument("--tokens", type=int, default=100)
     parser.add_argument("--rate", type=float, default=20.0)
     parser.add_argument("--pass-index", type=int, default=1, help="the <i> of pass-<i>-<scenario>.json")
