@@ -182,7 +182,7 @@ class WorkflowTests(unittest.TestCase):
     def test_only_the_scratch_of_shards_with_a_wrong_row_is_kept_and_never_a_provider_home(self):
         text = WORKFLOW.read_text()
         self.assertIn('.get("kept_scratch", [])', text)
-        self.assertIn("tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*'", text)
+        self.assertIn("tar --exclude='*/h' --exclude='*/host-home' --exclude='*.db' --exclude='*.db-*'", text)
         self.assertIn('tar -czf "$TT_OUT/shards.tgz" -C "$TT_OUT" shards', text)
 
     def test_the_collect_step_keeps_the_results_of_a_run_that_kept_no_scratch(self):
