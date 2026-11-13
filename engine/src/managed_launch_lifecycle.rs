@@ -209,6 +209,7 @@ fn runtime_host_client() -> reqwest::Client {
 #[derive(Debug)]
 struct ManagedLaunchOutcomeHttpError {
     outcome: &'static str,
+    session_id: String,
     status: reqwest::StatusCode,
     detail: Option<String>,
 }
@@ -218,13 +219,13 @@ impl std::fmt::Display for ManagedLaunchOutcomeHttpError {
         match self.detail.as_deref() {
             Some(detail) => write!(
                 formatter,
-                "Runtime Host rejected managed launch {} ({}): {}",
-                self.outcome, self.status, detail
+                "Runtime Host rejected managed launch {} for {} ({}): {}",
+                self.outcome, self.session_id, self.status, detail
             ),
             None => write!(
                 formatter,
-                "Runtime Host rejected managed launch {} ({})",
-                self.outcome, self.status
+                "Runtime Host rejected managed launch {} for {} ({})",
+                self.outcome, self.session_id, self.status
             ),
         }
     }
@@ -245,6 +246,28 @@ fn outcome_failure_is_retryable(error: &anyhow::Error) -> bool {
                 || http_error.status == reqwest::StatusCode::REQUEST_TIMEOUT
                 || http_error.status == reqwest::StatusCode::TOO_MANY_REQUESTS
         })
+}
+
+/// A bounded, sanitized plain-text body, for hosts that answer with prose.
+///
+/// `registration_error_detail` only surfaces the structured `detail` field, so
+/// a proxy or bare-text refusal would otherwise reach the user as a status
+/// code with no reason at all.
+fn bounded_plain_body(body: &str) -> Option<String> {
+    let collapsed = body
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let collapsed = collapsed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bounded = collapsed.chars().take(500).collect::<String>();
+    let trimmed = bounded.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// Why a registration attempt failed, in the terms the user needs.
@@ -626,6 +649,16 @@ impl<'a> ManagedLaunchTransaction<'a> {
             Err(error) => error,
         };
         self.confirmed = true;
+        // The first attempt already knows whether a replay could ever be
+        // accepted, so a decided refusal settles here instead of spending one
+        // more round trip to learn the same thing.
+        if !outcome_failure_is_retryable(&error) {
+            notices.push(format!(
+                "Longhouse warning: {provider} is running but its launch outcome was rejected: {error:#}"
+            ));
+            let _ = record_outcome_retry(agent_dir, self.session_id, provider, true);
+            return;
+        }
         notices.push(format!(
             "Longhouse warning: {provider} started but Longhouse could not record the launch outcome; retrying in the background: {error:#}"
         ));
@@ -928,13 +961,16 @@ pub async fn report_launch_outcome(
         .await
         .context("send managed launch outcome")?;
     if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
         return Err(anyhow::Error::new(ManagedLaunchOutcomeHttpError {
             outcome: match outcome {
                 LaunchOutcome::Confirmed => "confirmed",
                 LaunchOutcome::Aborted => "aborted",
             },
-            status: response.status(),
-            detail: registration_error_detail(&response.text().await.unwrap_or_default()),
+            session_id: session_id.to_string(),
+            status,
+            detail: registration_error_detail(&body).or_else(|| bounded_plain_body(&body)),
         }));
     }
     let payload: Value = response
@@ -1773,12 +1809,11 @@ mod tests {
             transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices, None);
         }
 
-        // The foreground confirm and exactly one replay.
-        requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Only the foreground confirm: a decided refusal is not replayed.
         requests.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(
             requests.recv_timeout(Duration::from_millis(1500)).is_err(),
-            "a 409 must not be replayed"
+            "a 409 must not be replayed, not even once"
         );
 
         let payload: Value = serde_json::from_slice(

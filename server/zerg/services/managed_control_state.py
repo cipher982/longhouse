@@ -519,7 +519,10 @@ def upsert_live_control_leases(
     if unchanged_session_keys:
         # One statement for the whole retained snapshot: liveness still has to
         # advance for every lease the machine reported, and that is the only
-        # thing an unchanged lease is saying.
+        # thing an unchanged lease is saying. Keyed by session within this one
+        # device, which is what the (device_id, session_id) pair means here: a
+        # second provider for the same session on the same machine shares the
+        # bump, and that row is still liveness for this heartbeat.
         db.query(LiveControlLease).filter(
             LiveControlLease.device_id == normalized_device_id,
             LiveControlLease.session_id.in_(unchanged_session_keys),
