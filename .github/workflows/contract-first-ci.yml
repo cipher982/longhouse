@@ -298,7 +298,7 @@ jobs:
     needs: backend-shards
     # Skipped shards (backend unchanged) leave this skipped too, as before.
     if: ${{ !cancelled() && needs.backend-shards.result != 'skipped' }}
-    runs-on: crunch
+    runs-on: grind-gate
     timeout-minutes: 5
     steps:
       - name: Every backend shard passed

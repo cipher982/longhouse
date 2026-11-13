@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 348,
+  "file_count": 350,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -65,6 +65,20 @@
     },
     {
       "path": "e2e/tests/core/sessions.spec.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "e2e/tests/core/signal-fidelity.spec.ts",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "e2e/tests/engine-fixtures.ts",
       "providers": [
         "claude",
         "codex"

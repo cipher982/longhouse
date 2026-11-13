@@ -3466,3 +3466,139 @@ def test_fts_indexes_tool_input_text_and_prunes_provider_system_rows():
     assert combined is not None
     assert combined.startswith('search-hub sources "Exa 3.0"\n')
     assert len(combined.encode("utf-8")) <= 8_192 + 64
+
+
+def test_searchd_excludes_compaction_boundary_from_search_worklog_and_user_counts(tmp_path):
+    connection = open_search_database(tmp_path / "search-compaction.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"compaction-boundary-search").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [
+        {
+            "event_id": "prompt-visible",
+            "record_ordinal": 0,
+            "order_time_us": now_us,
+            "source_position": 0,
+            "event_subordinal": 0,
+            "role": "user",
+            "content_text": "Investigate distinct needle alpha prompt",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "compaction-system",
+            "record_ordinal": 1,
+            "order_time_us": now_us + 1,
+            "source_position": 1,
+            "event_subordinal": 0,
+            "role": "system",
+            "interaction_kind": "compaction_boundary",
+            "content_text": "Conversation compacted phantomtoken99",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "compaction-user-shaped",
+            "record_ordinal": 2,
+            "order_time_us": now_us + 2,
+            "source_position": 2,
+            "event_subordinal": 0,
+            "role": "user",
+            "interaction_kind": "compaction_boundary",
+            "content_text": "Compact phantomuser88 notice",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="claude",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="claude/compaction.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="claude",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+
+        # Positive: real user prompt is searchable and counted.
+        aggregate = connection.execute(
+            "SELECT user_messages FROM session_index WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        assert aggregate[0] == 1
+
+        positive = store.search(
+            owner_id="42",
+            query="alpha",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=None,
+            window_end_us=None,
+            limit=10,
+        )
+        assert [row["event_id"] for row in positive["results"]] == ["prompt-visible"]
+
+        # Negative: compaction boundary rows never leak into FTS search or worklog turns.
+        for phantom_query in ("phantomtoken99", "phantomuser88"):
+            negative = store.search(
+                owner_id="42",
+                query=phantom_query,
+                project=None,
+                provider=None,
+                environment=None,
+                window_start_us=None,
+                window_end_us=None,
+                limit=10,
+            )
+            assert negative["results"] == []
+
+        worklog_page = store.worklog_day(
+            owner_id="42",
+            window_start_us=now_us - 1_000,
+            window_end_us=now_us + 10_000,
+            include_test=True,
+            section="sessions",
+            snapshot_id=None,
+            offset=0,
+            limit=10,
+        )
+        snapshot = store._worklog_snapshots[worklog_page["snapshot_id"]]
+        assert [row["session_id"] for row in snapshot.sessions] == [session_id]
+        assert snapshot.sessions[0]["message_count"] == 1
+        assert [row["content_text"] for row in snapshot.events] == ["Investigate distinct needle alpha prompt"]
+    finally:
+        connection.close()

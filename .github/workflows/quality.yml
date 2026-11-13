@@ -31,6 +31,31 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      - name: Check for oversized images (>2MB)
+        run: |
+          MAX_BYTES=2097152  # 2MB in bytes
+          FOUND_OVERSIZED=0
+
+          echo "Checking images in web/public..."
+
+          while IFS= read -r -d '' file; do
+            size_bytes=$(stat -c%s "$file")
+
+            if [ "$size_bytes" -gt "$MAX_BYTES" ]; then
+              size_mb=$(awk "BEGIN {printf \"%.2f\", $size_bytes/1048576}")
+              echo "❌ $file: ${size_mb}MB (max: 2MB)"
+              FOUND_OVERSIZED=1
+            fi
+          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
+
+          if [ "$FOUND_OVERSIZED" -eq 1 ]; then
+            echo ""
+            echo "🚨 Found oversized images! Compress them before merging."
+            exit 1
+          fi
+
+          echo "✅ All images under 2MB"
+
       - name: Setup Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -56,37 +81,3 @@ jobs:
       - name: Run Lighthouse CI
         run: lhci autorun
         working-directory: web
-
-  image-size:
-    timeout-minutes: 20
-    runs-on: crunch
-    name: "🖼️ Image Size Check"
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Check for oversized images (>2MB)
-        run: |
-          MAX_BYTES=2097152  # 2MB in bytes
-          FOUND_OVERSIZED=0
-
-          echo "Checking images in web/public..."
-
-          while IFS= read -r -d '' file; do
-            size_bytes=$(stat -c%s "$file")
-            size_kb=$((size_bytes / 1024))
-
-            if [ "$size_bytes" -gt "$MAX_BYTES" ]; then
-              size_mb=$(awk "BEGIN {printf \"%.2f\", $size_bytes/1048576}")
-              echo "❌ $file: ${size_mb}MB (max: 2MB)"
-              FOUND_OVERSIZED=1
-            fi
-          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
-
-          if [ "$FOUND_OVERSIZED" -eq 1 ]; then
-            echo ""
-            echo "🚨 Found oversized images! Compress them before merging."
-            exit 1
-          fi
-
-          echo "✅ All images under 2MB"

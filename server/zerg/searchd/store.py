@@ -45,10 +45,31 @@ _FAST_KEY_TIE_BITS = 11
 _FAST_KEY_TIE_LIMIT = 1 << _FAST_KEY_TIE_BITS
 _FAST_KEY_MAX_ORDER_TIME_US = 1 << 52
 
-_PUBLISH_AGGREGATES_SQL = """
+_NON_CONTENT_INTERACTION_KINDS = (
+    "provider_notification",
+    "compaction_boundary",
+)
+_NON_USER_INTERACTION_KINDS = (
+    "local_control",
+    "local_control_output",
+    "conversation_boundary",
+    "compaction_boundary",
+    "provider_system",
+    "provider_reasoning",
+    "provider_notification",
+)
+_NON_CONTENT_SQL_LIST = ", ".join(f"'{kind}'" for kind in _NON_CONTENT_INTERACTION_KINDS)
+_NON_USER_SQL_LIST = ", ".join(f"'{kind}'" for kind in _NON_USER_INTERACTION_KINDS)
+_ELIGIBLE_USER_EVENT_SQL = f"e.title_eligible = 1 AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ({_NON_USER_SQL_LIST}))"
+_SEARCHABLE_INTERACTION_SQL = (
+    f"(e.interaction_kind IS NULL OR e.interaction_kind NOT IN ({_NON_CONTENT_SQL_LIST})) "
+    "AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system')) "
+    f"AND (e.role != 'user' OR ({_ELIGIBLE_USER_EVENT_SQL}))"
+)
+
+_PUBLISH_AGGREGATES_SQL = f"""
     SELECT
-        SUM(CASE WHEN e.role = 'user' AND e.title_eligible = 1
-                  AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))
+        SUM(CASE WHEN e.role = 'user' AND {_ELIGIBLE_USER_EVENT_SQL}
                  THEN 1 ELSE 0 END) AS user_messages,
         SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL
                   AND (e.branch_kind IS NULL OR e.branch_kind NOT IN ('abandoned', 'reasoning'))
@@ -64,7 +85,7 @@ _PUBLISH_AGGREGATES_SQL = """
       AND e.session_id = ? AND e.generation_id = ?
 """
 
-_ARCHIVE_SEARCH_SQL = """
+_ARCHIVE_SEARCH_SQL = f"""
     SELECT e.id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            COALESCE(s.device_id, e.machine_id) AS device_id,
@@ -99,10 +120,7 @@ _ARCHIVE_SEARCH_SQL = """
       AND (? IS NULL OR s.environment = ?)
       AND (? IS NULL OR e.order_time_us >= ?)
       AND (? IS NULL OR e.order_time_us < ?)
-      AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-      AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-      AND (e.role != 'user' OR (e.title_eligible = 1
-           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+      AND {_SEARCHABLE_INTERACTION_SQL}
     ORDER BY events_fts.rank ASC
     LIMIT ?
 """
@@ -119,7 +137,7 @@ _ARCHIVE_SEARCH_WITHOUT_SNIPPETS_SQL = _ARCHIVE_SEARCH_SQL.replace(
 # recent candidate walk just like the published recent index. The response
 # reports when the walk saturated; callers never mistake a bounded ranking for
 # an exhaustive one.
-_ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
+_ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = f"""
     WITH candidates AS (
         SELECT e.id AS search_event_id, bm25(events_fts) AS rank
         FROM events_fts
@@ -142,10 +160,7 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
           AND (? IS NULL OR s.environment = ?)
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-          AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+          AND {_SEARCHABLE_INTERACTION_SQL}
         ORDER BY events_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -191,7 +206,7 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
 # real events carry multi-KB tool output, so snippetting a full candidate window
 # cost seconds and still blew the deadline on hosted data even after the
 # ranking fix. Snippetting the final page instead keeps that cost flat.
-_SEARCHABLE_SEARCH_SQL = """
+_SEARCHABLE_SEARCH_SQL = f"""
     WITH candidates AS (
         -- Eligibility filters sit inside the capped walk: filtering after the
         -- LIMIT let newer matches from other projects crowd out every eligible
@@ -215,10 +230,7 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (? IS NULL OR e.environment = ?)
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-          AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+          AND {_SEARCHABLE_INTERACTION_SQL}
         ORDER BY searchable_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -261,13 +273,10 @@ _CANDIDATE_CEILING = 10_000
 # correctness lane. Interactive recent recall uses _SEARCHABLE_SEARCH_SQL.
 _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
-_CLEAN_RECALL_TURN_PREDICATE = """
+_CLEAN_RECALL_TURN_PREDICATE = f"""
        e.role IN ('user', 'assistant')
        AND e.tool_name IS NULL
-       AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-      AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-      AND (e.role != 'user' OR (e.title_eligible = 1
-           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+       AND {_SEARCHABLE_INTERACTION_SQL}
 """
 
 _CONTEXT_TARGET_SQL = f"""
@@ -2277,25 +2286,17 @@ class SearchStore:
         cursor_started_at = cursor["started_at"] if cursor is not None else None
         cursor_session_id = cursor["session_id"] if cursor is not None else None
         rows = self.connection.execute(
-            """
+            f"""
             WITH active AS (
                 SELECT e.session_id,
                        MIN(e.order_time_us) AS first_event_us,
                        MAX(e.order_time_us) AS last_event_us,
                         MIN(CASE
-                             WHEN e.role IN ('user', 'assistant') AND e.tool_name IS NULL
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-                                AND (e.role != 'user' OR (e.title_eligible = 1
-                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+                             WHEN {_CLEAN_RECALL_TURN_PREDICATE}
                            THEN e.order_time_us
                        END) AS first_message_us,
                         SUM(CASE
-                             WHEN e.role IN ('user', 'assistant') AND e.tool_name IS NULL
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-                                AND (e.role != 'user' OR (e.title_eligible = 1
-                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+                             WHEN {_CLEAN_RECALL_TURN_PREDICATE}
                            THEN 1 ELSE 0
                        END) AS message_count,
                        COUNT(*) AS day_event_count
@@ -2356,7 +2357,7 @@ class SearchStore:
     ) -> dict[str, object]:
         cursor_values = _event_cursor_values(cursor)
         rows = self.connection.execute(
-            """
+            f"""
             SELECT e.session_id, e.role, e.source_object_id, e.record_ordinal, e.order_time_us,
                    e.machine_id, e.provider, e.opaque_source_id, e.source_epoch,
                    e.source_position, e.event_subordinal, e.event_key,
@@ -2370,12 +2371,7 @@ class SearchStore:
              AND m.object_id = e.source_object_id
             WHERE s.owner_id = ?
               AND e.order_time_us >= ? AND e.order_time_us < ?
-               AND e.role IN ('user', 'assistant')
-               AND e.tool_name IS NULL
-              AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-              AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
-              AND (e.role != 'user' OR (e.title_eligible = 1
-                   AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
+               AND {_CLEAN_RECALL_TURN_PREDICATE}
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
               AND (COALESCE(s.hidden_from_default_timeline, 0) = 0
                    OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))
@@ -2618,23 +2614,11 @@ def _object_projection_hash(**value: object) -> str:
 
 
 def _is_fts_indexable_event(*, role: str, interaction_kind: str | None, title_eligible: bool) -> bool:
-    if interaction_kind in ("provider_notification", "compaction_boundary"):
+    if interaction_kind in _NON_CONTENT_INTERACTION_KINDS:
         return False
     if interaction_kind in ("provider_system", "provider_reasoning") and role in ("user", "system"):
         return False
-    if role == "user" and (
-        not title_eligible
-        or interaction_kind
-        in (
-            "local_control",
-            "local_control_output",
-            "conversation_boundary",
-            "compaction_boundary",
-            "provider_system",
-            "provider_reasoning",
-            "provider_notification",
-        )
-    ):
+    if role == "user" and (not title_eligible or interaction_kind in _NON_USER_INTERACTION_KINDS):
         return False
     return True
 

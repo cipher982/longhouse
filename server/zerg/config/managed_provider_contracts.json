@@ -23,7 +23,7 @@
     },
     "context.compaction": {
       "disposition": "implemented",
-      "surface_proof": "server/tests_lite/test_agents_storage_v2.py"
+      "surface_proof": "e2e/tests/core/signal-fidelity.spec.ts"
     },
     "turn.api_error": {
       "disposition": "not_implemented",
