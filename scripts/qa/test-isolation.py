@@ -398,7 +398,9 @@ def prepare_image(scratch: Path) -> ImagePreparation:
         with open(lock_path, "w") as lock_file:
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             if tar_path.is_file():
-                docker("load", "-i", str(tar_path))
+                # `docker load` names the image on stdout, and `--prepare` prints one
+                # line there that the workflow reads as the image reference.
+                docker("load", "-i", str(tar_path), stdout=sys.stderr)
                 existing = inspect_image(ref)
                 if existing is not None and existing.labels.get(MANIFEST_LABEL) == expected_manifest:
                     image_id = validate_image(ref, existing, expected_manifest)
