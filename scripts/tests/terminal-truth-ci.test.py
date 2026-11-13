@@ -185,6 +185,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*'", text)
         self.assertIn('tar -czf "$TT_OUT/shards.tgz" -C "$TT_OUT" shards', text)
 
+    def test_the_collect_step_keeps_the_results_of_a_run_that_kept_no_scratch(self):
+        """The first push run with every row right the first time (2026-11-13) had nothing kept, the step's grep matched
+        nothing, and under bash -e the step failed before the receipt was stored: a red job on a passing gate."""
+
+        text = WORKFLOW.read_text()
+        start = text.index("      - name: Collect recordings and keep the results\n")
+        body = text[text.index("        run: |\n", start) + len("        run: |\n") : text.index("\n      - name:", start + 1)]
+        script = "\n".join(line[10:] for line in body.splitlines())
+        for kept in ([], ["{root}/a1001"]):
+            with tempfile.TemporaryDirectory() as tmp:
+                work = Path(tmp)
+                out, scratch = work / "out", work / "scratch"
+                (out / "shards").mkdir(parents=True)
+                (scratch / "a1001" / "0f3c" / "h").mkdir(parents=True)
+                (scratch / "a1001" / "0f3c" / "runtime-host.log").write_text("log\n")
+                (out / "fleet.json").write_text(json.dumps({"kept_scratch": [k.format(root=scratch) for k in kept]}))
+                (work / "scripts" / "ops").mkdir(parents=True)
+                (work / "scripts" / "ops" / "ci_receipts.py").write_text(
+                    "import sys, pathlib\npathlib.Path('stored.txt').write_text('\\n'.join(sys.argv[1:]))\n"
+                )
+                env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "TT_OUT": str(out), "TT_SCRATCH_ROOT": str(scratch), "GITHUB_SHA": "abc", "TT_EVENT": "push"}
+                result = subprocess.run(["bash", "-e", "-c", script], cwd=work, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stored = (work / "stored.txt").read_text()
+                self.assertIn("fleet.json", stored)
+                self.assertIn("shards.tgz", stored)
+                self.assertEqual("scratch-recordings.tgz" in stored, bool(kept))
+
     def test_the_budget_file_names_every_declared_cell(self):
         data = json.loads(BUDGET.read_text())
         for cell, value in data["budget_s"].items():

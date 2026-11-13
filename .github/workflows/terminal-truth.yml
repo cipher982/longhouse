@@ -401,7 +401,7 @@ jobs:
           # home (Codex bridge and Console worker stderr, launcher logs): the only record of why a provider launch or
           # a live-event POST stalled. Log files only.
           python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1])).get("kept_scratch", [])))' "$TT_OUT/fleet.json" 2>/dev/null \
-            | sed "s|^$TT_SCRATCH_ROOT/||" | grep -E '^[0-9a-f]+$' > "$TT_OUT/scratch-kept.txt"
+            | sed "s|^$TT_SCRATCH_ROOT/||" | { grep -E '^[0-9a-f]+$' || true; } > "$TT_OUT/scratch-kept.txt"  # nothing kept is a clean run
           if [[ -s "$TT_OUT/scratch-kept.txt" ]]; then
             (cd "$TT_SCRATCH_ROOT" && tar --exclude='*/h' --exclude='*.db' --exclude='*.db-*' -czf "$TT_OUT/scratch-recordings.tgz" -T "$TT_OUT/scratch-kept.txt")
             (cd "$TT_SCRATCH_ROOT" && while read -r d; do find "$d" -path '*/h/.longhouse/*' -name '*.log' -type f 2>/dev/null; done < "$TT_OUT/scratch-kept.txt" > "$TT_OUT/scratch-machine-logs.lst"
