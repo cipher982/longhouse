@@ -1809,12 +1809,71 @@
   color: inherit;
   font-size: inherit;
 }
+.tl-md-fence--tool {
+  margin: 0;
+  background: rgba(12, 10, 8, 0.78);
+  border-color: rgba(158, 124, 90, 0.14);
+}
+.tl-md-fence__plain--tool {
+  padding: 8px 10px;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Bounded SGR ANSI colors for tool outputs */
+.tl-ansi-red { color: var(--color-signal-fault-text); }
+.tl-ansi-green { color: var(--color-signal-live-text); }
+.tl-ansi-yellow { color: var(--color-signal-attention-text); }
+.tl-ansi-blue { color: #8FB8FF; }
+.tl-ansi-magenta { color: #D59BF6; }
+.tl-ansi-cyan { color: #7DD3D8; }
+.tl-ansi-white { color: rgba(255, 253, 248, 0.96); }
+.tl-ansi-bold { font-weight: var(--font-weight-semibold); }
+.tl-ansi-dim { color: var(--color-text-muted); }
+
 /* A table wider than the column scrolls inside its own box; its cells wrap
    between words, never one letter per line. */
+.tl-msg__table-wrap {
+  margin: 0.55em 0;
+}
+.tl-msg__table-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+.tl-msg__table-copy {
+  appearance: none;
+  border: 1px solid rgba(158, 124, 90, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 2px 7px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity var(--motion-duration-fast), color var(--motion-duration-fast), border-color var(--motion-duration-fast);
+}
+.tl-msg__table-wrap:hover .tl-msg__table-copy,
+.tl-msg__table-wrap:focus-within .tl-msg__table-copy,
+.tl-msg__table-copy:focus-visible {
+  opacity: 1;
+}
+.tl-msg__table-copy:hover,
+.tl-msg__table-copy:focus-visible {
+  color: var(--color-text-primary);
+  border-color: rgba(233, 185, 73, 0.45);
+}
+@media (hover: none) {
+  .tl-msg__table-copy {
+    opacity: 1;
+  }
+}
 .tl-msg__table-scroll {
   max-width: 100%;
   overflow-x: auto;
-  margin: 0.55em 0;
+  margin: 0;
 }
 .tl-msg__body table {
   border-collapse: collapse;

@@ -1,8 +1,6 @@
-import { Children, Fragment, isValidElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components } from "react-markdown";
 import { Link } from "react-router";
-import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "@/shared/ui";
 import { FunnelIcon } from "@/shared/ui/icons";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
@@ -59,9 +57,9 @@ import {
 } from "@/shared/session/model";
 import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
 import { useScrollToLoad } from "./useScrollToLoad";
-import { collapseUnchanged, lineDiff, type DiffLine } from "@/shared/session/model/diff";
-import type { EditStat } from "@/shared/session/model/editSummary";
-import { SyntaxHighlighter, oneDark, resolveHighlightLanguage } from "./syntaxHighlighter";
+import { CodeFence, detectLanguage } from "./CodeFence";
+import { EditDiffView } from "./EditDiffView";
+import { MarkdownBody } from "./MarkdownBody";
 import { OutboxRow, type OutboxEntry } from "./OutboxRow";
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
@@ -441,131 +439,6 @@ function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
   );
 }
 
-const MARKDOWN_HIGHLIGHT_MAX_LINES = 400;
-const MARKDOWN_HIGHLIGHT_MAX_CHARS = 20_000;
-
-function extractNodeText(node: ReactNode): string {
-  if (typeof node === "string") return node;
-  if (typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(extractNodeText).join("");
-  if (isValidElement<{ children?: ReactNode }>(node)) {
-    return extractNodeText(node.props.children);
-  }
-  return "";
-}
-
-function MarkdownFence({ children }: { children?: ReactNode }) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const timerRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-  }, []);
-
-  const firstChild = Children.toArray(children)[0];
-  const codeProps = isValidElement<{ className?: string; children?: ReactNode }>(firstChild)
-    ? firstChild.props
-    : null;
-  const rawClass = codeProps?.className ?? "";
-  const langMatch = /(?:^|\s)language-([^\s]+)/.exec(rawClass);
-  const rawLang = langMatch ? langMatch[1] : null;
-  const resolvedLang = resolveHighlightLanguage(rawLang);
-
-  const rawText = codeProps ? extractNodeText(codeProps.children) : extractNodeText(children);
-  const codeText = rawText.endsWith("\n") ? rawText.slice(0, -1) : rawText;
-
-  const lineCount = codeText ? codeText.split("\n").length : 0;
-  const shouldHighlight =
-    Boolean(resolvedLang) &&
-    codeText.length <= MARKDOWN_HIGHLIGHT_MAX_CHARS &&
-    lineCount <= MARKDOWN_HIGHLIGHT_MAX_LINES;
-
-  const handleCopy = (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    const clipboard = navigator?.clipboard;
-    if (!clipboard?.writeText) {
-      setCopyState("failed");
-      return;
-    }
-    clipboard.writeText(codeText).then(
-      () => {
-        setCopyState("copied");
-        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => setCopyState("idle"), 1600);
-      },
-      () => {
-        setCopyState("failed");
-        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => setCopyState("idle"), 2000);
-      },
-    );
-  };
-
-  return (
-    <div className="tl-md-fence">
-      <div className="tl-md-fence__header">
-        <span className="tl-md-fence__lang">{rawLang || "text"}</span>
-        <button
-          type="button"
-          className="tl-md-fence__copy"
-          aria-label="Copy code"
-          onClick={handleCopy}
-        >
-          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}
-        </button>
-        <span className="sr-only" aria-live="polite">
-          {copyState === "copied" ? "Code copied to clipboard" : copyState === "failed" ? "Copy failed" : ""}
-        </span>
-      </div>
-      <div className="tl-md-fence__scroll" tabIndex={0}>
-        {shouldHighlight && resolvedLang ? (
-          <SyntaxHighlighter
-            language={resolvedLang}
-            style={oneDark}
-            customStyle={{
-              margin: 0,
-              padding: "10px 12px",
-              background: "transparent",
-              fontSize: "0.88em",
-              lineHeight: 1.5,
-              overflow: "visible",
-            }}
-            codeTagProps={{ style: { fontFamily: "var(--font-family-mono)" } }}
-          >
-            {codeText}
-          </SyntaxHighlighter>
-        ) : (
-          <pre className="tl-md-fence__plain">
-            <code>{codeText}</code>
-          </pre>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const MARKDOWN_PLUGINS = [remarkGfm];
-
-const MARKDOWN_COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => (
-    <a {...props} target="_blank" rel="noreferrer noopener" />
-  ),
-  table: ({ node: _node, ...props }) => (
-    <div className="tl-msg__table-scroll">
-      <table {...props} />
-    </div>
-  ),
-  pre: ({ node: _node, children }) => <MarkdownFence>{children}</MarkdownFence>,
-};
-
-export const MarkdownBody = memo(function MarkdownBody({ content }: { content: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>
-      {content}
-    </ReactMarkdown>
-  );
-});
-
 const MessageRow = memo(function MessageRow({
   event,
   renderMedia,
@@ -661,31 +534,6 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
-/** Only languages PrismLight registers in lib/syntaxHighlighter.ts.
- *  Anything else falls back to a plain <pre> so we don't trigger a silent
- *  no-highlight render. Extend both lists in lockstep. */
-const EXT_TO_LANG: Record<string, string> = {
-  ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript",
-  cjs: "javascript", py: "python", sh: "bash", bash: "bash", zsh: "bash",
-  fish: "bash", json: "json", jsonc: "json", yaml: "yaml", yml: "yaml",
-  md: "markdown", markdown: "markdown", css: "css", sql: "sql",
-};
-
-function detectLanguage(text: string, hint: { filePath?: string | null; toolName?: string } = {}): string | null {
-  const path = hint.filePath?.toLowerCase() ?? "";
-  if (path) {
-    const ext = path.includes(".") ? path.slice(path.lastIndexOf(".") + 1) : "";
-    if (ext && EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-    if (path.endsWith("/makefile") || path.endsWith("makefile")) return "bash";
-  }
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try { JSON.parse(trimmed); return "json"; } catch { /* not json */ }
-  }
-  if (hint.toolName && /bash|shell|exec/i.test(hint.toolName)) return "bash";
-  return null;
-}
-
 function CodeBlock({
   text,
   language,
@@ -695,85 +543,15 @@ function CodeBlock({
   language: string | null;
   variant?: "input" | "output";
 }) {
-  const maxHeight = variant === "output" ? 420 : 320;
-  if (!language) {
-    return <pre className={`tl-code${variant === "output" ? " tl-code--output" : ""}`}>{text}</pre>;
-  }
   return (
-    <SyntaxHighlighter
+    <CodeFence
+      text={text}
       language={language}
-      style={oneDark}
-      customStyle={{
-        margin: 0,
-        padding: "8px 10px",
-        borderRadius: "var(--radius-md)",
-        border: "1px solid rgba(158, 124, 90, 0.14)",
-        fontSize: "11.5px",
-        lineHeight: 1.5,
-        maxHeight,
-        background: "rgba(12, 10, 8, 0.78)",
-      }}
-      codeTagProps={{ style: { fontFamily: "var(--font-family-mono)" } }}
+      variant={variant}
+      maxHeight={variant === "output" ? 420 : 320}
       wrapLongLines
-    >
-      {text}
-    </SyntaxHighlighter>
-  );
-}
-
-/**
- * Render an edit as a diff. Covers every shape `getEditStat` understands:
- * replace runs a line diff, create/delete render as all-added/all-removed, and
- * patch text renders its own hunks. Stats come from the memoized stat so the
- * collapsed header and this body cannot disagree.
- */
-function EditDiffView({ stat }: { stat: EditStat }) {
-  const patch = stat.patch;
-  if (!patch) return null;
-
-  const lines: DiffLine[] =
-    patch.kind === "replace"
-      ? collapseUnchanged(lineDiff(patch.oldStr, patch.newStr), 2)
-      : patch.kind === "create"
-        ? patch.content.split("\n").map((text, i) => ({ kind: "add" as const, text, oldLine: null, newLine: i + 1 }))
-        : patch.kind === "delete"
-          ? patch.content.split("\n").map((text, i) => ({ kind: "remove" as const, text, oldLine: i + 1, newLine: null }))
-          : patch.text.split("\n").map((text) => ({
-              kind:
-                text.startsWith("+") && !text.startsWith("+++")
-                  ? ("add" as const)
-                  : text.startsWith("-") && !text.startsWith("---")
-                    ? ("remove" as const)
-                    : ("equal" as const),
-              text,
-              oldLine: null,
-              newLine: null,
-            }));
-
-  return (
-    <section className="tl-detail__block">
-      <div className="tl-detail__label">
-        diff
-        {stat.filePath ? <span className="tl-detail__path"> · {stat.filePath}</span> : null}
-        {stat.hasStat ? (
-          <>
-            <span className="tl-detail__diff-stat tl-detail__diff-stat--remove"> −{stat.removed}</span>
-            <span className="tl-detail__diff-stat tl-detail__diff-stat--add"> +{stat.added}</span>
-            <span className="sr-only">{`${stat.added} lines added, ${stat.removed} lines removed`}</span>
-          </>
-        ) : null}
-      </div>
-      <div className="tl-diff">
-        {lines.map((line, i) => (
-          <div key={i} className={`tl-diff__line tl-diff__line--${line.kind}`}>
-            <span className="tl-diff__gutter">
-              {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
-            </span>
-            <span className="tl-diff__text">{line.text || " "}</span>
-          </div>
-        ))}
-      </div>
-    </section>
+      colorizeAnsi={variant === "output"}
+    />
   );
 }
 /** Bounded, click-free output preview of a collapsed tool call. */

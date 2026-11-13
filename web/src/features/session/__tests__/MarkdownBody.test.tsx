@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MarkdownBody } from "../TimelinePane";
+import { MarkdownBody } from "../MarkdownBody";
 import { resolveHighlightLanguage } from "../syntaxHighlighter";
 
 afterEach(() => {
@@ -83,5 +83,30 @@ describe("MarkdownBody", () => {
     const { container: c3 } = render(<MarkdownBody content={hugeFence} />);
     expect(c3.querySelector(".tl-md-fence__lang")?.textContent).toBe("rust");
     expect(c3.querySelector(".tl-md-fence__plain")).not.toBeNull();
+  });
+
+  it("copies rendered markdown tables as clean GFM", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    const md = [
+      "| Phase | Time |",
+      "| --- | --- |",
+      "| **Train** | `4m` |",
+    ].join("\n");
+
+    render(<MarkdownBody content={md} />);
+    const copyBtn = screen.getByRole("button", { name: "Copy table" });
+    fireEvent.click(copyBtn);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "| Phase | Time |\n| --- | --- |\n| Train | 4m |",
+      );
+      expect(copyBtn.textContent).toBe("Copied");
+    });
   });
 });

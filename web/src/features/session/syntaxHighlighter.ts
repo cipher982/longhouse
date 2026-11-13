@@ -11,8 +11,8 @@
  * refractor language (about 300 modules) as soon as a page uses this file.
  */
 /// <reference types="react-syntax-highlighter" />
+import type { CSSProperties } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 // Import only the languages we need
 import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
@@ -84,4 +84,63 @@ export function resolveHighlightLanguage(raw: string | null | undefined): string
   return REGISTERED_LANGUAGES.has(normalized) ? normalized : null;
 }
 
-export { SyntaxHighlighter, oneDark };
+/** Warm Ember-tuned Prism theme matching Longhouse's #0B0908 / #171210 ground. */
+export const emberPrismTheme: Record<string, CSSProperties> = {
+  'code[class*="language-"]': {
+    color: '#EAE0D0',
+    background: 'transparent',
+    fontFamily: 'var(--font-family-mono)',
+    textAlign: 'left',
+    whiteSpace: 'pre',
+    wordSpacing: 'normal',
+    wordBreak: 'normal',
+    lineHeight: 1.5,
+    tabSize: 2,
+  },
+  'pre[class*="language-"]': {
+    color: '#EAE0D0',
+    background: 'transparent',
+    fontFamily: 'var(--font-family-mono)',
+    textAlign: 'left',
+    whiteSpace: 'pre',
+    wordSpacing: 'normal',
+    wordBreak: 'normal',
+    lineHeight: 1.5,
+    tabSize: 2,
+    overflow: 'auto',
+    margin: 0,
+  },
+  comment: { color: '#8A7862', fontStyle: 'italic' },
+  prolog: { color: '#8A7862' },
+  doctype: { color: '#8A7862' },
+  cdata: { color: '#8A7862' },
+  punctuation: { color: '#A8957E' },
+  property: { color: '#D97757' },
+  tag: { color: '#F5D078' },
+  boolean: { color: '#F5A33B' },
+  number: { color: '#F5A33B' },
+  constant: { color: '#F5A33B' },
+  symbol: { color: '#F5A33B' },
+  deleted: { color: '#FF9B95' },
+  selector: { color: '#E9B949' },
+  'attr-name': { color: '#F5D078' },
+  string: { color: '#9BC4A2' },
+  char: { color: '#9BC4A2' },
+  builtin: { color: '#F5D078' },
+  inserted: { color: '#8EEDB9' },
+  operator: { color: '#C4B096' },
+  entity: { color: '#C4B096' },
+  url: { color: '#C4B096' },
+  variable: { color: '#D97757' },
+  atrule: { color: '#E9B949' },
+  'attr-value': { color: '#9BC4A2' },
+  function: { color: '#F5D078' },
+  'class-name': { color: '#F5D078' },
+  keyword: { color: '#E9B949' },
+  regex: { color: '#D97757' },
+  important: { color: '#E9B949', fontWeight: 600 },
+  bold: { fontWeight: 600 },
+  italic: { fontStyle: 'italic' },
+};
+
+export { SyntaxHighlighter };

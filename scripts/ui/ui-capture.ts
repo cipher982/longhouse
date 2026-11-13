@@ -1853,7 +1853,11 @@ async function main() {
     // --use-gl=angle --use-angle=swiftshader also put the compositor on
     // SwiftShader, and the first screenshot of every page then took 2.5 s on
     // an idle 4-vCPU guest and past the 30 s timeout on CI's (2026-10-07).
-    browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
+    const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
+    browser = await chromium.launch({
+      ...(executablePath ? { executablePath } : {}),
+      args: ["--enable-unsafe-swiftshader"],
+    });
     context = await browser.newContext({
       viewport: { width: opts.viewport.width, height: opts.viewport.height },
       isMobile: opts.viewport.isMobile,

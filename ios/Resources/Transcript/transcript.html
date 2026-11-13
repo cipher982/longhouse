@@ -205,7 +205,13 @@ body {
 }
 
 .message-content {
-  line-height: 1.45;
+  line-height: 1.48;
+  color: color-mix(in srgb, var(--text) 88%, transparent);
+}
+
+.message-content strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .media-strip {
@@ -269,8 +275,13 @@ p:last-child {
 }
 
 h1, h2, h3 {
-  margin: 0.35em 0 0.45em;
-  line-height: 1.18;
+  margin: 0.9em 0 0.35em;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+h1:first-child, h2:first-child, h3:first-child {
+  margin-top: 0;
 }
 
 h1 {
@@ -279,10 +290,13 @@ h1 {
 
 h2 {
   font-size: 17px;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--rule);
 }
 
 h3 {
   font-size: 15px;
+  font-weight: 700;
 }
 
 /* A table too wide for the screen scrolls sideways in here instead of
@@ -350,12 +364,37 @@ li {
   margin: 0.22em 0;
 }
 
-code {
+ul > li::marker {
+  color: var(--secondary);
+}
+
+:not(pre) > code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 0.88em;
   background: var(--code);
+  color: #3D7A4E;
   border-radius: 5px;
   padding: 1px 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+@media (prefers-color-scheme: dark) {
+  :not(pre) > code {
+    color: #9BC4A2;
+  }
+}
+
+h1 :not(pre) > code,
+h2 :not(pre) > code,
+h3 :not(pre) > code,
+table :not(pre) > code {
+  background: transparent;
+  padding: 0;
+}
+
+a code {
+  color: inherit;
 }
 
 pre {
