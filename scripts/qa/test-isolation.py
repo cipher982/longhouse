@@ -314,6 +314,27 @@ def ghcr_login(token: str) -> None:
         raise RuntimeError("GHCR authentication failed")
 
 
+def _build_local_test_image(scratch: Path, ref: str, expected_manifest: str) -> None:
+    """Build the local test-isolation image from the pinned manifest files."""
+    context = scratch / "image"
+    for name in MANIFESTS:
+        dest = context / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, dest)
+    docker(
+        "build",
+        "--build-arg",
+        f"TEST_MANIFEST_SHA={expected_manifest}",
+        "--label",
+        f"{LABEL}.image=true",
+        "-f",
+        str(context / "docker/test.dockerfile"),
+        "-t",
+        ref,
+        str(context),
+    )
+
+
 def prepare_image(scratch: Path) -> ImagePreparation:
     started = time.monotonic()
     expected_manifest = manifest_sha256()
@@ -365,25 +386,46 @@ def prepare_image(scratch: Path) -> ImagePreparation:
             cache="hit",
             source="local-cache",
         )
-    # A stale local tag is rebuilt, but an explicit GHCR digest above is
-    # always fail-closed on a provenance mismatch.
-    context = scratch / "image"
-    for name in MANIFESTS:
-        dest = context / name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / name, dest)
-    docker(
-        "build",
-        "--build-arg",
-        f"TEST_MANIFEST_SHA={expected_manifest}",
-        "--label",
-        f"{LABEL}.image=true",
-        "-f",
-        str(context / "docker/test.dockerfile"),
-        "-t",
-        ref,
-        str(context),
-    )
+
+    ci_cache_dir = Path(os.environ.get("LONGHOUSE_CI_IMAGE_CACHE_DIR", "/ci-cache/docker-images"))
+    use_ci_cache = ci_cache_dir.parent.is_dir() and os.access(ci_cache_dir.parent, os.W_OK)
+    if use_ci_cache:
+        import fcntl
+
+        ci_cache_dir.mkdir(parents=True, exist_ok=True)
+        tar_path = ci_cache_dir / f"longhouse-test-{expected_manifest}.tar"
+        lock_path = ci_cache_dir / f"longhouse-test-{expected_manifest}.lock"
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            if tar_path.is_file():
+                docker("load", "-i", str(tar_path))
+                existing = inspect_image(ref)
+                if existing is not None and existing.labels.get(MANIFEST_LABEL) == expected_manifest:
+                    image_id = validate_image(ref, existing, expected_manifest)
+                    return ImagePreparation(
+                        ref=ref,
+                        image_id=image_id,
+                        seconds=round(time.monotonic() - started, 3),
+                        cache="hit",
+                        source="ci-cache-tar",
+                    )
+            _build_local_test_image(scratch, ref, expected_manifest)
+            tmp_tar = ci_cache_dir / f".longhouse-test-{expected_manifest}.{os.getpid()}.tar.tmp"
+            try:
+                docker("save", "-o", str(tmp_tar), ref)
+                os.replace(tmp_tar, tar_path)
+            finally:
+                tmp_tar.unlink(missing_ok=True)
+            tars = sorted(
+                ci_cache_dir.glob("longhouse-test-*.tar"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for old_tar in tars[2:]:
+                old_tar.unlink(missing_ok=True)
+    else:
+        _build_local_test_image(scratch, ref, expected_manifest)
+
     existing = inspect_image(ref)
     if existing is None:
         raise RuntimeError("local dependency image build produced no image")
