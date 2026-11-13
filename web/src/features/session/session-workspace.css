@@ -698,6 +698,34 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.timeline-pane__load-older-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(158, 124, 90, 0.22);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
+}
+
+.timeline-pane__load-older-button:hover:not(:disabled) {
+  border-color: rgba(158, 124, 90, 0.45);
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.timeline-pane__load-older-button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .timeline-pane__filter-toggle {
   display: inline-flex;
   align-items: center;

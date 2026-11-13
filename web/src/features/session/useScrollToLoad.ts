@@ -26,11 +26,15 @@ export function useScrollToLoad(options: {
 
   const loadingRef = useRef(loading);
   const onLoadRef = useRef(onLoad);
+  const autoFillCountRef = useRef(0);
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { onLoadRef.current = onLoad; }, [onLoad]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      autoFillCountRef.current = 0;
+      return;
+    }
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
@@ -40,7 +44,7 @@ export function useScrollToLoad(options: {
       ([entry]) => {
         if (skipFirst) {
           skipFirst = false;
-          return;
+          if (!entry.isIntersecting) return;
         }
         if (entry.isIntersecting && !loadingRef.current) {
           onLoadRef.current();
@@ -54,4 +58,18 @@ export function useScrollToLoad(options: {
   // loading/onLoad intentionally excluded — tracked via refs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, sentinelRef]);
+
+  // If the loaded tail fits inside the viewport without overflowing (e.g. a
+  // page of tool calls collapsed into one row), there is no scrollbar and
+  // IntersectionObserver will not fire again after prepending. Auto-load up to
+  // a small bounded number of pages until content overflows.
+  useEffect(() => {
+    if (!enabled || loading) return;
+    const root = rootRef?.current;
+    if (!root || root.clientHeight <= 0) return;
+    if (root.scrollHeight <= root.clientHeight && autoFillCountRef.current < 5) {
+      autoFillCountRef.current += 1;
+      onLoadRef.current();
+    }
+  }, [enabled, loading, rootRef]);
 }

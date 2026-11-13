@@ -1545,4 +1545,34 @@ describe("TimelinePane outbox", () => {
     expect(divider).toHaveTextContent("Context compacted");
     expect(divider).toHaveTextContent("Auto · 155.7k tokens");
   });
+
+  it("renders a clickable Load earlier messages button when hasPreviousPage is true", () => {
+    const onFetchPreviousPage = vi.fn();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    render(
+      <TimelinePane
+        items={[makeTimelineMessage(1, "only message")]}
+        totalEntries={50}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={onFetchPreviousPage}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Load earlier messages" });
+    fireEvent.click(button);
+    expect(onFetchPreviousPage).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
 });

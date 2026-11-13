@@ -1875,7 +1875,25 @@ export const TimelinePane = memo(function TimelinePane({
             className="timeline-pane__load-older"
             data-testid="session-timeline-load-older"
           >
-            {isFetchingPreviousPage ? <Spinner size="sm" /> : null}
+            {hasPreviousPage ? (
+              <button
+                type="button"
+                className="timeline-pane__load-older-button"
+                disabled={isFetchingPreviousPage}
+                onClick={onFetchPreviousPage}
+              >
+                {isFetchingPreviousPage ? (
+                  <>
+                    <Spinner size="sm" />
+                    <span>Loading earlier messages...</span>
+                  </>
+                ) : (
+                  "Load earlier messages"
+                )}
+              </button>
+            ) : isFetchingPreviousPage ? (
+              <Spinner size="sm" />
+            ) : null}
           </div>
         ) : null}
         {showScopedLoading ? (
