@@ -1461,6 +1461,15 @@ def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
         stage = "stream_delivered"
     elif not frames or (kind == "tool" and not any(f.get("tool_name") not in (None, "", "exec") for f in frames)):
         stage = "kind"
+    # Reasoning must not be on the page as the reply, whatever else arrived. The stream lane counts a marker in a frame of any
+    # kind, so reasoning previewed as reply text beside one correct thinking frame read as delivered (OpenCode 1.19.5 on the
+    # Linux runner, 2026-11-13: the mutated projector sent the deltas as reply text and the part snapshot as thinking).
+    markers = [row["marker"] for row in result["signals"] if row["group"] == group] if kind == "thinking" else []
+    as_reply = [
+        f for f in result.get("sse_frames", []) if f.get("kind") == "reply" and any(m in str(f.get("text_tail") or "") for m in markers)
+    ]
+    if stage == "-" and as_reply:
+        stage = "kind"
     return {
         "cell": result["cell"],
         "scenario": result["scenario"],
@@ -1472,6 +1481,7 @@ def kinds_expectation(result: dict[str, Any]) -> dict[str, Any] | None:
         "stream_median_lag_s": entry["sse"]["delay_median_s"],
         "kinds_on_stream": sorted({str(f.get("kind")) for f in result.get("sse_frames", [])}),
         "tool_names_on_stream": sorted({str(f["tool_name"]) for f in result.get("sse_frames", []) if f.get("tool_name")}),
+        "thinking_markers_in_reply_frames": len(as_reply),
         "stage": stage,
         "ok": stage == "-",
     }

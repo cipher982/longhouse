@@ -660,6 +660,10 @@ def run_mutations(args: argparse.Namespace) -> int:
         result = run_kinds_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
         last_kinds.clear()
         last_kinds.update({k: result[k] for k in EVIDENCE_KEYS if k in result})
+        if result.get("sse_frames"):
+            last_kinds["sse_frames"] = [
+                {k: f.get(k) for k in ("t", "kind", "tool_name", "text_len", "text_tail")} for f in result["sse_frames"][:200]
+            ]
         if result["outcome"] != "measured":
             failed = [check["name"] for check in result.get("checks", []) if not check["ok"]]
             reason = str(result.get("reason", ""))
@@ -672,7 +676,8 @@ def run_mutations(args: argparse.Namespace) -> int:
             upstream = kinds_expectation({**result, "outcome": "measured"})
             if upstream is not None and not upstream["ok"]:
                 return "fail", upstream["stage"], f"{json.dumps({k: upstream[k] for k in ('engine_posted', 'stream')})}; then {reason}"
-            return "fail", "state_shown", reason
+            intact = "" if upstream is None else f" (published-kind check ok: kinds on the stream {upstream.get('kinds_on_stream')})"
+            return "fail", "state_shown", f"{reason}{intact}"
         check = kinds_expectation(result)
         if check is None:
             return "fail", "preflight", "the cell has no published-kind expectation"

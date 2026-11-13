@@ -408,3 +408,32 @@ def test_the_woken_reader_reads_once_per_wake_and_once_more_for_a_wake_that_land
 
     assert (reader.wakes, reader.reads) == (3, 2)
     assert [snap["headline"] for _, snap in reader.timeline] == ["Thinking", "Using Bash"]
+
+
+def _thinking_result(frames: list[dict]) -> dict:
+    """An OpenCode Console thinking cell whose two reasoning markers reached the engine post and the stream (no terminal reference)."""
+
+    signals = [
+        {"name": f"thinking {i}", "group": "thinking", "marker": marker, "reference": None, "engine_runtime_post": 1.0 + i, "sse": 1.1 + i,
+         "terminal_any": None, "terminal_default_view": None, "provider_file": None, "events": None, "workspace": None}
+        for i, marker in enumerate(("TTKa0001", "TTKa0002"))
+    ]  # fmt: skip
+    return {"cell": "opencode/console", "scenario": "thinking", "outcome": "measured", "signals": signals, "sse_frames": frames}
+
+
+def test_reasoning_that_also_arrives_as_reply_text_fails_the_published_kind_check_at_kind() -> None:
+    """Linux runner, 2026-11-13: deltas previewed as reply text, the part snapshot as thinking, and the check read delivered."""
+
+    from zerg.qa.terminal_truth_kinds import kinds_expectation
+
+    thinking = {"kind": "thinking", "text_tail": "weighing it TTKa0001 TTKa0002"}
+    reply = {"kind": "reply", "text_tail": "the answer is TTKr0001"}
+    clean = kinds_expectation(_thinking_result([thinking, reply]))
+    assert clean is not None and clean["ok"] and clean["thinking_markers_in_reply_frames"] == 0
+
+    mislabelled = {"kind": "reply", "text_tail": "weighing it TTKa0001"}
+    both = kinds_expectation(_thinking_result([mislabelled, thinking, reply]))
+    assert both is not None and (both["ok"], both["stage"], both["thinking_markers_in_reply_frames"]) == (False, "kind", 1)
+
+    only_as_reply = kinds_expectation(_thinking_result([mislabelled, reply]))
+    assert only_as_reply is not None and (only_as_reply["ok"], only_as_reply["stage"]) == (False, "kind")
