@@ -13,13 +13,12 @@ cleanup is part of acceptance. This skill adds the mechanics.
 
 | Command | Runs |
 |---|---|
-| `make test` | backend unit tests (`server/tests_lite`) |
-| `make test-backend-single TEST=tests_lite/<file>.py` | one backend file or node |
+| `make test` | backend unit tests (`server/tests_lite`; `TEST=tests_lite/<file>.py` focuses) |
 | `make test-frontend` | web unit tests plus type-check (`ARGS="src/path.test.ts"` focuses) |
-| `make test-engine` / `make test-engine-single TEST="mod::tests::name"` | Rust engine |
+| `make test-engine` | Rust engine (`TEST="mod::tests::name"` focuses) |
 | `make test-runner` | runner |
 | `make test-e2e-core` (alias `make test-e2e`) | launch-surface E2E plus accessibility, retries=0 |
-| `make test-e2e-single TEST=tests/<spec>.ts` | one E2E spec (`VERBOSE=1` adds list, HTML and JUnit reporters) |
+| `make test-transcript-stability` | web and iOS frame-by-frame layout/scroll stability |
 | `make validate` | every contract and drift check (pre-push gate) |
 | `make test-ci` / `make test-full` | broad cutover runs; CI or diagnosis only |
 

@@ -582,3 +582,10 @@ jobs:
         if: ${{ !cancelled() && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ios == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
         timeout-minutes: 15
         run: make test-ios-transcript-stability
+
+      # Replays streaming, tool collapse, and prepend updates against the web
+      # SessionDetailPage in headless Chromium and fails on layout/scroll drift.
+      - name: Replay content changes against the web transcript timeline
+        if: ${{ !cancelled() && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') }}
+        timeout-minutes: 15
+        run: make test-web-transcript-stability

@@ -47,7 +47,7 @@ SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: ios-transcript-stability help check-push-readiness install-precommit-autofix dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-tool-tiers validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-coordination-contract validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep test-ios-transcript-stability test-web-transcript-stability import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
+.PHONY: ios-transcript-stability help check-push-readiness install-precommit-autofix dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-omp-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-web-api-routes validate-web-layout validate-codemap validate-ios-transcript generate-ios-transcript validate-ws validate-sdk validate-ios-api validate-provider-brands validate-tool-tiers validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-coordination-contract validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-factory-registration validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary cold-open-probe session-propagation-sla managed-claude-truth-probe managed-claude-poc reprovision deploy-status launch-readiness ship-watch ship release ui-capture ui-gallery ui-sweep test-ui-sweep test-transcript-stability test-ios-transcript-stability test-web-transcript-stability import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e engine-compat test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down send-timeline
 .PHONY: lint-frontend
 .PHONY: terminal-truth terminal-truth-selfcheck terminal-truth-mutations web-paint
 .PHONY: test-opencode-console-steer-live-canary
@@ -150,10 +150,10 @@ observability-down: ## Stop the god-view observability stack
 affected-check: ## Show affected paths, CI lanes, and local commands (BASE=... HEAD=... JSON=1 RUN=1)
 	@uv run --no-project --with pyyaml python3 scripts/ci/affected.py $(if $(BASE),--base "$(BASE)",) $(if $(HEAD),--head "$(HEAD)",) $(if $(filter 1 true yes,$(JSON)),--json,) $(if $(filter 1 true yes,$(RUN)),--run,)
 
-test: ## Backend unit tests (tests_lite/, xdist: one worker per guest CPU)
-	@cd server && ./run_backend_tests_lite.sh $(ARGS)
+test: ## Backend unit tests (tests_lite/, xdist; TEST=tests_lite/test_file.py selects one)
+	@cd server && $(if $(TEST),LONGHOUSE_TEST_TARGET="$(TEST)",) ./run_backend_tests_lite.sh $(ARGS)
 
-test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
+test-backend-single: ## @internal Focused backend test file/node (TEST=tests_lite/test_file.py)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@cd server && LONGHOUSE_TEST_TARGET="$(TEST)" ./run_backend_tests_lite.sh $(ARGS)
 
@@ -217,12 +217,12 @@ ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChat
 ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previews/<timestamp>/
 	@out="$(CURDIR)/artifacts/ios-previews/$$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$$out"; ios/scripts/render-previews.sh "$$out"
 
-test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
+test-ios-perf: ## @internal iOS wall-clock benchmarks (simulator) — never gates a merge
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
-test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
+test-ios-session-open: ## @internal iOS simulator timeline tap-to-transcript benchmark
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	DERIVED_DATA_PATH="$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-SessionOpen}"; \
@@ -240,7 +240,7 @@ test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testCachedTimelineScrollRespondsImmediately \
 		test
 
-profile-ios-live-cold: ## Side-effect-free cold-launch/scroll profile on a physical iPhone (IOS_DEVICE_ID required)
+profile-ios-live-cold: ## @internal Side-effect-free cold-launch/scroll profile on a physical iPhone (IOS_DEVICE_ID required)
 	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
 	@$(MAKE) ios-project
 	@STAMP="$$(date -u +%Y%m%dT%H%M%SZ)"; \
@@ -259,7 +259,7 @@ profile-ios-live-cold: ## Side-effect-free cold-launch/scroll profile on a physi
 	echo "Live profile artifact: $$RESULT"; \
 	exit $$STATUS
 
-profile-ios-live-console: ## Physical launch/workspace/Console/composer profile (creates one session)
+profile-ios-live-console: ## @internal Physical launch/workspace/Console/composer profile (creates one session)
 	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
 	@test -n "$(IOS_WORKSPACE_PATH)" || (echo "Set IOS_WORKSPACE_PATH to an absolute workspace path" >&2; exit 2)
 	@$(MAKE) ios-project
@@ -280,11 +280,11 @@ profile-ios-live-console: ## Physical launch/workspace/Console/composer profile 
 	echo "Live profile artifact: $$RESULT"; \
 	exit $$STATUS
 
-benchmark-ios-transcript: ## Deterministic iOS streaming transcript renderer benchmark
+benchmark-ios-transcript: ## @internal Deterministic iOS streaming transcript renderer benchmark
 	@$(MAKE) ios-project
 	@ios/scripts/run-transcript-renderer-benchmark.sh
 
-ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-light.png, session-dark.png)
+ios-marketing: ## @internal Capture iOS marketing screenshots to /tmp/lh-shots/ (session-light.png, session-dark.png)
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseMarketingCaptures)"; \
 	rm -rf /tmp/lh-shots; \
@@ -332,25 +332,25 @@ send-timeline: ## Step-by-step web send timeline against a disposable local host
 	@python3 scripts/qa/send_timeline.py run $(or $(SCENARIO),single)
 
 .PHONY: test-terminal-fidelity-web test-terminal-fidelity-ios test-terminal-fidelity-gate test-terminal-fidelity-gate-helper historical-convergence-check
-test-terminal-fidelity-web: ## Real hidden-session browser fidelity (FIDELITY_CASES, PLAYWRIGHT_BASE_URL required)
+test-terminal-fidelity-web: ## @internal Real hidden-session browser fidelity (FIDELITY_CASES, PLAYWRIGHT_BASE_URL required)
 	@test -n "$(FIDELITY_CASES)" || (echo "Set FIDELITY_CASES to the campaign JSON manifest" >&2; exit 2)
 	@test -n "$(PLAYWRIGHT_BASE_URL)" || (echo "Set PLAYWRIGHT_BASE_URL to the explicit Runtime Host or linked dev frontend" >&2; exit 2)
 	@cd e2e && LONGHOUSE_FIDELITY_CASES_PATH="$(abspath $(FIDELITY_CASES))" bunx playwright test --config playwright.prod.config.js tests/live/terminal-fidelity.spec.ts --output "$(abspath $(or $(FIDELITY_OUTPUT),artifacts/terminal-fidelity/web))"
 
-test-terminal-fidelity-ios: ## Real-session iOS pixels and source immutability (FIDELITY_CASES, IOS_DESTINATION required)
+test-terminal-fidelity-ios: ## @internal Real-session iOS pixels and source immutability (FIDELITY_CASES, IOS_DESTINATION required)
 	@test -n "$(FIDELITY_CASES)" || (echo "Set FIDELITY_CASES to the campaign JSON manifest" >&2; exit 2)
 	@python3 scripts/qa/terminal-fidelity-ios.py --cases "$(abspath $(FIDELITY_CASES))" $(if $(FIDELITY_OUTPUT),--output "$(abspath $(FIDELITY_OUTPUT))",)
 
-test-terminal-fidelity-gate: ## Compose real Console, web, iOS and recovery proofs (ARGS=explicit targets)
+test-terminal-fidelity-gate: ## @internal Compose real Console, web, iOS and recovery proofs (ARGS=explicit targets)
 	@uv run --project server python scripts/qa/terminal-fidelity-gate.py $(ARGS)
 
-test-terminal-fidelity-gate-helper: ## Focused fidelity composition and failure-retention boundaries
+test-terminal-fidelity-gate-helper: ## @internal Focused fidelity composition and failure-retention boundaries
 	@uv run --project server python scripts/tests/terminal-fidelity-gate.test.py
 
 provider-fidelity-coverage: ## Provider→served content coverage (ARGS="--all-live" sweeps every managed session, or --provider/--session/--transcript for one)
 	@python3 scripts/ops/managed_profiler/transcript_coverage.py $(ARGS)
 
-test-provider-fidelity-coverage: ## Focused provider-fidelity coverage boundaries
+test-provider-fidelity-coverage: ## @internal Focused provider-fidelity coverage boundaries
 	@python3 scripts/tests/transcript-coverage.test.py
 
 fidelity-coverage-gate: ## Gate Pi/OMP transcript fidelity (ARGS="--all-live", --coverage-floor, --stall-age-ms)
@@ -360,7 +360,7 @@ fidelity-coverage-gate: ## Gate Pi/OMP transcript fidelity (ARGS="--all-live", -
 historical-convergence-check: ## Read-only historical publication diagnosis or bounded --wait qualification
 	@cd server && uv run python -m zerg.cli.historical_convergence $(ARGS)
 
-test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
+test-mobile-chat: ## @internal Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/features/session/__tests__/RenderTelemetryPanel.test.tsx src/features/session/__tests__/SessionDetailPage.test.tsx
 	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
@@ -373,13 +373,13 @@ test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit te
 		-derivedDataPath "$$DERIVED_DATA_PATH" \
 		test
 
-test-mobile-chat-stress: ## Holistic iOS mobile chat fixture stress test
+test-mobile-chat-stress: ## @internal Holistic iOS mobile chat fixture stress test
 	@$(MAKE) ios-project
 	@rm -f /tmp/longhouse-chat-replay.json
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
-test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mobile chat stress test
+test-mobile-chat-replay: ## @internal Replay a local SQLite transcript through the iOS mobile chat stress test
 	@$(MAKE) ios-project
 	@REPLAY_PATH="/tmp/longhouse-chat-replay.json"; \
 	trap 'rm -f "$$REPLAY_PATH"' EXIT; \
@@ -394,7 +394,7 @@ test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mob
 	LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH="$$REPLAY_PATH" \
 	IOS_TEST_SCHEMES="LonghouseChatStress" IOS_TEST_FILTER="" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
-test-ios-helper: ## iOS simulator and native-dispatch helper script tests
+test-ios-helper: ## @internal iOS simulator and native-dispatch helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh
 	@python3 scripts/tests/simlab.test.py
 	@python3 scripts/tests/simlab-proxy.test.py
@@ -407,7 +407,7 @@ testflight: ## Ship a main revision to TestFlight via CI on wisp (SHA=<sha>, def
 testflight-status: ## TestFlight builds, review state and public link (needs ASC_API_* in the environment)
 	@scripts/ops/testflight.py status
 
-ios-release-check: ## Unsigned Release archive + App Store upload preconditions (privacy manifest, export compliance)
+ios-release-check: ## @internal Unsigned Release archive + App Store upload preconditions (privacy manifest, export compliance)
 	@ios/scripts/release-check.sh
 
 ios-unit: ## Hermetic iOS unit tests on this machine (TEST=LonghouseIOSTests/Suite[/test] selects a case)
@@ -431,7 +431,7 @@ ios-unit: ## Hermetic iOS unit tests on this machine (TEST=LonghouseIOSTests/Sui
 		-only-testing:$(or $(TEST),LonghouseIOSTests) \
 		test
 
-lint-frontend: ## Frontend ESLint
+lint-frontend: ## @internal Frontend ESLint
 	@cd web && bun run lint
 
 test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" selects a focused run)
@@ -440,7 +440,8 @@ test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" sele
 	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
 	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100% $(ARGS)
 
-test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
+ifeq ($(strip $(TEST)),)
+test-engine: test-engine-omp-helm ## Rust engine tests (~20s; TEST=filter runs one)
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES)
 	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
@@ -464,68 +465,75 @@ test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
 	@# harness that vanishes mid-run fails nextest outright, which the old
 	@# completion-summary grep existed to catch.
 	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests
+else
+test-engine: test-engine-single ## Rust engine tests (~20s; TEST=filter runs one)
+endif
 
-test-engine-omp-helm: ## OMP and Pi Helm extension and Claude mod contract tests
+test-engine-omp-helm: ## @internal OMP and Pi Helm extension and Claude mod contract tests
 	@cd engine && bun test assets/longhouse-omp-helm.test.ts assets/longhouse-pi-helm.test.ts assets/claude-mod.test.ts
 
-test-engine-projection-failure: ## Isolated real-daemon failed-observation recovery
+test-engine-projection-failure: ## @internal Isolated real-daemon failed-observation recovery
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine
 	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )"
 
-test-engine-single: ## Exact Rust engine unit tests (TEST="module::tests::name ...")
+test-engine-single: ## @internal Exact Rust engine unit tests (TEST="module::tests::name ...")
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
+	@out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
+	status=0; $(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine -- "$(strip $(TEST))" --exact --nocapture --test-threads=1 >"$$out" || status=$$?; \
+	cat "$$out"; \
+	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	if grep -q "running 0 tests" "$$out"; then echo "No engine test matched TEST=$(strip $(TEST))" >&2; exit 1; fi
 
-test-engine-focused: test-engine-single test-engine-projection-failure ## Focused native checks sharing one isolated build (TEST required)
+test-engine-focused: test-engine-single test-engine-projection-failure ## @internal Focused native checks sharing one isolated build (TEST required)
 
-test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
+test-codex-console-warm-canary: ## @internal Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine codex_exec::tests::installed_codex_completes_through_production_console_adapter -- --ignored --exact --nocapture
 
-test-codex-conversation-reset: ## Real managed-Codex /clear characterization canary
+test-codex-conversation-reset: ## @internal Real managed-Codex /clear characterization canary
 	@cd server && uv run python -m zerg.qa.codex_conversation_reset $(ARGS)
 
-test-claude-console-live-canary: ## Real stock-Claude native Console create/resume canary
+test-claude-console-live-canary: ## @internal Real stock-Claude native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine claude_print::tests::installed_claude_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
-test-claude-conversation-reset: ## Real managed-Claude /clear characterization canary
+test-claude-conversation-reset: ## @internal Real managed-Claude /clear characterization canary
 	@cd server && uv run python -m zerg.qa.claude_conversation_reset $(ARGS)
 
-test-omp-console-live-canary: ## Real stock-OMP native Console create/resume canary (run after `omp update`)
+test-omp-console-live-canary: ## @internal Real stock-OMP native Console create/resume canary (run after `omp update`)
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine omp_print::tests::installed_omp_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
-test-cursor-console-live-canary: ## Real stock-Cursor native Console create/resume canary
+test-cursor-console-live-canary: ## @internal Real stock-Cursor native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine cursor_print::tests::installed_cursor_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
-test-cursor-conversation-reset: ## Real Cursor /clear characterization canary
+test-cursor-conversation-reset: ## @internal Real Cursor /clear characterization canary
 	@$(MAKE) test-cursor-helm-gate0 ARGS="--conversation-reset-only $(ARGS)"
 
-test-opencode-console-live-canary: ## Real stock-OpenCode native Console create/resume canary
+test-opencode-console-live-canary: ## @internal Real stock-OpenCode native Console create/resume canary
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine opencode_run::tests::installed_opencode_completes_and_resumes_through_production_console_adapter -- --ignored --exact --nocapture
 
-test-opencode-console-steer-live-canary: ## Real stock-OpenCode Console steer canary (run it on the bench under a scratch HOME/XDG, never on this Mac)
+test-opencode-console-steer-live-canary: ## @internal Real stock-OpenCode Console steer canary (run it on the bench under a scratch HOME/XDG, never on this Mac)
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine opencode_run::tests::installed_opencode_steer_reports_what_happened -- --ignored --exact --nocapture
 
-test-opencode-conversation-reset: ## Real managed-OpenCode /new characterization canary
+test-opencode-conversation-reset: ## @internal Real managed-OpenCode /new characterization canary
 	@cd server && uv run python -m zerg.qa.opencode_conversation_reset $(ARGS)
 
-test-antigravity-conversation-reset: ## Isolated-worker Antigravity /clear characterization canary
+test-antigravity-conversation-reset: ## @internal Isolated-worker Antigravity /clear characterization canary
 	@cd server && uv run python -m zerg.qa.antigravity_conversation_reset $(ARGS)
 
-test-opencode-console-product-e2e: ## Hosted Runtime Host -> Machine Agent -> stock OpenCode Console proof
+test-opencode-console-product-e2e: ## @internal Hosted Runtime Host -> Machine Agent -> stock OpenCode Console proof
 	@uv run --project server python scripts/qa/opencode-console-product-e2e.py $(ARGS)
 
-test-cursor-console-product-e2e: ## Hosted Runtime Host -> Machine Agent -> stock Cursor Console proof
+test-cursor-console-product-e2e: ## @internal Hosted Runtime Host -> Machine Agent -> stock Cursor Console proof
 	@uv run --project server python scripts/qa/opencode-console-product-e2e.py --provider cursor $(ARGS)
 
-test-console-served-state-e2e: ## Console turn proved on the BROWSER-served surface (live frames + settlement)
+test-console-served-state-e2e: ## @internal Console turn proved on the BROWSER-served surface (live frames + settlement)
 	@uv run --project server python scripts/qa/console-served-state-e2e.py $(ARGS)
 
 terminal-truth-selfcheck: ## Terminal truth harness checks itself (fake TUI schedule, late-lane negative control); no provider
@@ -541,7 +549,7 @@ web-paint: ## Real browser watches live thinking, tool and subagent rows on a sc
 terminal-truth-mutations: ## Reintroduce each 2026-11-11 live-text defect and require the gate to fail it (rebuilds the engine in a scratch worktree; ARGS="--engine <engine> --longhouse-cli <longhouse> [--only NAME] [--skip-engine]")
 	@uv run --project server python -m zerg.qa.terminal_truth_mutations $(ARGS)
 
-test-cursor-helm-gate0: ## Real stock-Cursor Helm identity/hook proof (release-gated)
+test-cursor-helm-gate0: ## @internal Real stock-Cursor Helm identity/hook proof (release-gated)
 	@uv run --project server python scripts/qa/cursor-helm-gate0.py $(ARGS)
 
 cursor-observed-install-qualification: ## Exact installed Cursor full-column snapshot (requires explicit paths/version)
@@ -557,13 +565,13 @@ cursor-observed-install-qualification: ## Exact installed Cursor full-column sna
 		--expected-version "$(CURSOR_VERSION)" \
 		--output-root "$(OUTPUT_ROOT)"
 
-test-cursor-helm-product-e2e: ## Real Longhouse↔Cursor launch/control/archive canary (release-gated)
+test-cursor-helm-product-e2e: ## @internal Real Longhouse↔Cursor launch/control/archive canary (release-gated)
 	@uv run --project server python scripts/qa/cursor-helm-product-e2e.py $(ARGS)
 
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
 
-test-frontend-runner: ## Frontend + runner unit tests in one isolated container (CI lane)
+test-frontend-runner: ## @internal Frontend + runner unit tests in one isolated container (CI lane)
 	@# Runner tests take under a second; their own container cost 30-65s.
 	@$(MAKE) --no-print-directory test-frontend
 	@$(MAKE) --no-print-directory test-runner
@@ -571,7 +579,7 @@ test-frontend-runner: ## Frontend + runner unit tests in one isolated container 
 test-e2e: ## Launch-surface E2E (core + a11y, one backend boot)
 	$(MAKE) test-e2e-core
 
-qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
+qa-landing-live: ## @internal Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
 	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,) $(if $(SHOTS),--shots $(SHOTS),) $(if $(SEED),--seed=$(SEED),) $(ARGS)
 
 hero-frames: ## Render the landing hero demo frame by frame (STEP=1 VIEWPORT=desktop|mobile) to artifacts/hero-frames/
@@ -632,11 +640,11 @@ engine-compat: ## Ship a transcript with the last released engine against the ca
 	python3 scripts/qa/engine_compat_receipt.py --metadata .build/engine-compat/previous.json \
 		--junit .build/engine-compat/junit.xml --output .build/engine-compat/receipt.json
 
-test-shipper-synthetic-bench: ## Synthetic shipper bench fixture gate
+test-shipper-synthetic-bench: ## @internal Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
 
-test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
+test-shipper-synthetic-live-bench: ## @internal Synthetic mixed live/archive shipper bench
 	@python3 scripts/build/generate_build_identity.py
 	@port_file="$$(mktemp)"; \
 	python3 scripts/qa/shipper_synthetic_echo.py --port-file "$$port_file" & server_pid="$$!"; \
@@ -661,15 +669,15 @@ validate-perf-proof: ## Validate perf proof collector parsing and summary logic
 	@python3 scripts/tests/perf-proof.test.py
 
 test-shipper-premerge: ## Engine + shipper E2E (run before merging engine changes)
-	$(MAKE) test-engine
+	$(MAKE) test-engine TEST=
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-shipper-synthetic-bench
 	$(MAKE) test-shipper-synthetic-live-bench
 
-test-codex-bridge-e2e: ## Codex bridge E2E
+test-codex-bridge-e2e: ## @internal Codex bridge E2E
 	@bash scripts/qa/test-codex-bridge-e2e.sh
 
-test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
+test-hooks: ## @internal Hook outbox pipeline E2E (requires daemon running)
 	@./scripts/qa/test-hooks-e2e.sh
 
 check-push-readiness: ## Before pushing: stale duplicate commits on main and verifier-boundary ratchet (~1s)
@@ -681,18 +689,18 @@ install-precommit-autofix: ## Once per clone: self-staging pre-commit shims; ret
 test-ci: ## Broad pre-release CI check (about 7 min in the release guest; not required for every push)
 	$(MAKE) validate
 	$(MAKE) import-smoke
-	$(MAKE) test
+	$(MAKE) test TEST=
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
-	$(MAKE) test-engine
+	$(MAKE) test-engine TEST=
 	$(MAKE) test-wheel-package
 	$(MAKE) test-shipper-e2e
 
 test-full: ## Full suite — all tiers (>10min)
-	$(MAKE) test
+	$(MAKE) test TEST=
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
-	$(MAKE) test-engine
+	$(MAKE) test-engine TEST=
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-e2e
 
@@ -1027,7 +1035,7 @@ validate-provider-cli-canaries: $(PROVIDER_CLI_CANARY_TESTS:%=provider-cli-canar
 provider-interaction-probe: ## Run the explicit provider-native interaction probe
 	@cd server && uv run python -m zerg.qa.provider_interaction_probe $(ARGS)
 
-provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..., optional PROVIDER_BIN=..., scenario flags via ARGS
+provider-release-proof: ## @internal Emit provider release proof artifact; set PROVIDER=..., optional PROVIDER_BIN=..., scenario flags via ARGS
 	@set -eu; \
 	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
 	if [ -n "$(QUALIFICATION_PROFILE)" ]; then \
@@ -1047,7 +1055,7 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
 	python3 "$$@" $(ARGS)
 
-provider-release-proof-accept: ## Accept provider proof baseline; set PROOF=... and optional BASELINE_ROOT=...
+provider-release-proof-accept: ## @internal Accept provider proof baseline; set PROOF=... and optional BASELINE_ROOT=...
 	@set -eu; \
 	if [ -z "$(PROOF)" ]; then echo "PROOF is required" >&2; exit 2; fi; \
 	set -- scripts/qa/provider-release-proof-baseline.py accept \
@@ -1057,7 +1065,7 @@ provider-release-proof-accept: ## Accept provider proof baseline; set PROOF=... 
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-diff: ## Diff provider proof artifact; set CANDIDATE=... and optional BASELINE_ROOT=... or BASE=...
+provider-release-proof-diff: ## @internal Diff provider proof artifact; set CANDIDATE=... and optional BASELINE_ROOT=... or BASE=...
 	@set -eu; \
 	if [ -z "$(CANDIDATE)" ]; then echo "CANDIDATE is required" >&2; exit 2; fi; \
 	set -- scripts/qa/provider-release-proof-baseline.py diff \
@@ -1068,7 +1076,7 @@ provider-release-proof-diff: ## Diff provider proof artifact; set CANDIDATE=... 
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-old-new: ## Diff explicit old/new provider proof artifacts; set OLD=... and NEW=...
+provider-release-proof-old-new: ## @internal Diff explicit old/new provider proof artifacts; set OLD=... and NEW=...
 	@set -eu; \
 	if [ -z "$(OLD)" ]; then echo "OLD is required" >&2; exit 2; fi; \
 	if [ -z "$(NEW)" ]; then echo "NEW is required" >&2; exit 2; fi; \
@@ -1080,7 +1088,7 @@ provider-release-proof-old-new: ## Diff explicit old/new provider proof artifact
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-staged-old-new: ## Run old/new staged provider binaries then diff; set PROVIDER=..., OLD_PROVIDER_BIN=..., NEW_PROVIDER_BIN=...
+provider-release-proof-staged-old-new: ## @internal Run old/new staged provider binaries then diff; set PROVIDER=..., OLD_PROVIDER_BIN=..., NEW_PROVIDER_BIN=...
 	@set -eu; \
 	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
 	if [ -z "$(OLD_PROVIDER_BIN)" ]; then echo "OLD_PROVIDER_BIN is required" >&2; exit 2; fi; \
@@ -1106,7 +1114,7 @@ provider-release-proof-staged-old-new: ## Run old/new staged provider binaries t
 	if [ -n "$(UNIVERSAL_PROMPT)" ]; then set -- "$$@" --universal-prompt "$(UNIVERSAL_PROMPT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-universal-smoke: ## Run all-provider fake/no-token universal release-proof smoke
+provider-release-proof-universal-smoke: ## @internal Run all-provider fake/no-token universal release-proof smoke
 	@set -eu; \
 	set -- scripts/qa/provider-release-proof-universal-smoke.py; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
@@ -1116,7 +1124,7 @@ provider-release-proof-universal-smoke: ## Run all-provider fake/no-token univer
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"
 
-provider-release-proof-universal-live-smoke: ## Run all-provider real-bin universal smoke including live-token streaming
+provider-release-proof-universal-live-smoke: ## @internal Run all-provider real-bin universal smoke including live-token streaming
 	@set -eu; \
 	set -- scripts/qa/provider-release-proof-universal-smoke.py --use-real-provider-bins; \
 	if [ -z "$(UNIVERSAL_SCENARIO)" ] || [ -n "$(INCLUDE_LIVE_TOKEN_STREAMING)" ]; then set -- "$$@" --include-live-token-streaming; fi; \
@@ -1127,7 +1135,7 @@ provider-release-proof-universal-live-smoke: ## Run all-provider real-bin univer
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
 	uv run --project server python "$$@"
 
-provider-capability-coordination-proof: ## Emit local diagnostic Codex coordination bootstrap proof
+provider-capability-coordination-proof: ## @internal Emit local diagnostic Codex coordination bootstrap proof
 	@set -eu; \
 	set -- -m zerg.qa.provider_coordination_scenarios; \
 	if [ -n "$(PROVIDER)" ]; then set -- "$$@" --provider "$(PROVIDER)"; fi; \
@@ -1141,7 +1149,7 @@ provider-capability-coordination-proof: ## Emit local diagnostic Codex coordinat
 	if [ -n "$(BUNDLE_OUTPUT)" ]; then set -- "$$@" --bundle-output "$(BUNDLE_OUTPUT)"; fi; \
 	cd server && uv run python "$$@"
 
-provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
+provider-release-proof-status: ## @internal Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
 	@set -eu; \
 	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
 	if [ -z "$(SCENARIO_ID)" ]; then echo "SCENARIO_ID is required" >&2; exit 2; fi; \
@@ -1153,7 +1161,7 @@ provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-status-all: ## Inspect all accepted provider proof baselines from the coverage inventory
+provider-release-proof-status-all: ## @internal Inspect all accepted provider proof baselines from the coverage inventory
 	@set -eu; \
 	set -- scripts/qa/provider-release-proof-baseline.py status-all \
 		--baseline-root "$(BASELINE_ROOT)" \
@@ -1162,7 +1170,7 @@ provider-release-proof-status-all: ## Inspect all accepted provider proof baseli
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
-provider-release-proof-maturity: ## Emit provider release-proof maturity rollups from coverage/baselines/universal artifacts
+provider-release-proof-maturity: ## @internal Emit provider release-proof maturity rollups from coverage/baselines/universal artifacts
 	@set -eu; \
 	set -- scripts/qa/provider-release-proof-maturity.py --json; \
 	if [ -n "$(COVERAGE)" ]; then set -- "$$@" --coverage "$(COVERAGE)"; fi; \
@@ -1279,7 +1287,7 @@ validate-cohort-journey: ## @internal Validate cohort selection and artifact pri
 	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
 	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/cohort-journey.spec.ts --list
 
-test-session-propagation-sla: ## Deterministic tests for the managed-session promotion metric
+test-session-propagation-sla: ## @internal Deterministic tests for the managed-session promotion metric
 	@python3 scripts/tests/session-propagation-sla.test.py
 
 session-propagation-sla: ## Managed Codex warm realtime SLA probe with contaminated-run retries
@@ -1291,7 +1299,7 @@ managed-claude-truth-probe: ## Observe local/hosted truth for one managed Claude
 managed-claude-poc: ## Launch one managed Claude channel POC and capture truth artifacts
 	@./scripts/ops/run-managed-claude-poc.py $(ARGS)
 
-qa-unmanaged: ## Local smoke for bare Claude/Codex compatibility ingest
+qa-unmanaged: ## @internal Local smoke for bare Claude/Codex compatibility ingest
 	@./scripts/qa/qa-unmanaged.sh
 
 reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=...@sha256:...)
@@ -1353,13 +1361,13 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 ui-capture: ## Render a web page to PNG (PAGE=, SCENE=, ACTION="click:<sel>;press:<key>"); fixture scenes need nothing running, Vite is started and stopped for you
 	@bunx tsx scripts/ui/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),) $(if $(WHEEL_MAP),--wheel-map,) $(if $(CSS_VARIANT),--css-variant=$(CSS_VARIANT),) $(if $(ACTION),--action="$(ACTION)",)
 
-ios-transcript-stability: ## Replay content changes against the iOS transcript document in WebKit; fail when the row being read moves (ONLY=a,b DARK=1 OUT=dir)
+ios-transcript-stability: ## @internal Replay content changes against the iOS transcript document in WebKit; fail when the row being read moves (ONLY=a,b DARK=1 OUT=dir)
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@$(MAKE) --no-print-directory generate-ios-transcript
 	@bunx playwright install webkit >/dev/null
 	@bun scripts/qa/ios-transcript-stability.ts $(if $(ONLY),--only=$(ONLY),) $(if $(DARK),--dark,) $(if $(FILM),--film,) $(if $(OUT),--out=$(OUT),)
 
-ui-gallery: ## Render every fixture page/scene at desktop, wide and phone sizes into one HTML contact sheet (ONLY=substring, JOBS=n)
+ui-gallery: ## @internal Render every fixture page/scene at desktop, wide and phone sizes into one HTML contact sheet (ONLY=substring, JOBS=n)
 	@bunx tsx scripts/ui/ui-gallery.ts $(if $(ONLY),--only=$(ONLY),) $(if $(JOBS),--jobs=$(JOBS),) $(if $(OUTPUT),--output=$(OUTPUT),)
 
 ui-sweep: ## Open every menu on every fixture page/scene at desktop, wide and phone sizes; fail if one lands off-screen, covered or clipped (ONLY=, JOBS=)
@@ -1370,6 +1378,8 @@ test-ui-sweep: ## @internal ui-sweep in the isolated test container (the CI lane
 	@$(MAKE) --no-print-directory ensure-playwright-browser
 	@bun scripts/ui/ui-gallery.ts --sweep --jobs=2 --output=artifacts/ui-sweep $(ARGS)
 
+test-transcript-stability: test-web-transcript-stability test-ios-transcript-stability ## Replay streaming/prepend stability checks for web and iOS
+
 test-ios-transcript-stability: ## @internal ios-transcript-stability in the isolated test container (the CI lane; its image carries Playwright WebKit); evidence lands in artifacts/ios-transcript-stability
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@$(MAKE) --no-print-directory generate-ios-transcript
@@ -1379,10 +1389,10 @@ test-web-transcript-stability: ## @internal web-transcript-stability in the isol
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@bun scripts/qa/web-transcript-stability.ts --out=artifacts/web-transcript-stability
 
-landing-screenshots: ## Regenerate the landing showcase images (Timeline/Search/Session Detail) from the current UI with curated fixtures
+landing-screenshots: ## @internal Regenerate the landing showcase images (Timeline/Search/Session Detail) from the current UI with curated fixtures
 	@./scripts/ui/landing-screenshots.sh
 
-demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed real-PTY grid timelines
+demo-render: ## @internal Render the ControlRoom hero demo (mp4 + poster) from committed real-PTY grid timelines
 	@# video/ is its own Bun project (Remotion stays out of the root install).
 	@cd video && bun install --frozen-lockfile && bun run render:control && bun run render:control-poster
 	@# Strip the silent AAC track Remotion muxes in (halves the asset size).
@@ -1391,11 +1401,11 @@ demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed r
 	@node scripts/generate/generate-og-image.mjs
 	@echo "Wedge demo, poster, and social card rendered into web/public"
 
-qa-remote-scene: ## Capture sampled remote-scene frames for independent visual review (FRONTEND_URL=... EVERY=6)
+qa-remote-scene: ## @internal Capture sampled remote-scene frames for independent visual review (FRONTEND_URL=... EVERY=6)
 	@$(MAKE) ensure-playwright-browser
 	@bun scripts/ui/remote-scene-qa.ts $(if $(EVERY),--every=$(EVERY),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(SEED),--seed=$(SEED),)
 
-qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
+qa-ui-workbench: ## @internal Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \
 	RUN_DIR="artifacts/ui-capture/workbench-$$(date -u +%Y%m%dT%H%M%SZ)"; \
 	echo "Output: $$RUN_DIR"; \
@@ -1406,12 +1416,12 @@ qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshot
 	bunx tsx scripts/ui/ui-workbench-report.ts $$RUN_DIR; \
 	echo "Workbench bundle: $$RUN_DIR"
 
-qa-ui-baseline: ## Visual baseline check for app and public pages (Linux renders: run on crunch, scripts/ops/crunch.sh run make qa-ui-baseline)
+qa-ui-baseline: ## @internal Visual baseline check for app and public pages (Linux renders: run on crunch, scripts/ops/crunch.sh run make qa-ui-baseline)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts
 
-qa-ui-baseline-update: ## Rewrite visual baselines for app, public, and mobile pages (on crunch, so they stay Linux renders)
+qa-ui-baseline-update: ## @internal Rewrite visual baselines for app, public, and mobile pages (on crunch, so they stay Linux renders)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline --update-snapshots=all
@@ -1420,12 +1430,12 @@ qa-ui-baseline-update: ## Rewrite visual baselines for app, public, and mobile p
 	@# then copy .../files/1/ui-baselines/* into e2e/tests/ and commit.
 	@mkdir -p artifacts/ui-baselines && cd e2e/tests && tar -cf - ui_baseline_app.spec.ts-snapshots ui_baseline_public.spec.ts-snapshots mobile/ui_baseline_mobile.spec.ts-snapshots | tar -xf - -C ../../artifacts/ui-baselines
 
-qa-ui-baseline-mobile: ## Visual baseline check for mobile app pages (Linux renders: run on crunch)
+qa-ui-baseline-mobile: ## @internal Visual baseline check for mobile app pages (Linux renders: run on crunch)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline tests/mobile/ui_baseline_mobile.spec.ts
 
-qa-visual-compare: ## Compare current app screenshots against baselines; set SKIP_LLM=1 to skip LLM triage
+qa-visual-compare: ## @internal Compare current app screenshots against baselines; set SKIP_LLM=1 to skip LLM triage
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=chromium tests/visual_compare.spec.ts --workers=1
@@ -1442,7 +1452,7 @@ onboarding-funnel: ## @internal Onboarding funnel from README contract
 launch-gate-local: ## @internal Native installer and portable onboarding gate
 	$(error launch-gate-local must be dispatched from outside an isolated child)
 
-vibetest: ## LLM-powered browser QA (advisory, needs GOOGLE_API_KEY)
+vibetest: ## @internal LLM-powered browser QA (advisory, needs GOOGLE_API_KEY)
 	@./scripts/qa/run-vibetest.sh --agents $(or $(AGENTS),3)
 
 # ---------------------------------------------------------------------------
