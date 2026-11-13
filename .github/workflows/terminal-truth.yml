@@ -19,7 +19,8 @@ name: Terminal Truth
 #     writing to one NVMe); with scratch in memory the same twelve passed with medians under a quarter second.
 #   - A mutation test reads its unmutated half from the gate's own run of that cell and runs only the mutated half.
 #   - Mutated engines, the engine itself and the provider installs are kept under /ci-cache by a hash of what they are
-#     built from. A push that does not touch engine/, config/ or schemas/ builds nothing.
+#     built from. A push that does not touch engine/, config/ or schemas/ builds nothing. One that does builds the 33
+#     mutated engines three at a time with incremental compilation (they were 18 minutes one after another).
 #   - A row that came out wrong beside the others is run once more alone; the first result stays in the record.
 #
 # Triggers
