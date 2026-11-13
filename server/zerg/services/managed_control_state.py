@@ -344,7 +344,13 @@ def live_attachment_state_map(db: Session, session_ids: list[str]) -> dict[str, 
             func.max(LiveSessionConnection.last_health_at),
         )
         .join(LiveSessionRun, LiveSessionRun.thread_id == LiveSessionThread.id)
-        .outerjoin(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+        .outerjoin(
+            LiveSessionConnection,
+            and_(
+                LiveSessionConnection.run_id == LiveSessionRun.id,
+                LiveSessionConnection.released_at.is_(None),
+            ),
+        )
         .filter(
             LiveSessionThread.session_id.in_(session_ids),
             LiveSessionRun.ended_at.is_(None),
@@ -365,21 +371,33 @@ def live_attachment_state_map(db: Session, session_ids: list[str]) -> dict[str, 
     return state
 
 
-def live_session_owner_map(db: Session, session_ids: list[str]) -> dict[str, str]:
-    """Device that owns each live session index row, for ownership before attach.
+def live_run_owner_map(db: Session, session_ids: list[str]) -> dict[str, str]:
+    """Device that owns each session's current run, checked before any attach.
 
     Ownership used to be discovered by letting `attach_live_catalog_control` raise
     `PermissionError` and reading that as "this device may not touch the session".
-    Skipping the attach for unchanged leases removed that probe, and with it the
-    only check that stopped an old device from restamping another device's
-    session index. Asking the index directly keeps the guarantee and costs one
-    primary-key read per candidate.
+    The authority behind that error is the run's `host_id`, so skipping the attach
+    for unchanged leases means reading it here instead. One join over the same
+    candidate sessions the freshness map already reads.
     """
 
     if not session_ids:
         return {}
-    rows = db.query(LiveSession.session_id, LiveSession.device_id).filter(LiveSession.session_id.in_(set(session_ids))).all()
-    return {str(session_id): str(device_id) for session_id, device_id in rows if device_id}
+    rows = (
+        db.query(LiveSessionThread.session_id, LiveSessionRun.host_id)
+        .join(LiveSessionRun, LiveSessionRun.thread_id == LiveSessionThread.id)
+        .filter(
+            LiveSessionThread.session_id.in_(set(session_ids)),
+            LiveSessionRun.ended_at.is_(None),
+        )
+        .all()
+    )
+    owners: dict[str, str] = {}
+    for session_id, host_id in rows:
+        normalized = _normalized(host_id)
+        if normalized:
+            owners[str(session_id)] = normalized
+    return owners
 
 
 def _lease_evidence_signature(
@@ -465,8 +483,10 @@ def upsert_live_control_leases(
     from zerg.services.live_catalog_launch import attach_live_catalog_control
 
     unchanged_session_keys: set[str] = set()
+    foreign_session_keys: set[str] = set()
     changed_count = 0
     refreshed_count = 0
+    foreign_count = 0
     attached_count = 0
     for lease, session_id, provider in normalized_leases:
         lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
@@ -510,7 +530,8 @@ def upsert_live_control_leases(
             if owner is not None and owner != normalized_device_id:
                 # Retain the device's raw lease, but an index owned by another
                 # device is not this heartbeat's to restamp, and the session is
-                # not this device's to project.
+                # not this device's to project. Counted on its own: these leases
+                # neither took the changed path nor were cheap retentions.
                 if changed:
                     row.machine_id = machine_id
                     row.state = lease_state
@@ -519,8 +540,8 @@ def upsert_live_control_leases(
                     row.updated_at = seen_at
                     row.payload_json = json.dumps(payload, sort_keys=True)
                 else:
-                    unchanged_session_keys.add(session_id)
-                changed_count += 1 if changed else 0
+                    foreign_session_keys.add(session_id)
+                foreign_count += 1
                 continue
         # Absent from the map means no open run, where an attach is a no-op.
         # Present with missing or stale health means there is work to do.
@@ -575,7 +596,8 @@ def upsert_live_control_leases(
             logger.debug("Live control lease arrived before catalog session %s", session_id)
         touched.add(UUID(session_id))
 
-    if unchanged_session_keys:
+    retained_session_keys = unchanged_session_keys | foreign_session_keys
+    if retained_session_keys:
         # One statement for the whole retained snapshot: liveness still has to
         # advance for every lease the machine reported, and that is the only
         # thing an unchanged lease is saying. Keyed by session within this one
@@ -584,7 +606,7 @@ def upsert_live_control_leases(
         # bump, and that row is still liveness for this heartbeat.
         db.query(LiveControlLease).filter(
             LiveControlLease.device_id == normalized_device_id,
-            LiveControlLease.session_id.in_(unchanged_session_keys),
+            LiveControlLease.session_id.in_(retained_session_keys),
         ).update(
             {"heartbeat_at": seen_at, "updated_at": seen_at},
             synchronize_session=False,
@@ -595,6 +617,7 @@ def upsert_live_control_leases(
         stats["leases_changed"] = changed_count
         stats["leases_refreshed"] = refreshed_count
         stats["leases_attached"] = attached_count
+        stats["leases_foreign"] = foreign_count
         stats["leases_retained"] = len(unchanged_session_keys)
     return touched
 

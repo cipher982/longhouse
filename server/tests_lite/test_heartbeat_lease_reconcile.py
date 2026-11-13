@@ -37,6 +37,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.managed_control_state import LIVE_ATTACHMENT_REFRESH_INTERVAL
 from zerg.services.managed_control_state import live_attachment_state_map
+from zerg.services.managed_control_state import live_run_owner_map
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.utils.time import normalize_utc
 
@@ -336,6 +337,44 @@ def test_an_open_run_without_a_connection_still_attaches(live_factory, monkeypat
     assert sorted(attached) == sorted(row["session_id"] for row in seeded)
     assert stats["leases_changed"] == 0
     assert stats["leases_refreshed"] == len(seeded)
+
+
+def test_a_foreign_owned_session_is_retained_but_never_attached(live_factory, monkeypatch):
+    """Ownership comes from the session index now, not from catching PermissionError.
+
+    Skipping the attach for unchanged leases would otherwise have removed the only
+    check that stopped an old device from restamping another device's session.
+    """
+
+    seen_at = datetime.now(timezone.utc)
+    seeded = _seed_attached_sessions(live_factory, provider="cursor", count=3, attached_at=seen_at)
+    with live_factory() as db:
+        for row in db.query(LiveSessionRun).all():
+            row.host_id = "other-device"
+        db.commit()
+    attached = _count_attaches(monkeypatch)
+
+    with live_factory() as db:
+        stats: dict[str, int] = {}
+        touched = upsert_live_control_leases(
+            db,
+            [_lease(row) for row in seeded],
+            device_id="cinder",
+            received_at=seen_at + timedelta(seconds=5),
+            attachment_state={},
+            session_owners=live_run_owner_map(db, [row["session_id"] for row in seeded]),
+            stats=stats,
+        )
+        db.commit()
+        heartbeat_ats = {str(row.session_id): normalize_utc(row.heartbeat_at) for row in db.query(LiveControlLease).all()}
+
+    assert attached == []
+    assert touched == set(), "a foreign session must not be reported as accepted"
+    assert stats["leases_foreign"] == len(seeded)
+    assert stats["leases_changed"] == 0
+    assert stats["leases_retained"] == 0
+    # The device's own raw lease is still retained for diagnostics.
+    assert all(value >= seen_at + timedelta(seconds=5) for value in heartbeat_ats.values())
 
 
 def test_an_attachment_one_heartbeat_old_is_not_refreshed(live_factory, monkeypatch):

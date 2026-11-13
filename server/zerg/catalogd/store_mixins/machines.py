@@ -81,7 +81,7 @@ class MachinesMixin:
         from zerg.services.live_session_state import mark_missing_live_sessions
         from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
         from zerg.services.managed_control_state import live_attachment_state_map
-        from zerg.services.managed_control_state import live_session_owner_map
+        from zerg.services.managed_control_state import live_run_owner_map
         from zerg.services.managed_control_state import mark_missing_live_control_leases
         from zerg.services.managed_control_state import upsert_live_control_leases
 
@@ -151,7 +151,7 @@ class MachinesMixin:
                     lease_stats: dict[str, int] = {}
                     lease_session_ids = [str(lease.session_id) for lease in lease_objects if lease.session_id is not None]
                     attachment_state = live_attachment_state_map(orm, lease_session_ids)
-                    session_owners = live_session_owner_map(orm, lease_session_ids)
+                    session_owners = live_run_owner_map(orm, lease_session_ids)
                     timer.mark("lease_freshness")
                     accepted_session_ids = upsert_live_control_leases(
                         orm,
