@@ -818,10 +818,8 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         surfaces, raw = read_deploy_status()
         errors = []
         if (deploy_run_completed or deploy_job_succeeded) and not no_runtime_change:
-            # The demo moves on its own production ring (release-rings.md) and
-            # is promoted well after the SHA that ships here; it is still
-            # printed in the status table below (deploy-status.sh's raw
-            # output), just no longer required to match this deploy.
+            # Only the canary has to match this deploy; dogfood is promoted
+            # after it and is printed in the status table for reference.
             require_surface(errors, surfaces, CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
         if not errors or not live_status_retryable(surfaces) or attempt == 2:
             break

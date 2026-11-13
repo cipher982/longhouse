@@ -11,7 +11,6 @@ DOGFOOD_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}"
 HOSTED_CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-release-canary-a}"
 DOGFOOD_HEALTH_URL="${DOGFOOD_HEALTH_URL:-https://${DOGFOOD_SUBDOMAIN}.longhouse.ai/api/health}"
 HOSTED_CANARY_HEALTH_URL="${HOSTED_CANARY_HEALTH_URL:-https://${HOSTED_CANARY_SUBDOMAIN}.longhouse.ai/api/health}"
-DEMO_HEALTH_URL="${DEMO_HEALTH_URL:-https://longhouse.ai/api/health}"
 CP_HEALTH_URL="${CP_HEALTH_URL:-https://control.longhouse.ai/health}"
 
 health_json() {
@@ -65,7 +64,6 @@ observe_surface() {
   printf '%s\t%s\t%s\n' "$source_sha" "$status" "$build_identity"
 }
 
-IFS=$'\t' read -r demo_sha demo_health demo_identity <<<"$(observe_surface "$DEMO_HEALTH_URL")"
 IFS=$'\t' read -r cp_sha cp_health cp_identity <<<"$(observe_surface "$CP_HEALTH_URL")"
 IFS=$'\t' read -r dogfood_sha dogfood_health dogfood_identity <<<"$(observe_surface "$DOGFOOD_HEALTH_URL")"
 IFS=$'\t' read -r canary_sha canary_health canary_identity <<<"$(observe_surface "$HOSTED_CANARY_HEALTH_URL")"
@@ -74,13 +72,12 @@ local_sha="$(git rev-parse --short=10 HEAD 2>/dev/null || echo '-')"
 printf '\n'
 printf '%-24s %-12s %-14s %-28s %s\n' 'Surface' 'SHA' 'Health' 'Build identity' 'Uptime'
 printf '%-24s %-12s %-14s %-28s %s\n' '-------' '---' '------' '-------------' '------'
-printf '%-24s %-12s %-14s %-28s %s\n' 'Demo runtime' "$demo_sha" "$demo_health" "$demo_identity" '-'
 printf '%-24s %-12s %-14s %-28s %s\n' 'Control plane' "$cp_sha" "$cp_health" "$cp_identity" '-'
 printf '%-24s %-12s %-14s %-28s %s\n' "Dogfood $DOGFOOD_SUBDOMAIN" "$dogfood_sha" "$dogfood_health" "$dogfood_identity" '-'
 printf '%-24s %-12s %-14s %-28s %s\n' "Canary $HOSTED_CANARY_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_identity" '-'
 printf '%-24s %-12s\n' 'Local HEAD' "$local_sha"
 printf '\n'
 
-if [[ "$demo_sha" != '-' && "$demo_sha" != "$local_sha" ]]; then
-  echo "Local HEAD ($local_sha) differs from deployed demo ($demo_sha)"
+if [[ "$dogfood_sha" != '-' && "$dogfood_sha" != "$local_sha" ]]; then
+  echo "Local HEAD ($local_sha) differs from deployed dogfood ($dogfood_sha)"
 fi
