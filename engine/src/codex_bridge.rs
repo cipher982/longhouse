@@ -3731,24 +3731,15 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         }
     }
 
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
-    let child_pid = child.id();
-    #[cfg(unix)]
-    let child_pgid = capture_dedicated_child_pgid(child_pid).await;
-    #[cfg(not(unix))]
-    let child_pgid = None;
-    let stdout = child.stdout.take().context("missing app-server stdout")?;
-    let stderr = child.stderr.take().context("missing app-server stderr")?;
-    let (events_tx, events_rx) = mpsc::unbounded_channel();
-    rpc::spawn_stdout_pump(stdout, events_tx.clone());
-    let ws_listen_rx = rpc::spawn_stderr_pump(stderr, events_tx.clone());
-
-    let upstream_ws_url = tokio::time::timeout(Duration::from_secs(10), ws_listen_rx)
-        .await
-        .context("timed out waiting for app-server websocket listener")?
-        .context("app-server websocket listener never announced a URL")?;
+    let StartedAppServer {
+        child,
+        child_pid,
+        child_pgid,
+        events_tx,
+        events_rx,
+        upstream_ws_url,
+    } = start_app_server_listener(&mut command, &config.codex_bin, APP_SERVER_LISTEN_TIMEOUT)
+        .await?;
     // Always put the backpressure relay in front of codex. Prevents codex's
     // internal mpsc(128) from filling under bursty streaming and killing the
     // WS. The same relay also fronts the remote TUI since ws_url gets written
@@ -3782,6 +3773,123 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
             .chain(std::iter::once(ws_token_file))
             .collect(),
     })
+}
+
+/// How many times the bridge starts the app-server before it gives up.
+///
+/// Codex creates its SQLite state the first time a home is used, and two Codex
+/// processes that do so at the same moment collide: one exits with "failed to
+/// initialize sqlite state runtime" before it listens. The Machine Agent
+/// prewarms a Codex Console worker in the same home, so a Helm launch beside
+/// it in a new home (a first install, a scratch home) can be the one that
+/// exits. Measured with Codex 0.167.1: two starts at once in a new home lost
+/// one in 59 of 60 rounds, and none in 60 rounds once the state existed. An
+/// app-server that exits before it listens has served nothing, so starting it
+/// again is safe.
+const APP_SERVER_START_ATTEMPTS: u32 = 3;
+const APP_SERVER_START_RETRY_DELAY: Duration = Duration::from_millis(250);
+const APP_SERVER_LISTEN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How much of what the app-server wrote to stderr goes into a start error.
+const APP_SERVER_STDERR_TAIL_LINES: usize = 12;
+
+/// An app-server process that has said where it listens.
+struct StartedAppServer {
+    child: Child,
+    child_pid: Option<u32>,
+    child_pgid: Option<i32>,
+    events_tx: mpsc::UnboundedSender<StreamEvent>,
+    events_rx: mpsc::UnboundedReceiver<StreamEvent>,
+    upstream_ws_url: String,
+}
+
+/// Start the app-server and wait for the line that says where it listens.
+///
+/// A process that exits first is started again, up to
+/// `APP_SERVER_START_ATTEMPTS` times; the error for the last one carries its
+/// exit status and what it wrote to stderr, which is the only record of why a
+/// start failed. A process that is still running but silent past
+/// `listen_timeout` is not retried.
+async fn start_app_server_listener(
+    command: &mut Command,
+    codex_bin: &str,
+    listen_timeout: Duration,
+) -> Result<StartedAppServer> {
+    let mut attempt = 1;
+    loop {
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("spawning `{codex_bin}` app-server"))?;
+        let child_pid = child.id();
+        #[cfg(unix)]
+        let child_pgid = capture_dedicated_child_pgid(child_pid).await;
+        #[cfg(not(unix))]
+        let child_pgid = None;
+        let stdout = child.stdout.take().context("missing app-server stdout")?;
+        let stderr = child.stderr.take().context("missing app-server stderr")?;
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        rpc::spawn_stdout_pump(stdout, events_tx.clone());
+        let ws_listen_rx = rpc::spawn_stderr_pump(stderr, events_tx.clone());
+
+        match tokio::time::timeout(listen_timeout, ws_listen_rx).await {
+            Ok(Ok(upstream_ws_url)) => {
+                return Ok(StartedAppServer {
+                    child,
+                    child_pid,
+                    child_pgid,
+                    events_tx,
+                    events_rx,
+                    upstream_ws_url,
+                });
+            }
+            Ok(Err(_stderr_closed)) => {
+                // stderr closed with no listen line: the process has exited or
+                // is on its way out. Its stderr is complete in the channel.
+                let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+                    .await
+                    .ok()
+                    .and_then(|waited| waited.ok());
+                if status.is_none() {
+                    let _ = child.kill().await;
+                }
+                let detail = format!(
+                    "app-server websocket listener never announced a URL: the app-server {} before it listened (start {attempt} of {APP_SERVER_START_ATTEMPTS}); it wrote: {}",
+                    status
+                        .map(|status| format!("exited ({status})"))
+                        .unwrap_or_else(|| "closed stderr".to_string()),
+                    app_server_stderr_tail(&mut events_rx),
+                );
+                if attempt >= APP_SERVER_START_ATTEMPTS {
+                    bail!("{detail}");
+                }
+                eprintln!("[codex-bridge] {detail}; starting it again");
+                tokio::time::sleep(APP_SERVER_START_RETRY_DELAY * attempt).await;
+                attempt += 1;
+            }
+            Err(_elapsed) => {
+                let _ = child.kill().await;
+                bail!(
+                    "timed out waiting for app-server websocket listener after {listen_timeout:?}; it wrote: {}",
+                    app_server_stderr_tail(&mut events_rx),
+                );
+            }
+        }
+    }
+}
+
+/// The last lines the app-server wrote to stderr, from what its pump has
+/// queued so far.
+fn app_server_stderr_tail(events_rx: &mut mpsc::UnboundedReceiver<StreamEvent>) -> String {
+    let mut lines = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        if let StreamEvent::Stderr(line) = event {
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        return "nothing".to_string();
+    }
+    let start = lines.len().saturating_sub(APP_SERVER_STDERR_TAIL_LINES);
+    truncate_tail_chars(&lines[start..].join(" | "), 2000)
 }
 
 #[cfg(unix)]
@@ -7890,6 +7998,111 @@ mod tests {
             )),
             "the app-server child lost its session id: {child_env}"
         );
+    }
+
+    /// A stand-in for `codex app-server`: a shell script that appends a line
+    /// to `starts` each time it runs, then does what `body` says.
+    #[cfg(unix)]
+    fn fake_app_server(temp: &tempfile::TempDir, body: &str) -> (Command, PathBuf) {
+        let starts = temp.path().join("starts");
+        let script = temp.path().join("fake-app-server.sh");
+        fs::write(
+            &script,
+            format!("echo start >> '{}'\n{body}\n", starts.display()),
+        )
+        .unwrap();
+        let mut command = Command::new("sh");
+        command
+            .arg(&script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        (command, starts)
+    }
+
+    #[cfg(unix)]
+    fn start_count(starts: &Path) -> usize {
+        fs::read_to_string(starts).unwrap().lines().count()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_app_server_that_exits_before_it_listens_is_started_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut command, starts) = fake_app_server(
+            &temp,
+            &format!(
+                "if [ \"$(wc -l < '{}')\" -lt 2 ]; then echo 'Error: failed to initialize sqlite state runtime' >&2; exit 1; fi\n\
+                 echo 'codex app-server (WebSockets)' >&2\n\
+                 echo '  listening on: ws://127.0.0.1:4601' >&2\n\
+                 exec sleep 30",
+                temp.path().join("starts").display()
+            ),
+        );
+
+        let started = start_app_server_listener(&mut command, "codex", Duration::from_secs(10))
+            .await
+            .expect("the second start listens");
+
+        assert_eq!(started.upstream_ws_url, "ws://127.0.0.1:4601");
+        assert_eq!(start_count(&starts), 2);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_app_server_that_never_listens_fails_with_what_it_wrote() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut command, starts) = fake_app_server(
+            &temp,
+            "echo 'WARNING: proceeding without PATH aliases' >&2\n\
+             echo 'Error: failed to initialize sqlite state runtime under /h/.codex' >&2\n\
+             exit 1",
+        );
+
+        let error =
+            match start_app_server_listener(&mut command, "codex", Duration::from_secs(10)).await {
+                Ok(_) => panic!("an app-server that never listens cannot start"),
+                Err(error) => format!("{error:#}"),
+            };
+
+        assert!(
+            error.contains("failed to initialize sqlite state runtime under /h/.codex"),
+            "{error}"
+        );
+        assert!(
+            error.contains("WARNING: proceeding without PATH aliases"),
+            "{error}"
+        );
+        assert!(error.contains("exit status: 1"), "{error}");
+        assert!(error.contains("start 3 of 3"), "{error}");
+        assert_eq!(start_count(&starts), APP_SERVER_START_ATTEMPTS as usize);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_silent_app_server_times_out_and_is_not_started_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut command, starts) =
+            fake_app_server(&temp, "echo 'still loading history' >&2\nexec sleep 30");
+
+        let error = match start_app_server_listener(
+            &mut command,
+            "codex",
+            Duration::from_millis(400),
+        )
+        .await
+        {
+            Ok(_) => panic!("an app-server that says nothing cannot start"),
+            Err(error) => format!("{error:#}"),
+        };
+
+        assert!(
+            error.contains("timed out waiting for app-server websocket listener"),
+            "{error}"
+        );
+        assert!(error.contains("still loading history"), "{error}");
+        assert_eq!(start_count(&starts), 1);
     }
 
     #[test]
