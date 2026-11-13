@@ -69,7 +69,6 @@ import { useDisplaySettings } from "./display/useDisplaySettings";
 import { useReportActiveSession, useSessionRail } from "./rail/sessionRailContext";
 import { config } from "@/shared/lib/config";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
-import { getSessionStartedLabel } from "./sessionTiming";
 import { getSessionCardText } from "@/shared/session/sessionLabels";
 import { useMarkSessionRead } from "./useMarkSessionRead";
 import {
@@ -202,10 +201,6 @@ function SessionDetailWorkspaceRoute({
     sessionId,
     sessionState: session?.session_state,
   });
-  const sessionStartedLabel = useMemo(
-    () => getSessionStartedLabel(session, nowMs),
-    [session, nowMs],
-  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Sends the composer owns but the transcript renders at its tail.
   const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);

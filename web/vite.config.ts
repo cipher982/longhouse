@@ -69,6 +69,7 @@ function buildHashPlugin(): Plugin {
             tag: "script",
             attrs: {
               src: `/config.js?v=${hash}`,
+              defer: true,
             },
             injectTo: "head-prepend",
           },
@@ -147,11 +148,14 @@ export default defineConfig(({ mode }) => {
       headers: {
         "Cache-Control": "no-store",
       },
-      // Enable file watching with polling for Docker volumes
-      watch: {
-        usePolling: true,
-        interval: 1000,
-      },
+      // Enable file watching with polling only in Docker containers or when explicitly requested
+      watch:
+        process.env.VITE_WATCH_POLLING === "1" || existsSync("/.dockerenv")
+          ? {
+              usePolling: true,
+              interval: 1000,
+            }
+          : undefined,
       proxy: {
         "/config.js": {
           target: proxyTarget,

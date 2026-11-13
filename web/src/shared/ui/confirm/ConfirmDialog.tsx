@@ -37,7 +37,7 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
   useBodyScrollLock(isOpen);
   useEscapeKey((event) => {
@@ -45,15 +45,29 @@ export function ConfirmDialog({
     onCancel();
   }, isOpen);
 
-  // Focus trap and initial focus on cancel button
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen) {
+      if (typeof dialog.showModal === "function") {
+        if (!dialog.open) dialog.showModal();
+      } else {
+        dialog.setAttribute("open", "");
+      }
+      cancelRef.current?.focus();
+    } else if (typeof dialog.close === "function") {
+      if (dialog.open) dialog.close();
+    } else {
+      dialog.removeAttribute("open");
+    }
+  }, [isOpen]);
+
+  // Fallback focus trap for environments without native <dialog>.showModal() (e.g. jsdom)
   useEffect(() => {
     if (!isOpen) return;
 
-    // Focus the cancel button (least destructive action)
-    cancelRef.current?.focus();
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Focus trap
       if (e.key === 'Tab' && dialogRef.current) {
         const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -78,24 +92,26 @@ export function ConfirmDialog({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="ui-confirm-overlay"
+    <dialog
+      ref={dialogRef}
+      role={variant === 'danger' || variant === 'warning' ? 'alertdialog' : 'dialog'}
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+      aria-describedby="confirm-dialog-description"
+      className={`ui-confirm-dialog ui-confirm-dialog--${variant}`}
+      data-testid="confirm-dialog"
+      onCancel={(e) => {
+        e.preventDefault();
+        onCancel();
+      }}
       onClick={(e) => {
-        // Close on backdrop click
+        // Close on ::backdrop click
         if (e.target === e.currentTarget) {
           onCancel();
         }
       }}
     >
-      <div
-        ref={dialogRef}
-        role={variant === 'danger' || variant === 'warning' ? 'alertdialog' : 'dialog'}
-        aria-modal="true"
-        aria-labelledby="confirm-dialog-title"
-        aria-describedby="confirm-dialog-description"
-        className={`ui-confirm-dialog ui-confirm-dialog--${variant}`}
-        data-testid="confirm-dialog"
-      >
+      <div className="ui-confirm-dialog__content">
         <h2 id="confirm-dialog-title" className="ui-confirm-dialog__title">
           {title}
         </h2>
@@ -122,6 +138,6 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

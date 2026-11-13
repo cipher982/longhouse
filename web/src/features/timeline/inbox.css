@@ -280,6 +280,14 @@
     transition: background-color 80ms ease;
     line-height: 1.35;
     height: var(--inbox-row-min-h);
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 42px;
+  }
+
+  @supports not (content-visibility: auto) {
+    .inbox-row {
+      contain: layout style paint;
+    }
   }
 
   .inbox-row:hover {

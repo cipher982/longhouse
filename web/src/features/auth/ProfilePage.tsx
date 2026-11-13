@@ -15,6 +15,7 @@ import {
 
 import { parseUTC } from "@/shared/lib/dateUtils";
 import { fetchWithRefresh } from "./auth-refresh";
+import "./profile-admin.css";
 
 interface UserUpdatePayload {
   display_name?: string | null;

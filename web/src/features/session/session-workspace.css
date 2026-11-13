@@ -191,6 +191,10 @@
   outline: none;
 }
 
+.session-overflow-menu__item:focus-visible {
+  box-shadow: inset 2px 0 0 var(--color-brand-primary);
+}
+
 .session-overflow-menu__item:disabled {
   opacity: 0.5;
   cursor: default;
@@ -878,6 +882,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.timeline-pane__rows > * {
+  contain: layout style;
 }
 
 .timeline-pane__dock {
@@ -1612,6 +1620,8 @@
   font-family: var(--tl-prose-font, inherit);
   text-wrap: pretty;
   word-break: break-word;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 6lh;
 }
 .tl-msg__body p {
   margin: 0 0 var(--tl-para-gap, 0.6em);
@@ -2294,7 +2304,10 @@
 }
 
 /* Bounded, click-free preview of tool output on a collapsed action row —
-   a soot well set into the row, darker than the page, no border box. */
+   a soot well set into the row, darker than the page, no border box.
+   Capped to a visual line budget (~5 lines; ~7-8 for failures) so long or
+   wrapped JSON lines scroll inside the well instead of shoving prose above
+   around. Pending/streaming previews hold a fixed height while tailing. */
 .tl-tool-preview {
   margin: 4px 0 8px;
   border-radius: 2px;
@@ -2302,9 +2315,15 @@
   box-shadow: inset 0 0 0 1px rgba(158, 124, 90, 0.28);
   background: var(--color-surface-well);
   padding: 10px 12px;
-  overflow-x: auto;
+  max-height: 118px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.tl-tool-preview--pending {
+  height: 118px;
 }
 .tl-tool-preview--failure {
+  max-height: 160px;
   box-shadow: inset 0 0 0 1px rgba(228, 87, 46, 0.28);
 }
 .tl-tool-preview__text {
@@ -2315,7 +2334,7 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--color-text-secondary);
-  opacity: 0.9;
+  opacity: 0.85;
 }
 
 .tl-diff {

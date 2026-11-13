@@ -6,12 +6,19 @@
     <meta name="longhouse-build-commit" content="__BUILD_COMMIT__" />
     <!-- CSP is set by nginx in production, only needed for local dev -->
     <title>Longhouse - Remote control for your coding agents</title>
-    <!-- Typography: Fraunces (editorial display) + General Sans + Inter -->
+    <!-- Typography: Inter (app + UI) and Fraunces (blog display, loaded non-blocking) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    </noscript>
     <meta
       name="description"
       content="Longhouse plugs into the Claude Code, Codex, Cursor, and OpenCode CLIs already on your machines. Watch sessions live, search past work, and control supported sessions from the web while the agent runs on your machine. Self-hosted and Apache-2.0."

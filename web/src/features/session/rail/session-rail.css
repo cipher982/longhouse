@@ -166,6 +166,14 @@
   line-height: 1.3;
   text-align: left;
   cursor: pointer;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 30px;
+}
+
+@supports not (content-visibility: auto) {
+  .session-rail__row {
+    contain: layout style paint;
+  }
 }
 
 .session-rail__row:hover {

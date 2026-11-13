@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router";
@@ -202,7 +202,7 @@ function normalizeTranscriptQuestions(input: Record<string, unknown> | null | un
   });
 }
 
-function SeamRow({ seam }: { seam: TimelineSeam }) {
+const SeamRow = memo(function SeamRow({ seam }: { seam: TimelineSeam }) {
   return (
     <div id={`seam-${seam.key}`} className="tl-seam" data-testid="session-timeline-seam">
       <div className="tl-seam__rule" />
@@ -213,7 +213,7 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
       <div className="tl-seam__stamp">{formatContinuationStamp(seam.timestamp)}</div>
     </div>
   );
-}
+});
 
 function timelineItemIdentity(item: TimelineItem): string {
   switch (item.kind) {
@@ -441,7 +441,7 @@ function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
   );
 }
 
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   event,
   renderMedia,
   provider,
@@ -548,7 +548,7 @@ function MessageRow({
       <TurnEndRow turnEnd={event.turn_end} />
     </div>
   );
-}
+});
 
 /** Only languages PrismLight registers in lib/syntaxHighlighter.ts.
  *  Anything else falls back to a plain <pre> so we don't trigger a silent
@@ -666,10 +666,26 @@ function EditDiffView({ stat }: { stat: EditStat }) {
   );
 }
 /** Bounded, click-free output preview of a collapsed tool call. */
-function ToolOutputPreview({ text, failed = false }: { text: string; failed?: boolean }) {
+function ToolOutputPreview({
+  text,
+  failed = false,
+  pending = false,
+}: {
+  text: string;
+  failed?: boolean;
+  pending?: boolean;
+}) {
+  const wellRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!pending || !wellRef.current) return;
+    wellRef.current.scrollTop = wellRef.current.scrollHeight;
+  }, [pending, text]);
+
   return (
     <div
-      className={`tl-tool-preview${failed ? " tl-tool-preview--failure" : ""}`}
+      ref={wellRef}
+      className={`tl-tool-preview${failed ? " tl-tool-preview--failure" : ""}${pending ? " tl-tool-preview--pending" : ""}`}
       data-testid={failed ? "tool-failure-preview" : "tool-output-preview"}
       role="note"
     >
@@ -907,8 +923,8 @@ function ActionCard({
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
       </button>
-      {!expanded && failurePreview ? <ToolOutputPreview text={failurePreview} failed /> : null}
-      {!expanded && !failurePreview && outputPreview ? <ToolOutputPreview text={outputPreview} /> : null}
+      {!expanded && failurePreview ? <ToolOutputPreview text={failurePreview} failed pending={pending} /> : null}
+      {!expanded && !failurePreview && outputPreview ? <ToolOutputPreview text={outputPreview} pending={pending} /> : null}
       <SubagentNode interaction={interaction} />
       {expanded ? (
         <div id={detailId}>
@@ -1294,7 +1310,7 @@ function ToolRow(props: {
 
 const EMPTY_OUTBOX: OutboxEntry[] = [];
 
-export function TimelinePane({
+export const TimelinePane = memo(function TimelinePane({
   items,
   totalEntries,
   loadedEntries,
@@ -1330,20 +1346,22 @@ export function TimelinePane({
   // pollute the URL/selection with transient UI state. Selection ≠ expanded.
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const toggleTool = (key: string) =>
+  const toggleTool = useCallback((key: string) => {
     setExpandedTools((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  const toggleGroup = (key: string) =>
+  }, []);
+  const toggleGroup = useCallback((key: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
+  }, []);
 
   // A deep link or external selection of a child call must reveal the exact
   // evidence instead of landing on a closed parent activity row.
@@ -1384,10 +1402,10 @@ export function TimelinePane({
   // Remember whether the user was "at the bottom" *before* items mutated.
   // If they were, new entries should scroll into view; if not, viewport
   // stays put so the user doesn't get yanked mid-read.
-  // Threshold is generous (80px) so a tiny manual scroll still counts as
-  // "at the bottom" for auto-follow purposes.
+  // Threshold is tight (24px) so scrolling up even a couple lines disengages
+  // auto-follow immediately instead of yanking the user back down.
   const wasAtBottomRef = useRef(true);
-  const STICK_THRESHOLD = 80;
+  const STICK_THRESHOLD = 24;
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -2027,4 +2045,4 @@ export function TimelinePane({
       {livePane}
     </div>
   );
-}
+});

@@ -23,6 +23,4 @@
 @import url("../../shared/instruments/instruments.css");
 
 /* Pages */
-@import url("../../features/auth/profile-admin.css");
 @import url("../../shared/ui/page-shell.css");
-@import url("../../features/marketing/blog/blog.css");
