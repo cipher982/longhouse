@@ -77,25 +77,29 @@ def upsert_live_sessions_from_managed_leases(
     advance_only: set[str] = set()
     changed_count = 0
     for lease, session_id in entries:
+        session_key = str(session_id)
         provider = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
         state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
         device_key = normalized_device_id or None
         machine_id = _normalized(getattr(lease, "machine_id", None)) or None
-        row = existing.get(str(session_id))
+        row = existing.get(session_key)
         if row is None:
-            db.add(
-                LiveSession(
-                    session_id=str(session_id),
-                    provider=provider,
-                    device_id=device_key,
-                    machine_id=machine_id,
-                    state=state,
-                    owner_id=normalized_owner_id,
-                    last_seen_at=seen_at,
-                    updated_at=seen_at,
-                    started_at=normalize_utc(getattr(lease, "observed_at", None)) or seen_at,
-                )
+            # Added rows are remembered under their key: one heartbeat can name
+            # the same session twice (a lease list built from two scans), and a
+            # second `db.add` for the same primary key fails at flush.
+            row = LiveSession(
+                session_id=session_key,
+                provider=provider,
+                device_id=device_key,
+                machine_id=machine_id,
+                state=state,
+                owner_id=normalized_owner_id,
+                last_seen_at=seen_at,
+                updated_at=seen_at,
+                started_at=normalize_utc(getattr(lease, "observed_at", None)) or seen_at,
             )
+            db.add(row)
+            existing[session_key] = row
             changed_count += 1
             touched.add(session_id)
             continue

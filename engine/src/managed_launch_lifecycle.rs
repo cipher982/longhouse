@@ -206,6 +206,47 @@ fn runtime_host_client() -> reqwest::Client {
         .expect("static managed-launch Runtime Host client configuration must be valid")
 }
 
+#[derive(Debug)]
+struct ManagedLaunchOutcomeHttpError {
+    outcome: &'static str,
+    status: reqwest::StatusCode,
+    detail: Option<String>,
+}
+
+impl std::fmt::Display for ManagedLaunchOutcomeHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.detail.as_deref() {
+            Some(detail) => write!(
+                formatter,
+                "Runtime Host rejected managed launch {} ({}): {}",
+                self.outcome, self.status, detail
+            ),
+            None => write!(
+                formatter,
+                "Runtime Host rejected managed launch {} ({})",
+                self.outcome, self.status
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ManagedLaunchOutcomeHttpError {}
+
+/// Whether replaying this confirmation could ever be accepted.
+///
+/// A conflict, a gone launch, or a refused token is a decided answer. Replaying
+/// one polls a decision forever while the receipt claims a recovery.
+fn outcome_failure_is_retryable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ManagedLaunchOutcomeHttpError>())
+        .is_none_or(|http_error| {
+            http_error.status.is_server_error()
+                || http_error.status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || http_error.status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        })
+}
+
 /// Why a registration attempt failed, in the terms the user needs.
 ///
 /// "Unavailable" and "did not answer in time" are different facts about the
@@ -683,7 +724,20 @@ fn spawn_launch_outcome_retry(
                     clear_outcome_retry(&agent_dir, &session_id);
                     return;
                 }
-                Err(error) => last_error = Some(error),
+                Err(error) => {
+                    // A refusal the host will repeat (409 conflict, 404 gone,
+                    // 401 token, 400 shape) is not a slow write: replaying it
+                    // would poll a decided answer forever and keep the receipt
+                    // claiming a recovery that cannot converge.
+                    if !outcome_failure_is_retryable(&error) {
+                        notices.push(format!(
+                            "Longhouse warning: {provider} is running but its launch outcome was rejected: {error:#}"
+                        ));
+                        let _ = record_outcome_retry(&agent_dir, &session_id, &provider, true);
+                        return;
+                    }
+                    last_error = Some(error);
+                }
             }
             attempt = attempt.saturating_add(1);
         }
@@ -692,7 +746,7 @@ fn spawn_launch_outcome_retry(
 
 /// Nobody will replay this confirmation now: the provider has exited.
 ///
-/// `recovery_exhausted` is the honest state — an outcome that was never
+/// `recovery_exhausted` is the honest state, an outcome that was never
 /// recorded and no longer has a running launch to describe. Without settling it
 /// the receipt keeps claiming a recovery that has no thread behind it, which is
 /// exactly what local health showed after the 2026-11-13 writer stall.
@@ -874,13 +928,14 @@ pub async fn report_launch_outcome(
         .await
         .context("send managed launch outcome")?;
     if !response.status().is_success() {
-        let status = response.status();
-        let detail = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Runtime Host rejected managed launch {} for {session_id} ({status}): {}",
-            outcome.as_wire(),
-            truncate(detail.trim(), 500)
-        );
+        return Err(anyhow::Error::new(ManagedLaunchOutcomeHttpError {
+            outcome: match outcome {
+                LaunchOutcome::Confirmed => "confirmed",
+                LaunchOutcome::Aborted => "aborted",
+            },
+            status: response.status(),
+            detail: registration_error_detail(&response.text().await.unwrap_or_default()),
+        }));
     }
     let payload: Value = response
         .json()
@@ -1702,6 +1757,39 @@ mod tests {
             outcome_backoff(6) > legacy_budget,
             "one gap must already outlast the whole schedule that stranded launches"
         );
+    }
+
+    /// A decided refusal is not a slow write: a 409 must settle the receipt
+    /// instead of replaying the same rejected confirmation every minute.
+    #[test]
+    fn a_rejected_outcome_stops_replaying_and_settles() {
+        let (url, requests) = spawn_outcome_server("409 Conflict");
+        let agent_dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let notices = DeferredNotices::default();
+        {
+            let mut transaction =
+                ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-7", "run-7");
+            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices, None);
+        }
+
+        // The foreground confirm and exactly one replay.
+        requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            requests.recv_timeout(Duration::from_millis(1500)).is_err(),
+            "a 409 must not be replayed"
+        );
+
+        let payload: Value = serde_json::from_slice(
+            &std::fs::read(outcome_receipt(agent_dir.path(), "session-7")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["recovery_exhausted"], json!(true));
+        assert!(notices
+            .drain()
+            .iter()
+            .any(|message| message.contains("launch outcome was rejected")));
     }
 
     #[test]

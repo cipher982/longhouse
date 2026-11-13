@@ -51,11 +51,12 @@ DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV = "LONGHOUSE_DISABLE_MISSING_MANAGED_LE
 """How stale a live attachment may get before a heartbeat restamps it.
 
 Unchanged leases skip the attach pass entirely, so this is what keeps an idle
-but attached session inside the claim horizon above: well under the lease TTL,
-and far above the 60s heartbeat cadence that would otherwise rewrite the whole
-fleet's attachments on every tick.
+but attached session inside the claim horizon: three times the 60s heartbeat
+cadence, and a fifth of the 15 min lease TTL. Matching the cadence instead was
+the bug the first version shipped with: at exactly 60s every attachment looked
+stale on the very next tick and the pass cost the same as no gate at all.
 """
-LIVE_ATTACHMENT_REFRESH_INTERVAL = timedelta(seconds=60)
+LIVE_ATTACHMENT_REFRESH_INTERVAL = timedelta(minutes=5)
 _CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 _KERNEL_STATE_BY_CONTROL_STATE = {
@@ -425,6 +426,7 @@ def upsert_live_control_leases(
 
     unchanged_session_keys: set[str] = set()
     changed_count = 0
+    refreshed_count = 0
     attached_count = 0
     for lease, session_id, provider in normalized_leases:
         lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
@@ -473,7 +475,10 @@ def upsert_live_control_leases(
             touched.add(UUID(session_id))
             continue
 
-        changed_count += 1
+        if changed:
+            changed_count += 1
+        else:
+            refreshed_count += 1
         row.machine_id = machine_id
         row.state = lease_state
         row.sequence = sequence
@@ -526,6 +531,7 @@ def upsert_live_control_leases(
     if stats is not None:
         stats["leases_present"] = len(normalized_leases)
         stats["leases_changed"] = changed_count
+        stats["leases_refreshed"] = refreshed_count
         stats["leases_attached"] = attached_count
         stats["leases_retained"] = len(unchanged_session_keys)
     return touched
