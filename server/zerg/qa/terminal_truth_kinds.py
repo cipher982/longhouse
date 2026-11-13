@@ -915,7 +915,9 @@ def run_kind_cell_in(
         out["state_lane"] = state_lane_result(obs, stopped_at)
         out["state_lane"]["errors"] = state_observer.errors
         out["state_lane"]["resolution_s"] = state_observer.resolution_s
-        woken_lags = woken_view_lags(state_observer.timeline, woken_reader.timeline, since=submitted, end_t=stopped_at)
+        woken_lags = woken_view_lags(
+            state_observer.timeline, woken_reader.timeline, since=submitted, end_t=stopped_at, gone=state_observer.gone
+        )
         # Judged on the sessions the prompt went to. A subagent's child session appears mid-turn and its stream opens when the harness
         # finds it, so its states are recorded below and not gated.
         woken_worst = max((lag for lag in woken_lags if lag["session_id"] in prompted_sessions), key=lambda lag: lag["lag_s"], default=None)

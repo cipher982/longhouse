@@ -16,6 +16,7 @@ import zlib
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
@@ -610,6 +611,7 @@ class StateObserver(threading.Thread):
         self.shaped = 0
         self.errors: list[str] = []
         self.read_times: list[float] = []
+        self.gone: dict[str, float] = {}  # session id -> when the host stopped serving it (unlisted, or a 404), if it has not come back
         self._last: dict[str, tuple] = {}
 
     @property
@@ -620,13 +622,26 @@ class StateObserver(threading.Thread):
     def run(self) -> None:
         while not self._stop_event.is_set():
             try:
-                for sid in self.api.session_ids():
+                listed = self.api.session_ids()
+                now = time.monotonic()
+                for sid in self._last:
+                    if sid not in listed:
+                        self.gone.setdefault(sid, now)
+                for sid in listed:
                     status, body = self.api.get(f"/api/timeline/sessions/{sid}/workspace", browser=True)
                     now = time.monotonic()
                     self.reads += 1
                     self.read_times.append(now)
+                    if status == 404:
+                        # Listed a moment ago and gone now: a Helm session found from the provider's file goes when the launched
+                        # one is tied to it. Its last state stopped being served here; the other sessions are still read.
+                        self.gone.setdefault(sid, now)
+                        if len(self.errors) < 10:
+                            self.errors.append("RuntimeError: HTTP 404")
+                        continue
                     if status != 200:
                         raise RuntimeError(f"HTTP {status}")
+                    self.gone.pop(sid, None)
                     snap = state_snapshot(body, sid)
                     if snap is None:
                         continue
@@ -699,6 +714,7 @@ def woken_view_lags(
     *,
     since: float,
     end_t: float,
+    gone: Mapping[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """For each state the host served from ``since`` on: how long a woken-only client took to show it, or how long it went unshown.
 
@@ -706,6 +722,9 @@ def woken_view_lags(
     is what the runtime strip draws: the headline and the delegated-work detail. ``lag_s`` is from the poller first seeing the state to
     the woken reader holding it; a state the reader never held before the host moved on (or the run ended) has ``shown`` false and
     ``lag_s`` equal to the time it was served. A state served for less than the lag budget cannot fail it, so a blip is not a finding.
+    ``gone`` is ``StateObserver.gone``: a session the host stopped serving had its last state served until then, not until the run
+    ended. 2026-11-13: a Codex Helm session found from the provider's file was read once as "Idle" 0.25 s after the prompt and
+    removed 0.6 s later, and its "Idle" was counted as served and unshown for the remaining 24.4 s of the run.
     """
 
     out: list[dict[str, Any]] = []
@@ -718,7 +737,7 @@ def woken_view_lags(
         for index, (t, text) in enumerate(changes):
             if t < since:
                 continue
-            until = changes[index + 1][0] if index + 1 < len(changes) else end_t
+            until = changes[index + 1][0] if index + 1 < len(changes) else max(t, min(end_t, (gone or {}).get(sid, end_t)))
             # The reader may have read the state a moment before the poller's next tick did.
             window_from = changes[index - 1][0] if index else float("-inf")
             held_before = [text_r for t_r, text_r in reads if window_from <= t_r <= t]

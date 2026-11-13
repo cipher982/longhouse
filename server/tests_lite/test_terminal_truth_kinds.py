@@ -495,6 +495,91 @@ def test_a_state_announced_when_it_is_served_is_shown_at_once_and_a_blip_is_not_
     assert all(lag["session_id"] == "s" for lag in lags)
 
 
+def test_a_session_the_host_removed_stops_being_served_then_and_not_at_the_end_of_the_run():
+    """Runner, 2026-11-13, Codex Helm: the session found from the provider's file was read as "Idle" 0.25 s after the prompt and
+    removed 0.6 s later. Its "Idle" was counted as served and unshown for the remaining 24.4 s and failed the cell."""
+    from zerg.qa.terminal_truth_lanes import woken_view_lags
+
+    polled = [
+        (10.25, _state("from-file", "Idle")),
+        (10.83, _state("launched", "Idle")),
+        (11.6, _state("launched", "Thinking")),
+        (13.83, _state("launched", "Idle")),
+    ]
+    woken = [(10.83, _state("launched", "Idle")), (11.6, _state("launched", "Thinking")), (13.85, _state("launched", "Idle"))]
+
+    counted_to_the_end = {lag["session_id"]: lag for lag in woken_view_lags(polled, woken, since=10.0, end_t=34.67)}
+    assert counted_to_the_end["from-file"]["lag_s"] == 24.42
+
+    lags = woken_view_lags(polled, woken, since=10.0, end_t=34.67, gone={"from-file": 10.85})
+    from_file = [lag for lag in lags if lag["session_id"] == "from-file"]
+    assert [(lag["shown"], lag["served_for_s"], lag["lag_s"]) for lag in from_file] == [(False, 0.6, 0.6)]
+    # A session that is still served keeps its last state until the run stops looking, shown or not.
+    assert [lag["served_for_s"] for lag in lags if lag["session_id"] == "launched"][-1] == 20.84
+
+
+class _SessionsThatGo:
+    """A host for ``StateObserver``: ``listed`` is the session list and ``status`` the answer for each session's workspace."""
+
+    def __init__(self) -> None:
+        self.listed: list[str] = []
+        self.status: dict[str, int] = {}
+        self.headline: dict[str, str] = {}
+
+    def session_ids(self) -> list[str]:
+        return list(self.listed)
+
+    def get(self, path: str, browser: bool = False) -> tuple[int, str]:
+        sid = path.split("/")[-2]
+        if self.status.get(sid, 200) != 200:
+            return self.status[sid], ""
+        facts = {"activity": {"state": "quiescent"}, "presentation": {"primary": {"label": self.headline.get(sid, "Idle")}}}
+        return 200, json.dumps({"session": {"session_state": facts}})
+
+
+def test_the_state_observer_records_when_a_session_goes_and_keeps_reading_the_others():
+    from zerg.qa.terminal_truth_lanes import StateObserver
+
+    def until(condition) -> None:
+        deadline = time.monotonic() + 5
+        while not condition():
+            assert time.monotonic() < deadline, "the observer did not get there in 5 s"
+            time.sleep(0.01)
+
+    host = _SessionsThatGo()
+    host.listed = ["from-file", "launched"]
+    stop = threading.Event()
+    observer = StateObserver(host, stop, interval=0.01)
+    observer.start()
+    try:
+        until(lambda: {snap["session_id"] for _, snap in observer.timeline} == {"from-file", "launched"})
+        assert observer.gone == {}
+
+        # Listed, and a 404 when read: the read of the session after it in the list still happens.
+        host.status["from-file"] = 404
+        host.headline["launched"] = "Thinking"
+        before = time.monotonic()
+        until(lambda: "from-file" in observer.gone and observer.timeline[-1][1]["headline"] == "Thinking")
+        assert before <= observer.gone["from-file"] <= time.monotonic()
+        assert "RuntimeError: HTTP 404" in observer.errors
+
+        # No longer listed at all: the time it went is the first time, not the latest.
+        went = observer.gone["from-file"]
+        host.listed = ["launched"]
+        reads = observer.reads
+        until(lambda: observer.reads > reads + 3)
+        assert observer.gone == {"from-file": went}
+
+        # A session that is unlisted for a moment and comes back is not gone.
+        host.listed = []
+        until(lambda: "launched" in observer.gone)
+        host.listed = ["launched"]
+        until(lambda: "launched" not in observer.gone)
+    finally:
+        stop.set()
+        observer.join(timeout=5)
+
+
 def test_the_woken_reader_reads_once_per_wake_and_once_more_for_a_wake_that_lands_mid_read():
     import threading as _threading
 
