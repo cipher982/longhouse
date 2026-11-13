@@ -1,5 +1,59 @@
 {
   "schema_version": 1,
+  "transcript_signal_surfaces": {
+    "turn.duration": {
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
+    },
+    "session.recap": {
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
+    },
+    "session.title": {
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
+    },
+    "turn.usage": {
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
+    },
+    "turn.thinking": {
+      "disposition": "implemented",
+      "surface_proof": "web/src/shared/session/model/__tests__/sessionWorkspace.test.ts"
+    },
+    "context.compaction": {
+      "disposition": "not_implemented",
+      "owner_action": "Emit Role::System event for Codex compacted, project compaction_boundary on full compactions, and render timeline divider in Web and iOS"
+    },
+    "turn.api_error": {
+      "disposition": "not_implemented",
+      "owner_action": "Read turn.api_error in catalogd _session_read_provider_facts and surface error markers in Web and iOS"
+    },
+    "input.queue": {
+      "disposition": "not_implemented",
+      "owner_action": "Project queued input items once ingest exists across launch providers"
+    },
+    "delegation.spawn": {
+      "disposition": "not_implemented",
+      "owner_action": "Complete served delegation signal projection beyond internal parent-child lineage"
+    },
+    "delegation.background": {
+      "disposition": "not_implemented",
+      "owner_action": "Surface background delegation signal once ingest is implemented"
+    },
+    "delegation.workflow": {
+      "disposition": "not_implemented",
+      "owner_action": "Surface workflow delegation signal once ingest is implemented"
+    },
+    "delegation.scheduled": {
+      "disposition": "not_implemented",
+      "owner_action": "Surface scheduled delegation signal once ingest is implemented"
+    },
+    "delegation.peer_message": {
+      "disposition": "not_implemented",
+      "owner_action": "Surface peer message delegation signal once ingest is implemented"
+    }
+  },
   "providers": [
     {
       "provider": "codex",
@@ -839,7 +893,16 @@
           "first_seen_version": "0.142.2",
           "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "turn_end"
+          "trigger": "turn_end",
+          "fields": {
+            "context_tokens": "native",
+            "context_window": "native",
+            "output_tokens": "native",
+            "thinking_tokens": "native",
+            "cache_tokens": "native",
+            "cost_usd": "absent",
+            "effort": "native"
+          }
         },
         "turn.api_error": {
           "disposition": "implemented",
@@ -1899,7 +1962,16 @@
           "first_seen_version": "2.1.121",
           "fixture": "engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl",
           "canary": "claude_transcript_signals",
-          "trigger": "turn_end"
+          "trigger": "turn_end",
+          "fields": {
+            "context_tokens": "native",
+            "context_window": "absent",
+            "output_tokens": "native",
+            "thinking_tokens": "native",
+            "cache_tokens": "native",
+            "cost_usd": "absent",
+            "effort": "native"
+          }
         },
         "turn.api_error": {
           "disposition": "implemented",
@@ -4670,7 +4742,16 @@
           "raw_source": "message/message.usage",
           "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "turn_end"
+          "trigger": "turn_end",
+          "fields": {
+            "context_tokens": "native",
+            "context_window": "absent",
+            "output_tokens": "native",
+            "thinking_tokens": "native",
+            "cache_tokens": "native",
+            "cost_usd": "absent",
+            "effort": "absent"
+          }
         },
         "turn.api_error": {
           "disposition": "implemented",
@@ -5534,7 +5615,16 @@
           "raw_source": "message/message.usage",
           "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
           "canary": "omp_transcript_signals",
-          "trigger": "turn_end"
+          "trigger": "turn_end",
+          "fields": {
+            "context_tokens": "native",
+            "context_window": "absent",
+            "output_tokens": "native",
+            "thinking_tokens": "native",
+            "cache_tokens": "native",
+            "cost_usd": "absent",
+            "effort": "absent"
+          }
         },
         "turn.api_error": {
           "disposition": "implemented",

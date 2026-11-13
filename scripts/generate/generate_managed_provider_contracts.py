@@ -22,7 +22,11 @@ OUTPUT_PATH = ROOT / "server" / "zerg" / "config" / "managed_provider_contracts.
 # on unrelated edits. (adapter_digest is not stored at all; it is computed from
 # adapter_sources when a proof is produced.)
 ENGINE_OUTPUT_PATH = ROOT / "engine" / "src" / "managed_provider_contracts.generated.json"
-ENGINE_OMITTED_KEYS = frozenset({"oracle_digest", "live_stream_signals"})  # harness-only expectations
+# Omit UI/surface and harness-only expectations from the engine copy so
+# surface/doc/test edits do not churn the binary or recompile Cargo.
+ENGINE_OMITTED_KEYS = frozenset(
+    {"oracle_digest", "live_stream_signals", "transcript_signal_surfaces", "fields"}
+)
 
 sys.path.insert(0, str(ROOT / "server"))
 

@@ -1017,9 +1017,16 @@ def test_outstanding_factory_work_reads_dispositions_not_reality() -> None:
     """
 
     from zerg.services.managed_provider_contracts import outstanding_factory_work
+    from zerg.services.managed_provider_contracts import transcript_signal_surfaces
 
+    surfaces = transcript_signal_surfaces()
     for row in outstanding_factory_work():
         assert set(row) >= {"provider", "operation", "support_tier"}
+        if row["operation"].startswith("transcript_signal_surface:"):
+            assert row["provider"] == "all"
+            signal = row["operation"].removeprefix("transcript_signal_surface:")
+            assert surfaces[signal]["disposition"] == "not_implemented"
+            continue
         contract = contract_for_provider(row["provider"])
         assert contract is not None
         # Only `not_implemented` is backlog. policy_disabled and
@@ -1276,3 +1283,122 @@ def test_live_stream_signals_are_declared_and_strictly_validated():
     for signals in bad:
         with pytest.raises(ValueError):
             _validate_live_stream_signals({"provider": "t", "live_stream_signals": signals})
+
+
+def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
+    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
+    from zerg.managed_provider_contract_manifest import _validate_transcript_signal_surfaces
+    from zerg.managed_provider_contract_manifest import _validate_transcript_signals
+    from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+    from zerg.services.managed_provider_contracts import transcript_signal_surfaces
+
+    manifest = managed_provider_contract_manifest()
+    surfaces = transcript_signal_surfaces()
+    assert set(surfaces) == TRANSCRIPT_SIGNAL_IDS
+    assert surfaces["context.compaction"]["disposition"] == "not_implemented"
+    assert surfaces["turn.usage"]["disposition"] == "implemented"
+
+    for contract in all_managed_provider_contracts():
+        usage_cell = contract.transcript_signals["turn.usage"]
+        if usage_cell["disposition"] == "implemented":
+            fields = usage_cell.get("fields")
+            assert isinstance(fields, dict) and set(fields) == set(TURN_USAGE_FIELD_NAMES), contract.provider
+        else:
+            assert "fields" not in usage_cell, contract.provider
+
+    open_surfaces = {row["operation"] for row in outstanding_factory_work() if row["operation"].startswith("transcript_signal_surface:")}
+    assert {"transcript_signal_surface:context.compaction", "transcript_signal_surface:turn.api_error"} <= open_surfaces
+
+    with pytest.raises(ValueError, match="transcript_signal_surfaces missing"):
+        _validate_transcript_signal_surfaces({"transcript_signal_surfaces": {}}, manifest["providers"])
+    with pytest.raises(ValueError, match="names no surface_proof"):
+        bad_surfaces = {k: dict(v) for k, v in surfaces.items()}
+        bad_surfaces["turn.usage"] = {"disposition": "implemented", "consumer": "UI"}
+        _validate_transcript_signal_surfaces({"transcript_signal_surfaces": bad_surfaces}, manifest["providers"])
+    with pytest.raises(ValueError, match="cannot be implemented without at least one launch-tier provider"):
+        bad_surfaces = {k: dict(v) for k, v in surfaces.items()}
+        bad_surfaces["input.queue"] = {"disposition": "implemented", "surface_proof": "tests_lite/test_x.py"}
+        _validate_transcript_signal_surfaces({"transcript_signal_surfaces": bad_surfaces}, manifest["providers"])
+
+    # turn.usage fields validation
+    def cells(**overrides: dict) -> dict:
+        base = {
+            signal: {"disposition": "upstream_absent", "raw_source": "none", "canary": "test_signals", "trigger": "census"}
+            for signal in TRANSCRIPT_SIGNAL_IDS
+        }
+        base.update(overrides)
+        return base
+
+    valid_fields = {name: "native" for name in TURN_USAGE_FIELD_NAMES}
+    with pytest.raises(ValueError, match="cannot claim native or derived"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{
+                        "turn.usage": {
+                            "disposition": "not_implemented",
+                            "raw_source": "x",
+                            "canary": "c",
+                            "trigger": "turn_end",
+                            "owner_action": "implement",
+                            "fields": valid_fields,
+                        }
+                    }
+                ),
+            }
+        )
+
+    with pytest.raises(ValueError, match="unknown"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{
+                        "turn.usage": {
+                            "disposition": "implemented",
+                            "raw_source": "x",
+                            "canary": "c",
+                            "trigger": "turn_end",
+                            "fixture": "f.jsonl",
+                            "fields": {**valid_fields, "magic": "native"},
+                        }
+                    }
+                ),
+            }
+        )
+
+
+def test_validate_signal_golden_fixtures_rejects_missing_signal_in_expected_json(tmp_path):
+    import json
+
+    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
+    from zerg.managed_provider_contract_manifest import _validate_signal_golden_fixtures
+
+    fixture = tmp_path / "fixture.jsonl"
+    fixture.write_text("{}\n", encoding="utf-8")
+    expected = tmp_path / "fixture.facts.expected.json"
+    expected.write_text(json.dumps({"turn.duration": [100]}), encoding="utf-8")
+
+    signals = {
+        signal: {"disposition": "upstream_absent", "raw_source": "none", "canary": "c", "trigger": "census"}
+        for signal in TRANSCRIPT_SIGNAL_IDS
+    }
+    signals["turn.usage"] = {
+        "disposition": "implemented",
+        "raw_source": "x",
+        "canary": "c",
+        "trigger": "turn_end",
+        "fixture": "fixture.jsonl",
+        "fields": {name: "native" for name in TURN_USAGE_FIELD_NAMES},
+    }
+
+    with pytest.raises(ValueError, match="turn.usage"):
+        _validate_signal_golden_fixtures(
+            [{"provider": "test", "transcript_signals": signals}],
+            None,
+            source_root=tmp_path,
+        )

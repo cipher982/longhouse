@@ -17,6 +17,7 @@ from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPER
 from zerg.managed_provider_contract_manifest import adapter_sources_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
+from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest
 from zerg.session_execution_home import ManagedSessionTransport
 
 COMMAND_INTERRUPT = "session.interrupt"
@@ -351,6 +352,13 @@ def all_managed_provider_contracts() -> tuple[ManagedProviderContract, ...]:
     return _CONTRACTS
 
 
+def transcript_signal_surfaces() -> dict[str, dict[str, str]]:
+    """Stage 3 (API + UI product surface) contract per transcript signal."""
+
+    surfaces = managed_provider_contract_manifest().get("transcript_signal_surfaces") or {}
+    return {str(signal): {str(k): str(v) for k, v in dict(cell).items()} for signal, cell in surfaces.items()}
+
+
 def managed_provider_names() -> frozenset[str]:
     return frozenset(_BY_PROVIDER)
 
@@ -415,6 +423,19 @@ def outstanding_factory_work() -> tuple[dict[str, str], ...]:
                     "reason": str(cell.get("raw_source") or ""),
                 }
             )
+    for signal, cell in sorted(transcript_signal_surfaces().items()):
+        if cell.get("disposition") != "not_implemented":
+            continue
+        work.append(
+            {
+                "provider": "all",
+                "operation": f"transcript_signal_surface:{signal}",
+                "support_tier": "launch",
+                "owner_action": str(cell.get("owner_action") or ""),
+                "blocker": "none",
+                "reason": str(cell.get("consumer") or cell.get("notes") or ""),
+            }
+        )
     return tuple(work)
 
 

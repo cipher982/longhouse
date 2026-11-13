@@ -1,4 +1,47 @@
 schema_version: 1
+# Product-surface parity status for every shared transcript signal.
+# Separating surface from provider ingest prevents a signal from reading green
+# when the parser extracts it but catalogd/API/UI never render it.
+transcript_signal_surfaces:
+  turn.duration:
+    disposition: implemented
+    surface_proof: server/tests_lite/test_storage_v2_provider_facts.py
+  session.recap:
+    disposition: implemented
+    surface_proof: server/tests_lite/test_storage_v2_provider_facts.py
+  session.title:
+    disposition: implemented
+    surface_proof: server/tests_lite/test_storage_v2_provider_facts.py
+  turn.usage:
+    disposition: implemented
+    surface_proof: server/tests_lite/test_storage_v2_provider_facts.py
+  turn.thinking:
+    disposition: implemented
+    surface_proof: web/src/shared/session/model/__tests__/sessionWorkspace.test.ts
+  context.compaction:
+    disposition: not_implemented
+    owner_action: "Emit Role::System event for Codex compacted, project compaction_boundary on full compactions, and render timeline divider in Web and iOS"
+  turn.api_error:
+    disposition: not_implemented
+    owner_action: "Read turn.api_error in catalogd _session_read_provider_facts and surface error markers in Web and iOS"
+  input.queue:
+    disposition: not_implemented
+    owner_action: "Project queued input items once ingest exists across launch providers"
+  delegation.spawn:
+    disposition: not_implemented
+    owner_action: "Complete served delegation signal projection beyond internal parent-child lineage"
+  delegation.background:
+    disposition: not_implemented
+    owner_action: "Surface background delegation signal once ingest is implemented"
+  delegation.workflow:
+    disposition: not_implemented
+    owner_action: "Surface workflow delegation signal once ingest is implemented"
+  delegation.scheduled:
+    disposition: not_implemented
+    owner_action: "Surface scheduled delegation signal once ingest is implemented"
+  delegation.peer_message:
+    disposition: not_implemented
+    owner_action: "Surface peer message delegation signal once ingest is implemented"
 # requires_longhouse_cli means the Machine Agent still needs the
 # Python-packaged longhouse CLI for remote-control shellouts. It does not mean
 # all device Python has been removed; the no-Python device inventory separately
@@ -575,6 +618,14 @@ providers:
       fixture: engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl
       canary: codex_transcript_signals
       trigger: turn_end
+      fields:
+        context_tokens: native
+        context_window: native
+        output_tokens: native
+        thinking_tokens: native
+        cache_tokens: native
+        cost_usd: absent
+        effort: native
     turn.api_error:
       disposition: implemented
       raw_source: event_msg/error + event_msg/stream_error
@@ -1186,6 +1237,14 @@ providers:
       fixture: engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl
       canary: claude_transcript_signals
       trigger: turn_end
+      fields:
+        context_tokens: native
+        context_window: absent
+        output_tokens: native
+        thinking_tokens: native
+        cache_tokens: native
+        cost_usd: absent
+        effort: native
     turn.api_error:
       disposition: implemented
       raw_source: system/api_error
@@ -2827,6 +2886,14 @@ providers:
       fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
       trigger: turn_end
+      fields:
+        context_tokens: native
+        context_window: absent
+        output_tokens: native
+        thinking_tokens: native
+        cache_tokens: native
+        cost_usd: absent
+        effort: absent
     turn.api_error:
       disposition: implemented
       raw_source: message/message.errorMessage + message.stopReason
@@ -3229,7 +3296,20 @@ providers:
     turn.duration: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: turn_end, owner_action: "Survey OMP turn duration in Phase 2"}
     session.recap: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: idle_after_turn, owner_action: "Survey OMP recaps in Phase 2"}
     session.title: {disposition: implemented, raw_source: title/title_change, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
-    turn.usage: {disposition: implemented, raw_source: message/message.usage, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}
+    turn.usage:
+      disposition: implemented
+      raw_source: message/message.usage
+      fixture: engine/tests/fixtures/golden/omp/native.jsonl
+      canary: omp_transcript_signals
+      trigger: turn_end
+      fields:
+        context_tokens: native
+        context_window: absent
+        output_tokens: native
+        thinking_tokens: native
+        cache_tokens: native
+        cost_usd: absent
+        effort: absent
     turn.api_error: {disposition: implemented, raw_source: message/message.errorMessage+message.stopReason, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
     context.compaction: {disposition: implemented, raw_source: compaction/tokensBefore, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: slash_compact}
     input.queue: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: send_while_working, owner_action: "Add OMP managed queue authority in Phase 2"}

@@ -565,8 +565,137 @@ _TRANSCRIPT_SIGNAL_TRIGGERS = frozenset(
     }
 )
 _TRANSCRIPT_SIGNAL_KEYS = frozenset(
-    {"disposition", "raw_source", "entrypoints", "first_seen_version", "fixture", "canary", "trigger", "owner_action"}
+    {"disposition", "raw_source", "entrypoints", "first_seen_version", "fixture", "canary", "trigger", "owner_action", "fields"}
 )
+TURN_USAGE_FIELD_NAMES = (
+    "context_tokens",
+    "context_window",
+    "output_tokens",
+    "thinking_tokens",
+    "cache_tokens",
+    "cost_usd",
+    "effort",
+)
+_TURN_USAGE_FIELD_STATES = frozenset({"native", "derived", "absent"})
+_SURFACE_DISPOSITIONS = frozenset({"implemented", "not_implemented", "internal_only"})
+_SURFACE_KEYS = frozenset({"disposition", "consumer", "owner_action", "surface_proof", "notes"})
+
+
+def _validate_turn_usage_fields(prefix: str, disposition: str, fields: Any) -> None:
+    if fields is None:
+        return
+    if not isinstance(fields, dict):
+        raise ValueError(f"{prefix}.fields must be an object")
+    expected = set(TURN_USAGE_FIELD_NAMES)
+    missing = expected - set(fields)
+    unknown = set(fields) - expected
+    if missing:
+        raise ValueError(f"{prefix}.fields missing {', '.join(sorted(missing))}")
+    if unknown:
+        raise ValueError(f"{prefix}.fields has unknown keys {', '.join(sorted(unknown))}")
+    for field_name, state in fields.items():
+        if state not in _TURN_USAGE_FIELD_STATES:
+            raise ValueError(f"{prefix}.fields.{field_name} must be one of {sorted(_TURN_USAGE_FIELD_STATES)}")
+    if disposition != "implemented" and any(state != "absent" for state in fields.values()):
+        raise ValueError(f"{prefix}.fields cannot claim native or derived while turn.usage is {disposition}")
+
+
+def _validate_transcript_signal_surfaces(payload: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, dict[str, Any]] | None:
+    surfaces = payload.get("transcript_signal_surfaces")
+    if surfaces is None:
+        return None
+    if not isinstance(surfaces, dict):
+        raise ValueError("managed provider contract manifest: transcript_signal_surfaces must be an object")
+    missing = TRANSCRIPT_SIGNAL_IDS - set(surfaces)
+    if missing:
+        raise ValueError(f"managed provider contract manifest: transcript_signal_surfaces missing {', '.join(sorted(missing))}")
+    launch_implemented = {
+        signal_id
+        for item in items
+        if item.get("support_tier") == "launch"
+        for signal_id, cell in (item.get("transcript_signals") or {}).items()
+        if isinstance(cell, dict) and cell.get("disposition") == "implemented"
+    }
+    for signal_id, entry in surfaces.items():
+        prefix = f"managed provider contract manifest: transcript_signal_surfaces.{signal_id}"
+        if signal_id not in TRANSCRIPT_SIGNAL_IDS:
+            raise ValueError(f"{prefix} is not a shared signal id")
+        if not isinstance(entry, dict):
+            raise ValueError(f"{prefix} must be an object")
+        unknown = set(entry) - _SURFACE_KEYS
+        if unknown:
+            raise ValueError(f"{prefix} has unknown keys {', '.join(sorted(unknown))}")
+        disposition = entry.get("disposition")
+        if disposition not in _SURFACE_DISPOSITIONS:
+            raise ValueError(f"{prefix}.disposition must be one of {sorted(_SURFACE_DISPOSITIONS)}")
+        if disposition == "implemented":
+            proof = entry.get("surface_proof")
+            if not isinstance(proof, str) or not proof.strip():
+                raise ValueError(f"{prefix} is implemented but names no surface_proof")
+            if signal_id not in launch_implemented:
+                raise ValueError(f"{prefix} cannot be implemented without at least one launch-tier provider implementing ingest")
+        elif disposition == "not_implemented":
+            if not (isinstance(entry.get("owner_action"), str) and entry["owner_action"].strip()):
+                raise ValueError(f"{prefix} is not_implemented but names no owner_action")
+        elif disposition == "internal_only":
+            if not (isinstance(entry.get("consumer"), str) and entry["consumer"].strip()):
+                raise ValueError(f"{prefix} is internal_only but names no consumer")
+        notes = entry.get("notes")
+        if notes is not None and (not isinstance(notes, str) or not notes.strip()):
+            raise ValueError(f"{prefix}.notes must be a non-empty string when present")
+    return deepcopy(surfaces)
+
+
+def _validate_signal_golden_fixtures(
+    items: list[dict[str, Any]],
+    surfaces: dict[str, dict[str, Any]] | None,
+    *,
+    source_root: Path,
+) -> None:
+    for item in items:
+        provider = str(item["provider"])
+        for signal_id, cell in (item.get("transcript_signals") or {}).items():
+            fixture = cell.get("fixture")
+            if not fixture:
+                continue
+            relative = Path(str(fixture))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"managed provider contract {provider}: unsafe fixture path {fixture!r}")
+            fixture_path = source_root / relative
+            if not fixture_path.is_file():
+                raise ValueError(f"managed provider contract {provider}: fixture not found: {fixture}")
+            if relative.suffix == ".jsonl":
+                expected_facts = fixture_path.with_suffix(".facts.expected.json")
+                if expected_facts.is_file():
+                    data = json.loads(expected_facts.read_text(encoding="utf-8"))
+                    matching = [f for f in data.get("facts", []) if f.get("kind") == signal_id]
+                    if not matching:
+                        raise ValueError(
+                            f"managed provider contract {provider}: {expected_facts.relative_to(source_root)} has no {signal_id} fact"
+                        )
+                    if signal_id == "turn.usage" and isinstance(cell.get("fields"), dict):
+                        payload_keys = {k for fact in matching for k in (fact.get("payload") or {})}
+                        for field_name, state in cell["fields"].items():
+                            if state != "native":
+                                continue
+                            if field_name == "cache_tokens":
+                                has_field = "cache_read_input_tokens" in payload_keys or "cache_creation_input_tokens" in payload_keys
+                            else:
+                                has_field = field_name in payload_keys
+                            if not has_field:
+                                raise ValueError(
+                                    f"managed provider contract {provider}: turn.usage.fields.{field_name}=native missing from {expected_facts.relative_to(source_root)}"
+                                )
+    if surfaces:
+        for signal_id, entry in surfaces.items():
+            proof = entry.get("surface_proof")
+            if not isinstance(proof, str) or not proof.strip() or proof.startswith("assurance:"):
+                continue
+            relative = Path(proof)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"managed provider contract manifest: unsafe surface_proof path {proof!r}")
+            if not (source_root / relative).is_file():
+                raise ValueError(f"managed provider contract manifest: surface_proof not found for {signal_id}: {proof}")
 
 
 def _validate_transcript_signals(item: dict[str, Any]) -> None:
@@ -610,6 +739,10 @@ def _validate_transcript_signals(item: dict[str, Any]) -> None:
         version = cell.get("first_seen_version")
         if version is not None and (not isinstance(version, str) or not version.strip()):
             raise ValueError(f"{prefix}.first_seen_version must be a non-empty string when present")
+        if "fields" in cell:
+            if signal_id != "turn.usage":
+                raise ValueError(f"{prefix}.fields is only supported on turn.usage")
+            _validate_turn_usage_fields(prefix, str(disposition), cell["fields"])
 
 
 _LIVE_STREAM_MODES = ("console", "helm")
@@ -850,7 +983,11 @@ def normalize_contract_manifest(
     source_root: Path | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
-    for item in _validated_contract_items(payload):
+    validated_items = _validated_contract_items(payload)
+    surfaces = _validate_transcript_signal_surfaces(payload, validated_items)
+    if source_root is None:
+        _validate_signal_golden_fixtures(validated_items, surfaces, source_root=contract_source_root())
+    for item in validated_items:
         normalized_item = deepcopy(item)
         # A manifest seeded from an older JSON may still carry the stored key.
         normalized_item.pop("adapter_digest", None)
@@ -879,16 +1016,18 @@ def normalize_contract_manifest(
                     source_root=source_root,
                 )
         items.append(normalized_item)
-    return {
-        "schema_version": 1,
-        "providers": items,
-    }
+    result: dict[str, Any] = {"schema_version": 1}
+    if surfaces is not None:
+        result["transcript_signal_surfaces"] = surfaces
+    result["providers"] = items
+    return result
 
 
 def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate generated digests without requiring repository source files."""
 
     items = _validated_contract_items(payload)
+    surfaces = _validate_transcript_signal_surfaces(payload, items)
     for item in items:
         provider = str(item["provider"])
         if "adapter_digest" in item:
@@ -900,7 +1039,11 @@ def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, A
                 oracle_digest = assertion.get("oracle_digest")
                 if not _is_sha256_digest(oracle_digest):
                     raise ValueError(f"managed provider contract {provider}: oracle_digest must be a SHA-256 hex digest")
-    return {"schema_version": 1, "providers": items}
+    result: dict[str, Any] = {"schema_version": 1}
+    if surfaces is not None:
+        result["transcript_signal_surfaces"] = surfaces
+    result["providers"] = items
+    return result
 
 
 def render_contract_manifest_json(payload: dict[str, Any], *, source_root: Path | None = None) -> str:
