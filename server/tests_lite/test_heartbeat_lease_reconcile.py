@@ -36,7 +36,7 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.managed_control_state import LIVE_ATTACHMENT_REFRESH_INTERVAL
-from zerg.services.managed_control_state import live_attachment_health_map
+from zerg.services.managed_control_state import live_attachment_state_map
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.utils.time import normalize_utc
 
@@ -166,14 +166,14 @@ def test_unchanged_leases_are_retained_without_reattaching(live_factory, monkeyp
     attached = _count_attaches(monkeypatch)
 
     with live_factory() as db:
-        health = live_attachment_health_map(db, [row["session_id"] for row in seeded])
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
         stats: dict[str, int] = {}
         touched = upsert_live_control_leases(
             db,
             [_lease(row) for row in seeded],
             device_id="cinder",
             received_at=seen_at + timedelta(seconds=5),
-            attachment_health=health,
+            attachment_state=health,
             stats=stats,
         )
         db.commit()
@@ -200,14 +200,14 @@ def test_only_the_lease_whose_evidence_moved_attaches(live_factory, monkeypatch)
     leases = [_lease(degraded) if index == 3 else _lease(row) for index, row in enumerate(seeded)]
 
     with live_factory() as db:
-        health = live_attachment_health_map(db, [row["session_id"] for row in seeded])
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
         stats: dict[str, int] = {}
         upsert_live_control_leases(
             db,
             leases,
             device_id="cinder",
             received_at=seen_at + timedelta(seconds=5),
-            attachment_health=health,
+            attachment_state=health,
             stats=stats,
         )
         db.commit()
@@ -232,7 +232,7 @@ def test_a_stale_attachment_is_refreshed_even_when_the_lease_is_unchanged(live_f
             [_lease(row) for row in seeded],
             device_id="cinder",
             received_at=seen_at + timedelta(seconds=5),
-            attachment_health=stale,
+            attachment_state=stale,
             stats=stats,
         )
         db.commit()
@@ -241,6 +241,101 @@ def test_a_stale_attachment_is_refreshed_even_when_the_lease_is_unchanged(live_f
     assert stats["leases_changed"] == 0
     assert stats["leases_refreshed"] == 4
     assert stats["leases_attached"] == 4
+
+
+def test_a_new_heartbeat_sequence_is_not_evidence_of_change(live_factory, monkeypatch):
+    """The engine stamps every lease with the same clock, so it cannot gate work.
+
+    `sequence` is `now.timestamp_millis()` applied to the whole snapshot. Counting
+    it as change made every lease attach on every heartbeat, which production
+    showed as `leases_changed` equal to `leases_present`.
+    """
+
+    seen_at = datetime.now(timezone.utc)
+    seeded = _seed_attached_sessions(live_factory, provider="cursor", count=8, attached_at=seen_at)
+    attached = _count_attaches(monkeypatch)
+    resequenced = [{**row, "sequence": row["sequence"] + 1000} for row in seeded]
+
+    with live_factory() as db:
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
+        stats: dict[str, int] = {}
+        upsert_live_control_leases(
+            db,
+            [_lease(row) for row in resequenced],
+            device_id="cinder",
+            received_at=seen_at + timedelta(seconds=10),
+            attachment_state=health,
+            stats=stats,
+        )
+        db.commit()
+
+    assert attached == []
+    assert stats["leases_changed"] == 0
+    assert stats["leases_retained"] == len(seeded)
+
+
+def test_a_session_with_no_open_run_is_not_reattached(live_factory, monkeypatch):
+    """Most of a machine's snapshot is history, and attaching it does nothing.
+
+    `attach_live_catalog_control` returns `None` when there is no current run, so
+    a lease whose run has ended must be retained without an attach. Without this,
+    1,613 of 1,623 real leases re-attached on every heartbeat.
+    """
+
+    seen_at = datetime.now(timezone.utc)
+    seeded = _seed_attached_sessions(live_factory, provider="cursor", count=6, attached_at=seen_at - timedelta(days=3))
+    with live_factory() as db:
+        for run in db.query(LiveSessionRun).all():
+            run.ended_at = seen_at - timedelta(days=2)
+        db.commit()
+    attached = _count_attaches(monkeypatch)
+
+    with live_factory() as db:
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
+        assert health == {}, "an ended run has nothing to attach to"
+        stats: dict[str, int] = {}
+        upsert_live_control_leases(
+            db,
+            [_lease(row) for row in seeded],
+            device_id="cinder",
+            received_at=seen_at,
+            attachment_state=health,
+            stats=stats,
+        )
+        db.commit()
+
+    assert attached == []
+    assert stats["leases_retained"] == len(seeded)
+
+
+def test_an_open_run_without_a_connection_still_attaches(live_factory, monkeypatch):
+    """The first observation of a live session has to create its attachment."""
+
+    seen_at = datetime.now(timezone.utc)
+    seeded = _seed_attached_sessions(live_factory, provider="cursor", count=2, attached_at=seen_at)
+    with live_factory() as db:
+        db.query(LiveSessionConnection).delete()
+        db.commit()
+    attached = _count_attaches(monkeypatch)
+
+    with live_factory() as db:
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
+        assert set(health) == {row["session_id"] for row in seeded}
+        assert all(value is None for value in health.values())
+        stats: dict[str, int] = {}
+        upsert_live_control_leases(
+            db,
+            [_lease(row) for row in seeded],
+            device_id="cinder",
+            received_at=seen_at,
+            attachment_state=health,
+            stats=stats,
+        )
+        db.commit()
+
+    assert sorted(attached) == sorted(row["session_id"] for row in seeded)
+    assert stats["leases_changed"] == 0
+    assert stats["leases_refreshed"] == len(seeded)
 
 
 def test_an_attachment_one_heartbeat_old_is_not_refreshed(live_factory, monkeypatch):
@@ -256,14 +351,14 @@ def test_an_attachment_one_heartbeat_old_is_not_refreshed(live_factory, monkeypa
     attached = _count_attaches(monkeypatch)
 
     with live_factory() as db:
-        health = live_attachment_health_map(db, [row["session_id"] for row in seeded])
+        health = live_attachment_state_map(db, [row["session_id"] for row in seeded])
         stats: dict[str, int] = {}
         upsert_live_control_leases(
             db,
             [_lease(row) for row in seeded],
             device_id="cinder",
             received_at=seen_at,
-            attachment_health=health,
+            attachment_state=health,
             stats=stats,
         )
         db.commit()

@@ -319,51 +319,89 @@ def _overlay_from_live_lease(row: LiveControlLease) -> ManagedControlOverlay | N
     )
 
 
-def live_attachment_health_map(db: Session, session_ids: list[str]) -> dict[str, datetime]:
-    """Newest live attachment per session, so a heartbeat can skip refreshing it.
+def live_attachment_state_map(db: Session, session_ids: list[str]) -> dict[str, datetime | None]:
+    """Which sessions have an open run, and when their attachment was last stamped.
 
-    One query instead of one per lease: the caller decides which unchanged
-    leases still need their attachment restamped from this map.
+    A key means "this session has an open run", so an attach there can still
+    change something; the value is that run's newest connection health, or
+    ``None`` when no connection row exists yet. A session with no open run is
+    *absent*, and that is the important half: attaching it is a documented no-op
+    (`attach_live_catalog_control` returns `None` when there is no current run to
+    attach to), so the work must be skipped, not refreshed.
+
+    Conflating absence with staleness cost the gate its whole point on real data:
+    a machine's snapshot carries every session it can still see, most with runs
+    long ended, so "not in the map" meant "refresh" for 1,613 of 1,623 leases on
+    every heartbeat.
     """
 
     if not session_ids:
         return {}
     rows = (
-        db.query(LiveSessionThread.session_id, func.max(LiveSessionConnection.last_health_at))
+        db.query(
+            LiveSessionThread.session_id,
+            LiveSessionRun.id,
+            func.max(LiveSessionConnection.last_health_at),
+        )
         .join(LiveSessionRun, LiveSessionRun.thread_id == LiveSessionThread.id)
-        .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+        .outerjoin(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
         .filter(
             LiveSessionThread.session_id.in_(session_ids),
             LiveSessionRun.ended_at.is_(None),
-            LiveSessionConnection.released_at.is_(None),
         )
-        .group_by(LiveSessionThread.session_id)
+        .group_by(LiveSessionThread.session_id, LiveSessionRun.id)
         .all()
     )
-    health: dict[str, datetime] = {}
-    for session_id, last_health in rows:
+    state: dict[str, datetime | None] = {}
+    for session_id, _run_id, last_health in rows:
+        key = str(session_id)
         normalized = normalize_utc(last_health)
-        if normalized is not None:
-            health[str(session_id)] = normalized
-    return health
+        if key not in state:
+            state[key] = normalized
+            continue
+        current = state[key]
+        if normalized is not None and (current is None or normalized > current):
+            state[key] = normalized
+    return state
+
+
+def live_session_owner_map(db: Session, session_ids: list[str]) -> dict[str, str]:
+    """Device that owns each live session index row, for ownership before attach.
+
+    Ownership used to be discovered by letting `attach_live_catalog_control` raise
+    `PermissionError` and reading that as "this device may not touch the session".
+    Skipping the attach for unchanged leases removed that probe, and with it the
+    only check that stopped an old device from restamping another device's
+    session index. Asking the index directly keeps the guarantee and costs one
+    primary-key read per candidate.
+    """
+
+    if not session_ids:
+        return {}
+    rows = db.query(LiveSession.session_id, LiveSession.device_id).filter(LiveSession.session_id.in_(set(session_ids))).all()
+    return {str(session_id): str(device_id) for session_id, device_id in rows if device_id}
 
 
 def _lease_evidence_signature(
     *,
     state: str,
-    sequence: int | None,
     machine_id: str | None,
     payload: dict[str, Any],
 ) -> tuple:
     """The parts of a lease that only change when the machine's evidence does.
 
-    ``observed_at`` and ``heartbeat_at`` move every heartbeat and describe when
-    the machine looked, not what it saw, so they are excluded here.
+    ``observed_at``, ``heartbeat_at`` and ``sequence`` describe when the machine
+    looked, not what it saw, so none of them is change evidence. ``sequence`` in
+    particular is the heartbeat clock itself: the engine stamps every lease in a
+    snapshot with the same `now.timestamp_millis()`, so comparing it made every
+    lease look changed on every tick and the gate below saved nothing. Production
+    showed it immediately (`leases_changed` equal to `leases_present` on every
+    slow heartbeat). A retained row keeps its last sequence, which only orders
+    overlays whose `heartbeat_at` already decided freshness.
     """
 
     return (
         state,
-        sequence,
         machine_id,
         payload.get("control_state"),
         payload.get("reason"),
@@ -379,7 +417,8 @@ def upsert_live_control_leases(
     *,
     device_id: str,
     received_at: datetime,
-    attachment_health: dict[str, datetime] | None = None,
+    attachment_state: dict[str, datetime | None] | None = None,
+    session_owners: dict[str, str] | None = None,
     stats: dict[str, int] | None = None,
 ) -> set[UUID]:
     """Retain device telemetry and return sessions accepted for owned projections.
@@ -391,9 +430,10 @@ def upsert_live_control_leases(
     factory machine, which held the single catalog writer ~17s per heartbeat.
 
     An unchanged lease now costs one row in a bulk ``heartbeat_at`` update. Its
-    attachment is refreshed only when the caller says it is stale
-    (``attachment_health``), because the attachment is what keeps a current
-    claim inside the lease TTL and must not simply stop advancing.
+    attachment is refreshed only when the caller says the session has an open run
+    whose attachment is missing or stale (``attachment_state``), because the
+    attachment is what keeps a current claim inside the lease TTL and must not
+    simply stop advancing.
     """
 
     touched: set[UUID] = set()
@@ -443,7 +483,6 @@ def upsert_live_control_leases(
         payload = _payload_for_live_lease(lease, control_state=control_state, reason=reason, ttl_ms=ttl_ms)
         signature = _lease_evidence_signature(
             state=lease_state,
-            sequence=sequence,
             machine_id=machine_id,
             payload=payload,
         )
@@ -461,14 +500,34 @@ def upsert_live_control_leases(
             created
             or _lease_evidence_signature(
                 state=_normalized(row.state).lower() or "unknown",
-                sequence=row.sequence,
                 machine_id=row.machine_id,
                 payload=_live_lease_payload(row),
             )
             != signature
         )
+        if session_owners is not None:
+            owner = session_owners.get(session_id)
+            if owner is not None and owner != normalized_device_id:
+                # Retain the device's raw lease, but an index owned by another
+                # device is not this heartbeat's to restamp, and the session is
+                # not this device's to project.
+                if changed:
+                    row.machine_id = machine_id
+                    row.state = lease_state
+                    row.sequence = sequence
+                    row.heartbeat_at = seen_at
+                    row.updated_at = seen_at
+                    row.payload_json = json.dumps(payload, sort_keys=True)
+                else:
+                    unchanged_session_keys.add(session_id)
+                changed_count += 1 if changed else 0
+                continue
+        # Absent from the map means no open run, where an attach is a no-op.
+        # Present with missing or stale health means there is work to do.
         refresh_attachment = (
-            changed or attachment_health is None or session_id not in attachment_health or attachment_health[session_id] < refresh_floor
+            changed
+            or attachment_state is None
+            or (session_id in attachment_state and (attachment_state[session_id] is None or attachment_state[session_id] < refresh_floor))
         )
         if not refresh_attachment:
             unchanged_session_keys.add(session_id)

@@ -80,7 +80,8 @@ class MachinesMixin:
 
         from zerg.services.live_session_state import mark_missing_live_sessions
         from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
-        from zerg.services.managed_control_state import live_attachment_health_map
+        from zerg.services.managed_control_state import live_attachment_state_map
+        from zerg.services.managed_control_state import live_session_owner_map
         from zerg.services.managed_control_state import mark_missing_live_control_leases
         from zerg.services.managed_control_state import upsert_live_control_leases
 
@@ -148,17 +149,17 @@ class MachinesMixin:
                     # leases on one Mac and 6,862 on the factory machine turned
                     # that stage into a multi-second writer hold.
                     lease_stats: dict[str, int] = {}
-                    attachment_health = live_attachment_health_map(
-                        orm,
-                        [str(lease.session_id) for lease in lease_objects if lease.session_id is not None],
-                    )
+                    lease_session_ids = [str(lease.session_id) for lease in lease_objects if lease.session_id is not None]
+                    attachment_state = live_attachment_state_map(orm, lease_session_ids)
+                    session_owners = live_session_owner_map(orm, lease_session_ids)
                     timer.mark("lease_freshness")
                     accepted_session_ids = upsert_live_control_leases(
                         orm,
                         lease_objects,
                         device_id=device_id,
                         received_at=received_at,
-                        attachment_health=attachment_health,
+                        attachment_state=attachment_state,
+                        session_owners=session_owners,
                         stats=lease_stats,
                     )
                     timer.mark("lease_upsert")
