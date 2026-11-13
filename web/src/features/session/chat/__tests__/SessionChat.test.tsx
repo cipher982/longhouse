@@ -4372,9 +4372,9 @@ describe("SessionChat composer status", () => {
     expect(composerHead()).not.toHaveTextContent("Using Shell");
   });
 
-  it("shows the shared working clock from observed_at even without timelineItems", () => {
+  it("omits the composer clock without a turn anchor and suppresses it during delegated work", () => {
     const now = Date.now();
-    renderSessionChat(
+    const { rerender } = renderSessionChat(
       {
         session: makeSession({
           session_state: makeSessionStateFacts({
@@ -4390,15 +4390,61 @@ describe("SessionChat composer status", () => {
     );
 
     expect(composerHead()).toHaveTextContent("Thinking");
-    expect(composerHead()).toHaveTextContent("1:05");
+    expect(composerHead()).not.toHaveTextContent("1:05");
+
+    const delegatedFacts = makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+      activity: "thinking",
+      observedAt: new Date(now - 5_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    delegatedFacts.presentation.primary = {
+      key: "delegated_work",
+      tone: "live",
+      label: "Background · 1 command",
+      observed_at: new Date(now - 5_000).toISOString(),
+      valid_until: new Date(now + 60_000).toISOString(),
+    };
+    delegatedFacts.delegation = {
+      state: "active",
+      count: 1,
+      kinds: { bash: 1 },
+      items: null,
+      recent_items: [],
+      observed_at: new Date(now - 5_000).toISOString(),
+      valid_until: new Date(now + 60_000).toISOString(),
+      source: "native",
+    };
+
+    rerender(
+      <QueryClientProvider client={lockedClient()}>
+        <SessionChat
+          session={makeSession({ session_state: delegatedFacts })}
+          chatMode="managed_local"
+          timelineItems={[
+            {
+              kind: "user",
+              id: 1,
+              eventId: 1,
+              timestamp: new Date(now - 30_000).toISOString(),
+              content: "Run probe",
+            } as never,
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(composerHead()).toHaveTextContent("Background · 1 command");
+    expect(composerHead()).not.toHaveTextContent("0:30");
   });
 
-  it("flashes the composer leaf on real activityFeed frames and quiets it during delegated wait", async () => {
+  it("flashes the composer leaf on real activityFeed frames, quiets on aggregate delegation, and cancels on unmount", async () => {
     const { SessionActivityFeed } = await import("../../sessionActivityFeed");
     const now = Date.now();
     const feed = new SessionActivityFeed();
 
-    const { container, rerender } = renderSessionChat(
+    const { container, rerender, unmount } = renderSessionChat(
       {
         session: makeSession({
           session_state: makeSessionStateFacts({
@@ -4420,7 +4466,8 @@ describe("SessionChat composer status", () => {
     expect(leaf).not.toBeNull();
     expect(leaf.style.opacity).toBe("0.22");
 
-    const animateMock = vi.fn(() => ({ cancel: vi.fn() }));
+    const cancelMock = vi.fn();
+    const animateMock = vi.fn(() => ({ cancel: cancelMock }));
     leaf.animate = animateMock as unknown as typeof leaf.animate;
 
     feed.push("state");
@@ -4447,14 +4494,7 @@ describe("SessionChat composer status", () => {
       state: "active",
       count: 1,
       kinds: { bash: 1 },
-      items: [
-        {
-          id: "bg-1",
-          kind: "bash",
-          description: "Run ceiling probe",
-          status: "running",
-        },
-      ],
+      items: null,
       recent_items: [],
       observed_at: new Date(now - 5_000).toISOString(),
       valid_until: new Date(now + 60_000).toISOString(),
@@ -4472,5 +4512,8 @@ describe("SessionChat composer status", () => {
     );
 
     expect(leaf.style.opacity).toBe("0");
+    expect(cancelMock).toHaveBeenCalledTimes(1);
+
+    unmount();
   });
 });

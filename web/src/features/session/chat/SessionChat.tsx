@@ -52,7 +52,6 @@ import {
   formatClockTime,
   formatElapsedClock,
   getSessionHeaderState,
-  getWorkingElapsedSeconds,
 } from "../sessionHeaderState";
 import type { SessionActivityFeed } from "../sessionActivityFeed";
 import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
@@ -62,7 +61,10 @@ import {
   isActivityExecuting,
   isActivityStalled,
 } from "@/shared/session/activityEvidence";
-import { workingStatusLabel } from "@/shared/session/sessionStatus";
+import {
+  delegatedWorkLabel,
+  workingStatusLabel,
+} from "@/shared/session/sessionStatus";
 import {
   failedBeforeRecorded,
   isSettledDelivery,
@@ -2527,9 +2529,12 @@ export function SessionChat({
     activityNowMs,
     turnStartMs,
   );
+  const isDelegatedWork =
+    composerState.tone === "live" &&
+    delegatedWorkLabel(session.session_state, activityNowMs) !== null;
   const composerElapsedSeconds =
-    composerState.tone === "live"
-      ? getWorkingElapsedSeconds(session, activityNowMs, turnStartMs)
+    composerState.tone === "live" && !isDelegatedWork && turnStartMs != null
+      ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))
       : null;
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
@@ -2540,7 +2545,7 @@ export function SessionChat({
       : null;
   const leafRef = useRef<HTMLSpanElement | null>(null);
   const leafAnimationRef = useRef<Animation | null>(null);
-  const leafLive = composerState.tone === "live" && !composerDelegatedDetail;
+  const leafLive = composerState.tone === "live" && !isDelegatedWork;
 
   useLayoutEffect(() => {
     const node = leafRef.current;
@@ -2562,8 +2567,7 @@ export function SessionChat({
     }
     node.style.opacity = "0.22";
     node.style.boxShadow = "none";
-    if (!activityFeed) return;
-    return activityFeed.subscribe((frame) => {
+    const unsubscribe = activityFeed?.subscribe((frame) => {
       if (!frame || frame.kind === "state") return;
       leafAnimationRef.current?.cancel();
       if (typeof node.animate !== "function") return;
@@ -2583,6 +2587,11 @@ export function SessionChat({
         },
       );
     });
+    return () => {
+      unsubscribe?.();
+      leafAnimationRef.current?.cancel();
+      leafAnimationRef.current = null;
+    };
   }, [activityFeed, leafLive]);
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
