@@ -191,6 +191,7 @@
 }
 
 .session-rail__glyph {
+  grid-column: 1;
   position: relative;
   display: inline-flex;
   width: 14px;
@@ -198,6 +199,7 @@
 }
 
 .session-rail__title {
+  grid-column: 2;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -205,6 +207,7 @@
 }
 
 .session-rail__host {
+  grid-column: 3;
   max-width: 64px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -216,6 +219,8 @@
 /* Status is the dot. A word appears only when the session needs the user,
    in the Timeline's attention colour; the full status is in the tooltip. */
 .session-rail__status {
+  grid-column: 4;
+  justify-self: end;
   display: inline-flex;
   align-items: center;
   gap: 6px;
