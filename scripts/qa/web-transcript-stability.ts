@@ -8,10 +8,10 @@
  *
  *   bunx tsx scripts/qa/web-transcript-stability.ts [--only=name,name] [--out=dir]
  */
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { ensureFrontend } from "../ui/frontend";
 import { buildRailSessionsFixture, buildSessionDetailStressFixture } from "../ui-fixtures/sessionDetailStress";
 
 interface Check {
@@ -59,47 +59,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const PORT = Number(process.env.WEB_STABILITY_PORT ?? 47299);
 const BASE_URL = process.env.FRONTEND_URL ?? `http://127.0.0.1:${PORT}`;
-
-async function startViteIfNeeded(): Promise<{ stop: () => void }> {
-  if (process.env.FRONTEND_URL) {
-    return { stop: () => {} };
-  }
-  const repoRoot = path.resolve(import.meta.dir, "../..");
-  const webDir = path.join(repoRoot, "web");
-  const child: ChildProcess = spawn("bunx", ["--bun", "vite", "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], {
-    cwd: webDir,
-    env: { ...process.env, VITE_AUTH_DISABLED: "1" },
-    stdio: "ignore",
-    detached: true,
-  });
-
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${BASE_URL}/`);
-      if (res.ok) {
-        return {
-          stop: () => {
-            try {
-              if (child.pid) process.kill(-child.pid, "SIGTERM");
-            } catch {
-              child.kill("SIGTERM");
-            }
-          },
-        };
-      }
-    } catch {
-      // keep polling
-    }
-    await sleep(250);
-  }
-  try {
-    if (child.pid) process.kill(-child.pid, "SIGTERM");
-  } catch {
-    // ignore
-  }
-  throw new Error(`Vite did not become ready at ${BASE_URL} within 30s`);
-}
 
 const INIT_SCRIPT = `
 (() => {
@@ -809,7 +768,7 @@ const scenarios: Scenario[] = [
   },
 ];
 
-const vite = await startViteIfNeeded();
+const stopFrontend = await ensureFrontend(BASE_URL, { handleSignals: false });
 const browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
 const results: Array<{ name: string; about: string; checks: Check[]; error?: string }> = [];
 
@@ -829,7 +788,7 @@ try {
   }
 } finally {
   await browser.close();
-  vite.stop();
+  await stopFrontend();
 }
 
 let failed = 0;
