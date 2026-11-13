@@ -5,6 +5,7 @@ Extracted from main.py — keeps the app factory lean.
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
@@ -21,8 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 def _start_local_embedding_projector(app: FastAPI) -> None:
-    """Start projection without provisioning the model during startup."""
+    """Start projection without provisioning the model during startup.
 
+    ``LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED=1`` leaves the lane off. A host that
+    exists to carry live sessions for a test has no use for recall, and the lane
+    costs it a 600 MB model download, about 0.9 GiB of memory and four inference
+    threads from the moment its first session arrives.
+    """
+
+    if os.getenv("LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        app.state.embeddings_v2_projector_started = False
+        logger.info("Embeddings-v2 projector is off: LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED is set")
+        return
     try:
         from zerg.services.embeddings_v2_projector import start_embeddings_v2_projector
 
