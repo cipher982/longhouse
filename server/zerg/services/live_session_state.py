@@ -46,37 +46,89 @@ def upsert_live_sessions_from_managed_leases(
     device_id: str,
     owner_id: int | str | None = None,
     received_at: datetime | None = None,
+    stats: dict[str, int] | None = None,
 ) -> set[UUID]:
-    """Project managed heartbeat leases into the Live Store session index."""
+    """Project managed heartbeat leases into the Live Store session index.
+
+    One row lookup and one update per changed lease, plus a single statement for
+    the untouched rest. A machine's heartbeat carries its whole lease snapshot,
+    so per-lease ``db.get`` and per-lease writes made this pass scale with fleet
+    size on every heartbeat.
+    """
 
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     normalized_device_id = _normalized(device_id)
     normalized_owner_id = _normalized(owner_id) or None
+
+    entries: list[tuple[Any, UUID]] = []
     for lease in leases:
         session_id = _session_uuid(getattr(lease, "session_id", None))
         if session_id is None:
             continue
+        entries.append((lease, session_id))
+    if not entries:
+        return touched
+
+    existing = {
+        row.session_id: row
+        for row in db.query(LiveSession).filter(LiveSession.session_id.in_({str(session_id) for _, session_id in entries})).all()
+    }
+    advance_only: set[str] = set()
+    changed_count = 0
+    for lease, session_id in entries:
         provider = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
         state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
-        row = db.get(LiveSession, str(session_id))
+        device_key = normalized_device_id or None
+        machine_id = _normalized(getattr(lease, "machine_id", None)) or None
+        row = existing.get(str(session_id))
         if row is None:
-            row = LiveSession(
-                session_id=str(session_id),
-                provider=provider,
-                device_id=normalized_device_id or None,
-                started_at=normalize_utc(getattr(lease, "observed_at", None)) or seen_at,
+            db.add(
+                LiveSession(
+                    session_id=str(session_id),
+                    provider=provider,
+                    device_id=device_key,
+                    machine_id=machine_id,
+                    state=state,
+                    owner_id=normalized_owner_id,
+                    last_seen_at=seen_at,
+                    updated_at=seen_at,
+                    started_at=normalize_utc(getattr(lease, "observed_at", None)) or seen_at,
+                )
             )
-            db.add(row)
-        if normalized_owner_id is not None:
-            row.owner_id = normalized_owner_id
-        row.provider = provider
-        row.device_id = normalized_device_id or None
-        row.machine_id = _normalized(getattr(lease, "machine_id", None)) or None
-        row.state = state
-        row.last_seen_at = seen_at
-        row.updated_at = seen_at
+            changed_count += 1
+            touched.add(session_id)
+            continue
+        unchanged = (
+            row.provider == provider
+            and row.device_id == device_key
+            and row.machine_id == machine_id
+            and row.state == state
+            and (normalized_owner_id is None or row.owner_id == normalized_owner_id)
+        )
+        if unchanged:
+            advance_only.add(str(session_id))
+        else:
+            changed_count += 1
+            if normalized_owner_id is not None:
+                row.owner_id = normalized_owner_id
+            row.provider = provider
+            row.device_id = device_key
+            row.machine_id = machine_id
+            row.state = state
+            row.last_seen_at = seen_at
+            row.updated_at = seen_at
         touched.add(session_id)
+
+    if advance_only:
+        db.query(LiveSession).filter(LiveSession.session_id.in_(advance_only)).update(
+            {"last_seen_at": seen_at, "updated_at": seen_at},
+            synchronize_session=False,
+        )
+
+    if stats is not None:
+        stats["sessions_present"] = len(entries)
+        stats["sessions_changed"] = changed_count
     return touched
 
 

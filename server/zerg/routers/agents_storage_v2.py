@@ -38,6 +38,7 @@ from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
+from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
@@ -116,6 +117,10 @@ _RENDER_MANIFEST_GROWTH = 4
 _RENDER_READ_BATCH = 2
 _MAX_MEDIA_CLAIMS = 512
 _SESSION_DETAIL_READ_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+# Refusals that mean "the writer is busy", not "your request is wrong". Those
+# carry a Retry-After so the Machine Agent paces the lane instead of retrying
+# into the same queue.
+_BACKPRESSURE_ERROR_CODES = frozenset({"catalog_unavailable", "storage_lane_busy"})
 
 
 def _http_error(
@@ -126,6 +131,8 @@ def _http_error(
     details: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> HTTPException:
+    if headers is None and status_code == status.HTTP_503_SERVICE_UNAVAILABLE and code in _BACKPRESSURE_ERROR_CODES:
+        headers = catalog_backpressure_headers()
     return HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message, "details": details or {}},

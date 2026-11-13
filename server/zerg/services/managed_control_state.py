@@ -18,6 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_
+from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,6 +31,9 @@ from zerg.models.agents import SessionThread
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
@@ -44,6 +48,14 @@ CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
 CONTROL_SOURCE_RUNNER_CONNECTION = "runner_connection"
 DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
 DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV = "LONGHOUSE_DISABLE_MISSING_MANAGED_LEASE_DETACH"
+"""How stale a live attachment may get before a heartbeat restamps it.
+
+Unchanged leases skip the attach pass entirely, so this is what keeps an idle
+but attached session inside the claim horizon above: well under the lease TTL,
+and far above the 60s heartbeat cadence that would otherwise rewrite the whole
+fleet's attachments on every tick.
+"""
+LIVE_ATTACHMENT_REFRESH_INTERVAL = timedelta(seconds=60)
 _CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}
 
 _KERNEL_STATE_BY_CONTROL_STATE = {
@@ -306,23 +318,115 @@ def _overlay_from_live_lease(row: LiveControlLease) -> ManagedControlOverlay | N
     )
 
 
+def live_attachment_health_map(db: Session, session_ids: list[str]) -> dict[str, datetime]:
+    """Newest live attachment per session, so a heartbeat can skip refreshing it.
+
+    One query instead of one per lease: the caller decides which unchanged
+    leases still need their attachment restamped from this map.
+    """
+
+    if not session_ids:
+        return {}
+    rows = (
+        db.query(LiveSessionThread.session_id, func.max(LiveSessionConnection.last_health_at))
+        .join(LiveSessionRun, LiveSessionRun.thread_id == LiveSessionThread.id)
+        .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+        .filter(
+            LiveSessionThread.session_id.in_(session_ids),
+            LiveSessionRun.ended_at.is_(None),
+            LiveSessionConnection.released_at.is_(None),
+        )
+        .group_by(LiveSessionThread.session_id)
+        .all()
+    )
+    health: dict[str, datetime] = {}
+    for session_id, last_health in rows:
+        normalized = normalize_utc(last_health)
+        if normalized is not None:
+            health[str(session_id)] = normalized
+    return health
+
+
+def _lease_evidence_signature(
+    *,
+    state: str,
+    sequence: int | None,
+    machine_id: str | None,
+    payload: dict[str, Any],
+) -> tuple:
+    """The parts of a lease that only change when the machine's evidence does.
+
+    ``observed_at`` and ``heartbeat_at`` move every heartbeat and describe when
+    the machine looked, not what it saw, so they are excluded here.
+    """
+
+    return (
+        state,
+        sequence,
+        machine_id,
+        payload.get("control_state"),
+        payload.get("reason"),
+        payload.get("bridge_status"),
+        payload.get("thread_subscription_status"),
+        payload.get("lease_ttl_ms"),
+    )
+
+
 def upsert_live_control_leases(
     db: Session,
     leases: list[Any],
     *,
     device_id: str,
     received_at: datetime,
+    attachment_health: dict[str, datetime] | None = None,
+    stats: dict[str, int] | None = None,
 ) -> set[UUID]:
-    """Retain device telemetry and return sessions accepted for owned projections."""
+    """Retain device telemetry and return sessions accepted for owned projections.
+
+    Work here is bounded by what changed, not by how many leases the machine
+    holds. Every heartbeat carries the machine's whole lease snapshot (absence
+    detection needs it), so writing and re-attaching every row made one write
+    proportional to fleet size: 1,621 leases on a builder Mac and 6,862 on the
+    factory machine, which held the single catalog writer ~17s per heartbeat.
+
+    An unchanged lease now costs one row in a bulk ``heartbeat_at`` update. Its
+    attachment is refreshed only when the caller says it is stale
+    (``attachment_health``), because the attachment is what keeps a current
+    claim inside the lease TTL and must not simply stop advancing.
+    """
 
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
     normalized_device_id = _normalized(device_id) or device_id
+    refresh_floor = seen_at - LIVE_ATTACHMENT_REFRESH_INTERVAL
+
+    normalized_leases: list[tuple[Any, str, str]] = []
     for lease in leases:
         session_id = getattr(lease, "session_id", None)
         if session_id is None:
             continue
         provider = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
+        normalized_leases.append((lease, str(session_id), provider))
+    if not normalized_leases:
+        return touched
+
+    session_keys = {session_id for _, session_id, _ in normalized_leases}
+    existing_rows = (
+        db.query(LiveControlLease)
+        .filter(
+            LiveControlLease.device_id == normalized_device_id,
+            LiveControlLease.session_id.in_(session_keys),
+        )
+        .all()
+    )
+    existing = {(row.session_id, row.provider): row for row in existing_rows}
+
+    from zerg.services.live_catalog_launch import attach_live_catalog_control
+
+    unchanged_session_keys: set[str] = set()
+    changed_count = 0
+    attached_count = 0
+    for lease, session_id, provider in normalized_leases:
         lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
         bridge_status = _normalized(getattr(lease, "bridge_status", None)) or None
         thread_subscription_status = _normalized(getattr(lease, "thread_subscription_status", None)) or None
@@ -332,48 +436,67 @@ def upsert_live_control_leases(
             thread_subscription_status=thread_subscription_status,
         )
         ttl_ms = int(getattr(lease, "lease_ttl_ms", None) or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
-        row = (
-            db.query(LiveControlLease)
-            .filter(
-                LiveControlLease.session_id == str(session_id),
-                LiveControlLease.provider == provider,
-                LiveControlLease.device_id == normalized_device_id,
-            )
-            .first()
+        machine_id = _normalized(getattr(lease, "machine_id", None)) or None
+        sequence = getattr(lease, "sequence", None)
+        payload = _payload_for_live_lease(lease, control_state=control_state, reason=reason, ttl_ms=ttl_ms)
+        signature = _lease_evidence_signature(
+            state=lease_state,
+            sequence=sequence,
+            machine_id=machine_id,
+            payload=payload,
         )
-        if row is None:
+
+        row = existing.get((session_id, provider))
+        created = row is None
+        if created:
             row = LiveControlLease(
-                session_id=str(session_id),
+                session_id=session_id,
                 provider=provider,
                 device_id=normalized_device_id,
             )
             db.add(row)
-        row.machine_id = _normalized(getattr(lease, "machine_id", None)) or None
-        row.state = lease_state
-        row.sequence = getattr(lease, "sequence", None)
-        row.heartbeat_at = seen_at
-        row.payload_json = json.dumps(
-            _payload_for_live_lease(lease, control_state=control_state, reason=reason, ttl_ms=ttl_ms),
-            sort_keys=True,
+        changed = (
+            created
+            or _lease_evidence_signature(
+                state=_normalized(row.state).lower() or "unknown",
+                sequence=row.sequence,
+                machine_id=row.machine_id,
+                payload=_live_lease_payload(row),
+            )
+            != signature
         )
-        from zerg.services.live_catalog_launch import attach_live_catalog_control
+        refresh_attachment = (
+            changed or attachment_health is None or session_id not in attachment_health or attachment_health[session_id] < refresh_floor
+        )
+        if not refresh_attachment:
+            unchanged_session_keys.add(session_id)
+            touched.add(UUID(session_id))
+            continue
 
+        changed_count += 1
+        row.machine_id = machine_id
+        row.state = lease_state
+        row.sequence = sequence
+        row.heartbeat_at = seen_at
+        row.updated_at = seen_at
+        row.payload_json = json.dumps(payload, sort_keys=True)
         try:
             connection = attach_live_catalog_control(
                 db,
-                session_id=session_id,
+                session_id=UUID(session_id),
                 provider=provider,
                 device_id=normalized_device_id,
                 state={"online": "attached", "degraded": "degraded"}.get(control_state, "detached"),
                 external_name=row.machine_id,
                 observed_at=seen_at,
             )
+            attached_count += 1
             if connection is not None and control_state in {"online", "degraded"}:
-                readiness = db.get(LiveLaunchReadiness, str(session_id))
+                readiness = db.get(LiveLaunchReadiness, session_id)
                 if readiness is not None and readiness.state in {"pending", "dispatched"}:
                     update_live_launch_readiness_state(
                         db,
-                        session_id=UUID(str(session_id)),
+                        session_id=UUID(session_id),
                         state="adopted",
                         clear_expires=True,
                         now=seen_at,
@@ -386,7 +509,25 @@ def upsert_live_control_leases(
             # Heartbeats may precede catalog ingest for a newly discovered
             # Shadow session. The next catalog sync/heartbeat converges it.
             logger.debug("Live control lease arrived before catalog session %s", session_id)
-        touched.add(session_id)
+        touched.add(UUID(session_id))
+
+    if unchanged_session_keys:
+        # One statement for the whole retained snapshot: liveness still has to
+        # advance for every lease the machine reported, and that is the only
+        # thing an unchanged lease is saying.
+        db.query(LiveControlLease).filter(
+            LiveControlLease.device_id == normalized_device_id,
+            LiveControlLease.session_id.in_(unchanged_session_keys),
+        ).update(
+            {"heartbeat_at": seen_at, "updated_at": seen_at},
+            synchronize_session=False,
+        )
+
+    if stats is not None:
+        stats["leases_present"] = len(normalized_leases)
+        stats["leases_changed"] = changed_count
+        stats["leases_attached"] = attached_count
+        stats["leases_retained"] = len(unchanged_session_keys)
     return touched
 
 

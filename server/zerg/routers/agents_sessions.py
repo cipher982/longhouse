@@ -37,6 +37,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
 from zerg.routers.agents_search import search_storage_v2_sessions
+from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
@@ -1783,7 +1784,11 @@ async def record_managed_local_launch_outcome(
     owner_id = owner_id_from_caller(_auth)
     catalogd = get_catalogd_client()
     if catalogd is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Launch outcomes require catalogd",
+            headers=catalog_backpressure_headers(),
+        )
     error_code = body.error_code
     error_message = body.error_message
     if body.outcome == "confirmed":
@@ -1816,7 +1821,11 @@ async def record_managed_local_launch_outcome(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Launch outcome was rejected") from exc
     except CatalogUnavailable as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd") from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Launch outcomes require catalogd",
+            headers=catalog_backpressure_headers(),
+        ) from exc
     launch = result.get("launch") or {}
     return {
         "recorded": True,

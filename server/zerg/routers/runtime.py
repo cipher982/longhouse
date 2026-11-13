@@ -32,6 +32,7 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
+from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_live_previews import LIVE_ITEM_MEMORY
 from zerg.services.session_live_previews import PREVIEW_KIND_REPLY
@@ -263,6 +264,7 @@ async def apply_runtime_observation_batch(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                headers=catalog_backpressure_headers(),
             )
         catalog_events = _without_superseded_print_overlays(events)
         try:
@@ -295,6 +297,7 @@ async def apply_runtime_observation_batch(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                headers=catalog_backpressure_headers(),
             ) from exc
         except CatalogRemoteError as exc:
             if getattr(exc, "code", None) == "invalid_request":

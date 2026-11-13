@@ -80,6 +80,7 @@ class MachinesMixin:
 
         from zerg.services.live_session_state import mark_missing_live_sessions
         from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
+        from zerg.services.managed_control_state import live_attachment_health_map
         from zerg.services.managed_control_state import mark_missing_live_control_leases
         from zerg.services.managed_control_state import upsert_live_control_leases
 
@@ -139,12 +140,28 @@ class MachinesMixin:
             orm = Session(bind=connection, join_transaction_mode="rollback_only", expire_on_commit=False)
             try:
                 if lease_objects:
+                    # One freshness read decides which unchanged leases still
+                    # need their attachment restamped, so the pass costs what
+                    # changed instead of what the machine holds. Lease counts
+                    # and the changed subset are annotated because "lease
+                    # reconcile was slow" is unactionable without them: 1,621
+                    # leases on one Mac and 6,862 on the factory machine turned
+                    # that stage into a multi-second writer hold.
+                    lease_stats: dict[str, int] = {}
+                    attachment_health = live_attachment_health_map(
+                        orm,
+                        [str(lease.session_id) for lease in lease_objects if lease.session_id is not None],
+                    )
+                    timer.mark("lease_freshness")
                     accepted_session_ids = upsert_live_control_leases(
                         orm,
                         lease_objects,
                         device_id=device_id,
                         received_at=received_at,
+                        attachment_health=attachment_health,
+                        stats=lease_stats,
                     )
+                    timer.mark("lease_upsert")
                     touched.update(accepted_session_ids)
                     touched.update(
                         upsert_live_sessions_from_managed_leases(
@@ -153,8 +170,11 @@ class MachinesMixin:
                             device_id=device_id,
                             owner_id=owner_id,
                             received_at=received_at,
+                            stats=lease_stats,
                         )
                     )
+                    timer.mark("lease_sessions")
+                    timer.annotate(**lease_stats)
                 if managed_leases_present:
                     missing_session_ids = mark_missing_live_control_leases(
                         orm,
@@ -162,6 +182,8 @@ class MachinesMixin:
                         device_id=device_id,
                         received_at=received_at,
                     )
+                    timer.mark("lease_missing")
+                    timer.annotate(leases_missing=len(missing_session_ids))
                     touched.update(missing_session_ids)
                     touched.update(
                         mark_missing_live_sessions(
@@ -171,6 +193,7 @@ class MachinesMixin:
                             received_at=received_at,
                         )
                     )
+                    timer.mark("lease_sessions_missing")
                 # The catalog connection owns the heartbeat transaction. Flush
                 # the ORM unit without releasing a nested savepoint so lease
                 # reconciliation, state projection, and the final stamp update
@@ -181,7 +204,9 @@ class MachinesMixin:
                 raise
             finally:
                 orm.close()
-            timer.mark("lease_reconcile")
+            # The lease stages above carry their own marks now, so what is left
+            # here is the flush that writes the reconciled rows.
+            timer.mark("lease_flush")
 
             commit_seq = _advance_commit_seq(connection, received_at)
             timer.mark("advance_commit_seq")

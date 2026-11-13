@@ -609,6 +609,26 @@ def test_heartbeat_aged_request_does_not_dispatch_catalog_write(live_catalog):
     assert _stamps(device_id) == []
 
 
+def test_heartbeat_backpressure_names_a_retry_window(live_catalog, monkeypatch):
+    """A busy catalog answers with a pacing hint, not a bare 503.
+
+    Without ``Retry-After`` every machine retried on its own cadence into the one
+    writer: on 2026-11-13 a 148s writer hold became 3,315 refused ingest batches
+    in 75 minutes. The Machine Agent paces each lane by this header already.
+    """
+
+    owner_id = live_catalog.create_user("owner@backpressure.test")
+    headers = {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id="busy-machine")}
+    monkeypatch.setattr("zerg.routers.heartbeat.get_catalogd_client", lambda: None)
+
+    with live_catalog.http_client() as client:
+        response = client.post("/agents/heartbeat", headers=headers, json={"version": "backpressure"})
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "catalog_unavailable"
+    assert response.headers["retry-after"] == "5"
+
+
 class _ReducerResultClient:
     """The real catalog client, with the reducer outcome a heartbeat's evidence would have had."""
 

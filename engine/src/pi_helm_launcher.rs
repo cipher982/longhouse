@@ -1713,6 +1713,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
                 "Pi",
                 &crate::config::get_agent_dir()?,
                 &DeferredNotices::default(),
+                None,
             );
         }
         if let Some(registration) = degraded.as_ref() {

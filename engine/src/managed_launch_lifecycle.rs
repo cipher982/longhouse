@@ -156,6 +156,14 @@ fn recovery_backoff(attempt: u32) -> Duration {
 /// someone is debugging a live degradation.
 const RETRY_RECEIPT_RETENTION: chrono::Duration = chrono::Duration::days(14);
 
+/// Longest gap between launch-outcome replays. The provider is already running,
+/// so this is a slow convergence poll rather than a race against a user.
+const OUTCOME_RETRY_MAX_BACKOFF: Duration = RECOVERY_MAX_BACKOFF;
+
+/// Slice size for sleeping between replays, so a provider that exits mid-gap
+/// stops the retry within this bound rather than after the whole gap.
+const OUTCOME_RETRY_POLL: Duration = Duration::from_millis(250);
+
 // Facade-only: the engine binary reaches the Runtime Host through the bounded
 // entry point, so these are dead there but live in `longhouse`.
 //
@@ -563,12 +571,14 @@ impl<'a> ManagedLaunchTransaction<'a> {
     ///
     /// Degrading marks the transaction settled, because its `Drop` would
     /// otherwise report a launch abort for a provider that really did start,
-    /// and hands the same idempotent outcome to a bounded background retry.
+    /// and hands the same idempotent outcome to a background retry that lasts
+    /// as long as the provider does.
     pub fn confirm_or_degrade(
         &mut self,
         provider: &str,
         agent_dir: &std::path::Path,
         notices: &DeferredNotices,
+        provider_alive: Option<Arc<AtomicBool>>,
     ) {
         let error = match self.confirm() {
             Ok(()) => return,
@@ -591,6 +601,7 @@ impl<'a> ManagedLaunchTransaction<'a> {
             provider,
             agent_dir.to_path_buf(),
             notices.clone(),
+            provider_alive,
         );
     }
 }
@@ -600,6 +611,14 @@ impl<'a> ManagedLaunchTransaction<'a> {
 /// The outcome is idempotent on (session, run): the Runtime Host accepts an
 /// exact replay of an already-committed confirmation instead of treating it as
 /// a conflict, so retrying a lost response cannot corrupt durable state.
+///
+/// The loop lasts as long as the provider process does. What it replaced ran
+/// five attempts inside about fifteen seconds, which is shorter than one slow
+/// write on this route: on 2026-11-13 a rented tenant held its single catalog
+/// writer for 148s, and a launch whose confirm landed in that window was left
+/// permanently unrecorded even though the session itself was registered and
+/// running. Attempts stay immediate-first, because a detached launch returns in
+/// milliseconds and takes this thread with it.
 fn spawn_launch_outcome_retry(
     url: &str,
     device_token: &str,
@@ -608,6 +627,7 @@ fn spawn_launch_outcome_retry(
     provider: &str,
     agent_dir: PathBuf,
     notices: DeferredNotices,
+    provider_alive: Option<Arc<AtomicBool>>,
 ) {
     let url = url.to_string();
     let device_token = device_token.to_string();
@@ -619,14 +639,37 @@ fn spawn_launch_outcome_retry(
             let _ = record_outcome_retry(&agent_dir, &session_id, &provider, true);
             return;
         };
+        let provider_gone = || {
+            provider_alive
+                .as_ref()
+                .is_some_and(|flag| !flag.load(Ordering::Acquire))
+        };
         let mut last_error = None;
-        for attempt in 0..5_u32 {
-            // Back off between attempts, never before the first one. A detached
-            // launch (`--no-attach`) returns within milliseconds and takes this
-            // thread with it, so a sleep-first loop never reached the Runtime
-            // Host at all and left the launch permanently unrecorded.
+        let mut attempt = 0_u32;
+        loop {
+            if provider_gone() {
+                settle_unrecorded_outcome(&agent_dir, &session_id, &provider, &notices, last_error);
+                return;
+            }
             if attempt > 0 {
-                std::thread::sleep(Duration::from_secs(2_u64.pow(attempt - 1)));
+                // Sliced so a provider that exits mid-backoff stops the retry
+                // promptly instead of after the next full gap.
+                let gap = outcome_backoff(attempt - 1);
+                let mut slept = Duration::ZERO;
+                while slept < gap {
+                    if provider_gone() {
+                        settle_unrecorded_outcome(
+                            &agent_dir,
+                            &session_id,
+                            &provider,
+                            &notices,
+                            last_error,
+                        );
+                        return;
+                    }
+                    std::thread::sleep(OUTCOME_RETRY_POLL);
+                    slept += OUTCOME_RETRY_POLL;
+                }
             }
             match runtime.block_on(report_launch_outcome(
                 &url,
@@ -642,14 +685,39 @@ fn spawn_launch_outcome_retry(
                 }
                 Err(error) => last_error = Some(error),
             }
+            attempt = attempt.saturating_add(1);
         }
-        if let Some(error) = last_error {
-            notices.push(format!(
-                "Longhouse warning: {provider} is running but its launch outcome was never recorded: {error:#}"
-            ));
-        }
-        let _ = record_outcome_retry(&agent_dir, &session_id, &provider, true);
     });
+}
+
+/// Nobody will replay this confirmation now: the provider has exited.
+///
+/// `recovery_exhausted` is the honest state — an outcome that was never
+/// recorded and no longer has a running launch to describe. Without settling it
+/// the receipt keeps claiming a recovery that has no thread behind it, which is
+/// exactly what local health showed after the 2026-11-13 writer stall.
+fn settle_unrecorded_outcome(
+    agent_dir: &std::path::Path,
+    session_id: &str,
+    provider: &str,
+    notices: &DeferredNotices,
+    last_error: Option<anyhow::Error>,
+) {
+    if let Some(error) = last_error {
+        notices.push(format!(
+            "Longhouse warning: {provider} exited before its launch outcome was recorded: {error:#}"
+        ));
+    }
+    let _ = record_outcome_retry(agent_dir, session_id, provider, true);
+}
+
+/// Gap before retrying an unrecorded launch outcome: doubling, then flat.
+///
+/// Pure so the policy can be asserted directly. The failure it guards against is
+/// a schedule that looks like a retry loop but expires inside the first slow
+/// write on the route it calls.
+fn outcome_backoff(attempt: u32) -> Duration {
+    Duration::from_secs(1u64 << attempt.min(6)).min(OUTCOME_RETRY_MAX_BACKOFF)
 }
 
 /// Register one managed launch with the Runtime Host.
@@ -1509,7 +1577,7 @@ mod tests {
         {
             let mut transaction =
                 ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-1", "run-1");
-            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices);
+            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices, None);
         }
 
         let confirm = requests.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -1548,7 +1616,7 @@ mod tests {
         {
             let mut transaction =
                 ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-2", "run-2");
-            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices);
+            transaction.confirm_or_degrade("Claude", agent_dir.path(), &notices, None);
         }
 
         assert!(requests
@@ -1558,6 +1626,82 @@ mod tests {
         assert!(requests.recv_timeout(Duration::from_millis(250)).is_err());
         assert!(!outcome_receipt(agent_dir.path(), "session-2").exists());
         assert!(notices.drain().is_empty());
+    }
+
+    /// An outcome retry outlives the old five-attempt budget, and stops the
+    /// moment the provider it describes is gone: the receipt then says
+    /// exhausted, so local health stops reporting a recovery with no thread
+    /// behind it.
+    #[test]
+    fn unrecorded_outcome_keeps_retrying_until_the_provider_exits() {
+        let (url, requests) = spawn_outcome_server("503 Service Unavailable");
+        let agent_dir = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let notices = DeferredNotices::default();
+        let provider_alive = Arc::new(AtomicBool::new(true));
+        {
+            let mut transaction =
+                ManagedLaunchTransaction::new(&runtime, &url, "device-token", "session-9", "run-9");
+            transaction.confirm_or_degrade(
+                "Claude",
+                agent_dir.path(),
+                &notices,
+                Some(Arc::clone(&provider_alive)),
+            );
+        }
+
+        // The foreground confirm plus the immediate first replay.
+        requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Past the old budget: the retry must still have a live thread behind
+        // it, and the receipt must still read as active recovery.
+        std::thread::sleep(Duration::from_millis(500));
+        let receipt = outcome_receipt(agent_dir.path(), "session-9");
+        let payload: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(payload["recovery_exhausted"], json!(false));
+
+        provider_alive.store(false, Ordering::Release);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut settled = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(raw) = std::fs::read(&receipt) {
+                let payload: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+                if payload["recovery_exhausted"] == json!(true) {
+                    settled = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(settled, "a provider exit must settle the outcome receipt");
+        assert!(
+            notices
+                .drain()
+                .iter()
+                .any(|message| message.contains("exited before its launch outcome was recorded")),
+            "the user must be told the outcome was abandoned"
+        );
+        // Nothing replays it after the settle.
+        assert!(requests.recv_timeout(Duration::from_millis(1500)).is_err());
+    }
+
+    #[test]
+    fn outcome_backoff_outlives_a_slow_write_and_caps() {
+        assert!(outcome_backoff(0) <= Duration::from_secs(1));
+        assert_eq!(outcome_backoff(3), Duration::from_secs(8));
+        assert_eq!(
+            outcome_backoff(u32::MAX),
+            OUTCOME_RETRY_MAX_BACKOFF,
+            "a long outage must settle into a slow poll, not an ever-growing gap"
+        );
+        // The schedule this replaced was five attempts inside ~15s.
+        let legacy_budget: Duration = (0..5)
+            .map(|attempt| Duration::from_secs(2u64.pow(attempt)))
+            .sum();
+        assert!(
+            outcome_backoff(6) > legacy_budget,
+            "one gap must already outlast the whole schedule that stranded launches"
+        );
     }
 
     #[test]
@@ -1945,7 +2089,12 @@ fn spawn_registration_retry(
                                 // retry -- and must never abort a provider that
                                 // is running, which is what dropping this
                                 // transaction unconfirmed would have posted.
-                                transaction.confirm_or_degrade(&provider, &agent_dir, &notices);
+                                transaction.confirm_or_degrade(
+                                    &provider,
+                                    &agent_dir,
+                                    &notices,
+                                    Some(Arc::clone(&provider_alive_for_thread)),
+                                );
                                 if let Ok(mut state) = state_for_thread.lock() {
                                     state.outcome = RegistrationRetryOutcome::Recovered;
                                     state.recovered_at = Some(chrono::Utc::now().to_rfc3339());

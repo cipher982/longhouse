@@ -1823,7 +1823,12 @@ where
             // launch: the provider starts either way and the unrecorded outcome
             // converges in the background.
             if let Some(transaction) = launch_transaction.as_mut() {
-                transaction.confirm_or_degrade("Antigravity", confirm_agent_dir, confirm_notices);
+                transaction.confirm_or_degrade(
+                    "Antigravity",
+                    confirm_agent_dir,
+                    confirm_notices,
+                    degraded_provider_alive.as_ref().map(Arc::clone),
+                );
             }
             Ok(())
         }),
@@ -2372,15 +2377,21 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let confirm_agent_dir = managed_launch_agent_dir();
     let confirm_notices = deferred_notices.clone();
     let run_result = run_foreground_command_after_spawn(&mut command, || {
-        if let Some(provider_alive) = degraded_provider_alive_for_spawn {
-            provider_alive.store(true, Ordering::Release);
+        let provider_alive = degraded_provider_alive_for_spawn.clone();
+        if let Some(alive) = provider_alive.as_ref() {
+            alive.store(true, Ordering::Release);
         }
         // The child is spawned but still blocked on the terminal-release
         // barrier, so an error returned here reaps it before `claude` is ever
         // exec'd. Confirmation must therefore degrade in place: the provider
         // starts, and the unrecorded outcome converges in the background.
         if let Some(transaction) = launch_transaction.as_mut() {
-            transaction.confirm_or_degrade("Claude", &confirm_agent_dir, &confirm_notices);
+            transaction.confirm_or_degrade(
+                "Claude",
+                &confirm_agent_dir,
+                &confirm_notices,
+                provider_alive,
+            );
         }
         warp_cli_agent::emit_session_event(
             "claude",
@@ -2701,7 +2712,12 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         // The bridge already owns a live provider. Stopping it because the
         // Runtime Host could not record the outcome would destroy a working
         // session over bookkeeping, so degrade and converge in the background.
-        transaction.confirm_or_degrade("OpenCode", &managed_launch_agent_dir(), &deferred_notices);
+        transaction.confirm_or_degrade(
+            "OpenCode",
+            &managed_launch_agent_dir(),
+            &deferred_notices,
+            None,
+        );
     }
     // The bridge owns the provider process from here.
     if let Some(registration) = &degraded_registration {
@@ -3520,7 +3536,12 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if let Some(transaction) = launch_transaction.as_mut() {
         // Same contract as every other provider: the bridge is already running
         // Codex, so an unrecorded outcome degrades rather than stopping it.
-        transaction.confirm_or_degrade("Codex", &managed_launch_agent_dir(), &deferred_notices);
+        transaction.confirm_or_degrade(
+            "Codex",
+            &managed_launch_agent_dir(),
+            &deferred_notices,
+            None,
+        );
     }
     // The bridge owns the provider process from here, so a background
     // registration retry is allowed to confirm the launch once it succeeds.
@@ -3713,6 +3734,7 @@ fn launch_managed_codex_resume(
         "Codex resume",
         &managed_launch_agent_dir(),
         &resume_notices,
+        None,
     );
     for message in resume_notices.drain() {
         eprintln!("{message}");

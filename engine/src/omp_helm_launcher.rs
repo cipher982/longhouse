@@ -3437,7 +3437,12 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         server_for_spawn.persist_state()?;
         server_for_spawn.wait_until_provider_session_started()?;
         if let Some(transaction) = transaction.as_mut() {
-            transaction.confirm_or_degrade("OMP", &crate::config::get_agent_dir()?, &deferred);
+            transaction.confirm_or_degrade(
+                "OMP",
+                &crate::config::get_agent_dir()?,
+                &deferred,
+                None,
+            );
         }
         if let Some(registration) = server_for_spawn.launch_registration_retry.lock().as_ref() {
             registration.provider_alive.store(true, Ordering::Release);

@@ -61,6 +61,7 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import agents_machine_evidence_dropped_total
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -1338,6 +1339,7 @@ async def ingest_heartbeat(
                         "code": "catalog_unavailable",
                         "message": "Catalog mutation is temporarily unavailable.",
                     },
+                    headers=catalog_backpressure_headers(),
                 )
             rpc_started = time.monotonic()
             try:
@@ -1386,6 +1388,7 @@ async def ingest_heartbeat(
                     "code": "catalog_unavailable",
                     "message": "Catalog mutation is temporarily unavailable.",
                 },
+                headers=catalog_backpressure_headers(),
             ) from exc
         except CatalogRemoteError as exc:
             request_status_label = "write_backpressure" if exc.retryable else "internal_error"

@@ -1613,7 +1613,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         // it because the Runtime Host could not record the launch outcome would
         // destroy a working session over bookkeeping, so degrade instead and
         // let the background retry converge.
-        transaction.confirm_or_degrade("Cursor", &confirm_agent_dir, &deferred_notices);
+        transaction.confirm_or_degrade(
+            "Cursor",
+            &confirm_agent_dir,
+            &deferred_notices,
+            Some(Arc::clone(&stop)),
+        );
     }
     pty_relay::sync_winsize(master);
     let socket_stop = stop.clone();
