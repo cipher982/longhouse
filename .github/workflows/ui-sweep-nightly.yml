@@ -29,7 +29,7 @@ env:
 jobs:
   ui-sweep:
     if: ${{ github.repository == 'cipher982/longhouse' }}
-    runs-on: crunch
+    runs-on: grind-fast
     timeout-minutes: 20
     # One size at a time: three at once would hold all three of this repo's crunch slots.
     strategy:

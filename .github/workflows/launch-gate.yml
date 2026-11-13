@@ -117,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: crunch
+          - os: grind-fast
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -174,7 +174,7 @@ jobs:
                 "Longhouse-macos-arm64.zip"
               )
               ;;
-            crunch)
+            grind-fast)
               required_assets+=(
                 "longhouse-engine-linux-x64"
               )
@@ -262,7 +262,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: crunch
+          - os: grind-fast
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -334,7 +334,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: crunch
+          - os: grind-fast
             project: all
             browsers: "chromium firefox webkit"
     runs-on: ${{ matrix.os }}
@@ -399,7 +399,7 @@ jobs:
     # `make onboarding-funnel` always git-clones the repo into the README
     # contract's workdir, so this is the fresh-clone first-user path. Launch
     # Gate and the onboarding ring each used to run it; once is enough.
-    runs-on: crunch
+    runs-on: grind-fast
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
 

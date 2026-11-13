@@ -25,7 +25,7 @@ jobs:
   # installed on the guest, control-plane scripts/ops/crunch/guest).
   web-quality:
     timeout-minutes: 30
-    runs-on: crunch
+    runs-on: grind-fast
     name: "Web quality (build, bundle size, Lighthouse)"
 
     steps:

@@ -25,7 +25,7 @@ jobs:
   readme-smoke:
     name: README smoke tests
     # Public repo: hosted runners are free, so this no longer holds a cube slot.
-    runs-on: crunch
+    runs-on: grind-fast
     timeout-minutes: 15
 
     steps:
