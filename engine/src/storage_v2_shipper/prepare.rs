@@ -464,12 +464,24 @@ fn prepare_file_envelope(
     if !path.exists() {
         return Ok(None);
     }
+    let framing = if provider.eq_ignore_ascii_case("antigravity")
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
+    {
+        RawSourceFraming::WholeDocument
+    } else {
+        RawSourceFraming::LfDelimited
+    };
     let source_revision =
         if provider.eq_ignore_ascii_case("omp") || provider.eq_ignore_ascii_case("pi") {
             pi_lineage_source_revision(path)?
         } else if is_cursor_agent_transcript_path(provider, path) {
             cursor_agent_transcript_source_revision(path)?
-        } else if provider.eq_ignore_ascii_case("antigravity") {
+        } else if provider.eq_ignore_ascii_case("antigravity")
+            && framing == RawSourceFraming::WholeDocument
+        {
             Some(hash_file(path)?)
         } else {
             None
@@ -485,16 +497,6 @@ fn prepare_file_envelope(
         SourceChangeHint::None,
     )?;
     let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
-    let framing = if provider.eq_ignore_ascii_case("antigravity")
-        && path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
-    {
-        RawSourceFraming::WholeDocument
-    } else {
-        RawSourceFraming::LfDelimited
-    };
     // Identity and length catch a replaced or shortened file. A file rewritten
     // in place to the same or a greater length passes both, and the cursor
     // would go on reading new bytes as if they followed the old ones. The

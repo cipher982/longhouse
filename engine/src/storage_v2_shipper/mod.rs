@@ -3616,8 +3616,9 @@ mod tests {
         .unwrap()
         .is_none());
 
-        // A later native snapshot may repeat the exact reply at a distinct step.
-        // It must rotate this source's epoch, not dedupe prose or lose raw history.
+        // Appending a later native step to an LF-delimited Antigravity
+        // transcript must advance within the same epoch and ship only the
+        // appended bytes, not re-ship from byte 0.
         let repeated = reply.replace("\"step_index\":3", "\"step_index\":5");
         let updated = format!("{native}{repeated}\n");
         fs::write(&path, &updated).unwrap();
@@ -3634,10 +3635,9 @@ mod tests {
             next.envelope.opaque_source_id,
             first.envelope.opaque_source_id
         );
-        assert_eq!(
-            next.envelope.predecessor_source_epoch,
-            Some(first.source_epoch.to_string())
-        );
+        assert_eq!(next.envelope.source_epoch, first.source_epoch.to_string());
+        assert_eq!(next.envelope.predecessor_source_epoch, None);
+        assert_eq!(next.envelope.range_start, first.envelope.range_end);
         let replies = next
             .envelope
             .render
@@ -3648,10 +3648,7 @@ mod tests {
             .filter(|record| record.content_text.as_deref() == Some("repeated answer"))
             .map(|record| record.event_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            replies,
-            vec!["antigravity-step-3-content", "antigravity-step-5-content"]
-        );
+        assert_eq!(replies, vec!["antigravity-step-5-content"]);
         assert_eq!(
             decode_envelope_record_bytes(&first.envelope.records).unwrap(),
             vec![
@@ -3662,14 +3659,87 @@ mod tests {
         );
         assert_eq!(
             decode_envelope_record_bytes(&next.envelope.records).unwrap(),
-            vec![
-                format!("{tool}\n").into_bytes(),
-                format!("{result}\n").into_bytes(),
-                format!("{reply}\n").into_bytes(),
-                format!("{repeated}\n").into_bytes(),
-            ]
+            vec![format!("{repeated}\n").into_bytes()]
         );
         assert_eq!(fs::read(&mirror).unwrap(), summary.into_bytes());
+    }
+
+    #[test]
+    fn antigravity_jsonl_rewritten_under_cursor_rotates_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(
+            "brain/eb514596-95e0-4e96-a1cc-e355b576127c/.system_generated/logs/transcript_full.jsonl",
+        );
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first_line = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","content":"initial answer"}"#;
+        fs::write(&path, format!("{first_line}\n")).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let session_id = "c75c18e2-2726-4ad6-94a4-0756fdb340c5";
+        let first = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+
+        let rewritten = first_line.replace("initial answer", "edited  answer");
+        fs::write(&path, format!("{rewritten}\n")).unwrap();
+        let next = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(next.envelope.range_start, 0);
+        assert_eq!(
+            next.envelope.predecessor_source_epoch,
+            Some(first.source_epoch.to_string())
+        );
+    }
+
+    #[test]
+    fn antigravity_json_whole_document_rotates_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("brain/snapshot.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let first_doc = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","content":"v1"}"#;
+        fs::write(&path, first_doc).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let session_id = "c75c18e2-2726-4ad6-94a4-0756fdb340c6";
+        let first = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+
+        let second_doc = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","content":"v2"}"#;
+        fs::write(&path, second_doc).unwrap();
+        let next = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(next.envelope.range_start, 0);
+        assert_eq!(
+            next.envelope.predecessor_source_epoch,
+            Some(first.source_epoch.to_string())
+        );
     }
 
     #[test]
