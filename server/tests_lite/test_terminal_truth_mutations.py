@@ -96,6 +96,39 @@ def test_a_row_that_is_not_ok_says_which_cell_went_wrong_and_why() -> None:
     assert mutations.why_not(half_speed) == "expected a pass, saw fail at client_received: no reason recorded"
 
 
+def test_a_reply_cell_that_fails_unmutated_keeps_where_each_marker_was_late(monkeypatch, tmp_path) -> None:
+    """omp/helm, alone on its own host, delivered 1.3 s and 1.9 s late on the runner (2026-11-13) and the row kept only the median."""
+
+    import json
+
+    from zerg.qa.terminal_truth_verdicts import CellResult
+
+    reply_mutation = next(m for m in MUTATIONS if m.name == "omp-session-dir-rule")
+    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
+    monkeypatch.setattr(mutations, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(mutations, "_clone_dir", lambda *a, **k: None)
+    monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
+    late = CellResult(
+        provider="omp", mode="helm", status="measured", outcome="fail", first_failed_stage="stream_delivered",
+        reason="stream_delivered: median_delay_within_budget: median 1.861 s, budget 1.0 s",
+        stages={"preflight": {"ok": True, "reason": ""}, "stream_delivered": {"ok": False, "reason": "median 1.861 s, budget 1.0 s"}},
+        pass_shape="cold", stream_stage_s={"TT0000": {"paint": 1.5, "engine_stamp": 1.4, "host_publish": 3.3, "client_receive": 3.4}},
+    )  # fmt: skip
+    monkeypatch.setattr(mutations.tt, "run_suite", lambda *a, **k: [late])
+    out = tmp_path / "rows.json"
+    args = mutations.argparse.Namespace(
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[reply_mutation.name],
+        skip_engine=False, tokens=100, rate=20.0, out=out,
+    )  # fmt: skip
+
+    assert mutations.run_mutations(args) == 1
+
+    (row,) = json.loads(out.read_text())
+    assert row["ok"] is False and row["baseline_stage"] == "stream_delivered"
+    assert row["evidence"]["stream_stage_s"]["TT0000"]["host_publish"] == 3.3 and row["evidence"]["pass_shape"] == "cold"
+    assert row["evidence"]["stage_reasons"] == {"stream_delivered": "median 1.861 s, budget 1.0 s"}
+
+
 def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_is_not_built(monkeypatch, tmp_path, capsys) -> None:
     """On the Linux runner 7 unmutated cells failed (2026-11-12) and the log said only "fail": 14 minutes of rebuilds, no reason."""
 

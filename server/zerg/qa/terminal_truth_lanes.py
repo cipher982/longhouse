@@ -385,6 +385,30 @@ class RuntimeApi:
         self.known_sessions.update(ids)
         return ids
 
+    def wait_for_session_stream(self, timeout: float = 15.0) -> tuple[float | None, float | None]:
+        """Wait for this cell's session to be listed and its workspace stream subscribed: (seconds to listed, seconds to subscribed).
+
+        A Helm launch creates its session on the host at once, but the list this harness (and a client) finds it in did not show
+        it under its working directory until the Machine Agent's next periodic scan: 9.9 s after the launch on a Machine Agent that
+        had just started (runner, 2026-11-13, omp/helm alone on its own host), under 5 s on one that had been up a while. A prompt
+        sent before then streams to a host with no subscriber, the host does not replay previews to a first connection, and the cell
+        read "0 of 6 markers on the live stream" or a 2 s median while the host log showed every preview published within 0.2 s.
+        The wait is recorded, not judged here: how long a new session takes to be listed is its own number. ``None`` means it did
+        not happen within ``timeout``; the caller sends the prompt anyway and the cell fails on what the stream then misses.
+        """
+
+        started = time.monotonic()
+        listed: float | None = None
+        while time.monotonic() - started < timeout:
+            with contextlib.suppress(Exception):
+                sessions = set(self.session_ids())
+                if sessions and listed is None:
+                    listed = time.monotonic() - started
+                if sessions and sessions <= self.subscribed_streams:
+                    return listed, time.monotonic() - started
+            time.sleep(0.05)
+        return listed, None
+
     def _lane(self, name: str, path: str, *, browser: bool, interval: float) -> Lane:
         def read() -> str | None:
             sessions = self.session_ids()

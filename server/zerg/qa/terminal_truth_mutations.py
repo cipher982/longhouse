@@ -41,7 +41,12 @@ from zerg.qa.terminal_truth_kinds import run_kinds_suite
 
 REPO_ROOT = tt.REPO_ROOT
 # What a live-kinds cell's result says about a failure: the checks, the states served and shown, and how the run ended.
-EVIDENCE_KEYS = ("checks", "state_lane", "stream_open_before_prompt", "lane_errors", "sse_event_counts", "last_output", "wall_s")
+EVIDENCE_KEYS = (
+    "checks", "state_lane", "stream_open_before_prompt", "lane_errors", "sse_event_counts", "last_output", "wall_s",
+    "cell_sessions", "sessions_after",
+)  # fmt: skip
+# The same for a reply-text cell: where each marker was at each stage, so a late median says which hop was late.
+REPLY_EVIDENCE_KEYS = ("pass_shape", "timing", "split", "stream_stage_s", "worst_marker", "diagnostics", "lane_errors", "scratch")
 SCRATCH = tt.SCRATCH_ROOT.parent / "tt-mut"
 
 
@@ -639,12 +644,14 @@ def run_mutations(args: argparse.Namespace) -> int:
     base_engine, base_cli = args.engine.resolve(), args.longhouse_cli.resolve()
     rows: list[dict[str, Any]] = []
     last_kinds: dict[str, Any] = {}  # what the most recent live-kinds cell saw, kept on a row that is not ok
+    last_reply: dict[str, Any] = {}  # the same for the most recent reply-text cell
 
     def record(row: dict[str, Any]) -> None:
         """Keep the row, and the file up to date: a run that hits its time limit still leaves every row it finished."""
 
-        if not row["ok"] and "(" in row["cell"] and last_kinds:
-            row["evidence"] = dict(last_kinds)
+        seen = last_kinds if "(" in row["cell"] else last_reply
+        if not row["ok"] and seen:
+            row["evidence"] = dict(seen)
         rows.append(row)
         if args.out:
             args.out.write_text(json.dumps(rows, indent=2) + "\n")
@@ -660,6 +667,8 @@ def run_mutations(args: argparse.Namespace) -> int:
         result = run_kinds_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
         last_kinds.clear()
         last_kinds.update({k: result[k] for k in EVIDENCE_KEYS if k in result})
+        if "sessions_after" in last_kinds:
+            last_kinds["sessions_after"] = last_kinds["sessions_after"][:10]  # which session served what: a launch can leave two
         if result.get("sse_frames"):
             last_kinds["sse_frames"] = [
                 {k: f.get(k) for k in ("t", "kind", "tool_name", "text_len", "text_tail")} for f in result["sse_frames"][:200]
@@ -688,7 +697,11 @@ def run_mutations(args: argparse.Namespace) -> int:
         )
 
     def cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tt.CellResult:
-        return tt.run_suite([spec], pace=extra.pop("pace", pace), engine=engine, longhouse_cli=cli, expectations=expectations, **extra)[0]
+        result = tt.run_suite([spec], pace=extra.pop("pace", pace), engine=engine, longhouse_cli=cli, expectations=expectations, **extra)[0]
+        last_reply.clear()
+        last_reply.update({k: v for k in REPLY_EVIDENCE_KEYS if (v := getattr(result, k, None))})
+        last_reply["stage_reasons"] = {name: stage.get("reason") for name, stage in result.stages.items() if not stage.get("ok", True)}
+        return result
 
     try:
         if any(m.side == "engine" for m in selected) and not args.skip_engine:

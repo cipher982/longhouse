@@ -254,6 +254,33 @@ def test_the_prompt_waits_for_the_stream_subscription_not_for_the_connection() -
         host.server_close()
 
 
+def test_a_helm_reply_cell_holds_its_prompt_until_its_session_is_listed_and_subscribed() -> None:
+    """Runner, 2026-11-13: omp/helm alone on its own host was listed 9.9 s after launch; the prompt went first and the cell read late."""
+
+    _SseHandler.release.clear()
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SseHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    stop = threading.Event()
+    try:
+        api = RuntimeApi(f"http://127.0.0.1:{host.server_address[1]}", "token")
+        assert api.wait_for_session_stream(timeout=0.2) == (None, None)  # no session listed yet: it waits the whole time
+
+        def appear() -> None:
+            api.pinned_sessions = ["s1"]  # the host lists the session now
+            threading.Thread(target=api._stream_one, args=("s1", queue.Queue(), stop), daemon=True).start()
+            threading.Timer(0.2, _SseHandler.release.set).start()
+
+        threading.Timer(0.2, appear).start()
+        listed, subscribed = api.wait_for_session_stream(timeout=5)
+        assert listed is not None and subscribed is not None
+        assert 0.15 <= listed < subscribed < 3, "listed first, subscribed when the host said so"
+    finally:
+        stop.set()
+        _SseHandler.release.set()
+        host.shutdown()
+        host.server_close()
+
+
 def test_a_cell_with_no_session_yet_does_not_wait() -> None:
     api = RuntimeApi("http://127.0.0.1:9", "token")  # no pinned session and no workspace: nothing is listed, no request is made
     assert kinds._wait_for_open_streams(api, timeout=5)[:2] == (0, 0)

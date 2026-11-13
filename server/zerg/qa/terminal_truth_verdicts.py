@@ -482,6 +482,8 @@ def render_timing(results: Sequence[CellResult]) -> str:
         ("pass_boot_host_s", "boot host"),
         ("pass_boot_engine_s", "boot engine"),
         ("provider_start_to_ready_s", "provider start to ready"),
+        ("session_listed_after_ready_s", "ready to session listed"),
+        ("stream_subscribed_after_ready_s", "ready to stream subscribed"),
         ("stream_s", "stream"),
         ("settle_s", "settle"),
         ("teardown_s", "teardown"),
