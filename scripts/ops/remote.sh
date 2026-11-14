@@ -53,7 +53,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAME="$(basename "$ROOT_DIR" | tr -c 'A-Za-z0-9._\n-' '_')"
-HOST="${REMOTE_HOST:-grind.coin-castor.ts.net}"
+HOST="${REMOTE_HOST:-ci.coin-castor.ts.net}"
 KEY="${REMOTE_KEY:-$HOME/.ssh/remote_builds_ed25519}"
 SLOTS="${REMOTE_SLOTS:-3}"
 TIMEOUT="${REMOTE_TIMEOUT:-3600}"
