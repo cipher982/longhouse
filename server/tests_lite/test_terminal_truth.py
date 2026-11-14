@@ -100,6 +100,27 @@ def test_the_file_watcher_reads_only_where_it_was_pointed_and_follows_a_linked_f
     assert missing.first_path == {}
 
 
+def test_a_process_left_behind_is_found_by_the_real_path_of_a_scratch_directory_reached_through_a_link(tmp_path) -> None:
+    import subprocess
+    import sys
+
+    from zerg.qa.terminal_truth_scenarios import leaked_processes
+
+    real = tmp_path / "scratch-root" / "b5001" / "ef39"
+    real.mkdir(parents=True)
+    link = tmp_path / "tt1e0c"
+    link.symlink_to(tmp_path / "scratch-root")
+    left = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(real / "h" / "ws-token")])
+    try:
+        found = leaked_processes(link / "b5001" / "ef39")  # the name the pass was given; the process holds the other
+        assert [line.split()[0] for line in found] == [str(left.pid)]
+        assert left.wait(timeout=10) != 0
+        assert leaked_processes(link / "b5001" / "ef39") == []
+    finally:
+        left.kill()
+        left.wait()
+
+
 def test_every_provider_the_harness_drives_is_watched_where_it_writes_its_transcript_and_not_over_its_whole_home() -> None:
     from zerg.qa.terminal_truth_lanes import TRANSCRIPT_ROOTS
     from zerg.qa.terminal_truth_providers import PROVIDERS

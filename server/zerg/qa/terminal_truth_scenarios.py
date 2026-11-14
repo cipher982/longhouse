@@ -292,13 +292,21 @@ def end_codex_sessions(pas: Pass, sessions: Sequence[str]) -> dict[str, Any]:
 
 
 def leaked_processes(root: Path) -> list[str]:
-    """Processes whose command line still names ``root`` (a pass's scratch directory); each one is killed and reported."""
+    """Processes whose command line still names ``root`` (a pass's scratch directory); each one is killed and reported.
 
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, check=False).stdout
+    The directory is looked for under the name it was given and the one it resolves to. Scratch is reached through a
+    short link, and the Machine Agent hands Codex's app-server the resolved path: until 2026-11-14 a sweep for the link's
+    name found none of them, and nine app-servers a run (150 to 190 MB each) outlived it.
+    """
+
+    names = {str(root), str(root.resolve())}
+    # ``ww``: the whole command line. Without it ps on Linux cuts a line at 80 columns when it writes to a pipe, and the
+    # directory is hundreds of characters into an app-server's command line.
+    out = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True, check=False).stdout
     leaked: list[str] = []
     for line in out.splitlines():
         pid_text, _, command = line.strip().partition(" ")
-        if str(root) in command and pid_text.isdigit() and int(pid_text) != os.getpid():
+        if any(name in command for name in names) and pid_text.isdigit() and int(pid_text) != os.getpid():
             leaked.append(f"{pid_text} {command[:160]}")
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(int(pid_text), signal.SIGKILL)

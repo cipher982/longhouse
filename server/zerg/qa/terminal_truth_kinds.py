@@ -63,6 +63,7 @@ from zerg.qa.terminal_truth_scenarios import HOME_EXCLUSIVE
 from zerg.qa.terminal_truth_scenarios import Pass
 from zerg.qa.terminal_truth_scenarios import _create_console_session
 from zerg.qa.terminal_truth_scenarios import build_pass
+from zerg.qa.terminal_truth_scenarios import end_codex_sessions
 from zerg.qa.terminal_truth_scenarios import stop_pass
 from zerg.qa.terminal_truth_verdicts import CellSpec
 
@@ -1063,6 +1064,8 @@ def run_kind_cell_in(
     finally:
         stop.set()
         spans.mark("read back")
+        if provider == "codex" and mode == "helm":
+            out.update(end_codex_sessions(pas, sorted(api.known_sessions)))  # or its app-server outlives the cell
         if session is not None:
             session.close()
         spans.mark("provider stopped")
