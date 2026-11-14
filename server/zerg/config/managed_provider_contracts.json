@@ -1,6 +1,18 @@
 {
   "schema_version": 1,
   "transcript_signal_surfaces": {
+    "message.phase": {
+      "disposition": "not_implemented",
+      "owner_action": "render commentary as step narration with the following tool rows trailing under it, and only final answers at full message weight, on Web and iOS"
+    },
+    "turn.end": {
+      "disposition": "not_implemented",
+      "owner_action": "show why a turn ended (interrupted, error, aborted) as a timeline marker instead of inferring it from the absence of further rows"
+    },
+    "tool.intent": {
+      "disposition": "not_implemented",
+      "owner_action": "read the normalized intent from the tool presentation on Web and iOS instead of each client parsing provider input fields"
+    },
     "turn.duration": {
       "disposition": "implemented",
       "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
@@ -824,6 +836,27 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "response_item/message/assistant.phase",
+          "canary": "codex_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "carry phase (commentary or final_answer) onto the normalized assistant event; CodexPayload has no phase field, so it survives only in raw_line"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "event_msg/task_complete (error, last_agent_message) + event_msg/turn_aborted (reason)",
+          "canary": "codex_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "emit a turn.end fact with its reason (completed, aborted with reason, error); turn.duration reads the same records but keeps no reason"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "codex_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a per-call purpose field on function_call or custom_tool_call and record the raw source, or declare upstream_absent"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "session_meta/source.subagent.thread_spawn",
@@ -933,7 +966,7 @@
           "first_seen_version": "0.142.2",
           "canary": "codex_transcript_signals",
           "trigger": "turn_end",
-          "owner_action": "render reasoning as collapsed thinking records"
+          "owner_action": "emit response_item/reasoning as provider_reasoning instead of skipping it (engine/src/pipeline/parser.rs extract_codex_events): summary text when present, a withheld-reasoning marker when only encrypted_content is written"
         }
       }
     },
@@ -1864,6 +1897,38 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "assistant.message.stop_reason (tool_use: commentary, end_turn: final)",
+          "entrypoints": [
+            "cli",
+            "sdk-cli"
+          ],
+          "canary": "claude_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "derive phase from the stop_reason of the message that carries each text block; Claude has no explicit marker, and the stop reason is the protocol's own distinction"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "system/turn_duration + system/stop_hook_summary + assistant.message.stop_reason",
+          "entrypoints": [
+            "cli"
+          ],
+          "canary": "claude_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "emit a turn.end fact with its reason (completed, interrupted, error, stop hook continued); end_turn messages and turn_duration records do not pair one to one, because stop hooks and background work resume a turn"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "assistant.content.tool_use.input.description",
+          "entrypoints": [
+            "cli",
+            "sdk-cli"
+          ],
+          "canary": "claude_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "normalize the description into the tool presentation so Web and iOS stop reading provider input fields (Web reads it only on shell tools today)"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "subagents/agent-*.meta.json",
@@ -2017,7 +2082,7 @@
           "first_seen_version": "2.1.121",
           "canary": "claude_transcript_signals",
           "trigger": "turn_end",
-          "owner_action": "render as collapsed thinking records with a thinking interaction kind"
+          "owner_action": "emit thinking blocks as provider_reasoning instead of dropping them (engine/src/pipeline/parser.rs extract_assistant_events). Most blocks carry only a signature with empty text (the API defaults Opus 5.5 and newer to display: omitted), so a signature-only block becomes a withheld-reasoning marker, not nothing"
         }
       }
     },
@@ -2684,6 +2749,27 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "opencode_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "session.parent_id + part.data.callID",
@@ -3128,6 +3214,27 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "antigravity_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "INVOKE_SUBAGENT",
@@ -3867,6 +3974,27 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "unsurveyed",
+          "canary": "cursor_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "tool-call/Task + input.subagent_type",
@@ -3953,10 +4081,10 @@
         },
         "turn.thinking": {
           "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "raw_source": "store/assistant/reasoning",
           "canary": "cursor_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "trigger": "turn_end",
+          "owner_action": "stop emitting reasoning and redacted-reasoning blocks as assistant text (engine/src/pipeline/parser.rs extract_cursor_events), emit them as provider_reasoning, and reclassify the store/assistant/reasoning+text shape away from transcript:assistant"
         }
       }
     },
@@ -4681,6 +4809,26 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "message/message.stopReason (toolUse: commentary, stop: final)",
+          "canary": "pi_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "derive phase from the stopReason of the message that carries each text block"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "message/message.stopReason (stop, aborted, error, length)",
+          "canary": "pi_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "emit a turn.end fact from the final assistant message's stopReason; only error is read today (turn.api_error)"
+        },
+        "tool.intent": {
+          "disposition": "upstream_absent",
+          "raw_source": "none: no intent field on toolCall in 778 calls across 16 local sessions (2026-11-14)",
+          "canary": "pi_orchestration_signals",
+          "trigger": "census"
+        },
         "delegation.spawn": {
           "disposition": "upstream_absent",
           "raw_source": "none",
@@ -5554,6 +5702,27 @@
         }
       },
       "transcript_signals": {
+        "message.phase": {
+          "disposition": "not_implemented",
+          "raw_source": "message/message.stopReason (toolUse: commentary, stop: final)",
+          "canary": "omp_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "derive phase from the stopReason of the message that carries each text block"
+        },
+        "turn.end": {
+          "disposition": "not_implemented",
+          "raw_source": "message/message.stopReason (stop, aborted, error, length)",
+          "canary": "omp_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "emit a turn.end fact from the final assistant message's stopReason; only error is read today (turn.api_error)"
+        },
+        "tool.intent": {
+          "disposition": "not_implemented",
+          "raw_source": "message/message.content.toolCall.intent + toolCall.arguments.i",
+          "canary": "omp_orchestration_signals",
+          "trigger": "turn_end",
+          "owner_action": "normalize intent into the tool presentation; Web reads arguments.i directly today"
+        },
         "delegation.spawn": {
           "disposition": "not_implemented",
           "raw_source": "session_header/parentSession",

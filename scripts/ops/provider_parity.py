@@ -41,7 +41,7 @@ def build_parity_report() -> dict[str, object]:
                     for item in providers
                 },
             }
-            for signal in TRANSCRIPT_SIGNAL_IDS
+            for signal in sorted(TRANSCRIPT_SIGNAL_IDS)
         },
         "turn_usage_fields": {
             str(item["provider"]): dict(((item.get("transcript_signals") or {}).get("turn.usage") or {}).get("fields") or {})
@@ -73,7 +73,7 @@ def main() -> int:
     signals: dict[str, dict[str, object]] = report["signals"]  # type: ignore[assignment]
 
     signal_rows: list[list[str]] = []
-    for signal in TRANSCRIPT_SIGNAL_IDS:
+    for signal in sorted(TRANSCRIPT_SIGNAL_IDS):
         entry = signals[signal]
         surface = dict(entry["surface"])  # type: ignore[arg-type]
         surface_label = _DISPOSITION_LABEL.get(str(surface.get("disposition") or ""), "?")

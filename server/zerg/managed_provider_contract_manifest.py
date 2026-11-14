@@ -536,6 +536,16 @@ TRANSCRIPT_SIGNAL_IDS = frozenset(
         "context.compaction",
         "input.queue",
         "turn.thinking",
+        # Turn structure: how one turn's records relate to each other. Every
+        # frontier model interleaves reasoning, text and tool calls until the
+        # turn ends; providers differ in whether they mark in-turn commentary
+        # apart from the final answer (`message.phase`), whether the harness
+        # records why a turn ended (`turn.end`, distinct from the model's own
+        # stop signal), and whether a tool call carries the agent's stated
+        # purpose (`tool.intent`).
+        "message.phase",
+        "turn.end",
+        "tool.intent",
         # Delegation: work a session hands to another worker, or that runs
         # beside it. Same axis as the turn signals — these are things the
         # provider writes that the render surface never shows, and they carry
