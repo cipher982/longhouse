@@ -1,0 +1,156 @@
+{
+  "adversarial/claude/malformed_middle.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "adversarial/claude/malformed_middle.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "adversarial/codex/unknown_payload_type.jsonl@start": [
+    "git_info"
+  ],
+  "codex/ephemeral_side_chat.jsonl@resume": [
+    "source_path"
+  ],
+  "codex/ephemeral_side_chat.jsonl@start": [
+    "source_path"
+  ],
+  "golden/antigravity/basic.jsonl@resume": [
+    "source_path"
+  ],
+  "golden/antigravity/basic.jsonl@start": [
+    "source_path"
+  ],
+  "golden/claude/basic.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/basic.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/branch_siblings.jsonl@resume": [
+    "source_path"
+  ],
+  "golden/claude/branch_siblings.jsonl@start": [
+    "source_path"
+  ],
+  "golden/claude/recap_title.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/recap_title.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/task_notification.jsonl@resume": [
+    "source_path"
+  ],
+  "golden/claude/task_notification.jsonl@start": [
+    "source_path"
+  ],
+  "golden/claude/turn_duration.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/turn_duration.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/usage_errors_compaction.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/claude/usage_errors_compaction.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "golden/codex/basic.jsonl@start": [
+    "git_info"
+  ],
+  "golden/codex/rollout-turn_signals.jsonl@start": [
+    "git_info"
+  ],
+  "golden/codex/search_tools.jsonl@start": [
+    "git_info"
+  ],
+  "golden/codex/turn_interrupted.jsonl@start": [
+    "git_info"
+  ],
+  "golden/cursor/basic.jsonl@resume": [
+    "source_path"
+  ],
+  "golden/cursor/basic.jsonl@start": [
+    "source_path"
+  ],
+  "golden/omp/basic.jsonl@resume": [
+    "git_info"
+  ],
+  "golden/omp/basic.jsonl@start": [
+    "git_info"
+  ],
+  "golden/omp/fork-child.jsonl@start": [
+    "git_info"
+  ],
+  "golden/omp/native.jsonl@resume": [
+    "git_info"
+  ],
+  "golden/omp/native.jsonl@start": [
+    "git_info"
+  ],
+  "golden/omp/task-child.jsonl@start": [
+    "git_info"
+  ],
+  "golden/omp/task-parent.jsonl@start": [
+    "git_info"
+  ],
+  "golden/pi/basic.jsonl@resume": [
+    "fallback_time",
+    "source_path"
+  ],
+  "golden/pi/basic.jsonl@start": [
+    "fallback_time",
+    "source_path"
+  ],
+  "golden/pi/native.jsonl@start": [
+    "git_info"
+  ],
+  "golden/pi/system_prompt.jsonl@start": [
+    "git_info"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555.jsonl@resume": [
+    "git_info",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555.jsonl@start": [
+    "git_info",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/agent-a049eaf15e4dbcae3.jsonl@resume": [
+    "git_info",
+    "subagent_meta",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/agent-a049eaf15e4dbcae3.jsonl@start": [
+    "git_info",
+    "subagent_meta",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/agent-a04eaddc8e3b46986.jsonl@resume": [
+    "git_info",
+    "subagent_meta",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/agent-a04eaddc8e3b46986.jsonl@start": [
+    "git_info",
+    "subagent_meta",
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/journal.jsonl@resume": [
+    "source_path"
+  ],
+  "workflows/claude/11111111-2222-3333-4444-555555555555/subagents/workflows/wf_testrun01/journal.jsonl@start": [
+    "source_path"
+  ]
+}

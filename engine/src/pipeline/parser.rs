@@ -14,7 +14,7 @@
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -25,10 +25,9 @@ use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::source::{FileSource, FileWitness, SourceBytes, Witness};
 use crate::codex_source::{parse_codex_subagent_source, parse_codex_subagent_source_str};
-use crate::media_redaction::{
-    provider_blob_root, redact_source_line_with_media, InlineImageRedaction,
-};
+use crate::media_redaction::{redact_source_line_with_media, InlineImageRedaction};
 
 /// Files above this size go through the byte-oriented `parse_large_file` (1 MB).
 const LARGE_FILE_THRESHOLD: u64 = 1_048_576;
@@ -763,6 +762,27 @@ pub fn parse_session_file_bounded(
     end_limit: Option<u64>,
     provider: Option<&str>,
 ) -> Result<ParseResult> {
+    parse_source(
+        &FileSource::new(path),
+        &FileWitness::new(path),
+        offset,
+        end_limit,
+        provider,
+    )
+}
+
+/// Parse a transcript from its bytes and an explicit witness for everything
+/// outside them. `parse_session_file_bounded` is this with the laptop's file
+/// and disk; a host passes stored raw records and what was shipped beside them.
+pub fn parse_source(
+    source: &dyn SourceBytes,
+    witness: &dyn Witness,
+    offset: u64,
+    end_limit: Option<u64>,
+    provider: Option<&str>,
+) -> Result<ParseResult> {
+    let _clock = FallbackClock::set(witness.fallback_time());
+    let path = source.identity_path();
     let native_flavor = match provider.map(|value| value.to_ascii_lowercase()).as_deref() {
         Some("omp") => Some(NativeFlavor::Omp),
         Some("pi") => Some(NativeFlavor::Pi),
@@ -771,7 +791,7 @@ pub fn parse_session_file_bounded(
     if native_flavor == Some(NativeFlavor::Omp) {
         // Do not let an incomplete OMP file acquire a filename-derived
         // Longhouse identity. The shipper repeats this fence before enqueueing.
-        crate::omp_session::read_session_header(path)?;
+        source.omp_header()?;
     }
     let is_gemini = path
         .extension()
@@ -788,9 +808,7 @@ pub fn parse_session_file_bounded(
     // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
     // get a deterministic UUID v5 derived from the full file path.
     let mut session_id = if native_flavor == Some(NativeFlavor::Omp) {
-        crate::omp_session::deterministic_session_id(
-            &crate::omp_session::read_session_header(path)?.native_id,
-        )
+        crate::omp_session::deterministic_session_id(&source.omp_header()?.native_id)
     } else if let Some(antigravity_id) = antigravity_session_id_from_path(path) {
         antigravity_id
     } else if Uuid::parse_str(&raw_stem).is_ok() {
@@ -803,13 +821,13 @@ pub fn parse_session_file_bounded(
     // Recover canonical Codex session ID (and fork lineage) from the header
     // so replays do not fall back to filename-derived UUIDs.
     let scanned_session_meta = if offset > 0 {
-        scan_codex_session_meta(path)
+        scan_codex_session_meta(source)
     } else {
         None
     };
     let scanned_pi_header = match native_flavor {
-        Some(NativeFlavor::Omp) => scan_omp_session_header(path),
-        _ => scan_pi_session_header(path),
+        Some(NativeFlavor::Omp) => scan_omp_session_header(source),
+        _ => scan_pi_session_header(source),
     };
     if let Some(scanned) = scanned_pi_header.as_ref() {
         if native_flavor == Some(NativeFlavor::Omp) {
@@ -823,12 +841,10 @@ pub fn parse_session_file_bounded(
 
     // Gemini: full JSON document, always parse from 0 (file is rewritten in place)
     if is_gemini {
-        return parse_gemini_json(path, &session_id);
+        return parse_gemini_json(source, &session_id);
     }
 
-    let file_size = std::fs::metadata(path)
-        .with_context(|| format!("Failed to stat {}", path.display()))?
-        .len();
+    let file_size = source.len()?;
 
     let bytes_to_read = file_size.saturating_sub(offset);
 
@@ -854,12 +870,13 @@ pub fn parse_session_file_bounded(
         });
     }
 
-    let cursor_timestamps = crate::cursor_store::cursor_transcript_timestamps(path);
+    let cursor_timestamps = witness.cursor_transcript_timestamps();
     let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
     // JSONL: choose strategy based on file size
     let mut result = if file_size > LARGE_FILE_THRESHOLD {
         parse_large_file(
-            path,
+            source,
+            witness,
             offset,
             end_limit,
             &session_id,
@@ -868,7 +885,8 @@ pub fn parse_session_file_bounded(
         )?
     } else {
         parse_buffered(
-            path,
+            source,
+            witness,
             offset,
             end_limit,
             &session_id,
@@ -934,7 +952,10 @@ pub fn parse_session_file_bounded(
     // it. Workflow children have no sidecar; their binding runs through the
     // run id and the parent's tool result instead.
     if result.metadata.subagent_tool_use_id.is_none() {
-        result.metadata.subagent_tool_use_id = subagent_tool_use_id_from_sidecar(path);
+        result.metadata.subagent_tool_use_id = witness
+            .subagent_meta()
+            .as_deref()
+            .and_then(subagent_tool_use_id_from_meta);
     }
 
     let canonical_session_id = result.metadata.session_id.clone();
@@ -957,19 +978,35 @@ pub fn parse_session_file_bounded(
 /// Fail-closed: a missing, unreadable, oversized, or malformed sidecar yields
 /// no binding, and the child renders as an unattached subagent rather than
 /// being attached to a guess.
-fn subagent_tool_use_id_from_sidecar(path: &Path) -> Option<String> {
-    const MAX_SIDECAR_BYTES: u64 = 64 * 1024;
+thread_local! {
+    static FALLBACK_TIME: std::cell::Cell<Option<DateTime<Utc>>> = const { std::cell::Cell::new(None) };
+}
 
-    let stem = path.file_stem().and_then(|value| value.to_str())?;
-    if !stem.starts_with("agent-") {
-        return None;
+/// The time given to a record that carries no clock of its own. It comes from
+/// the witness for the duration of one parse, so the same bytes and witness
+/// always produce the same events; it used to be the wall clock at parse time.
+fn fallback_time() -> DateTime<Utc> {
+    FALLBACK_TIME
+        .with(|cell| cell.get())
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+}
+
+struct FallbackClock(Option<DateTime<Utc>>);
+
+impl FallbackClock {
+    fn set(time: DateTime<Utc>) -> Self {
+        Self(FALLBACK_TIME.with(|cell| cell.replace(Some(time))))
     }
-    let sidecar = path.with_file_name(format!("{stem}.meta.json"));
-    if std::fs::metadata(&sidecar).ok()?.len() > MAX_SIDECAR_BYTES {
-        return None;
+}
+
+impl Drop for FallbackClock {
+    fn drop(&mut self) {
+        FALLBACK_TIME.with(|cell| cell.set(self.0));
     }
-    let raw = std::fs::read_to_string(&sidecar).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+}
+
+fn subagent_tool_use_id_from_meta(raw: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     let tool_use_id = parsed.get("toolUseId")?.as_str()?.trim();
     (!tool_use_id.is_empty()).then(|| tool_use_id.to_string())
 }
@@ -998,7 +1035,7 @@ fn workflow_run_id_from_path(path: &Path) -> Option<String> {
 /// flush boundary would mint a fresh live orphan. Bounded backward scan: read the
 /// single line ending at `offset`. Returns empty pending if `offset == 0`, the prior
 /// record is not an antigravity planner with tool_calls, or anything fails.
-fn seed_antigravity_pending(path: &Path, offset: u64) -> AntigravityPending {
+fn seed_antigravity_pending(source: &dyn SourceBytes, offset: u64) -> AntigravityPending {
     if offset == 0 {
         return AntigravityPending::default();
     }
@@ -1007,17 +1044,10 @@ fn seed_antigravity_pending(path: &Path, offset: u64) -> AntigravityPending {
     let window = SEED_WINDOW_BYTES.min(offset);
     let start = offset - window;
 
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return AntigravityPending::default();
+    let buf = match source.read_range(start, offset) {
+        Ok(buf) if buf.len() as u64 == window => buf,
+        _ => return AntigravityPending::default(),
     };
-    use std::io::{Read, Seek};
-    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
-        return AntigravityPending::default();
-    }
-    let mut buf = vec![0u8; window as usize];
-    if file.read_exact(&mut buf).is_err() {
-        return AntigravityPending::default();
-    }
     // Drop a possibly-partial leading line when we started mid-file.
     let search = if start > 0 {
         match buf.iter().position(|&b| b == b'\n') {
@@ -1071,7 +1101,7 @@ fn seed_antigravity_pending(path: &Path, offset: u64) -> AntigravityPending {
     }
 }
 
-fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
+pub(crate) fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
     let components: Vec<&str> = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -1083,7 +1113,7 @@ fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
     }
     None
 }
-fn cursor_session_id_from_path(path: &Path) -> Option<String> {
+pub(crate) fn cursor_session_id_from_path(path: &Path) -> Option<String> {
     if !path
         .components()
         .any(|part| part.as_os_str() == "agent-transcripts")
@@ -1099,11 +1129,10 @@ fn cursor_session_id_from_path(path: &Path) -> Option<String> {
 /// Scan the start of a JSONL file for Codex `session_meta` identity fields.
 ///
 /// This is intentionally bounded to avoid large-file overhead on every parse.
-fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
+fn scan_codex_session_meta(source: &dyn SourceBytes) -> Option<ScannedCodexSessionMeta> {
     const SESSION_META_SCAN_LIMIT_BYTES: usize = 256 * 1024;
 
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = BufReader::with_capacity(16 * 1024, file);
+    let mut reader = BufReader::with_capacity(16 * 1024, source.reader(0, u64::MAX).ok()?);
     let mut line = String::new();
     let mut bytes_scanned = 0usize;
 
@@ -1147,10 +1176,12 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
 /// Recover Pi's canonical session identity and header metadata when an
 /// incremental batch starts after the header. The header is authoritative;
 /// filenames are only a fallback for malformed or non-Pi JSONL.
-fn scan_pi_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
+fn scan_pi_session_header(source: &dyn SourceBytes) -> Option<ScannedPiSessionHeader> {
     const PI_HEADER_SCAN_LIMIT_BYTES: usize = 256 * 1024;
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = BufReader::with_capacity(1024, file.take(PI_HEADER_SCAN_LIMIT_BYTES as u64));
+    let mut reader = BufReader::with_capacity(
+        1024,
+        source.reader(0, PI_HEADER_SCAN_LIMIT_BYTES as u64).ok()?,
+    );
     let mut line = String::new();
     let mut bytes_scanned = 0usize;
 
@@ -1186,8 +1217,8 @@ fn scan_pi_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
     None
 }
 
-fn scan_omp_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
-    let header = crate::omp_session::read_session_header(path).ok()?;
+fn scan_omp_session_header(source: &dyn SourceBytes) -> Option<ScannedPiSessionHeader> {
+    let header = source.omp_header().ok()?;
     Some(ScannedPiSessionHeader {
         session_id: header.native_id,
         cwd: Some(header.cwd),
@@ -1317,8 +1348,10 @@ fn empty_gemini_result(session_id: &str, file_size: u64) -> ParseResult {
     }
 }
 
-fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
-    let content = std::fs::read_to_string(path)
+fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<ParseResult> {
+    let path = source.identity_path();
+    let content = source
+        .read_to_string()
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let file_size = content.len() as u64;
     let (source_lines, media_objects) = capture_text_source_lines(&content);
@@ -1428,7 +1461,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             .timestamp
             .as_deref()
             .and_then(parse_timestamp)
-            .unwrap_or_else(Utc::now);
+            .unwrap_or_else(fallback_time);
 
         // Track session end time
         match metadata.ended_at {
@@ -1718,29 +1751,21 @@ fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
 /// ends the batch at the last complete line. Lines are bytes, so a line that is
 /// not UTF-8 is still consumed rather than stopping the parse.
 fn parse_large_file(
-    path: &Path,
+    source: &dyn SourceBytes,
+    witness: &dyn Witness,
     offset: u64,
     end_limit: Option<u64>,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
 ) -> Result<ParseResult> {
-    use std::io::Seek;
-
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-    let file_len = file
-        .metadata()
-        .with_context(|| format!("Failed to stat {}", path.display()))?
-        .len();
+    let file_len = source.len()?;
 
     let limit = end_limit
         .map(|value| value.min(file_len))
         .unwrap_or(file_len);
     let mut reader = if offset < limit {
-        file.seek(std::io::SeekFrom::Start(offset))
-            .with_context(|| format!("Failed to seek {}", path.display()))?;
-        BufReader::with_capacity(1024 * 1024, file.take(limit - offset))
+        BufReader::with_capacity(1024 * 1024, source.reader(offset, limit)?)
     } else {
         return Ok(ParseResult {
             events: Vec::new(),
@@ -1768,16 +1793,16 @@ fn parse_large_file(
     // Antigravity tool result records inherit their call id from the adjacent
     // preceding planner. On incremental resume (offset > 0) the planner may live in
     // the prior batch, so seed from the record before `offset`.
-    let mut antigravity_pending = seed_antigravity_pending(path, offset);
+    let mut antigravity_pending = seed_antigravity_pending(source, offset);
     let mut codex_pending = CodexPending::default();
-    let mut codex_facts = codex_fact_state_for(path, offset);
+    let mut codex_facts = codex_fact_state_for(source, offset);
     // Pi and OMP keep pasted images in a blob store beside their transcripts;
     // only those providers can produce a reference worth resolving.
     let blob_root = matches!(
         native_flavor,
         Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
     )
-    .then(|| provider_blob_root(path))
+    .then(|| witness.blob_root())
     .flatten();
 
     let mut line_buf: Vec<u8> = Vec::new();
@@ -1874,7 +1899,7 @@ fn parse_large_file(
     if metadata.session_id.is_empty() {
         metadata.session_id = session_id.to_string();
     }
-    finalize_workspace_metadata(&mut metadata, path);
+    finalize_workspace_metadata(&mut metadata, witness);
 
     Ok(ParseResult {
         events,
@@ -1892,22 +1917,15 @@ fn parse_large_file(
 // ---------------------------------------------------------------------------
 
 fn parse_buffered(
-    path: &Path,
+    source: &dyn SourceBytes,
+    witness: &dyn Witness,
     offset: u64,
     end_limit: Option<u64>,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
 ) -> Result<ParseResult> {
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-
-    if offset > 0 {
-        use std::io::Seek;
-        file.seek(std::io::SeekFrom::Start(offset))?;
-    }
-
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut reader = BufReader::with_capacity(64 * 1024, source.reader(offset, u64::MAX)?);
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
@@ -1919,15 +1937,15 @@ fn parse_buffered(
     let mut current_offset = offset;
     let mut candidate_lines: usize = 0;
     // See parse_large_file: seed antigravity call/result pairing across the resume boundary.
-    let mut antigravity_pending = seed_antigravity_pending(path, offset);
+    let mut antigravity_pending = seed_antigravity_pending(source, offset);
     let mut codex_pending = CodexPending::default();
-    let mut codex_facts = codex_fact_state_for(path, offset);
+    let mut codex_facts = codex_fact_state_for(source, offset);
     // See parse_large_file: only the Pi lineage keeps a blob store beside its transcripts.
     let blob_root = matches!(
         native_flavor,
         Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
     )
-    .then(|| provider_blob_root(path))
+    .then(|| witness.blob_root())
     .flatten();
     let mut line = String::new();
 
@@ -2021,7 +2039,7 @@ fn parse_buffered(
     if metadata.session_id.is_empty() {
         metadata.session_id = session_id.to_string();
     }
-    finalize_workspace_metadata(&mut metadata, path);
+    finalize_workspace_metadata(&mut metadata, witness);
 
     Ok(ParseResult {
         events,
@@ -2045,29 +2063,15 @@ fn parse_buffered(
 /// no project at all. Recovery feeds `metadata.cwd` and then goes through the
 /// same `resolve_git_info` every other provider uses, so there is one project
 /// derivation rather than one per provider.
-fn finalize_workspace_metadata(metadata: &mut SessionMetadata, path: &Path) {
+fn finalize_workspace_metadata(metadata: &mut SessionMetadata, witness: &dyn Witness) {
     if metadata.cwd.is_none() {
-        if let Some(conversation_id) = antigravity_session_id_from_path(path) {
-            if let Some(workspace) =
-                crate::antigravity_workspace::antigravity_workspace(path, &conversation_id)
-            {
-                metadata.cwd = Some(workspace.cwd);
-                if metadata.git_repo.is_none() {
-                    metadata.git_repo = workspace.git_repo;
-                }
+        if let Some(workspace) = witness.workspace() {
+            metadata.cwd = Some(workspace.cwd);
+            if metadata.project.is_none() {
+                metadata.project = workspace.project;
             }
-        } else if let Some(conversation_id) = cursor_session_id_from_path(path) {
-            if let Some(store) = crate::cursor_visibility::configured_cursor_store(&conversation_id)
-            {
-                if let Some(facts) = crate::cursor_store::cursor_workspace_facts(&store) {
-                    metadata.cwd = Some(facts.0);
-                    if metadata.project.is_none() {
-                        metadata.project = facts.1;
-                    }
-                    if metadata.git_repo.is_none() {
-                        metadata.git_repo = facts.2;
-                    }
-                }
+            if metadata.git_repo.is_none() {
+                metadata.git_repo = workspace.git_repo;
             }
         }
     }
@@ -2075,7 +2079,7 @@ fn finalize_workspace_metadata(metadata: &mut SessionMetadata, path: &Path) {
     let Some(ref cwd) = metadata.cwd else {
         return;
     };
-    let (project, git_repo) = resolve_git_info(Path::new(cwd));
+    let (project, git_repo) = witness.git_info(cwd);
     metadata.project = project;
     // Only use disk-resolved git_repo if the transcript or a sidecar already
     // provided one (e.g. Codex carries it in session_meta).
@@ -2796,7 +2800,7 @@ fn pi_timestamp(obj: &RawLine) -> DateTime<Utc> {
                 .and_then(|message| message.timestamp.as_ref().and_then(Value::as_i64))
                 .and_then(DateTime::<Utc>::from_timestamp_millis)
         })
-        .unwrap_or_else(Utc::now)
+        .unwrap_or_else(fallback_time)
 }
 
 fn pi_blocks(raw: &RawValue) -> Vec<Value> {
@@ -3548,7 +3552,7 @@ fn push_omp_malformed_event(
         uuid: format!("omp-offset-{line_offset}"),
         parent_uuid: None,
         session_id: session_id.to_string(),
-        timestamp: Utc::now(),
+        timestamp: fallback_time(),
         role: Role::System,
         content_text: None,
         tool_name: None,
@@ -3785,7 +3789,7 @@ fn extract_events(
         };
         timestamp
     } else {
-        source_timestamp.unwrap_or_else(Utc::now)
+        source_timestamp.unwrap_or_else(fallback_time)
     };
 
     let msg_uuid = obj.uuid.as_deref().unwrap_or("").to_string();
@@ -3796,7 +3800,9 @@ fn extract_events(
             // keeps render event identities deterministic.
             format!("cursor-line-{line_offset}")
         } else {
-            Uuid::new_v4().to_string()
+            // Byte offset, not a random id: a rebuild from the same raw must
+            // reproduce the same event identity.
+            format!("line-{line_offset}")
         }
     } else {
         msg_uuid
@@ -4269,7 +4275,7 @@ fn antigravity_timestamp(obj: &RawLine) -> DateTime<Utc> {
         .as_deref()
         .or(obj.timestamp.as_deref())
         .and_then(parse_timestamp)
-        .unwrap_or_else(Utc::now)
+        .unwrap_or_else(fallback_time)
 }
 
 fn antigravity_uuid(obj: &RawLine, line_offset: u64, suffix: &str) -> String {
@@ -4806,7 +4812,7 @@ fn metadata_timestamp(obj: &RawLine) -> DateTime<Utc> {
                 .and_then(|s| s.timestamp.as_deref())
                 .and_then(parse_timestamp)
         })
-        .unwrap_or_else(Utc::now)
+        .unwrap_or_else(fallback_time)
 }
 
 fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
@@ -5011,7 +5017,7 @@ impl CodexFactState {
 /// On an incremental parse the turn's `turn_context` and `token_count` lines
 /// may sit before `offset`; replay the ones in a bounded window ending there so
 /// the closing line still yields its usage fact.
-fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
+fn seed_codex_fact_state(source: &dyn SourceBytes, offset: u64) -> CodexFactState {
     let mut state = CodexFactState::default();
     if offset == 0 {
         return state;
@@ -5019,17 +5025,10 @@ fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
     const SEED_WINDOW_BYTES: u64 = 1024 * 1024;
     let window = SEED_WINDOW_BYTES.min(offset);
     let start = offset - window;
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return state;
+    let buf = match source.read_range(start, offset) {
+        Ok(buf) if buf.len() as u64 == window => buf,
+        _ => return state,
     };
-    use std::io::{Read, Seek};
-    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
-        return state;
-    }
-    let mut buf = vec![0u8; window as usize];
-    if file.read_exact(&mut buf).is_err() {
-        return state;
-    }
     let search: &[u8] = if start > 0 {
         match buf.iter().position(|&b| b == b'\n') {
             Some(nl) => &buf[nl + 1..],
@@ -5078,9 +5077,9 @@ fn is_codex_rollout_path(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
 }
 
-fn codex_fact_state_for(path: &Path, offset: u64) -> CodexFactState {
-    if is_codex_rollout_path(path) {
-        seed_codex_fact_state(path, offset)
+fn codex_fact_state_for(source: &dyn SourceBytes, offset: u64) -> CodexFactState {
+    if is_codex_rollout_path(source.identity_path()) {
+        seed_codex_fact_state(source, offset)
     } else {
         CodexFactState::default()
     }

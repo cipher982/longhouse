@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 353,
+  "file_count": 354,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -368,6 +368,14 @@
       "providers": [
         "antigravity",
         "claude",
+        "omp",
+        "pi"
+      ]
+    },
+    {
+      "path": "engine/src/pipeline/source.rs",
+      "providers": [
+        "codex",
         "omp",
         "pi"
       ]

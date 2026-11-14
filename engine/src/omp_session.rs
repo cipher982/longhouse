@@ -404,7 +404,17 @@ pub(crate) fn is_transient_header_error(error: &anyhow::Error) -> bool {
 fn read_session_header_uncached(path: &Path) -> Result<OmpSessionHeader> {
     let file =
         File::open(path).with_context(|| format!("opening OMP source: {}", path.display()))?;
-    let mut reader = BufReader::new(file);
+    read_session_header_from(file, path)
+}
+
+/// Read the session header from transcript bytes. `label` names the source in
+/// errors; it is never opened.
+pub fn read_session_header_from(
+    source: impl std::io::Read,
+    label: &Path,
+) -> Result<OmpSessionHeader> {
+    let path = label;
+    let mut reader = BufReader::new(source);
     let mut line = String::new();
     let mut scanned = 0_u64;
     loop {
