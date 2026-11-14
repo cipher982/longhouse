@@ -23,11 +23,16 @@ from zerg.services.provider_interaction_semantics import codex_provider_system_c
 from zerg.services.provider_interaction_semantics import provider_display_message_content_candidate
 from zerg.services.provider_interaction_semantics import provider_reasoning_content_candidate
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import use_json_decoder
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import aggregate_render_object
 from zerg.utils import fast_json
+
+# Ingest, enrichment and the projectors all come through this module. The classifier cannot import the fast decoder
+# itself (see ``use_json_decoder``), so the ingest path hands it over here.
+use_json_decoder(fast_json.loads)
 
 
 class StorageV2SemanticRecoveryError(RuntimeError):

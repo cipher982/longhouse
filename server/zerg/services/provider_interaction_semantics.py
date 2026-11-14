@@ -12,11 +12,25 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import MutableMapping
 from typing import Any
 
-from zerg.utils import fast_json
+# Decodes a raw provider record given as text. This module takes on no new import from the rest of the server: the
+# provider factory pins this file and every file it imports into its verifier bundle, and that set may only shrink. On
+# 2026-11-11 it imported zerg.utils.fast_json for the ingest path, and from then on the factory refused every new
+# epoch (control-plane provider_factory/bundle_lock.py). The server installs its faster decoder with
+# ``use_json_decoder`` instead; a verifier decodes with the standard library.
+_loads: Callable[[str], Any] = json.loads
+
+
+def use_json_decoder(loads: Callable[[str], Any]) -> None:
+    """Decode raw records with ``loads``, which returns and raises exactly what ``json.loads`` does."""
+
+    global _loads
+    _loads = loads
+
 
 INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
 INTERACTION_LOCAL_CONTROL = "local_control"
@@ -92,7 +106,7 @@ def _raw_mapping(raw_json: Any) -> Mapping[str, Any] | None:
     if not isinstance(raw_json, str) or not raw_json.strip():
         return None
     try:
-        value = fast_json.loads(raw_json)
+        value = _loads(raw_json)
     except (TypeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, Mapping) else None

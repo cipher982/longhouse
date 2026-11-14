@@ -1358,3 +1358,38 @@ def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of
         raw_json={"type": "system", "subtype": "microcompact_boundary", "content": "Context microcompacted"},
     )
     assert micro["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+
+
+def test_the_classifier_imports_no_new_server_code_and_the_ingest_path_hands_it_the_fast_decoder() -> None:
+    """The provider factory pins this file and all it imports; an import of server code blocks every new epoch."""
+
+    import ast
+    import json
+    from pathlib import Path
+
+    from zerg.services import provider_interaction_semantics as semantics
+
+    tree = ast.parse(Path(semantics.__file__).read_text())
+    imported = [
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for name in ([node.module or ""] if isinstance(node, ast.ImportFrom) else [alias.name for alias in node.names])
+    ]
+    # These two are on the factory's pinned list already; anything else from the server is a new pin.
+    server_imports = sorted({name for name in imported if name.split(".")[0] == "zerg" or name == ""})
+    assert server_imports == ["zerg.services.managed_provider_contracts", "zerg.services.raw_json_compression"]
+
+    import zerg.services.storage_v2_semantics  # noqa: F401 - importing the ingest path installs the decoder
+    from zerg.utils import fast_json
+
+    assert semantics._loads is fast_json.loads
+    record = '{"type": "user", "big": 123456789012345678901234567890, "text": "caf\u00e9"}'
+    fast = semantics._raw_mapping(record)
+    semantics.use_json_decoder(json.loads)
+    try:
+        assert semantics._raw_mapping(record) == fast == json.loads(record)
+        assert semantics._raw_mapping("{not json") is None
+    finally:
+        semantics.use_json_decoder(fast_json.loads)
+    assert semantics._raw_mapping("{not json") is None
