@@ -49,7 +49,7 @@ jobs:
   wake:
     name: "Wait for the run that woke this one"
     if: github.repository == 'cipher982/longhouse' && github.event_name == 'workflow_dispatch' && inputs.after_run != ''
-    runs-on: grind-gate
+    runs-on: ci-gate
     timeout-minutes: 10
     outputs:
       woken_by: ${{ steps.wait.outputs.woken_by }}
@@ -86,7 +86,7 @@ jobs:
       !cancelled() && needs.wake.result != 'failure' &&
       github.repository == 'cipher982/longhouse' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
-    runs-on: grind-gate
+    runs-on: ci-gate
     timeout-minutes: 75
     # One writer for both rings: one run at a time, never cancelled mid-cutover.
     # GitHub keeps one pending job and drops older pending ones, which is what we

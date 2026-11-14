@@ -48,7 +48,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    runs-on: grind-gate
+    runs-on: ci-gate
     timeout-minutes: 30
     steps:
       # The archive tooling comes from this workflow's own commit (main), not

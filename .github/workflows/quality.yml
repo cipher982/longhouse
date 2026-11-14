@@ -21,11 +21,10 @@ on:
 
 jobs:
   # One job, so the built frontend is a directory on this runner and not a
-  # handed-off artifact. Runs on the crunch VM (Chrome for Lighthouse is
-  # installed on the guest, control-plane scripts/ops/crunch/guest).
+  # handed-off artifact.
   web-quality:
     timeout-minutes: 30
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Web quality (build, bundle size, Lighthouse)"
 
     steps:

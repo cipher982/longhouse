@@ -11,7 +11,7 @@ permissions:
 jobs:
   matrix:
     timeout-minutes: 30
-    runs-on: grind-fast
+    runs-on: ci-fast
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
     steps:
@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.providers) }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     continue-on-error: ${{ matrix.allow_failure }}
     name: ${{ matrix.provider }} unconditional full column
     timeout-minutes: 30

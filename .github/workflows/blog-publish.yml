@@ -20,7 +20,7 @@ jobs:
   validate:
     timeout-minutes: 15
     name: Validate static blog
-    runs-on: grind-fast
+    runs-on: ci-fast
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Check HTML and local links
@@ -28,7 +28,7 @@ jobs:
 
   publish:
     name: Publish static blog files
-    runs-on: grind-deploy
+    runs-on: ci-deploy
     needs: validate
     # By hand only while Longhouse is paused: longhouse.ai is dark (HTTP 410), and
     # publishing is public-facing work (control-plane docs/workspace-agents.md).

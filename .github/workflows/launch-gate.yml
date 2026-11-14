@@ -85,8 +85,8 @@ on:
         required: false
         default: true
         type: boolean
-      run_grind_self_hosted:
-        description: "Run grind self-hosted Linux x64 smoke"
+      run_ci_self_hosted:
+        description: "Run self-hosted Linux x64 smoke on the ci VM"
         required: false
         default: true
         type: boolean
@@ -117,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: grind-fast
+          - os: ci-fast
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -174,7 +174,7 @@ jobs:
                 "Longhouse-macos-arm64.zip"
               )
               ;;
-            grind-fast)
+            ci-fast)
               required_assets+=(
                 "longhouse-engine-linux-x64"
               )
@@ -262,7 +262,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: grind-fast
+          - os: ci-fast
             shell_path: /bin/bash
           - os: wisp
             shell_path: /bin/zsh
@@ -334,7 +334,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: grind-fast
+          - os: ci-fast
             project: all
             browsers: "chromium firefox webkit"
     runs-on: ${{ matrix.os }}
@@ -399,7 +399,7 @@ jobs:
     # `make onboarding-funnel` always git-clones the repo into the README
     # contract's workdir, so this is the fresh-clone first-user path. Launch
     # Gate and the onboarding ring each used to run it; once is enough.
-    runs-on: grind-fast
+    runs-on: ci-fast
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
 
@@ -415,11 +415,11 @@ jobs:
       - name: Run fresh-clone onboarding funnel in the portable isolation boundary
         run: make onboarding-funnel
 
-  self-hosted-grind-linux-x64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_grind_self_hosted }}
-    runs-on: grind-browser
+  self-hosted-ci-linux-x64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ci_self_hosted }}
+    runs-on: ci-browser
     timeout-minutes: 30
-    name: "launch-gate--self-hosted-onboarding--linux-x64--grind"
+    name: "launch-gate--self-hosted-onboarding--linux-x64--ci"
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -429,7 +429,7 @@ jobs:
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
 
-      - name: Run onboarding smoke on grind in the portable isolation boundary
+      - name: Run onboarding smoke on the ci VM in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
 
   self-hosted-linux-x64:

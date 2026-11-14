@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: grind-runner-canary
+  group: ci-runner-canary
   cancel-in-progress: true
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [grind-fast, grind-browser, grind-maint, grind-gate, grind-deploy]
+        lane: [ci-fast, ci-browser, ci-maint, ci-gate, ci-deploy]
     runs-on: ${{ matrix.lane }}
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.GRIND_RUNNER_CANARY_ENABLED != 'false' }}

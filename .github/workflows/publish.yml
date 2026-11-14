@@ -13,7 +13,7 @@ on:
 jobs:
   publish:
     timeout-minutes: 30
-    runs-on: grind-fast
+    runs-on: ci-fast
     environment: pypi
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}

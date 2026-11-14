@@ -62,7 +62,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -106,7 +106,7 @@ jobs:
   test-image:
     name: "Fixture image"
     needs: changes
-    runs-on: grind-fast
+    runs-on: ci-fast
     timeout-minutes: 45
     permissions:
       contents: read
@@ -150,7 +150,7 @@ jobs:
     # fetch against GitHub, and a network timeout there used to fail it -- which
     # would now skip this whole job, because it needs that job's outputs.
     if: ${{ !cancelled() && needs.test-image.result == 'success' }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
@@ -242,7 +242,7 @@ jobs:
     # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
     # until 2026-09-24.
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Managed launch lifecycle"
     timeout-minutes: 20
     steps:
@@ -264,7 +264,7 @@ jobs:
     # !cancelled(): an image build skipped upstream (tag already published)
     # must not skip this job; the prepare result is the real gate.
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
     # xdist; three runners take ~2. "Backend tests" below is the one name that
@@ -298,7 +298,7 @@ jobs:
     needs: backend-shards
     # Skipped shards (backend unchanged) leave this skipped too, as before.
     if: ${{ !cancelled() && needs.backend-shards.result != 'skipped' }}
-    runs-on: grind-gate
+    runs-on: ci-gate
     timeout-minutes: 5
     steps:
       - name: Every backend shard passed
@@ -315,7 +315,7 @@ jobs:
     timeout-minutes: 15
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Provider contract tests"
 
     steps:
@@ -332,7 +332,7 @@ jobs:
     timeout-minutes: 45
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Engine tests"
 
     steps:
@@ -367,7 +367,7 @@ jobs:
     timeout-minutes: 20
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Frontend + runner tests"
 
     steps:
@@ -382,7 +382,7 @@ jobs:
     timeout-minutes: 15
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.ui_sweep == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     # Opens every menu on every fixture scene at three sizes and fails when one
     # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
     # browser check verifies after the fact: it is not in Deploy and Verify's
@@ -478,7 +478,7 @@ jobs:
     timeout-minutes: 30
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Core E2E tests"
     env:
       CI: "1"
@@ -495,7 +495,7 @@ jobs:
     timeout-minutes: 20
     needs: changes
     if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -526,7 +526,7 @@ jobs:
     # does not hide another; the job is red if any step is.
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' }}
-    runs-on: grind-fast
+    runs-on: ci-fast
     name: "Small checks"
     timeout-minutes: 45
     steps:

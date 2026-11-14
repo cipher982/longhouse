@@ -1,7 +1,7 @@
 {
  "status": "derived",
  "record": {
-  "runner": "grind-browser pool (self-hosted Linux, 12 CPUs)",
+  "runner": "ci-browser pool (self-hosted Linux, 12 CPUs)",
   "date_utc": "2026-11-12",
   "run": "https://github.com/cipher982/longhouse/actions/runs/43158843018",
   "commit": "e714d1da7",

@@ -21,7 +21,7 @@ jobs:
   # directory on this runner, not artifacts handed between jobs.
   release:
     timeout-minutes: 45
-    runs-on: grind-fast
+    runs-on: ci-fast
 
     steps:
       - name: Checkout

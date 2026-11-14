@@ -142,7 +142,7 @@ concurrency:
 jobs:
   terminal-truth:
     name: "terminal-truth"
-    runs-on: grind-browser
+    runs-on: ci-browser
     if: github.repository == 'cipher982/longhouse'
     # A push that changes the engine also rebuilds it and every mutated engine. Only a run started by hand may use the
     # long limit (20 passes, or 400 tokens at 5/s). Every run shares one concurrency group, so a stuck run holds every

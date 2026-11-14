@@ -74,7 +74,7 @@ concurrency:
 jobs:
   console-served-state:
     name: "console-served-state"
-    runs-on: grind-browser
+    runs-on: ci-browser
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     env:
