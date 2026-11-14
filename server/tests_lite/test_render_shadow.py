@@ -261,3 +261,26 @@ async def test_a_session_too_large_to_rebuild_is_recorded_and_leaves_the_queue(m
         monkeypatch.setattr(shadow_store, "SHADOW_SESSION_COOLDOWN", shadow_store.timedelta(0))
         listed = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None})
         assert listed["sessions"] == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_session_drops_its_shadow_rows_and_late_results_are_ignored(monkeypatch, tmp_path):
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-del-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="drift", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+        finally:
+            await worker.close()
+        await stack.catalog.call("render.shadow.record.v2", {"results": results})
+        assert (await stack.catalog.call("render.shadow.summary.v2", {}))["samples"]
+
+        await stack.catalog.call(
+            "storage.session.delete.v2",
+            {"session_id": session_id, "deletion_id": str(uuid4()), "reason": "test", "deleted_at": "2026-11-14T12:00:00+00:00"},
+        )
+        assert (await stack.catalog.call("render.shadow.summary.v2", {}))["samples"] == []
+
+        late = await stack.catalog.call("render.shadow.record.v2", {"results": results})
+        assert late["recorded"] == 0
+        assert (await stack.catalog.call("render.shadow.summary.v2", {}))["counts"] == []

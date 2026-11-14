@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+from collections import Counter
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime
@@ -414,6 +415,8 @@ async def _epoch_request(
                 }
             )
             if media["media_hash"] not in media_bytes:
+                if not media.get("object_path"):
+                    raise LookupError(f"media {media['media_hash']} has no stored object ({media.get('state')})")
                 # A blob the host cannot read is an error, never a silent difference.
                 blob = await raw_workers.read_media(
                     media["object_path"],
@@ -423,6 +426,8 @@ async def _epoch_request(
                     operation_timeout_seconds=30.0,
                 )
                 total += len(blob.data)
+                if total > MAX_EPOCH_BYTES:
+                    raise _EpochTooLarge(f"epoch holds more than {MAX_EPOCH_BYTES} raw and media bytes")
                 media_bytes[media["media_hash"]] = base64.b64encode(blob.data).decode("ascii")
         envelopes.append(
             {
@@ -533,6 +538,13 @@ async def _sweep(
                     render_workers=render_workers,
                     worker=worker,
                     session_id=str(candidate["session_id"]),
+                )
+                logger.info(
+                    "render shadow session=%s envelopes=%d outcomes=%s normalizer_peak_rss_kib=%d",
+                    candidate["session_id"],
+                    len(results),
+                    dict(Counter(row["outcome"] for row in results)),
+                    worker.peak_rss_kib,
                 )
                 for chunk in range(0, len(results), RECORD_CHUNK):
                     await catalog.call("render.shadow.record.v2", {"results": results[chunk : chunk + RECORD_CHUNK]})

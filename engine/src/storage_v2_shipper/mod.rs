@@ -70,6 +70,11 @@ pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
 const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v8-turn-outcome";
+/// What the host normalizer reports: every parser revision a rebuild can run.
+/// A bump of either makes the host render shadow compare stored envelopes again.
+pub(crate) fn normalizer_revision() -> String {
+    format!("{PARSER_REVISION}+{CURSOR_PARSER_REVISION}")
+}
 /// Blobs one Cursor capture reads from the hash-sorted store before it yields.
 const CURSOR_BLOB_PAGE_ROWS: usize = 256;
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;

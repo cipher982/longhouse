@@ -25,6 +25,7 @@ from zerg.catalogd.models import RenderObject
 from zerg.catalogd.models import RenderShadowEnvelope
 from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionProviderFact
+from zerg.catalogd.models import SessionTombstone
 from zerg.catalogd.models import SourceEpoch
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.store import _read_snapshot
@@ -54,6 +55,13 @@ class RenderShadowMixin:
             session = connection.execute(select(sessions).where(sessions.c.session_id == session_id)).mappings().first()
             if session is None:
                 return {"found": False}
+            shadow = RenderShadowEnvelope.__table__
+            checked = {
+                str(row["envelope_id"]): {"outcome": row["outcome"], "revision": row["normalizer_revision"]}
+                for row in connection.execute(
+                    select(shadow.c.envelope_id, shadow.c.outcome, shadow.c.normalizer_revision).where(shadow.c.session_id == session_id)
+                ).mappings()
+            }
             raw_count = connection.execute(
                 select(func.count()).where(raw.c.session_id == session_id, raw.c.retired_at.is_(None))
             ).scalar_one()
@@ -66,6 +74,7 @@ class RenderShadowMixin:
                 return {
                     "found": True,
                     "too_large": True,
+                    "checked": checked,
                     "raw_objects": [{**dict(row), "range_start": int(row["range_start"])} for row in envelopes],
                 }
             raw_rows = (
@@ -129,20 +138,13 @@ class RenderShadowMixin:
                 )
             media_rows = (
                 connection.execute(
-                    select(refs.c.envelope_id, refs.c.media_hash, media.c.object_path, media.c.state)
+                    select(refs.c.envelope_id, refs.c.media_hash, refs.c.ref_key, media.c.object_path, media.c.state)
                     .select_from(refs.join(media, media.c.media_hash == refs.c.media_hash))
                     .where(refs.c.session_id == session_id, refs.c.retired_at.is_(None))
                 )
                 .mappings()
                 .all()
             )
-            shadow = RenderShadowEnvelope.__table__
-            checked = {
-                str(row["envelope_id"]): {"outcome": row["outcome"], "revision": row["normalizer_revision"]}
-                for row in connection.execute(
-                    select(shadow.c.envelope_id, shadow.c.outcome, shadow.c.normalizer_revision).where(shadow.c.session_id == session_id)
-                ).mappings()
-            }
         return {
             "found": True,
             "provider": session["provider"],
@@ -230,8 +232,19 @@ class RenderShadowMixin:
             index_elements=["envelope_id"],
             set_={name: statement.excluded[name] for name in ("outcome", "detail", "normalizer_revision", "elapsed_us", "checked_at")},
         )
+        tombstones = SessionTombstone.__table__
         with _write_transaction(self.engine) as connection:
-            connection.execute(statement, rows)
+            # A session deleted while the sweep compared it keeps no shadow rows:
+            # their details quote transcript text.
+            deleted = {
+                str(value)
+                for value in connection.execute(
+                    select(tombstones.c.session_id).where(tombstones.c.session_id.in_({row["session_id"] for row in rows}))
+                ).scalars()
+            }
+            rows = [row for row in rows if row["session_id"] not in deleted]
+            if rows:
+                connection.execute(statement, rows)
         return {"recorded": len(rows)}
 
     def render_shadow_summary(self, *, sample: int = 20) -> dict[str, Any]:

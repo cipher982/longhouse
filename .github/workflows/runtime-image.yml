@@ -26,6 +26,7 @@ on:
       - 'docker/entrypoint.sh'
       - 'docker/runtime.dockerfile'
       - 'engine/**'
+      - '.cargo/**'
       - 'schemas/**'
       - 'server/**'
       - 'web/**'

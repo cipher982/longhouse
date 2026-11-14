@@ -2541,7 +2541,7 @@ class CatalogDaemon:
         if not _is_canonical_uuid(request.params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
         assert self._store is not None
-        result = await self._run_read_store(self._store.read_render_rebuild_inputs, session_id=request.params["session_id"])
+        result = await self._run_projector_read_store(self._store.read_render_rebuild_inputs, session_id=request.params["session_id"])
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_render_shadow_candidates(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2552,7 +2552,7 @@ class CatalogDaemon:
         if revision is not None and (not isinstance(revision, str) or not 0 < len(revision) <= 128):
             return self._error(request, "invalid_request", "revision must be null or a short string")
         assert self._store is not None
-        result = await self._run_read_store(self._store.list_render_shadow_candidates, limit=limit, revision=revision)
+        result = await self._run_projector_read_store(self._store.list_render_shadow_candidates, limit=limit, revision=revision)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _record_render_shadow(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2572,7 +2572,7 @@ class CatalogDaemon:
 
     async def _render_shadow_summary(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         assert self._store is not None
-        result = await self._run_read_store(self._store.render_shadow_summary)
+        result = await self._run_projector_read_store(self._store.render_shadow_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _insert_session_provider_facts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

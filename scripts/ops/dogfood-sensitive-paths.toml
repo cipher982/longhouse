@@ -42,6 +42,9 @@ paths = [
   "scripts/ops/release.sh",
   "scripts/ops/release-artifacts.py",
   "docker/runtime.dockerfile",
+  # Host render shadow: reads every stored epoch in the background.
+  "server/zerg/services/render_shadow.py",
+  "server/zerg/catalogd/store_mixins/render_shadow.py",
   "docker/entrypoint.sh",
 
   # CI, workflow, secrets, and the fast-lane classifier itself.

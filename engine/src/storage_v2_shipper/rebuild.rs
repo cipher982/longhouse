@@ -547,7 +547,7 @@ pub(crate) fn serve_normalize_worker(
                         "id": request.id,
                         "envelopes": envelopes,
                         "elapsed_us": started.elapsed().as_micros() as u64,
-                        "revision": PARSER_REVISION,
+                        "revision": normalizer_revision(),
                     }),
                     Ok(Err(error)) => {
                         serde_json::json!({ "id": request.id, "error": format!("{error:#}") })

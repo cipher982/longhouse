@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from sqlalchemy import and_
 from sqlalchemy import case
+from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
@@ -26,6 +27,7 @@ from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
+from zerg.catalogd.models import RenderShadowEnvelope
 from zerg.catalogd.models import RuntimeDependencyState
 from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
@@ -201,6 +203,7 @@ class StorageMixin:
                             updated_at=deleted_at,
                         )
                     )
+            connection.execute(delete(RenderShadowEnvelope.__table__).where(RenderShadowEnvelope.__table__.c.session_id == session_key))
             live_deleted = _delete_bounded_live_session_state(connection, session_key=session_key, deleted_at=deleted_at)
             return {
                 "changed": True,
