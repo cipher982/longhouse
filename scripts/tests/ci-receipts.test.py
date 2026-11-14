@@ -79,6 +79,30 @@ class CiReceiptsTest(unittest.TestCase):
         with self.assertRaisesRegex(ci_receipts.ReceiptError, "run identity"):
             self.store.put("k", "s", {"f": b"1"}, identity={"run_id": "", "run_attempt": ""})
 
+    def test_a_store_that_refuses_for_a_while_is_tried_again(self):
+        pauses: list[float] = []
+        self.addCleanup(setattr, ci_receipts.time, "sleep", ci_receipts.time.sleep)
+        ci_receipts.time.sleep = pauses.append
+        self.fake.refuse = [503, 500, 503]
+        self.store.put("k", "s", {"f": b"1"}, identity=identity(1))
+        self.assertEqual(pauses, [1.0, 2.0, 4.0])
+        self.assertEqual(self.store.instances("k", "s")[0].read("f"), b"1")
+
+    def test_a_store_that_keeps_refusing_fails_and_a_client_error_is_never_retried(self):
+        pauses: list[float] = []
+        self.addCleanup(setattr, ci_receipts.time, "sleep", ci_receipts.time.sleep)
+        ci_receipts.time.sleep = pauses.append
+        self.addCleanup(setattr, ci_receipts, "RETRY_SECONDS", ci_receipts.RETRY_SECONDS)
+        ci_receipts.RETRY_SECONDS = 1.5  # room for the 1 second pause, not for the 2 second one
+        self.fake.refuse = [503, 503, 503]
+        with self.assertRaisesRegex(ci_receipts.ReceiptError, "refused GET .* HTTP 503"):
+            self.store.put("k", "s", {"f": b"1"}, identity=identity(1))
+        self.assertEqual((pauses, self.fake.refuse), ([1.0], [503]))
+        self.fake.refuse = [403]
+        with self.assertRaisesRegex(ci_receipts.ReceiptError, "HTTP 403"):
+            self.store.put("k", "s", {"f": b"1"}, identity=identity(1))
+        self.assertEqual((pauses, self.fake.refuse), ([1.0], []))
+
     def test_unconfigured_store_names_what_is_missing(self):
         with self.assertRaisesRegex(ci_receipts.ReceiptError, "CI_RECEIPTS_S3_ENDPOINT"):
             ci_receipts.store_from_environment({})

@@ -21,6 +21,7 @@ class FakeS3:
         self.objects: dict[str, bytes] = {}
         self.signed_requests = 0
         self.reads: list[str] = []
+        self.refuse: list[int] = []  # statuses the next requests are answered with, before any is served
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -35,7 +36,18 @@ class FakeS3:
                     outer.signed_requests += 1
                 return path[len(BUCKET) + 2 :], dict(urllib.parse.parse_qsl(parts.query))
 
+            def _refused(self) -> bool:
+                if not outer.refuse:
+                    return False
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.send_response(outer.refuse.pop(0))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+
             def do_PUT(self) -> None:  # noqa: N802
+                if self._refused():
+                    return
                 key, _ = self._key()
                 outer.objects[key] = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 self.send_response(200)
@@ -43,6 +55,8 @@ class FakeS3:
                 self.end_headers()
 
             def do_GET(self) -> None:  # noqa: N802
+                if self._refused():
+                    return
                 key, query = self._key()
                 if key == "" and query.get("list-type") == "2":
                     body = outer._list(query.get("prefix", ""), query.get("delimiter", ""))

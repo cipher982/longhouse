@@ -43,6 +43,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,6 +59,10 @@ _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _INSTANCE = re.compile(r"^([1-9][0-9]*)-([1-9][0-9]*)$")
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 _ENV = "CI_RECEIPTS_S3_"
+# How long one request keeps trying a store that answers 5xx or cannot be reached. The store is a
+# single MinIO drive that goes offline when its disk stalls; over 14 hours of a disk rebalance
+# (2026-11-14) the longest of 12 such episodes was 114 seconds, after a 30 second stall.
+RETRY_SECONDS = 300.0
 
 
 class ReceiptError(Exception):
@@ -112,19 +117,34 @@ class S3:
     def _request(self, method: str, key: str, query: dict[str, str] | None = None, body: bytes = b"") -> tuple[int, bytes]:
         path = f"/{self.bucket}/{key}" if key else f"/{self.bucket}"
         query = query or {}
-        headers = self._sign(method, path, query, body, dt.datetime.now(dt.timezone.utc))
         url = self.endpoint + urllib.parse.quote(path, safe="/-_.~")
         if query:
             url += "?" + "&".join(f"{urllib.parse.quote(k, safe='-_.~')}={urllib.parse.quote(v, safe='-_.~')}" for k, v in sorted(query.items()))
-        request = urllib.request.Request(url, data=body if method == "PUT" else None, method=method, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - operator-configured endpoint
-                return response.status, response.read()
-        except urllib.error.HTTPError as exc:
-            with exc:
-                return exc.code, exc.read()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise ReceiptError(f"receipt store unreachable ({self.endpoint}): {exc}") from exc
+        deadline = time.monotonic() + RETRY_SECONDS
+        pause = 1.0
+        while True:
+            headers = self._sign(method, path, query, body, dt.datetime.now(dt.timezone.utc))
+            request = urllib.request.Request(url, data=body if method == "PUT" else None, method=method, headers=headers)
+            refused: tuple[int, bytes] | None = None
+            unreachable: Exception | None = None
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - operator-configured endpoint
+                    return response.status, response.read()
+            except urllib.error.HTTPError as exc:
+                with exc:
+                    refused = (exc.code, exc.read())
+                if refused[0] < 500:
+                    return refused
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                unreachable = exc
+            if time.monotonic() + pause > deadline:
+                if refused is not None:
+                    return refused
+                raise ReceiptError(f"receipt store unreachable ({self.endpoint}): {unreachable}") from unreachable
+            said = f"HTTP {refused[0]}" if refused is not None else f"unreachable: {unreachable}"
+            print(f"receipt store {said} on {method} {key or self.bucket}; trying again in {pause:.0f}s", file=sys.stderr)
+            time.sleep(pause)
+            pause = min(pause * 2, 15.0)
 
     def put(self, key: str, data: bytes) -> None:
         status, body = self._request("PUT", key, body=data)
