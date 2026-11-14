@@ -28,10 +28,10 @@ disposable container, or to the wisp bench for native iOS and macOS. Run them on
 their own, never in the same `make` invocation as a host goal like `dev` or `ship`.
 Receipts and collected files land in `artifacts/test-isolation/<run-id>/`.
 
-Heavy Docker-dispatched goals can go to the crunch VM instead of the laptop lock:
-`scripts/ops/crunch.sh run make test` (`status` shows load; `--out PATH`,
+Heavy Docker-dispatched goals can go to the `ci` VM instead of the laptop lock:
+`scripts/ops/remote.sh run make test` (`status` shows load; `--out PATH`,
 `--env K=V`, `--timeout S`). Keep `release` and `validate-build-identity` on the
-laptop and never run a provider CLI on crunch.
+laptop and never run a provider CLI there.
 
 ## Attributing a failure first
 

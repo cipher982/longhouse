@@ -649,7 +649,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     export = sub.add_parser("export-hosted", help="Export hosted one-shot candidates to CSV.")
-    export.add_argument("--ssh-host", default="zerg")
+    export.add_argument("--ssh-host", default="cube")
     export.add_argument("--subdomain", default="david010")
     export.add_argument("--output", default="/tmp/longhouse-hatch-backfill-candidates.csv")
     export.add_argument(

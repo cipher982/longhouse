@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""crunch.sh refuses bad settings before it touches the guest.
+"""remote.sh refuses bad settings before it touches the guest.
 
 The script is copied into a temp checkout with its output root pointed there (it
-otherwise writes the shared /tmp/agents/crunch ssh config), and `ssh`/`rsync` on PATH
+otherwise writes the shared /tmp/agents/remote ssh config), and `ssh`/`rsync` on PATH
 are stubs that record a call and fail. A refusal is therefore exit != 0 with the
 reason on stderr and no call recorded.
 """
@@ -16,17 +16,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "ops" / "crunch.sh"
+SCRIPT = Path(__file__).resolve().parents[1] / "ops" / "remote.sh"
 
 
-class CrunchSettingsTests(unittest.TestCase):
-    def run_crunch(self, *args: str, env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
-        with tempfile.TemporaryDirectory(prefix="longhouse-crunch-test-") as directory:
+class RemoteSettingsTests(unittest.TestCase):
+    def run_remote(self, *args: str, env: dict | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
+        with tempfile.TemporaryDirectory(prefix="longhouse-remote-test-") as directory:
             root = Path(directory)
             (root / "scripts" / "ops").mkdir(parents=True)
-            source = SCRIPT.read_text().replace("OUT_ROOT=/tmp/agents/crunch", f"OUT_ROOT={root / 'out'}", 1)
+            source = SCRIPT.read_text().replace("OUT_ROOT=/tmp/agents/remote", f"OUT_ROOT={root / 'out'}", 1)
             self.assertIn(str(root / "out"), source)
-            script = root / "scripts" / "ops" / "crunch.sh"
+            script = root / "scripts" / "ops" / "remote.sh"
             script.write_text(source)
             script.chmod(0o755)
             key = root / "key"
@@ -41,7 +41,7 @@ class CrunchSettingsTests(unittest.TestCase):
             environment = {
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
                 "HOME": str(root),
-                "CRUNCH_KEY": str(key),
+                "REMOTE_KEY": str(key),
             }
             environment.update(env or {})
             result = subprocess.run(
@@ -58,24 +58,24 @@ class CrunchSettingsTests(unittest.TestCase):
     def test_a_malformed_slot_count_is_refused_not_spun_on(self) -> None:
         for value in ("abc", "0", "2;id", "-1"):
             with self.subTest(value=value):
-                result, calls = self.run_crunch("run", "true", env={"CRUNCH_SLOTS": value})
-                self.assert_refused(result, calls, "CRUNCH_SLOTS")
+                result, calls = self.run_remote("run", "true", env={"REMOTE_SLOTS": value})
+                self.assert_refused(result, calls, "REMOTE_SLOTS")
 
     def test_a_malformed_timeout_is_refused(self) -> None:
         for value in ("abc", "10s", "5;id"):
             with self.subTest(value=value):
-                result, calls = self.run_crunch("run", "true", env={"CRUNCH_TIMEOUT": value})
-                self.assert_refused(result, calls, "CRUNCH_TIMEOUT")
+                result, calls = self.run_remote("run", "true", env={"REMOTE_TIMEOUT": value})
+                self.assert_refused(result, calls, "REMOTE_TIMEOUT")
 
     def test_out_paths_must_stay_inside_the_checkout(self) -> None:
         for value in ("", "/etc/passwd", "..", "../x", "a/../b", "a/.."):
             with self.subTest(value=value):
-                result, calls = self.run_crunch("run", "--out", value, "true")
+                result, calls = self.run_remote("run", "--out", value, "true")
                 self.assert_refused(result, calls, "--out")
 
     def test_a_dotted_name_is_not_a_traversal(self) -> None:
         # Reaches the guest probe (the stub ssh fails it): the flag itself was accepted.
-        result, calls = self.run_crunch("run", "--out", "docs/v1..2/file.json", "true")
+        result, calls = self.run_remote("run", "--out", "docs/v1..2/file.json", "true")
         self.assertNotIn("--out needs", result.stderr)
         self.assertTrue(calls, "an ordinary --out path should get as far as the guest")
 

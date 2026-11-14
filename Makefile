@@ -905,7 +905,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py
 	@python3 scripts/tests/ring-promoter.test.py
-	@python3 scripts/tests/crunch.test.py
+	@python3 scripts/tests/remote.test.py
 
 validate-terminal-truth-ci: ## @internal Terminal-truth CI lane: pinned provider versions, verdict script, workflow shape
 	@python3 scripts/tests/terminal-truth-ci.test.py
@@ -1425,21 +1425,21 @@ qa-ui-workbench: ## @internal Capture fixture-backed timeline/session workbench 
 	bunx tsx scripts/ui/ui-workbench-report.ts $$RUN_DIR; \
 	echo "Workbench bundle: $$RUN_DIR"
 
-qa-ui-baseline: ## @internal Visual baseline check for app and public pages (Linux renders: run on crunch, scripts/ops/crunch.sh run make qa-ui-baseline)
+qa-ui-baseline: ## @internal Visual baseline check for app and public pages (Linux renders: run remotely, scripts/ops/remote.sh run make qa-ui-baseline)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline tests/ui_baseline_app.spec.ts tests/ui_baseline_public.spec.ts
 
-qa-ui-baseline-update: ## @internal Rewrite visual baselines for app, public, and mobile pages (on crunch, so they stay Linux renders)
+qa-ui-baseline-update: ## @internal Rewrite visual baselines for app, public, and mobile pages (remotely via scripts/ops/remote.sh, so they stay Linux renders)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline --update-snapshots=all
-	@# Copied under artifacts/ because an isolated run returns only artifacts. On crunch:
-	@#   scripts/ops/crunch.sh run 'make qa-ui-baseline-update && cp -r artifacts/test-isolation "$$CRUNCH_OUT"/'
+	@# Copied under artifacts/ because an isolated run returns only artifacts. Remotely:
+	@#   scripts/ops/remote.sh run 'make qa-ui-baseline-update && cp -r artifacts/test-isolation "$$REMOTE_OUT"/'
 	@# then copy .../files/1/ui-baselines/* into e2e/tests/ and commit.
 	@mkdir -p artifacts/ui-baselines && cd e2e/tests && tar -cf - ui_baseline_app.spec.ts-snapshots ui_baseline_public.spec.ts-snapshots mobile/ui_baseline_mobile.spec.ts-snapshots | tar -xf - -C ../../artifacts/ui-baselines
 
-qa-ui-baseline-mobile: ## @internal Visual baseline check for mobile app pages (Linux renders: run on crunch)
+qa-ui-baseline-mobile: ## @internal Visual baseline check for mobile app pages (Linux renders: run via scripts/ops/remote.sh)
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=visual-baseline tests/mobile/ui_baseline_mobile.spec.ts

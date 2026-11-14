@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# Run heavy builds and tests on grind instead of this laptop's heavy-build lock. grind is the 64-vCPU / 80 GiB
-# CI KVM guest on cube (k3s + ARC); these runs use its host Docker, which CI does not, capped below the CI pods.
-# Until 2026-11-13 the target was the separate crunch VM, now retired into grind (the script keeps its name). The working tree (uncommitted edits included, .gitignore'd output excluded) is
+# Run heavy builds and tests on the `ci` VM instead of this laptop's heavy-build lock. `ci` is the 64-vCPU / 80 GiB
+# CI KVM guest on cube (k3s + ARC); these runs use its host Docker, which CI does not, capped below the CI pods. The working tree (uncommitted edits included, .gitignore'd output excluded) is
 # mirrored to a per-run directory in the guest, the command runs there, output streams back live, and
-# named outputs are copied back to /tmp/agents/crunch/<run>/. Same shape as bench.sh.
+# named outputs are copied back to /tmp/agents/remote/<run>/. Same shape as bench.sh.
 #
-#   scripts/ops/crunch.sh run [options] <command...>
-#   scripts/ops/crunch.sh status     slots in use, load, memory, disk of the guest
-#   scripts/ops/crunch.sh ssh        a shell in the guest
+#   scripts/ops/remote.sh run [options] <command...>
+#   scripts/ops/remote.sh status     slots in use, load, memory, disk of the guest
+#   scripts/ops/remote.sh ssh        a shell in the guest
 #
-#   scripts/ops/crunch.sh run make test                           # backend suite in the guest's Docker
-#   scripts/ops/crunch.sh run make test-engine-projection-failure # one engine lane
-#   scripts/ops/crunch.sh run --out artifacts/foo.json 'make foo'
+#   scripts/ops/remote.sh run make test                           # backend suite in the guest's Docker
+#   scripts/ops/remote.sh run make test-engine-projection-failure # one engine lane
+#   scripts/ops/remote.sh run --out artifacts/foo.json 'make foo'
 #
 # Options for `run`:
 #   --out PATH     copy PATH (relative to the checkout root) back after the run (repeatable)
 #   --env K=V      set K=V for the command (repeatable)
-#   --timeout S    kill the run after S seconds (default $CRUNCH_TIMEOUT, else 3600)
+#   --timeout S    kill the run after S seconds (default $REMOTE_TIMEOUT, else 3600)
 #   --keep         leave the run's guest directory in place (debugging; the guest GC removes it after 6 h)
-# The command is one shell string (`run make test`, or quote it: `run 'a && b'`). In it, $CRUNCH_OUT is a fresh directory whose contents come back to /tmp/agents/crunch/<run>/out/.
+# The command is one shell string (`run make test`, or quote it: `run 'a && b'`). In it, $REMOTE_OUT is a fresh directory whose contents come back to /tmp/agents/remote/<run>/out/.
 # Every run also brings back run.log and exit there.
 #
 # What runs in the guest: it has Docker, make, git, python3 and rsync, and nothing else. `make test*`,
@@ -36,52 +35,52 @@
 # keeps no second one to drift. `make test-engine` and `make test-engine-single TEST=mod::tests::name` use the image.
 # For any other cargo command (a loop, a filter, nextest flags) run it in that image through test-isolation's ad-hoc
 # mode; the image carries the dependencies warm, so only the engine crate builds (~30 s):
-#   scripts/ops/crunch.sh run "python3 scripts/qa/test-isolation.py --target test-engine-single --command bash -c \
+#   scripts/ops/remote.sh run "python3 scripts/qa/test-isolation.py --target test-engine-single --command bash -c \
 #       'python3 scripts/build/generate_build_identity.py && python3 scripts/build/cargo.py exec -- nextest run \
 #        --manifest-path engine/Cargo.toml --cargo-profile ci-test --bins -E \"test(pi_print)\"'"
 #
-# Up to CRUNCH_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
+# Up to REMOTE_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
 # directory under /work/agents; the container image, Cargo dependencies and uv cache live in the image and
-# are shared, so runs are warm. grind is reached over Tailscale ssh as user `crunch`. Host setup, caps and
+# are shared, so runs are warm. `ci` is reached over Tailscale ssh as user `builds`. Host setup, caps and
 # cleanup: ~/git/me/domains/mytech/infrastructure/kube/agent-builds/provision.sh.
 #
 # Environment:
-#   CRUNCH_HOST      ssh host name of the build machine (default: grind.coin-castor.ts.net)
-#   CRUNCH_KEY       private key the build host's `crunch` user trusts (default: ~/.ssh/crunch_vm_ed25519)
-#   CRUNCH_SLOTS     concurrent runs (default: 3)
-#   CRUNCH_TIMEOUT   per-run limit in seconds (default: 3600)
+#   REMOTE_HOST      ssh host name of the build machine (default: ci.coin-castor.ts.net)
+#   REMOTE_KEY       private key the build host's `builds` user trusts (default: ~/.ssh/remote_builds_ed25519)
+#   REMOTE_SLOTS     concurrent runs (default: 3)
+#   REMOTE_TIMEOUT   per-run limit in seconds (default: 3600)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAME="$(basename "$ROOT_DIR" | tr -c 'A-Za-z0-9._\n-' '_')"
-HOST="${CRUNCH_HOST:-grind.coin-castor.ts.net}"
-KEY="${CRUNCH_KEY:-$HOME/.ssh/crunch_vm_ed25519}"
-SLOTS="${CRUNCH_SLOTS:-3}"
-TIMEOUT="${CRUNCH_TIMEOUT:-3600}"
-OUT_ROOT=/tmp/agents/crunch
+HOST="${REMOTE_HOST:-grind.coin-castor.ts.net}"
+KEY="${REMOTE_KEY:-$HOME/.ssh/remote_builds_ed25519}"
+SLOTS="${REMOTE_SLOTS:-3}"
+TIMEOUT="${REMOTE_TIMEOUT:-3600}"
+OUT_ROOT=/tmp/agents/remote
 SSH_CONFIG="$OUT_ROOT/ssh_config"
 
-die() { echo "crunch: $*" >&2; exit 1; }
+die() { echo "remote: $*" >&2; exit 1; }
 
 # Both reach the guest inside one unquoted command string, and a non-numeric slot count makes its slot loop spin forever.
-[[ "$SLOTS" =~ ^[1-9][0-9]*$ ]] || die "CRUNCH_SLOTS must be a positive integer (got: $SLOTS)"
-[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "CRUNCH_TIMEOUT must be seconds, digits only (got: $TIMEOUT)"
+[[ "$SLOTS" =~ ^[1-9][0-9]*$ ]] || die "REMOTE_SLOTS must be a positive integer (got: $SLOTS)"
+[[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "REMOTE_TIMEOUT must be seconds, digits only (got: $TIMEOUT)"
 
-[[ -f "$KEY" ]] || die "no key at $KEY (the build host trusts ~/.ssh/crunch_vm_ed25519; see me kube/agent-builds/provision.sh)"
+[[ -f "$KEY" ]] || die "no key at $KEY (the build host trusts ~/.ssh/remote_builds_ed25519; see me kube/agent-builds/provision.sh)"
 
 write_ssh_config() {
   mkdir -p "$OUT_ROOT" && chmod 700 "$OUT_ROOT"
-  # One config per invocation, under the alias `crunch` so the rsync/ssh lines below stay host-agnostic.
+  # One config per invocation, under the alias `remote-build` so the rsync/ssh lines below stay host-agnostic.
   # The build host's key is pinned on first use in its own file, never mixed into known_hosts.
   cat > "$SSH_CONFIG.$$" <<EOF
-Host crunch
+Host remote-build
   HostName $HOST
-  User crunch
+  User builds
   IdentityFile $KEY
   IdentitiesOnly yes
   BatchMode yes
-  HostKeyAlias crunch-$HOST
-  UserKnownHostsFile $HOME/.ssh/known_hosts_crunch
+  HostKeyAlias remote-build-$HOST
+  UserKnownHostsFile $HOME/.ssh/known_hosts_remote_build
   StrictHostKeyChecking accept-new
   ServerAliveInterval 20
   ServerAliveCountMax 6
@@ -92,12 +91,12 @@ EOF
   mv "$SSH_CONFIG.$$" "$SSH_CONFIG"
 }
 
-g() { ssh -F "$SSH_CONFIG" crunch "$@"; }
+g() { ssh -F "$SSH_CONFIG" remote-build "$@"; }
 
 guest_probe() {
   if ! g true 2>/dev/null; then
-    echo "crunch: cannot reach $HOST as user crunch. Check 'tailscale ping ${HOST%%.*}', then 'ssh drose@$HOST true'" >&2
-    echo "        (grind is a VM on cube: 'ssh cube sudo virsh -c qemu:///system domstate grind' must say running)." >&2
+    echo "remote: cannot reach $HOST as user builds. Check 'tailscale ping ${HOST%%.*}', then 'ssh drose@$HOST true'" >&2
+    echo "        (`ci` is a VM on cube: 'ssh cube sudo virsh -c qemu:///system domstate ci' must say running)." >&2
     echo "        Setup: ~/git/me/domains/mytech/infrastructure/kube/agent-builds/provision.sh" >&2
     g true || true
     exit 1
@@ -117,10 +116,10 @@ sync_tree() {
   # Seed the run directory from the last mirror (local copy in the guest, ~1 s), so rsync sends only the delta;
   # then publish the synced tree as the new mirror before the command can modify it.
   g "mkdir -p /ci-cache/agents/mirror/$NAME /work/agents/$run/src && flock -s /ci-cache/agents/mirror-$NAME.lock cp -a /ci-cache/agents/mirror/$NAME/. /work/agents/$run/src/ 2>/dev/null || true"
-  rsync -az --delete --exclude-from="$excludes" -e "ssh -F $SSH_CONFIG" "$ROOT_DIR/" "crunch:/work/agents/$run/src/"
+  rsync -az --delete --exclude-from="$excludes" -e "ssh -F $SSH_CONFIG" "$ROOT_DIR/" "remote-build:/work/agents/$run/src/"
   rm -f "$excludes"
   g "flock /ci-cache/agents/mirror-$NAME.lock rsync -a --delete /work/agents/$run/src/ /ci-cache/agents/mirror/$NAME/ && touch /ci-cache/agents/mirror/$NAME"
-  echo "crunch: synced $NAME to the guest in $((SECONDS - started))s" >&2
+  echo "remote: synced $NAME to the guest in $((SECONDS - started))s" >&2
 }
 
 # The guest half of a run, as one bash program. It reads no stdin: stdin is the ssh channel, and EOF on it
@@ -136,7 +135,7 @@ exec 3<&0
 # Its own session (setsid), so the kill below does not take the watchdog with it before the KILL escalation.
 # `timeout` runs its command in a process group of its own, which this shell's group kill does not reach, so the
 # run's `timeout` pid is recorded and signalled too (it forwards INT to its group; KILL goes to the whole group).
-setsid bash -c 'cat >/dev/null; echo "crunch: client went away; stopping run $2" >&2
+setsid bash -c 'cat >/dev/null; echo "remote: client went away; stopping run $2" >&2
   t="$(cat "$3" 2>/dev/null)"
   kill -INT -- "-$1" 2>/dev/null; [ -n "$t" ] && kill -INT "$t" 2>/dev/null
   sleep 25
@@ -150,24 +149,24 @@ while [ -z "$slot" ]; do
     if flock -n 9; then slot=$i; break; fi
   done
   [ -n "$slot" ] && break
-  waited=$((waited + 2)); [ $((waited % 30)) -eq 0 ] && echo "crunch: all $slots slots busy, waiting (${waited}s)" >&2
+  waited=$((waited + 2)); [ $((waited % 30)) -eq 0 ] && echo "remote: all $slots slots busy, waiting (${waited}s)" >&2
   sleep 2
 done
 if [ ! -d .git ]; then
-  git init -q -b main . && git add -A -f && git -c user.name=crunch -c user.email=crunch@localhost commit -q -m "crunch sync $run"
+  git init -q -b main . && git add -A -f && git -c user.name=remote -c user.email=remote@localhost commit -q -m "remote sync $run"
 fi
-export CRUNCH_OUT="$base/out" CRUNCH_RUN="$run" CRUNCH_SLOT="$slot"
+export REMOTE_OUT="$base/out" REMOTE_RUN="$run" REMOTE_SLOT="$slot"
 eval "$extra_env"
 # Sizing defaults come after --env so an override moves the container and its xdist workers together. The
 # container's memory follows its CPU count when LONGHOUSE_TEST_MEMORY is unset (scripts/qa/test-isolation.py).
 export LONGHOUSE_TEST_CPUS="${LONGHOUSE_TEST_CPUS:-8}"
 export PYTEST_XDIST_WORKERS="${PYTEST_XDIST_WORKERS:-$LONGHOUSE_TEST_CPUS}"
-echo "crunch: run $run in slot $slot of $slots (waited ${waited}s); load $(cut -d' ' -f1-3 /proc/loadavg)" >&2
+echo "remote: run $run in slot $slot of $slots (waited ${waited}s); load $(cut -d' ' -f1-3 /proc/loadavg)" >&2
 t0=$SECONDS
 bash -c 'echo $$ > "$1"; shift; exec timeout --kill-after=30 "$@"' _ "$base/timeout.pid" "$timeout_s" bash -c "$cmd" 2>&1 | tee "$base/run.log"
 code=${PIPESTATUS[0]}
 echo "$code" > "$base/exit"
-echo "crunch: command exited $code after $((SECONDS - t0))s" >&2
+echo "remote: command exited $code after $((SECONDS - t0))s" >&2
 exit "$code"
 PROGRAM
 }
@@ -208,18 +207,18 @@ cmd_run() {
   local ran=$SECONDS
 
   mkdir -p "$dest"
-  rsync -a -e "ssh -F $SSH_CONFIG" "crunch:/work/agents/$run/run.log" "crunch:/work/agents/$run/exit" "crunch:/work/agents/$run/out" "$dest/" 2>/dev/null || true
+  rsync -a -e "ssh -F $SSH_CONFIG" "remote-build:/work/agents/$run/run.log" "remote-build:/work/agents/$run/exit" "remote-build:/work/agents/$run/out" "$dest/" 2>/dev/null || true
   local path
   for path in ${outs[@]+"${outs[@]}"}; do
-    rsync -a --relative -e "ssh -F $SSH_CONFIG" "crunch:/work/agents/$run/src/./$path" "$dest/" 2>/dev/null \
-      || echo "crunch: no $path in the run directory" >&2
+    rsync -a --relative -e "ssh -F $SSH_CONFIG" "remote-build:/work/agents/$run/src/./$path" "$dest/" 2>/dev/null \
+      || echo "remote: no $path in the run directory" >&2
   done
   if ((keep)); then
-    echo "crunch: kept /work/agents/$run in the guest" >&2
+    echo "remote: kept /work/agents/$run in the guest" >&2
   else
     g "case '$run' in ''|*[!A-Za-z0-9._-]*) exit 1;; esac; rm -rf -- /work/agents/$run" || true
   fi
-  echo "crunch: $run exited $code; sync $((synced - started))s, run $((ran - synced))s, total $((SECONDS - started))s; outputs in $dest" >&2
+  echo "remote: $run exited $code; sync $((synced - started))s, run $((ran - synced))s, total $((SECONDS - started))s; outputs in $dest" >&2
   return "$code"
 }
 
@@ -235,6 +234,6 @@ cmd_status() {
 case "${1:-}" in
   run) shift; cmd_run "$@" ;;
   status) cmd_status ;;
-  ssh) write_ssh_config; exec ssh -F "$SSH_CONFIG" -t crunch ;;
+  ssh) write_ssh_config; exec ssh -F "$SSH_CONFIG" -t remote-build ;;
   *) awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

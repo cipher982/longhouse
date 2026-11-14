@@ -236,7 +236,7 @@ Python modules stay flat by design; services group by file prefix.
 | `scripts/ops/ring_promoter.py`, `.github/workflows/promote-rings.yml` | Continuous promotion: Promote Rings reacts to image publication, archive, canary, QA and CI completion, plus the Sauron wake |
 | `scripts/ops/install-precommit-autofix.sh` | Installs the self-staging pre-commit shims and retires only its own obsolete pre-push hook |
 | `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
-| `scripts/ops/crunch.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the crunch VM, iOS build and simulator work on the bench Mac |
+| `scripts/ops/remote.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the `ci` VM, iOS build and simulator work on the bench Mac |
 | `scripts/ci/perf-proof.py`, `scripts/ci/perf-soak.py`, `scripts/ci/perf_soak_fixtures.py`, `.github/workflows/perf-proof.yml` | Nightly perf lane: throughput proof, then a steady-state soak of the engine; fails on a resource-budget breach or a regression against recent runs |
 | `scripts/ops/testflight.py`, `scripts/ops/testflight-ship.sh` | `make testflight` and `make testflight-status` (workflow `.github/workflows/ios-testflight.yml`) |
 

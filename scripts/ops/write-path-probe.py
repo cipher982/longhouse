@@ -120,7 +120,7 @@ def spread(values: list[float]) -> float:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tenant", default="david010")
-    parser.add_argument("--host", default="zerg")
+    parser.add_argument("--host", default="cube")
     parser.add_argument("--runs", type=int, default=3, help="minimum 3; fewer cannot show a spread")
     parser.add_argument("--seconds", type=float, default=120.0)
     parser.add_argument("--token-file", default=str(Path.home() / ".longhouse/machine/device-token"))
