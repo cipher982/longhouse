@@ -25,15 +25,14 @@ name: Terminal Truth
 #
 # Triggers
 #   push to main, paths below    the whole gate. The verdict is the commit status `longhouse/terminal-truth` and a CI
-#                                receipt. Nothing consumes the status yet (promotion is unchanged).
+#                                receipt. Dogfood promotion requires it (scripts/ops/promote-dogfood.sh) for a range that touches these paths.
 #   schedule (nightly)           the whole gate with reruns off, so a red night is the raw rate. New failing cells are
 #                                annotated as errors, and the Sauron job ci-scheduled-red pages after three red nights
 #                                in a row. GitHub starts this repository's schedules 7 to 10 hours late.
 #   workflow_dispatch            the same by hand, or narrowed (inputs below).
 #
-# THE PATH LIST BELOW IS THE ONE COPY. It is the push filter. When the promotion requirement is switched on (branch
-# terminal-truth-promotion-gate), scripts/ops/dogfood-sensitive-paths.toml carries the same list in a marked block and
-# a test fails if the two differ.
+# THE PATH LIST BELOW IS THE ONE COPY. It is the push filter. scripts/ops/dogfood-sensitive-paths.toml carries the
+# same list as live_preview_paths, which decides whose status a promotion requires, and a test fails if the two differ.
 #
 # No provider secret is passed to this job; every provider talks to the loopback scripted model and a cell fails
 # closed if that model served no request. The only secrets in the environment are the CI receipt store's, used after

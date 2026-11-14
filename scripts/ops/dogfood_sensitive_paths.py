@@ -2,8 +2,8 @@
 """Classify the dogfood range for fast-lane eligibility.
 
 A matching path means the change must use the canary-qualified dogfood path.
-This classifier is used only to choose between dogfood promotion lanes, and to find the commit whose
-`longhouse/terminal-truth` status promote-dogfood.sh requires (`live-preview`).
+This classifier is used to choose between dogfood promotion lanes, and (`live-preview`) to find the commit
+whose `longhouse/terminal-truth` status promote-dogfood.sh requires in either lane.
 """
 
 from __future__ import annotations
@@ -63,14 +63,14 @@ def _string_list(data: dict, key: str, policy: str | Path) -> list[str]:
 
 
 def load_live_preview_paths(policy: str | Path = POLICY) -> list[str]:
-    """The live-preview paths: sensitive, and gated on the terminal-truth commit status."""
+    """The live-preview paths: the commits whose terminal-truth status a promotion needs. Not lane-sensitive."""
     return _string_list(tomllib.loads(Path(policy).read_text(encoding="utf-8")), "live_preview_paths", policy)
 
 
 def load_patterns(policy: str | Path = POLICY) -> tuple[list[str], list[re.Pattern[str]]]:
-    """Every sensitive path: the general list plus the live-preview paths."""
+    """Every sensitive path: those that need the canary-qualified lane."""
     data = tomllib.loads(Path(policy).read_text(encoding="utf-8"))
-    paths = _string_list(data, "paths", policy) + _string_list(data, "live_preview_paths", policy)
+    paths = _string_list(data, "paths", policy)
     return paths, [compile_glob(path) for path in paths]
 
 

@@ -70,14 +70,14 @@ class DogfoodSensitivePathsTests(unittest.TestCase):
                   if not any(pattern.fullmatch(name) for name in tracked)]
         self.assertEqual(unused, [], "a path rename must not silently switch off a canary qualification")
 
-    # --- live-preview paths: sensitive, and the commit whose terminal-truth status a promotion needs ---
+    # --- live-preview paths: the commit whose terminal-truth status a promotion needs (not lane-sensitive) ---
 
-    def test_live_preview_paths_are_sensitive_and_the_newest_touching_commit_is_found(self) -> None:
+    def test_the_newest_commit_touching_a_live_preview_path_is_found_and_none_is_lane_sensitive(self) -> None:
         first = self.repo.commit({"engine/src/pi_print.rs": "a\n"}, "pi print")
         docs = self.repo.commit({"README.md": "docs\n"}, "docs")
         second = self.repo.commit({"server/zerg/services/session_live_previews.py": "b\n"}, "previews")
         later = self.repo.commit({"README.md": "docs2\n"}, "docs again")
-        self.assertTrue(classifier.has_sensitive_paths(self.repo.path, self.base, first))
+        self.assertFalse(classifier.has_sensitive_paths(self.repo.path, self.base, first))
         self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, later), second)
         self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, docs), first)
         self.assertIsNone(classifier.newest_live_preview_commit(self.repo.path, second, later))
@@ -86,7 +86,7 @@ class DogfoodSensitivePathsTests(unittest.TestCase):
         edit = self.repo.commit({"engine/src/codex_exec.rs": "x\n"}, "edit")
         revert = self.repo.commit({"engine/src/codex_exec.rs": None}, "revert")
         self.assertEqual(classifier.newest_live_preview_commit(self.repo.path, self.base, revert), revert)
-        self.assertTrue(classifier.has_sensitive_paths(self.repo.path, edit, revert))
+        self.assertFalse(classifier.has_sensitive_paths(self.repo.path, edit, revert))
 
     def test_the_cli_prints_the_commit_or_nothing_and_exits_2_when_it_cannot_decide(self) -> None:
         touched = self.repo.commit({"engine/src/omp_helm_launcher.rs": "x\n"}, "launcher")
