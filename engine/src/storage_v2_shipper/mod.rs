@@ -40,7 +40,7 @@ use crate::state::file_identity::{
 };
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
-use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
+use crate::state::source_epoch::{self, SourceChangeHint, SourceLane};
 use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 
 mod cursor_acp_source;
@@ -48,6 +48,7 @@ mod cursor_store_source;
 mod opencode_source;
 mod pending;
 mod prepare;
+mod rebuild;
 mod reconcile;
 mod render;
 mod resume;

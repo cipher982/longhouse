@@ -560,12 +560,23 @@ fn prepare_file_envelope(
     // the raw batch and the rendered events two independent reads of a mutable
     // file: unbounded work proportional to the file, and a rewrite between them
     // could publish bytes from one version with events from another.
-    let mut parse_result = parser::parse_session_file_bounded(
-        path,
+    // Parse with a witness that records every answer it gives, dated by the
+    // epoch's opening time, and ship those answers beside the bytes: a host
+    // holding only this envelope then parses identically.
+    let epoch_opened_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
+        .context("source epoch opened_at is not RFC 3339")?
+        .with_timezone(&Utc);
+    let file_source = crate::pipeline::source::FileSource::new(path);
+    let capturing = crate::pipeline::source::CapturingWitness::new(path, epoch_opened_at);
+    let mut parse_result = parser::parse_source(
+        &file_source,
+        &capturing,
         position,
         Some(raw_batch.range_end),
         Some(provider),
     )?;
+    let captured_witness =
+        capturing.finish(crate::pipeline::source::SourceBytes::identity(&file_source).clone());
     if is_cursor_agent_transcript_path(provider, path)
         && parse_result.metadata.started_at.is_none()
         && parse_result.events.is_empty()
@@ -725,7 +736,7 @@ fn prepare_file_envelope(
         provider,
         &parse_result.metadata,
         &render_records,
-        &resolution,
+        &resolution.opened_at,
     )?;
     let media_objects = parse_result
         .media_objects
@@ -736,7 +747,7 @@ fn prepare_file_envelope(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let facts = parse_result
+    let mut facts = parse_result
         .provider_facts
         .iter()
         .filter(|fact| {
@@ -749,6 +760,11 @@ fn prepare_file_envelope(
             payload: fact.payload.clone(),
         })
         .collect::<Vec<_>>();
+    // First, so a host that truncates an oversized fact list keeps it.
+    facts.insert(
+        0,
+        capture_witness_fact(&captured_witness, raw_batch.range_start)?,
+    );
     if position == 0
         && render_records.is_empty()
         && media_objects.is_empty()
@@ -1091,4 +1107,19 @@ pub(super) fn batch_tail(batch: &RawRecordBatch) -> Vec<u8> {
         wanted -= take;
     }
     pieces.into_iter().rev().flatten().copied().collect()
+}
+
+/// The witness a parse used, as the fact that travels with its envelope.
+pub(super) fn capture_witness_fact(
+    witness: &crate::pipeline::source::CapturedWitness,
+    range_start: u64,
+) -> Result<StorageV2ProviderFact> {
+    Ok(StorageV2ProviderFact {
+        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
+        at: witness
+            .fallback_time
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        source_position: range_start,
+        payload: serde_json::to_value(witness).context("capture witness is not JSON")?,
+    })
 }

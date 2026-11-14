@@ -104,12 +104,21 @@ pub fn provider_blob_root(transcript: &Path) -> Option<PathBuf> {
     Some(sessions.parent()?.join(BLOBS_DIR_NAME))
 }
 
+/// Resolves a `blob:sha256:` reference to its bytes: the provider's blob store
+/// on a laptop, shipped content-addressed media on a host.
+pub type BlobLookup<'a> = &'a dyn Fn(&str, &str) -> Option<Vec<u8>>;
+
 /// The bytes a `blob:sha256:` reference names, or nothing.
 ///
 /// The digest is a filename the provider wrote, so the bytes are hashed and
 /// compared before they are trusted: a store that disagrees with its own name
 /// yields no media rather than bytes of unknown provenance. Symlinks, paths
 /// that leave the store, and oversized blobs are all refused.
+
+pub fn provider_blob_bytes(blob_root: &Path, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+    blob_media_bytes(blob_root, reference, mime_type)
+}
+
 fn blob_media_bytes(blob_root: &Path, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
     let digest = reference.strip_prefix(PI_BLOB_PREFIX)?;
     if digest.len() != SHA256_HEX_CHARS || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -167,14 +176,14 @@ struct PiImageBlock<'a> {
 
 fn pi_image_redactions(
     raw: &str,
-    blob_root: Option<&Path>,
+    blob: Option<BlobLookup<'_>>,
 ) -> Vec<(usize, usize, String, InlineImageRedaction)> {
     if !raw.contains("\"mimeType\"") {
         return Vec::new();
     }
     // A transcript that references a provider blob is the only shape that can
     // produce one, and most lines carry no image at all.
-    let blob_root = blob_root.filter(|_| raw.contains(PI_BLOB_PREFIX));
+    let blob = blob.filter(|_| raw.contains(PI_BLOB_PREFIX));
     let Ok(envelope) = serde_json::from_str::<PiImageEnvelope<'_>>(raw) else {
         return Vec::new();
     };
@@ -216,8 +225,8 @@ fn pi_image_redactions(
         // The provider kept the bytes in its own store, so the line carries a
         // pointer instead of the image; only a digest that matches the bytes on
         // disk becomes media, and an unresolvable one stays a pointer.
-        let redaction = match blob_root {
-            Some(root) => blob_media_bytes(root, data, image.mime_type)
+        let redaction = match blob {
+            Some(lookup) => lookup(data, image.mime_type)
                 .map(|bytes| media_redaction(bytes, image.mime_type, data.len())),
             None => image_redaction(data, image.mime_type, data.len()),
         };
@@ -312,9 +321,9 @@ fn claude_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageR
     result
 }
 
-pub fn redact_source_line_with_media(raw: &str, blob_root: Option<&Path>) -> RedactedJsonLine {
+pub fn redact_source_line_with_media(raw: &str, blob: Option<BlobLookup<'_>>) -> RedactedJsonLine {
     let original_line_sha256 = format!("{:x}", Sha256::digest(raw.as_bytes()));
-    let mut replacements = pi_image_redactions(raw, blob_root);
+    let mut replacements = pi_image_redactions(raw, blob);
     replacements.extend(claude_image_redactions(raw));
     if replacements.is_empty() && !raw.contains(DATA_IMAGE_PREFIX) {
         return RedactedJsonLine {

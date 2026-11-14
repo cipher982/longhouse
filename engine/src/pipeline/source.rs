@@ -27,12 +27,78 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
+/// Whether the source is a whole JSON document or newline-delimited records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFormat {
+    Jsonl,
+    JsonDocument,
+}
+
+/// What the transcript's location tells the parser, as plain values. A laptop
+/// computes it from the path ([`SourceIdentity::from_path`]); it is shipped
+/// beside the raw bytes, so a host that only has a hash of the path parses
+/// identically.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SourceIdentity {
+    pub format: SourceFormat,
+    /// The session id the location implies, before the content can say
+    /// otherwise: an Antigravity brain id, a UUID file stem, or a UUID derived
+    /// from the full path.
+    pub location_session_id: String,
+    /// Claude dynamic-workflow run directory (`subagents/workflows/<run>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
+    /// A Codex `rollout-*.jsonl` file.
+    #[serde(default)]
+    pub codex_rollout: bool,
+    /// For log lines only; never parsed, and never shipped: the host knows a
+    /// source only by its opaque id.
+    #[serde(skip)]
+    pub label: String,
+}
+
+impl SourceIdentity {
+    pub fn from_path(path: &Path) -> Self {
+        let format = if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        {
+            SourceFormat::JsonDocument
+        } else {
+            SourceFormat::Jsonl
+        };
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let location_session_id =
+            if let Some(id) = super::parser::antigravity_session_id_from_path(path) {
+                id
+            } else if uuid::Uuid::parse_str(stem).is_ok() {
+                stem.to_string()
+            } else {
+                uuid::Uuid::new_v5(
+                    &uuid::Uuid::NAMESPACE_URL,
+                    path.to_string_lossy().as_bytes(),
+                )
+                .to_string()
+            };
+        Self {
+            format,
+            location_session_id,
+            workflow_run_id: super::parser::workflow_run_id_from_path(path),
+            codex_rollout: super::parser::is_codex_rollout_path(path),
+            label: path.display().to_string(),
+        }
+    }
+}
+
 /// A transcript's bytes, addressed by offset.
 pub trait SourceBytes {
-    /// The path the transcript was captured from. Used only for identity the
-    /// parser derives from the location (file stem, workflow run directory,
-    /// Antigravity brain id); never opened through this trait's caller.
-    fn identity_path(&self) -> &Path;
+    /// What the transcript's location tells the parser.
+    fn identity(&self) -> &SourceIdentity;
     /// Current length in bytes.
     fn len(&self) -> Result<u64>;
     /// A reader over `[start, end)`, clamped to the current length.
@@ -47,7 +113,7 @@ pub trait SourceBytes {
     fn omp_header(&self) -> Result<crate::omp_session::OmpSessionHeader> {
         crate::omp_session::read_session_header_from(
             self.reader(0, u64::MAX)?,
-            self.identity_path(),
+            Path::new(&self.identity().label),
         )
     }
     /// The whole transcript as text (full-document formats).
@@ -60,17 +126,21 @@ pub trait SourceBytes {
 /// The transcript file on this machine.
 pub struct FileSource<'a> {
     path: &'a Path,
+    identity: SourceIdentity,
 }
 
 impl<'a> FileSource<'a> {
     pub fn new(path: &'a Path) -> Self {
-        Self { path }
+        Self {
+            path,
+            identity: SourceIdentity::from_path(path),
+        }
     }
 }
 
 impl SourceBytes for FileSource<'_> {
-    fn identity_path(&self) -> &Path {
-        self.path
+    fn identity(&self) -> &SourceIdentity {
+        &self.identity
     }
 
     fn len(&self) -> Result<u64> {
@@ -102,38 +172,48 @@ impl SourceBytes for FileSource<'_> {
 /// Transcript bytes held in memory: a host's stored raw records, concatenated
 /// in source order from offset 0.
 pub struct MemorySource {
-    identity_path: PathBuf,
+    identity: SourceIdentity,
+    /// Source offset of `bytes[0]`. A host holds a source from the first
+    /// position the laptop shipped, which is not always 0: Claude startup
+    /// metadata before the first event is acknowledged locally and never sent.
+    base: u64,
     bytes: Vec<u8>,
 }
 
 impl MemorySource {
-    pub fn new(identity_path: impl Into<PathBuf>, bytes: Vec<u8>) -> Self {
+    pub fn new(identity: SourceIdentity, bytes: Vec<u8>) -> Self {
+        Self::at(identity, 0, bytes)
+    }
+
+    /// Bytes that start at source offset `base`; reads before it see nothing.
+    pub fn at(identity: SourceIdentity, base: u64, bytes: Vec<u8>) -> Self {
         Self {
-            identity_path: identity_path.into(),
+            identity,
+            base,
             bytes,
         }
     }
 }
 
 impl SourceBytes for MemorySource {
-    fn identity_path(&self) -> &Path {
-        &self.identity_path
+    fn identity(&self) -> &SourceIdentity {
+        &self.identity
     }
 
     fn len(&self) -> Result<u64> {
-        Ok(self.bytes.len() as u64)
+        Ok(self.base + self.bytes.len() as u64)
     }
 
     fn reader(&self, start: u64, end: u64) -> Result<Box<dyn Read + '_>> {
         let len = self.bytes.len() as u64;
-        let end = end.min(len) as usize;
-        let start = (start as usize).min(end);
+        let end = end.saturating_sub(self.base).min(len) as usize;
+        let start = (start.saturating_sub(self.base) as usize).min(end);
         Ok(Box::new(Cursor::new(&self.bytes[start..end])))
     }
 }
 
 /// Workspace facts for a session whose transcript does not name its cwd.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkspaceWitness {
     pub cwd: String,
     pub project: Option<String>,
@@ -150,8 +230,8 @@ pub trait Witness {
     fn workspace(&self) -> Option<WorkspaceWitness>;
     /// Git `(project, repo)` resolved from a working directory on disk.
     fn git_info(&self, cwd: &str) -> (Option<String>, Option<String>);
-    /// Pi/OMP blob store root, for pasted-image capture.
-    fn blob_root(&self) -> Option<PathBuf>;
+    /// The bytes a Pi/OMP `blob:sha256:` image reference names, if known.
+    fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>>;
     /// Time for a record that carries no clock of its own.
     fn fallback_time(&self) -> DateTime<Utc>;
 }
@@ -210,8 +290,9 @@ impl Witness for FileWitness<'_> {
         super::parser::resolve_git_info(Path::new(cwd))
     }
 
-    fn blob_root(&self) -> Option<PathBuf> {
-        crate::media_redaction::provider_blob_root(self.path)
+    fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+        let root = crate::media_redaction::provider_blob_root(self.path)?;
+        crate::media_redaction::provider_blob_bytes(&root, reference, mime_type)
     }
 
     fn fallback_time(&self) -> DateTime<Utc> {
@@ -240,7 +321,7 @@ impl Witness for NoWitness {
     fn git_info(&self, _cwd: &str) -> (Option<String>, Option<String>) {
         (None, None)
     }
-    fn blob_root(&self) -> Option<PathBuf> {
+    fn blob(&self, _reference: &str, _mime_type: &str) -> Option<Vec<u8>> {
         None
     }
     fn fallback_time(&self) -> DateTime<Utc> {
@@ -295,15 +376,152 @@ impl<W: Witness> Witness for RecordingWitness<W> {
         self.note("git_info", value.0.is_some() || value.1.is_some());
         value
     }
-    fn blob_root(&self) -> Option<PathBuf> {
-        let value = self.inner.blob_root();
-        self.note("blob_root", value.is_some());
+    fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+        let value = self.inner.blob(reference, mime_type);
+        self.note("blob", value.is_some());
         value
     }
     fn fallback_time(&self) -> DateTime<Utc> {
         // Asked on every parse; whether it mattered shows up as a difference
         // the test attributes to it.
         self.inner.fallback_time()
+    }
+}
+
+/// Git resolution for one working directory, as the laptop saw it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitWitness {
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_repo: Option<String>,
+}
+
+/// Fact kind that carries a [`CapturedWitness`] beside an envelope's raw
+/// records. Captured, not derived: a rebuild must never drop it.
+pub const CAPTURE_WITNESS_FACT_KIND: &str = "capture.witness";
+
+/// Everything one parse took from outside the transcript bytes, in a form a
+/// host can store and answer from. Shipped as a [`CAPTURE_WITNESS_FACT_KIND`]
+/// fact so the host parses the same bytes with the same answers.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CapturedWitness {
+    pub identity: SourceIdentity,
+    pub fallback_time: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_meta: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_transcript_timestamps: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceWitness>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git: Vec<GitWitness>,
+    /// Blob bytes by sha256, from the shipped content-addressed media. Not
+    /// serialized: media travels as media objects, not inside the fact.
+    #[serde(skip)]
+    pub media: std::collections::HashMap<String, Vec<u8>>,
+}
+
+impl Witness for CapturedWitness {
+    fn subagent_meta(&self) -> Option<String> {
+        self.subagent_meta.clone()
+    }
+    fn cursor_transcript_timestamps(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        self.cursor_transcript_timestamps
+    }
+    fn workspace(&self) -> Option<WorkspaceWitness> {
+        self.workspace.clone()
+    }
+    fn git_info(&self, cwd: &str) -> (Option<String>, Option<String>) {
+        self.git
+            .iter()
+            .find(|entry| entry.cwd == cwd)
+            .map(|entry| (entry.project.clone(), entry.git_repo.clone()))
+            .unwrap_or((None, None))
+    }
+    fn blob(&self, reference: &str, _mime_type: &str) -> Option<Vec<u8>> {
+        let digest = reference.strip_prefix("blob:sha256:")?.to_ascii_lowercase();
+        self.media.get(&digest).cloned()
+    }
+    fn fallback_time(&self) -> DateTime<Utc> {
+        self.fallback_time
+    }
+}
+
+/// The laptop witness, with a fixed clock, recording every answer it gives so
+/// the shipper can send exactly what the parse used.
+pub struct CapturingWitness<'a> {
+    inner: FileWitness<'a>,
+    fallback_time: DateTime<Utc>,
+    subagent_meta: RefCell<Option<String>>,
+    cursor_transcript_timestamps: RefCell<Option<(DateTime<Utc>, DateTime<Utc>)>>,
+    workspace: RefCell<Option<WorkspaceWitness>>,
+    git: RefCell<Vec<GitWitness>>,
+}
+
+impl<'a> CapturingWitness<'a> {
+    /// `fallback_time` is the source epoch's opening time, which is shipped
+    /// with every envelope; the laptop and a host then date a clockless record
+    /// the same way.
+    pub fn new(path: &'a Path, fallback_time: DateTime<Utc>) -> Self {
+        Self {
+            inner: FileWitness::new(path),
+            fallback_time,
+            subagent_meta: RefCell::new(None),
+            cursor_transcript_timestamps: RefCell::new(None),
+            workspace: RefCell::new(None),
+            git: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn finish(self, identity: SourceIdentity) -> CapturedWitness {
+        CapturedWitness {
+            identity,
+            fallback_time: self.fallback_time,
+            subagent_meta: self.subagent_meta.into_inner(),
+            cursor_transcript_timestamps: self.cursor_transcript_timestamps.into_inner(),
+            workspace: self.workspace.into_inner(),
+            git: self.git.into_inner(),
+            media: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl Witness for CapturingWitness<'_> {
+    fn subagent_meta(&self) -> Option<String> {
+        let value = self.inner.subagent_meta();
+        *self.subagent_meta.borrow_mut() = value.clone();
+        value
+    }
+    fn cursor_transcript_timestamps(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        let value = self.inner.cursor_transcript_timestamps();
+        *self.cursor_transcript_timestamps.borrow_mut() = value;
+        value
+    }
+    fn workspace(&self) -> Option<WorkspaceWitness> {
+        let value = self.inner.workspace();
+        *self.workspace.borrow_mut() = value.clone();
+        value
+    }
+    fn git_info(&self, cwd: &str) -> (Option<String>, Option<String>) {
+        let value = self.inner.git_info(cwd);
+        let mut git = self.git.borrow_mut();
+        if !git.iter().any(|entry| entry.cwd == cwd) {
+            git.push(GitWitness {
+                cwd: cwd.to_string(),
+                project: value.0.clone(),
+                git_repo: value.1.clone(),
+            });
+        }
+        value
+    }
+    fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+        // Blob bytes ship as media objects; the host answers from those.
+        self.inner.blob(reference, mime_type)
+    }
+    fn fallback_time(&self) -> DateTime<Utc> {
+        self.fallback_time
     }
 }
 
@@ -442,7 +660,7 @@ mod equivalence {
         fn git_info(&self, _cwd: &str) -> (Option<String>, Option<String>) {
             (None, None)
         }
-        fn blob_root(&self) -> Option<PathBuf> {
+        fn blob(&self, _reference: &str, _mime_type: &str) -> Option<Vec<u8>> {
             None
         }
         fn fallback_time(&self) -> DateTime<Utc> {
@@ -475,28 +693,29 @@ mod equivalence {
                 // clock from the other witness inputs.
                 let clock = ClockOnly(FileWitness::new(&path).fallback_time());
                 let from_memory = parse_source(
-                    &MemorySource::new(&path, bytes.clone()),
+                    &MemorySource::new(SourceIdentity::from_path(&path), bytes.clone()),
                     &clock,
                     offset,
                     None,
                     provider,
                 );
-                // The host receives a hash of the path, not the path. Keep
-                // only the extension (the format dispatch) and see what else
-                // the location was supplying.
-                let neutral_path = PathBuf::from(format!(
-                    "source.{}",
-                    path.extension().and_then(|e| e.to_str()).unwrap_or("jsonl")
-                ));
+                // The host receives a hash of the path plus the shipped
+                // SourceIdentity, never the path: parse with that identity and
+                // a label that names nothing, and see whether the location
+                // still supplied anything.
+                let shipped_identity = SourceIdentity {
+                    label: "shipped".to_string(),
+                    ..SourceIdentity::from_path(&path)
+                };
                 let pathless = parse_source(
-                    &MemorySource::new(&neutral_path, bytes.clone()),
+                    &MemorySource::new(shipped_identity, bytes.clone()),
                     &clock,
                     offset,
                     None,
                     provider,
                 );
                 let clockless = parse_source(
-                    &MemorySource::new(&path, bytes.clone()),
+                    &MemorySource::new(SourceIdentity::from_path(&path), bytes.clone()),
                     &NoWitness,
                     offset,
                     None,

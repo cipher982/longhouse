@@ -262,9 +262,9 @@ pub(super) fn session_facts(
     provider: &str,
     metadata: &SessionMetadata,
     records: &[StorageV2RenderRecord],
-    resolution: &SourceEpochResolution,
+    epoch_opened_at: &str,
 ) -> Result<StorageV2SessionFacts> {
-    let fallback = DateTime::parse_from_rfc3339(&resolution.opened_at)
+    let fallback = DateTime::parse_from_rfc3339(epoch_opened_at)
         .context("source epoch opened_at is invalid")?
         .with_timezone(&Utc);
     let started_at = metadata

@@ -4563,9 +4563,14 @@ PROVIDER_FACT_KINDS = frozenset(
         "delegation.metadata",
         "delegation.spawn",
         "delegation.activity",
+        # What the laptop parser read from outside the shipped bytes (git
+        # resolution, sidecars, source identity), so the host can rebuild the
+        # render from raw. Source-tier: never served, never dropped by a rebuild.
+        "capture.witness",
     }
 )
 _PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
+_CAPTURE_FACT_PAYLOAD_MAX_BYTES = 65_536
 _DELEGATION_METADATA_MAX_CHARS = 8_192
 _DELEGATION_CHILD_LIMIT = 256
 
@@ -4669,7 +4674,7 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
         payload_size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     except (TypeError, ValueError) as exc:
         raise ValueError("provider fact payload must be a small JSON object") from exc
-    if payload_size > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
+    if payload_size > (_CAPTURE_FACT_PAYLOAD_MAX_BYTES if kind.startswith("capture.") else _PROVIDER_FACT_PAYLOAD_MAX_BYTES):
         raise ValueError("provider fact payload must be a small JSON object")
     if kind.startswith("delegation."):
         payload = _validate_delegation_payload(kind, payload)

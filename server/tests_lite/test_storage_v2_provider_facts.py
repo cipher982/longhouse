@@ -678,3 +678,38 @@ async def test_session_read_carries_provenance_so_the_workspace_needs_no_extra_r
         assert workspace["session"]["last_turn"]["duration_ms"] == 129_299
         assert "session.provider_facts.list.v2" not in calls
         assert "session.input.receipts.list.v2" not in calls
+
+
+@pytest.mark.asyncio
+async def test_capture_witness_is_accepted_but_never_listed_as_a_provider_fact(monkeypatch):
+    """One capture witness rides every envelope; it must not crowd the bounded fact list."""
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-capture-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        at = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
+        payload["facts"] = [
+            {
+                "kind": "capture.witness",
+                "at": at.isoformat(),
+                "source_position": 0,
+                "payload": {"identity": {"format": "jsonl", "location_session_id": str(session_id)}, "fallback_time": at.isoformat()},
+            },
+            _fact(at),
+        ]
+        response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert response.status_code == 200, response.text
+        listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
+        assert [fact["kind"] for fact in listed["facts"]] == ["turn.duration"]
+        # Stored for the host normalizer, though never listed.
+        import sqlite3
+
+        from zerg.catalogd.models import SessionProviderFact
+
+        with sqlite3.connect(stack.object_root.parent / "catalog.db") as db:
+            stored = db.execute(
+                f"SELECT kind FROM {SessionProviderFact.__tablename__} WHERE session_id = ? ORDER BY kind",
+                (str(session_id),),
+            ).fetchall()
+        assert [row[0] for row in stored] == ["capture.witness", "turn.duration"]

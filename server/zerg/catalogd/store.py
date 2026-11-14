@@ -1823,7 +1823,9 @@ def _provider_fact_rows(connection: Connection, *, session_id: str, limit: int =
     rows = (
         connection.execute(
             select(table)
-            .where(table.c.session_id == session_id)
+            # Capture witnesses are rebuild inputs stored beside the raw, one per
+            # envelope; they are not provider facts anyone reads.
+            .where(table.c.session_id == session_id, table.c.kind.not_like("capture.%"))
             .order_by(table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc())
             .limit(limit)
         )

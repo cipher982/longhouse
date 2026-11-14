@@ -25,7 +25,7 @@ use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::source::{FileSource, FileWitness, SourceBytes, Witness};
+use super::source::{FileSource, FileWitness, SourceBytes, SourceFormat, Witness};
 use crate::codex_source::{parse_codex_subagent_source, parse_codex_subagent_source_str};
 use crate::media_redaction::{redact_source_line_with_media, InlineImageRedaction};
 
@@ -782,7 +782,7 @@ pub fn parse_source(
     provider: Option<&str>,
 ) -> Result<ParseResult> {
     let _clock = FallbackClock::set(witness.fallback_time());
-    let path = source.identity_path();
+    let identity = source.identity();
     let native_flavor = match provider.map(|value| value.to_ascii_lowercase()).as_deref() {
         Some("omp") => Some(NativeFlavor::Omp),
         Some("pi") => Some(NativeFlavor::Pi),
@@ -793,28 +793,14 @@ pub fn parse_source(
         // Longhouse identity. The shipper repeats this fence before enqueueing.
         source.omp_header()?;
     }
-    let is_gemini = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("json"))
-        .unwrap_or(false);
+    let is_gemini = identity.format == SourceFormat::JsonDocument;
 
-    let raw_stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
-    // get a deterministic UUID v5 derived from the full file path.
+    // The location's session id (Antigravity brain id, UUID stem, or a UUID
+    // derived from the full path) unless OMP's header names one.
     let mut session_id = if native_flavor == Some(NativeFlavor::Omp) {
         crate::omp_session::deterministic_session_id(&source.omp_header()?.native_id)
-    } else if let Some(antigravity_id) = antigravity_session_id_from_path(path) {
-        antigravity_id
-    } else if Uuid::parse_str(&raw_stem).is_ok() {
-        raw_stem
     } else {
-        Uuid::new_v5(&Uuid::NAMESPACE_URL, path.to_string_lossy().as_bytes()).to_string()
+        identity.location_session_id.clone()
     };
 
     // Incremental parses can start after the initial session_meta line.
@@ -943,7 +929,7 @@ pub fn parse_source(
 
     // Workflow run id comes from the on-disk path, not the line contents.
     if result.metadata.workflow_run_id.is_none() {
-        result.metadata.workflow_run_id = workflow_run_id_from_path(path);
+        result.metadata.workflow_run_id = identity.workflow_run_id.clone();
     }
 
     // A Task/Agent subagent names its own spawning tool call in a sidecar
@@ -1013,7 +999,7 @@ fn subagent_tool_use_id_from_meta(raw: &str) -> Option<String> {
 
 /// Extract the dynamic-workflow run id from a Claude workflow subagent path:
 /// `.../subagents/workflows/<run>/agent-*.jsonl` -> `<run>`.
-fn workflow_run_id_from_path(path: &Path) -> Option<String> {
+pub(crate) fn workflow_run_id_from_path(path: &Path) -> Option<String> {
     let components: Vec<&str> = path
         .components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -1349,10 +1335,10 @@ fn empty_gemini_result(session_id: &str, file_size: u64) -> ParseResult {
 }
 
 fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<ParseResult> {
-    let path = source.identity_path();
+    let label = source.identity().label.as_str();
     let content = source
         .read_to_string()
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+        .with_context(|| format!("Failed to read {label}"))?;
     let file_size = content.len() as u64;
     let (source_lines, media_objects) = capture_text_source_lines(&content);
 
@@ -1363,7 +1349,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                 match serde_json::from_str(&sanitized) {
                     Ok(value) => {
                         tracing::debug!(
-                            path = %path.display(),
+                            path = %label,
                             error = %primary_error,
                             "Recovered Gemini JSON after surrogate-escape repair"
                         );
@@ -1371,7 +1357,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                     }
                     Err(repaired_error) => {
                         tracing::debug!(
-                            path = %path.display(),
+                            path = %label,
                             error = %primary_error,
                             repaired_error = %repaired_error,
                             "Failed to parse Gemini JSON (including repaired payload)"
@@ -1380,7 +1366,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                     }
                 }
             } else {
-                tracing::debug!(path = %path.display(), error = %primary_error, "Failed to parse Gemini JSON");
+                tracing::debug!(path = %label, error = %primary_error, "Failed to parse Gemini JSON");
                 return Ok(empty_gemini_result(session_id, file_size));
             }
         }
@@ -1390,7 +1376,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
         let messages: Vec<GeminiMessage> = match serde_json::from_value(document) {
             Ok(messages) => messages,
             Err(error) => {
-                tracing::debug!(path = %path.display(), error = %error, "Failed to parse Gemini logs array");
+                tracing::debug!(path = %label, error = %error, "Failed to parse Gemini logs array");
                 return Ok(empty_gemini_result(session_id, file_size));
             }
         };
@@ -1405,7 +1391,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
         let session: GeminiSession = match serde_json::from_value(document) {
             Ok(session) => session,
             Err(error) => {
-                tracing::debug!(path = %path.display(), error = %error, "Failed to parse Gemini session document");
+                tracing::debug!(path = %label, error = %error, "Failed to parse Gemini session document");
                 return Ok(empty_gemini_result(session_id, file_size));
             }
         };
@@ -1798,12 +1784,11 @@ fn parse_large_file(
     let mut codex_facts = codex_fact_state_for(source, offset);
     // Pi and OMP keep pasted images in a blob store beside their transcripts;
     // only those providers can produce a reference worth resolving.
-    let blob_root = matches!(
+    let blob_lookup = matches!(
         native_flavor,
         Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
     )
-    .then(|| witness.blob_root())
-    .flatten();
+    .then_some(|reference: &str, mime_type: &str| witness.blob(reference, mime_type));
 
     let mut line_buf: Vec<u8> = Vec::new();
     let mut next_line_offset = offset;
@@ -1828,7 +1813,8 @@ fn parse_large_file(
         let line_bytes = &line_buf[..bytes_read - 1];
 
         let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
-            let redacted = redact_source_line_with_media(line_str, blob_root.as_deref());
+            let redacted =
+                redact_source_line_with_media(line_str, blob_lookup.as_ref().map(|f| f as _));
             media_objects.extend(parsed_media_objects(
                 line_offset,
                 &redacted.original_line_sha256,
@@ -1941,12 +1927,11 @@ fn parse_buffered(
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(source, offset);
     // See parse_large_file: only the Pi lineage keeps a blob store beside its transcripts.
-    let blob_root = matches!(
+    let blob_lookup = matches!(
         native_flavor,
         Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
     )
-    .then(|| witness.blob_root())
-    .flatten();
+    .then_some(|reference: &str, mime_type: &str| witness.blob(reference, mime_type));
     let mut line = String::new();
 
     loop {
@@ -1980,7 +1965,7 @@ fn parse_buffered(
         let line_offset = current_offset;
         current_offset += bytes_read as u64;
 
-        let redacted = redact_source_line_with_media(&line, blob_root.as_deref());
+        let redacted = redact_source_line_with_media(&line, blob_lookup.as_ref().map(|f| f as _));
         media_objects.extend(parsed_media_objects(
             line_offset,
             &redacted.original_line_sha256,
@@ -5071,14 +5056,14 @@ fn seed_codex_fact_state(source: &dyn SourceBytes, offset: u64) -> CodexFactStat
 
 /// Codex rollouts are the only transcripts that carry the turn signals the
 /// seed replays; every other provider's incremental parse skips the read.
-fn is_codex_rollout_path(path: &Path) -> bool {
+pub(crate) fn is_codex_rollout_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
 }
 
 fn codex_fact_state_for(source: &dyn SourceBytes, offset: u64) -> CodexFactState {
-    if is_codex_rollout_path(source.identity_path()) {
+    if source.identity().codex_rollout {
         seed_codex_fact_state(source, offset)
     } else {
         CodexFactState::default()

@@ -414,7 +414,7 @@ pub(super) fn walk_opencode_database(
                 "opencode",
                 &parse_result.metadata,
                 &render_records,
-                &resolution,
+                &resolution.opened_at,
             )?;
             let media_objects = opencode_media_objects_for_range(
                 &parse_result,
