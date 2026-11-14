@@ -11,7 +11,10 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import and_
 from sqlalchemy import func
+from sqlalchemy import literal
+from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -30,7 +33,10 @@ from zerg.catalogd.store import _write_transaction
 # A session this large is rebuilt by Phase 4's incremental path, not sampled.
 MAX_SHADOW_RAW_OBJECTS = 20_000
 SHADOW_SESSION_COOLDOWN = timedelta(minutes=30)
-SHADOW_OUTCOMES = ("match", "mismatch", "no_witness", "raw_only", "error")
+SHADOW_OUTCOMES = ("match", "mismatch", "no_witness", "raw_only", "too_large", "error")
+# Outcomes a newer normalizer revision must answer again. An error is retried
+# after the cooldown whatever the revision.
+REVISION_BOUND_OUTCOMES = ("match", "mismatch")
 
 
 class RenderShadowMixin:
@@ -52,7 +58,16 @@ class RenderShadowMixin:
                 select(func.count()).where(raw.c.session_id == session_id, raw.c.retired_at.is_(None))
             ).scalar_one()
             if raw_count > MAX_SHADOW_RAW_OBJECTS:
-                return {"found": True, "too_large": True, "raw_objects": int(raw_count)}
+                envelopes = connection.execute(
+                    select(raw.c.envelope_id, raw.c.provider, raw.c.source_epoch, raw.c.range_start).where(
+                        raw.c.session_id == session_id, raw.c.retired_at.is_(None)
+                    )
+                ).mappings()
+                return {
+                    "found": True,
+                    "too_large": True,
+                    "raw_objects": [{**dict(row), "range_start": int(row["range_start"])} for row in envelopes],
+                }
             raw_rows = (
                 connection.execute(
                     select(
@@ -121,10 +136,11 @@ class RenderShadowMixin:
                 .mappings()
                 .all()
             )
+            shadow = RenderShadowEnvelope.__table__
             checked = {
-                str(row["envelope_id"])
+                str(row["envelope_id"]): {"outcome": row["outcome"], "revision": row["normalizer_revision"]}
                 for row in connection.execute(
-                    select(RenderShadowEnvelope.__table__.c.envelope_id).where(RenderShadowEnvelope.__table__.c.session_id == session_id)
+                    select(shadow.c.envelope_id, shadow.c.outcome, shadow.c.normalizer_revision).where(shadow.c.session_id == session_id)
                 ).mappings()
             }
         return {
@@ -149,11 +165,15 @@ class RenderShadowMixin:
             ],
             "render_objects": [dict(row) for row in render_rows],
             "media": [dict(row) for row in media_rows],
-            "checked_envelopes": sorted(checked),
+            "checked": checked,
         }
 
-    def list_render_shadow_candidates(self, *, limit: int) -> dict[str, Any]:
-        """Sessions with committed envelopes the shadow has not compared yet, newest first.
+    def list_render_shadow_candidates(self, *, limit: int, revision: str | None = None) -> dict[str, Any]:
+        """Sessions with envelopes the shadow has not answered yet, newest first.
+
+        Unanswered means never compared, last compared with an error, or (when
+        the caller names its normalizer `revision`) last matched or mismatched
+        by another revision.
 
         A session compared in the last `SHADOW_SESSION_COOLDOWN` waits: each
         comparison rebuilds whole epochs, so rechecking a live session on every
@@ -166,7 +186,19 @@ class RenderShadowMixin:
             rows = connection.execute(
                 select(raw.c.session_id, raw.c.provider, func.max(raw.c.commit_seq).label("newest"))
                 .select_from(raw.outerjoin(shadow, shadow.c.envelope_id == raw.c.envelope_id))
-                .where(raw.c.retired_at.is_(None), shadow.c.envelope_id.is_(None), raw.c.session_id.not_in(recent))
+                .where(
+                    raw.c.retired_at.is_(None),
+                    raw.c.session_id.not_in(recent),
+                    or_(
+                        shadow.c.envelope_id.is_(None),
+                        shadow.c.outcome == "error",
+                        and_(
+                            literal(revision is not None),
+                            shadow.c.outcome.in_(REVISION_BOUND_OUTCOMES),
+                            shadow.c.normalizer_revision != (revision or ""),
+                        ),
+                    ),
+                )
                 .group_by(raw.c.session_id, raw.c.provider)
                 .order_by(func.max(raw.c.commit_seq).desc())
                 .limit(limit)

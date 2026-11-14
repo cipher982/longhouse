@@ -1313,14 +1313,14 @@
   "empty": {
    "code": "invalid_request",
    "details": {},
-   "message": "render.shadow.candidates.v2 requires limit",
+   "message": "render.shadow.candidates.v2 requires limit and revision",
    "retry_after_ms": null,
    "retryable": false
   },
   "extra": {
    "code": "invalid_request",
    "details": {},
-   "message": "render.shadow.candidates.v2 requires limit",
+   "message": "render.shadow.candidates.v2 requires limit and revision",
    "retry_after_ms": null,
    "retryable": false
   }

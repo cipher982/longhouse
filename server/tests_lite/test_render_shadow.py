@@ -44,6 +44,8 @@ for line in sys.stdin:
         if data != b"hello\n" or len(witnessed) != 1 or witnessed[0]["payload"] != {"format": "codex"}:
             answers.append({"range_start": envelope["range_start"], "range_end": envelope["range_end"], "error": f"bad input {data!r} {witnessed!r}"})
             continue
+        if mode == "short":
+            continue
         records = [dict(record) for record in render]
         if mode == "drift":
             records[1]["content_text"] = "WORLD"
@@ -98,7 +100,7 @@ async def _shadow(stack, worker, session_id):
 async def test_a_host_rebuild_equal_to_the_laptop_render_is_recorded_as_a_match(monkeypatch, tmp_path):
     async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-") as stack:
         session_id, payload = await _commit(stack, witnessed=True)
-        candidates = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10})
+        candidates = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None})
         assert [row["session_id"] for row in candidates["sessions"]] == [session_id]
 
         worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=payload["render"]["records"]))
@@ -109,7 +111,7 @@ async def test_a_host_rebuild_equal_to_the_laptop_render_is_recorded_as_a_match(
         assert [(row["outcome"], row["detail"], row["normalizer_revision"]) for row in results] == [("match", None, "fake-rev")]
 
         await stack.catalog.call("render.shadow.record.v2", {"results": results})
-        assert (await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10}))["sessions"] == []
+        assert (await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None}))["sessions"] == []
         summary = await stack.catalog.call("render.shadow.summary.v2", {})
         assert summary["counts"] == [{"provider": "codex", "outcome": "match", "envelopes": 1, "sessions": 1}]
 
@@ -188,8 +190,74 @@ async def test_a_session_compared_recently_waits_before_its_new_envelopes_are_co
         later["render"]["generation_id"] = payload["render"]["generation_id"]
         response = await stack.client.post("/agents/storage/v2/envelopes", json=later, headers={"X-Longhouse-Storage-Lane": "live"})
         assert response.status_code == 200, response.text
-        assert (await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10}))["sessions"] == []
+        assert (await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None}))["sessions"] == []
 
         monkeypatch.setattr(shadow_store, "SHADOW_SESSION_COOLDOWN", shadow_store.timedelta(0))
-        candidates = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10})
+        candidates = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None})
         assert [row["session_id"] for row in candidates["sessions"]] == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_or_a_missing_answer_is_an_error_not_a_mismatch(monkeypatch, tmp_path):
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-err-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="short", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+            assert [(row["outcome"], row["detail"]) for row in results] == [("error", "normalizer answered 0 envelopes for 1")]
+
+            async def busy(*_args, **_kwargs):
+                raise RuntimeError("raw repair queue is full")
+
+            monkeypatch.setattr(stack.raw_workers, "read", busy)
+            results = await _shadow(stack, worker, session_id)
+            assert [row["outcome"] for row in results] == ["error"]
+            assert "raw repair queue is full" in results[0]["detail"]
+        finally:
+            await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_a_new_normalizer_revision_reopens_matches_and_errors_are_retried(monkeypatch, tmp_path):
+    from zerg.catalogd.store_mixins import render_shadow as shadow_store
+
+    monkeypatch.setattr(shadow_store, "SHADOW_SESSION_COOLDOWN", shadow_store.timedelta(0))
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-rev-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+        finally:
+            await worker.close()
+        assert worker.revision == "fake-rev"
+        await stack.catalog.call("render.shadow.record.v2", {"results": results})
+
+        async def candidates(revision):
+            listed = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": revision})
+            return [row["session_id"] for row in listed["sessions"]]
+
+        assert await candidates("fake-rev") == []
+        assert await candidates(None) == []
+        assert await candidates("next-rev") == [session_id]
+
+        await stack.catalog.call("render.shadow.record.v2", {"results": [{**results[0], "outcome": "error"}]})
+        assert await candidates("fake-rev") == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_a_session_too_large_to_rebuild_is_recorded_and_leaves_the_queue(monkeypatch, tmp_path):
+    from zerg.catalogd.store_mixins import render_shadow as shadow_store
+
+    monkeypatch.setattr(shadow_store, "MAX_SHADOW_RAW_OBJECTS", 0)
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-big-") as stack:
+        session_id, _unused = await _commit(stack, witnessed=True)
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="die", render=[]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+        finally:
+            await worker.close()
+        assert [row["outcome"] for row in results] == ["too_large"]
+        await stack.catalog.call("render.shadow.record.v2", {"results": results})
+        monkeypatch.setattr(shadow_store, "SHADOW_SESSION_COOLDOWN", shadow_store.timedelta(0))
+        listed = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None})
+        assert listed["sessions"] == []

@@ -259,6 +259,8 @@ COPY --link --chown=1000:1000 server/ /app/
 # 5. The frontend dist, where the backend expects it.
 COPY --link --chown=1000:1000 --from=frontend-builder /app/web/dist /app/web/dist
 COPY --link --from=engine-builder /out/longhouse-engine /usr/local/bin/longhouse-engine
+# Prove the normalizer runs on this base image (glibc, loader), not only in the builder.
+RUN echo '{}' | /usr/local/bin/longhouse-engine normalize-worker | grep -q '"error":"bad request'
 
 # Create the durable Runtime Host data root. User uploads live below this
 # volume; application source remains immutable and replaceable.

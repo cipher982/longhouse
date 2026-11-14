@@ -847,7 +847,7 @@ class CatalogDaemon:
             "_read_render_rebuild_inputs", frozenset({"session_id"}), "storage.session.rebuild_inputs.v2 requires session_id"
         ),
         "render.shadow.candidates.v2": _Route(
-            "_list_render_shadow_candidates", frozenset({"limit"}), "render.shadow.candidates.v2 requires limit"
+            "_list_render_shadow_candidates", frozenset({"limit", "revision"}), "render.shadow.candidates.v2 requires limit and revision"
         ),
         "render.shadow.record.v2": _Route("_record_render_shadow", frozenset({"results"}), "render.shadow.record.v2 requires results"),
         "render.shadow.summary.v2": _Route("_render_shadow_summary", frozenset(), "render.shadow.summary.v2 accepts no parameters"),
@@ -2548,8 +2548,11 @@ class CatalogDaemon:
         limit = request.params["limit"]
         if type(limit) is not int or not 1 <= limit <= 100:
             return self._error(request, "invalid_request", "limit must be between 1 and 100")
+        revision = request.params["revision"]
+        if revision is not None and (not isinstance(revision, str) or not 0 < len(revision) <= 128):
+            return self._error(request, "invalid_request", "revision must be null or a short string")
         assert self._store is not None
-        result = await self._run_read_store(self._store.list_render_shadow_candidates, limit=limit)
+        result = await self._run_read_store(self._store.list_render_shadow_candidates, limit=limit, revision=revision)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _record_render_shadow(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
