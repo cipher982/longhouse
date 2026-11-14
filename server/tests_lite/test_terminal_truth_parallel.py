@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -238,7 +239,7 @@ class FakeRunner:
 
     def __init__(self, script: dict[str, list[tuple[str, str | None, str]]], scratch: Path) -> None:
         self.script, self.scratch, self.calls, self.epoch = script, scratch, [], 0.0
-        self.child_environment: dict[str, str] = {}
+        self.hosts: parallel.HostPool | None = None
         self.stopped = parallel.threading.Event()
 
     def run(self, shard: parallel.Shard, attempt: str = "") -> parallel.ShardRun:
@@ -450,8 +451,14 @@ def test_a_run_that_was_given_less_memory_says_so_and_records_both_numbers(monke
     engine = tmp_path / "longhouse-engine"
     code = parallel.main(["--engine", str(engine), "--longhouse-cli", str(engine), "--out-dir", str(out), "--jobs", "8", "--no-mutations"])
     fleet = json.loads((out / "fleet.json").read_text())
-    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (2, 8)
-    assert "2 at a time, not 8: a limit of 5.0 GiB" in capsys.readouterr().err
+    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (5, 8)
+    assert "5 at a time, not 8: a limit of 5.0 GiB" in capsys.readouterr().err
+    code = parallel.main([
+        "--engine", str(engine), "--longhouse-cli", str(engine), "--out-dir", str(out), "--jobs", "8", "--no-mutations",
+        "--shards-per-host", "0",
+    ])  # fmt: skip
+    fleet = json.loads((out / "fleet.json").read_text())
+    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (2, 8)  # a host for every pass is 0.8 GiB more a shard
 
 
 # ----- the mutated engine cache
@@ -715,81 +722,213 @@ def test_a_run_with_a_long_scratch_root_gives_shards_the_link_and_records_and_re
     assert sorted(p.name for p in root.iterdir() if p.name != "server-copies") == sorted(k.name for k in kept)
 
 
-# ----- one host for the whole run (--shared-host)
+# ----- the hosts the shards share (HostPool)
 
 
 class FakeHost:
-    def __init__(self, root: Path, exit_status: int | None = None) -> None:
-        self.root, self.log_path, self.url = root, root / "runtime-host.log", "http://127.0.0.1:1"
-        self.process = SimpleNamespace(poll=lambda: exit_status)
-        self.stopped = False
-        root.mkdir(parents=True, exist_ok=True)
-        self.log_path.write_text("INFO [ZERG.SERVICES.LOCAL_EMBEDDER] Local embedder loaded model=/m threads=4\n")
+    """Stands in for ``ScratchRuntimeHost``: ``FakeHost.exit_status`` is what a started host's process reports."""
+
+    started: list[FakeHost] = []
+    exit_status: int | None = None
+    fail_to_start = False
+
+    def __init__(self, root: Path, extra_environment: dict | None = None, *, device_id: str = "terminal-truth") -> None:
+        self.root, self.log_path, self.device_id = root, root / "runtime-host.log", device_id
+        self.url, self.process, self.stopped = "", None, False
+
+    def start(self) -> None:
+        if FakeHost.fail_to_start:
+            raise RuntimeError("scratch Runtime Host did not answer /api/health")
+        status = FakeHost.exit_status
+        self.url = f"http://127.0.0.1:{len(FakeHost.started) + 1}"
+        self.process = SimpleNamespace(poll=lambda: status)
+        self.log_path.write_text("up\n")
+        FakeHost.started.append(self)
 
     def stop(self) -> None:
         self.stopped = True
 
 
-def test_each_shard_has_its_own_host_unless_one_is_asked_for(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(parallel, "start_shared_host", lambda *a, **k: pytest.fail("a host was started for the run"))
-    code, fleet, fake = run_with(monkeypatch, tmp_path, {})
-    assert code == 0 and fleet["shared_host"] is None and fake.child_environment == {} and fleet["narrowed"] is False
+@pytest.fixture
+def fake_hosts(monkeypatch):
+    FakeHost.started, FakeHost.exit_status, FakeHost.fail_to_start = [], None, False
+    monkeypatch.setattr(parallel, "ScratchRuntimeHost", FakeHost)
+    return FakeHost
 
 
-def test_a_shared_host_run_starts_one_host_points_every_shard_at_it_and_is_not_the_gate(monkeypatch, tmp_path) -> None:
-    hosts: list[FakeHost] = []
-    asked: list[tuple] = []
+def test_hosts_start_when_a_shard_needs_one_and_each_carries_so_many_shards_at_a_time(fake_hosts, tmp_path) -> None:
+    """Until 2026-11-13 every pass started its own host: 6 to 8 s and 0.9 GiB, about 80 times a run."""
 
-    def start(root: Path, model_dir, *, embedding: bool = True) -> FakeHost:
-        asked.append((root, model_dir, embedding))
-        hosts.append(FakeHost(root))
-        return hosts[-1]
-
-    monkeypatch.setattr(parallel, "start_shared_host", start)
-    code, fleet, fake = run_with(monkeypatch, tmp_path, {}, "--shared-host", "--embed-model-cache", str(tmp_path / "model"))
-    (host,) = hosts
-    assert asked == [(tmp_path / "scratch" / "shared-host", tmp_path / "model", True)]
-    assert fake.child_environment == {"TT_RUNTIME_HOST": host.url, "TT_RUNTIME_HOST_LOG": str(host.log_path)}
-    assert code == 0 and host.stopped and fleet["narrowed"] is True
-    assert fleet["shared_host"] == {"exited_during_the_run": None, "embedding_model_loaded": True, "root": str(host.root)}
-    assert not host.root.exists() and fleet["kept_scratch"] == []  # nothing came out wrong: its scratch goes too
+    pool = parallel.HostPool(tmp_path / "hosts", 2, lambda _m: None)
+    assert fake_hosts.started == []  # nothing is started for a run that never asks
+    a, b = pool.take(), pool.take()
+    assert a is b and len(fake_hosts.started) == 1 and a.host.root == tmp_path / "hosts" / "host-0"
+    c = pool.take()  # the first host is full
+    assert c is not a and [h.name for h in pool.hosts] == ["host-0", "host-1"]
+    pool.give_back(a)
+    assert pool.take() is a  # room again on the first
+    assert pool.take() is c and len(fake_hosts.started) == 2  # the least busy host with room, not a third
+    state = pool.stop()
+    assert all(h.stopped for h in fake_hosts.started)
+    assert [(h["name"], h["shards"], h["exited"], h["error"]) for h in state] == [("host-0", 3, None, ""), ("host-1", 2, None, "")]
 
 
-def test_a_shared_host_that_exited_fails_the_run_and_its_log_is_kept(monkeypatch, tmp_path) -> None:
-    hosts: list[FakeHost] = []
-    monkeypatch.setattr(parallel, "start_shared_host", lambda root, _m, **_k: hosts.append(FakeHost(root, exit_status=-9)) or hosts[-1])
-    code, fleet, _fake = run_with(monkeypatch, tmp_path, {}, "--shared-host")
-    assert code == 1 and fleet["state"] == "failure" and fleet["shared_host"]["exited_during_the_run"] == -9
-    assert fleet["kept_scratch"] == [str(hosts[0].root)] and hosts[0].log_path.is_file()
-
-
-def test_a_wrong_row_under_a_shared_host_keeps_the_hosts_log_beside_the_shards(monkeypatch, tmp_path) -> None:
-    hosts: list[FakeHost] = []
-    monkeypatch.setattr(parallel, "start_shared_host", lambda root, _m, **_k: hosts.append(FakeHost(root)) or hosts[-1])
-    bad = ("fail", "state_shown", "2.6 s behind")
-    code, fleet, _fake = run_with(monkeypatch, tmp_path, {"thinking:claude/console": [bad, bad]}, "--shared-host")
-    assert code == 1 and str(hosts[0].root) in fleet["kept_scratch"] and len(fleet["kept_scratch"]) >= 2 and hosts[0].root.is_dir()
-
-
-def test_the_shared_host_starts_with_the_embedding_lane_and_the_model_directory(monkeypatch, tmp_path) -> None:
-    started: list[tuple[Path, dict]] = []
-
-    class Host:
-        def __init__(self, root: Path, environment: dict[str, str]) -> None:
-            started.append((root, environment))
-
-        def start(self) -> None:
-            pass
-
-    monkeypatch.setattr(parallel, "ScratchRuntimeHost", Host)
-    (tmp_path / "h" / "left-over").mkdir(parents=True)
-    parallel.start_shared_host(tmp_path / "h", tmp_path / "model")
-    parallel.start_shared_host(tmp_path / "h", None, embedding=False)
-    assert started == [
-        (tmp_path / "h", {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "0", "LONGHOUSE_EMBED_MODEL_DIR": str(tmp_path / "model")}),
-        (tmp_path / "h", {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "1"}),
+def test_a_host_that_exited_or_never_started_is_not_handed_out_again_and_is_reported(fake_hosts, tmp_path) -> None:
+    pool = parallel.HostPool(tmp_path / "hosts", 4, lambda _m: None)
+    fake_hosts.exit_status = -9
+    dead = pool.take()
+    pool.give_back(dead)
+    fake_hosts.exit_status = None
+    alive = pool.take()
+    assert alive is not dead and alive.name == "host-1"
+    fake_hosts.fail_to_start = True
+    pool.per_host = 1
+    never = pool.take()  # the shard given it fails with the reason; the run goes on
+    assert never.error == "RuntimeError: scratch Runtime Host did not answer /api/health" and never.up.is_set()
+    fake_hosts.fail_to_start = False
+    assert pool.take().name == "host-3"
+    assert [(h["name"], h["exited"], bool(h["error"])) for h in pool.stop()] == [
+        ("host-0", -9, False),
+        ("host-1", None, False),
+        ("host-2", None, True),
+        ("host-3", None, False),
     ]
-    assert list((tmp_path / "h").iterdir()) == []
+
+
+def test_shards_asking_at_once_wait_for_the_one_host_that_is_starting(fake_hosts, tmp_path, monkeypatch) -> None:
+    release = parallel.threading.Event()
+    slow_start = fake_hosts.start
+    monkeypatch.setattr(fake_hosts, "start", lambda self: (release.wait(5), slow_start(self))[1])
+    pool = parallel.HostPool(tmp_path / "hosts", 2, lambda _m: None)
+    got: list[parallel.PooledHost] = []
+    threads = [parallel.threading.Thread(target=lambda: got.append(pool.take())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.2)
+    assert got == [] and len(pool.hosts) == 1  # both were given the one host and neither has it before it is up
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+    assert len(got) == 2 and got[0] is got[1] and got[0].host.url
+
+
+def test_a_shard_is_pointed_at_a_shared_host_unless_it_needs_a_host_of_its_own(fake_hosts, monkeypatch, tmp_path) -> None:
+    seen: list[dict[str, str]] = []
+
+    class Child:
+        def __init__(self, argv, *, env, **_kwargs) -> None:
+            seen.append(env)
+
+        def wait(self, timeout=None) -> int:
+            return 0
+
+    monkeypatch.setattr(parallel.subprocess, "Popen", Child)
+    monkeypatch.setattr(parallel, "leaked_processes", lambda _root: [])
+    monkeypatch.delenv("TT_RUNTIME_HOST", raising=False)
+    runner = parallel.Runner(tmp_path / "out", tmp_path / "scratch", lambda _m: None)
+    runner.hosts = parallel.HostPool(tmp_path / "scratch" / "hosts", 2, lambda _m: None)
+    unit = parallel.Unit("long_reply:claude/console", "claude/console", "long_reply")
+    shared = runner.run(parallel.Shard("a", "long_reply", [unit], ENGINE, CLI))
+    own = runner.run(parallel.Shard("b", "long_reply", [unit], ENGINE, CLI, ["--host-env", "PYTHONPATH=/a/patched/server"]))
+    host = fake_hosts.started[0]
+    assert (seen[0]["TT_RUNTIME_HOST"], seen[0]["TT_RUNTIME_HOST_LOG"]) == (host.url, str(host.log_path))
+    assert "TT_RUNTIME_HOST" not in seen[1] and (shared.host, own.host) == ("host-0", None)
+    assert [h.shards for h in runner.hosts.hosts] == [0]  # given back when the shard ended
+
+
+def test_a_run_shares_hosts_two_shards_to_one_and_that_is_the_gate(monkeypatch, tmp_path) -> None:
+    code, fleet, fake = run_with(monkeypatch, tmp_path, {})
+    assert code == 0 and fleet["narrowed"] is False and fleet["shards_per_host"] == parallel.SHARDS_PER_HOST == 2
+    assert isinstance(fake.hosts, parallel.HostPool) and fake.hosts.per_host == 2 and fleet["hosts"] == []
+    code, fleet, fake = run_with(monkeypatch, tmp_path / "own", {}, "--shards-per-host", "0")
+    assert code == 0 and fake.hosts is None and fleet["shards_per_host"] == 0
+
+
+def run_on_hosts(monkeypatch, tmp_path, script) -> tuple[int, dict]:
+    """A run whose every shard takes a shared host, as the real runner's shards do."""
+
+    plain = FakeRunner.run
+
+    def run(self, shard, attempt=""):
+        pooled = self.hosts.take()
+        try:
+            result = plain(self, shard, attempt)
+            result.host = pooled.name
+            return result
+        finally:
+            self.hosts.give_back(pooled)
+
+    monkeypatch.setattr(FakeRunner, "run", run)
+    code, fleet, _fake = run_with(monkeypatch, tmp_path, script)
+    return code, fleet
+
+
+def test_a_shared_host_that_exited_fails_the_run_and_its_log_is_kept(fake_hosts, monkeypatch, tmp_path) -> None:
+    fake_hosts.exit_status = -9
+    code, fleet = run_on_hosts(monkeypatch, tmp_path, {})
+    assert code == 1 and fleet["state"] == "failure" and fleet["hosts"][0]["exited"] == -9
+    assert fleet["hosts"][0]["root"] in fleet["kept_scratch"] and fake_hosts.started[0].log_path.is_file()
+
+
+def test_a_wrong_row_keeps_the_log_of_the_host_it_ran_on_and_a_clean_run_keeps_none(fake_hosts, monkeypatch, tmp_path) -> None:
+    bad = ("fail", "state_shown", "2.6 s behind")
+    code, fleet = run_on_hosts(monkeypatch, tmp_path, {"thinking:claude/console": [bad, bad]})
+    used = {shard["host"] for shard in fleet["shards"] if "thinking" in shard["name"] and "claude/console" in " ".join(shard["cells"])}
+    roots = {h["name"]: h["root"] for h in fleet["hosts"]}
+    assert code == 1 and used and all(roots[name] in fleet["kept_scratch"] and Path(roots[name]).is_dir() for name in used)
+
+    fake_hosts.started.clear()
+    code, fleet = run_on_hosts(monkeypatch, tmp_path / "clean", {})
+    assert code == 0 and fleet["kept_scratch"] == [] and fleet["hosts"] and all(h.stopped for h in fake_hosts.started)
+    assert not (tmp_path / "clean" / "scratch" / "hosts").exists()
+
+
+def test_claude_is_onboarded_once_a_run_and_later_passes_copy_the_profile_under_their_own_paths(monkeypatch, tmp_path) -> None:
+    """A run onboarded Claude in every pass with a Claude cell: 13 s of first-run screens, about twenty times (2026-11-13)."""
+    from zerg.qa import live_session_toolkit as toolkit
+    from zerg.qa import terminal_truth_providers as providers
+
+    onboarded: list[Path] = []
+
+    def prepare(*, binary, home, workspace, environment, recording) -> None:
+        config = home / ".claude"
+        (config / "projects").mkdir(parents=True)
+        environment["CLAUDE_CONFIG_DIR"] = str(config)
+        trusted = {str(workspace.resolve()): {"hasTrustDialogAccepted": True}}
+        (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "projects": trusted, "given": str(workspace)}))
+        (config / "blob.bin").write_bytes(b"\xff\xfe\x00")
+        onboarded.append(home)
+
+    def a_pass(name: str) -> tuple[Path, dict[str, str], str]:
+        real = tmp_path / "real" / name
+        (real / "h").mkdir(parents=True)
+        (real / "w" / "claude").mkdir(parents=True)
+        (tmp_path / "links").mkdir(exist_ok=True)
+        root = tmp_path / "links" / name  # the scratch root is a short link on a runner
+        root.symlink_to(real, target_is_directory=True)
+        penv: dict[str, str] = {}
+        how = providers.onboard_claude(Path("claude"), home=root / "h", root=root, penv=penv, workspace_root=root / "w" / "claude")
+        return root, penv, how
+
+    monkeypatch.setattr(toolkit, "prepare_claude_profile", prepare)
+    monkeypatch.delenv(providers.PROFILE_CACHE_ENV, raising=False)
+    assert [a_pass("solo-1")[2], a_pass("solo-2")[2]] == ["onboarded", "onboarded"] and len(onboarded) == 2  # no cache: as before
+
+    monkeypatch.setenv(providers.PROFILE_CACHE_ENV, str(tmp_path / "profiles"))
+    first, _penv, how = a_pass("a1001")
+    assert how == "onboarded" and len(onboarded) == 3
+    second, penv, how = a_pass("b2002")
+    assert how == "copied" and len(onboarded) == 3
+    config = second / "h" / ".claude"
+    profile = json.loads((config / ".claude.json").read_text())
+    assert penv["CLAUDE_CONFIG_DIR"] == str(config) and (config / "blob.bin").read_bytes() == b"\xff\xfe\x00"
+    # The folder Claude trusts is this pass's, in both spellings, and nothing names the first pass any more.
+    assert profile["projects"] == {str((second / "w" / "claude").resolve()): {"hasTrustDialogAccepted": True}}
+    assert profile["given"] == str(second / "w" / "claude") and "a1001" not in (config / ".claude.json").read_text()
+
+    # A copy that was cut short (no made.json) is not used: the next pass onboards again.
+    (tmp_path / "profiles" / "claude" / "made.json").unlink()
+    assert a_pass("c3003")[2] == "onboarded" and len(onboarded) == 4
 
 
 def test_a_pass_attaches_to_the_runs_host_unless_it_has_a_host_environment_of_its_own(monkeypatch, tmp_path) -> None:
@@ -826,10 +965,40 @@ def test_an_attached_host_takes_a_token_for_its_own_device_and_is_not_stopped_by
     ]
 
 
-def test_fewer_shards_fit_with_a_host_each_than_with_one_host_for_the_run() -> None:
+def test_a_pass_keeps_asking_a_busy_shared_host_and_gives_up_on_any_other_refusal(monkeypatch, tmp_path) -> None:
+    """Bench, 2026-11-13, twelve shards on six hosts: a host answered one pass's first request with 503 and the pass failed its setup."""
+    import urllib.error
+
+    from zerg.qa import terminal_truth_providers as providers
+
+    answers = [503, 503, 200]
+
+    def post(url: str, payload: dict) -> dict:
+        status = answers.pop(0)
+        if status != 200:
+            raise urllib.error.HTTPError(url, status, "refused", None, None)  # type: ignore[arg-type]
+        return {"token": "t-2"}
+
+    monkeypatch.setattr(providers.urllib.request, "urlopen", lambda url, timeout=0: contextlib.nullcontext())
+    monkeypatch.setattr(providers, "_post_json", post)
+    monkeypatch.setattr(providers.time, "sleep", lambda _s: None)
+    host = providers.AttachedRuntimeHost("http://127.0.0.1:1", tmp_path / "runtime-host.log", "tt-a1001-0f3c")
+    host.start()
+    assert host.token == "t-2" and answers == []
+
+    answers[:] = [500]
+    with pytest.raises(urllib.error.HTTPError):
+        host.start()
+    monkeypatch.setattr(providers, "ATTACH_WAIT_S", 0.0)  # a host that stays busy is a failure, not a hang
+    answers[:] = [503, 200]
+    with pytest.raises(urllib.error.HTTPError):
+        host.start()
+
+
+def test_fewer_shards_fit_with_a_host_each_than_on_shared_hosts() -> None:
     room = (7.6, "a limit of 8.0 GiB with 0.4 GiB in use")
     own = parallel.fit_jobs(12, room)[0]
-    shared = parallel.fit_jobs(12, room, parallel.SHARED_HOST_SHARD_MEMORY_GIB, parallel.SHARED_HOST_RESERVED_MEMORY_GIB)[0]
+    shared = parallel.fit_jobs(12, room, parallel.POOLED_SHARD_MEMORY_GIB, parallel.RESERVED_MEMORY_GIB)[0]
     assert (own, shared) == (4, 8)
 
 

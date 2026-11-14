@@ -26,9 +26,11 @@ from zerg.qa.scripted_model_server import REASONING_WORD
 from zerg.qa.scripted_model_server import Pacing
 from zerg.qa.scripted_model_server import pace_schedule
 from zerg.qa.scripted_model_server import paced_text
+from zerg.qa.terminal_truth_lanes import TRANSCRIPT_ROOTS
 from zerg.qa.terminal_truth_lanes import FileWatcher
 from zerg.qa.terminal_truth_lanes import LaneWatcher
 from zerg.qa.terminal_truth_lanes import RuntimeApi
+from zerg.qa.terminal_truth_lanes import Spans
 from zerg.qa.terminal_truth_lanes import StreamWatcher
 from zerg.qa.terminal_truth_lanes import TeeProxy
 from zerg.qa.terminal_truth_lanes import host_publishes
@@ -89,6 +91,10 @@ class CellPlan:
 # Claude Code 2.1.322 repeats the request (4 requests, the reply streamed 4 times) when the response carries a thinking
 # block from the fake, signed or not. The cell result records that reasoning was off.
 NO_REASONING_FAKE = {"claude"}
+# After every lane has every marker: how long a passing verdict must hold before the cell leaves, and how long a cell
+# that is not passing goes on looking (see the wait loop in ``run_cell_in``).
+PASS_HOLD_S = 1.0
+SETTLE_S = 8.0
 
 
 def plan_cell(spec: CellSpec, base: Pacing) -> CellPlan:
@@ -331,6 +337,7 @@ def run_cell_in(
     driver = drivers[provider]
     binary = pas.binaries[provider]
     cell_started = time.monotonic()
+    spans = Spans()
     result = CellResult(provider=provider, mode=mode, status="could_not_run", scenario=spec.scenario, nonce=plan.nonce)
     result.expectation = {"live_reply_text": expectation.live_reply_text, "source": expectation.source, "reason": expectation.reason}
     result.provider_version = _version(binary)
@@ -341,6 +348,7 @@ def run_cell_in(
         "reasoning_from_fake": "off (client repeats the request)" if provider in NO_REASONING_FAKE else base_pace.reasoning_tokens,
     }
     result.timing = {"prepare_home_s": pas.prepared.get(provider), "prepare_home_note": "per provider, shared by its cells"}
+    spans.mark("versions")
     schedule = plan_schedule(plan)
     markers = [word for _, word, _ in schedule]
     obs = Observation(
@@ -382,6 +390,7 @@ def run_cell_in(
             )
             obs.ready_evidence = _wait_ready(session, recording, timing_file, driver.ready_text, ready_timeout, driver.answers)
             result.timing["provider_start_to_ready_s"] = time.monotonic() - t0
+        spans.mark("provider ready")
 
         watchers = [LaneWatcher(lane, watch_for, stop) for lane in api.poll_lanes()]
         stream = StreamWatcher("workspace stream (SSE)", lambda: api.stream_lines(stop), watch_for, stop)
@@ -395,8 +404,7 @@ def run_cell_in(
             api.pinned_sessions = [console_session]  # the list endpoint may not show a headless session
             obs.ready_evidence = f"console session {console_session} created on machine {pas.shipper.machine_name}; adapter available"
             result.timing["provider_start_to_ready_s"] = time.monotonic() - t0
-        # Codex also writes streamed text to debug SQLite logs; only its rollout file is the transcript.
-        files = FileWatcher(pas.home, markers, stop, only_under=(".codex/sessions",) if provider == "codex" else ())
+        files = FileWatcher(pas.home, markers, stop, only_under=TRANSCRIPT_ROOTS.get(provider, ()))
         files.scan_once()  # baseline of what already exists, so only writes after the prompt count
         for watcher in watchers:
             watcher.start()
@@ -407,6 +415,7 @@ def run_cell_in(
             result.timing["session_listed_after_ready_s"] = listed_s
             result.timing["launched_session_listed_after_ready_s"] = api.launched_listed_s
             result.timing["stream_subscribed_after_ready_s"] = subscribed_s
+        spans.mark("session listed, lanes open")
         submitted = time.monotonic()
         if mode == "console":
             api.post(
@@ -421,31 +430,82 @@ def run_cell_in(
         deadline = submitted + stream_seconds + grace_s + 30
         reference: dict[str, float | None] = {}
         polled_done_at: float | None = None
+        polled = [w for w in watchers if isinstance(w, LaneWatcher)]
 
         def reference_times() -> dict[str, float | None]:
             if mode == "console":
                 return pas.model.sent_times(markers)
             return terminal_first_seen(load_timed_chunks(recording, timing_file), markers)
 
+        def seen_so_far() -> Observation:
+            """What the judge would be given if the cell stopped now."""
+
+            seen = dataclasses.replace(obs)
+            seen.stream_first_seen = dict(stream.first_seen)
+            seen.previews = {sid: list(texts) for sid, texts in list(stream.previews.items())}
+            seen.tool_on_client = bool(
+                plan.tool_token
+                and (
+                    plan.tool_token in stream.first_seen
+                    or stream.tool_steps
+                    or any(plan.tool_token in w.first_seen for w in polled if "workspace" in w.lane.name)
+                )
+            )
+            seen.reference, seen.model_sent = reference, pas.model.sent_times(markers)
+            seen.host_publishes, seen.host_publish_max_len, _ = host_publishes(pas.host.log_path, api.known_sessions)
+            seen.engine_posted = {m: t for m, t in list(pas.proxy.runtime_posts.items()) if m in markers}
+            seen.model_requests_served = pas.model.served_requests(plan.turn_ids)
+            return seen
+
+        # A cell leaves when every lane has every marker and the verdict on what it has seen is a pass, and has been for
+        # PASS_HOLD_S: nothing more can make it pass, and a preview that came back after the last one would still be caught.
+        # A cell that is not passing (a defect, a mutation, a cell expected to fail) waits the whole SETTLE_S, as every
+        # cell did until 2026-11-13, when that wait was 8 to 9 of a Console cell's 17 seconds.
+        passing_since: float | None = None
+        next_reference_at = next_verdict_at = 0.0
+        all_seen = False
+        seen_ref: list[str] = []
         while time.monotonic() < deadline:
-            reference = reference_times()
-            seen_ref = [m for m in markers if reference.get(m) is not None]
-            all_seen = len(seen_ref) == len(markers)
-            polled = [w for w in watchers if isinstance(w, LaneWatcher)]
+            now = time.monotonic()
+            if not all_seen and now >= next_reference_at:
+                # Reading the terminal recording replays the whole of it, so it is read once a second and no more once
+                # every marker has been painted (a first-seen time does not change).
+                reference = reference_times()
+                next_reference_at = now + 1.0
+                seen_ref = [m for m in markers if reference.get(m) is not None]
+                all_seen = len(seen_ref) == len(markers)
             if all_seen and polled_done_at is None and all(m in w.first_seen for w in polled for m in seen_ref):
-                polled_done_at = time.monotonic()
-            if polled_done_at is not None and time.monotonic() > polled_done_at + 8:
-                break
-            if all_seen and time.monotonic() > max(reference[m] for m in markers) + grace_s:  # type: ignore[type-var]
+                polled_done_at = now
+                spans.mark("prompt to every lane")
+            if polled_done_at is not None:
+                if now >= next_verdict_at:  # the verdict reads the host's log, so twice a second
+                    next_verdict_at = now + 0.5
+                    passes = False
+                    with contextlib.suppress(Exception):  # a lane thread changing a dict under the copy: look again next time
+                        passes = first_failed_stage(judge(seen_so_far())) is None
+                    passing_since = (passing_since or now) if passes else None
+                if passing_since is not None and now >= passing_since + PASS_HOLD_S:
+                    result.timing["left_on"] = "verdict held"
+                    break
+                if now > polled_done_at + SETTLE_S:
+                    result.timing["left_on"] = "settle time"
+                    break
+            if all_seen and now > max(reference[m] for m in markers) + grace_s:  # type: ignore[type-var]
+                result.timing["left_on"] = "grace"
                 break
             if session is not None and not session.alive():
+                result.timing["left_on"] = "provider exited"
                 break
-            time.sleep(1.0)
+            time.sleep(0.2)
         settle_from = time.monotonic()
+        spans.mark("after every lane" if polled_done_at is not None else "prompt to deadline")
+        result.timing["submit_to_leave_s"] = settle_from - submitted
+        result.timing["after_last_lane_s"] = (settle_from - polled_done_at) if polled_done_at is not None else None
         stop.set()
         for watcher in watchers:
             watcher.join(timeout=5)
         files.join(timeout=5)
+        spans.mark("lanes closed")
         reference = reference_times()
         last_ref = max((t for t in reference.values() if t is not None), default=None)
         result.timing["stream_s"] = (last_ref - submitted) if last_ref is not None else None
@@ -535,12 +595,14 @@ def run_cell_in(
             result.reason += "\nlast output:\n" + _tail_text(recording)
     finally:
         stop.set()
+        spans.mark("read back")
         t0 = time.monotonic()
         if provider == "codex" and mode == "helm":
             result.diagnostics.update(end_codex_sessions(pas, sorted(api.known_sessions)))
         if session is not None:
             session.close()
         result.timing["teardown_s"] = time.monotonic() - t0
+        spans.mark("provider stopped")
     obs.model_requests_served = pas.model.served_requests(plan.turn_ids)
     result.diagnostics["model_served_requests_for_cell"] = obs.model_requests_served
     stages = judge(obs)
@@ -552,6 +614,8 @@ def run_cell_in(
     sse = next((lane for lane in result.lanes if "SSE" in lane.lane), None)
     worst = max(((d, m) for m, d in (sse.delays.items() if sse else []) if d is not None), default=None)
     result.worst_marker = {"marker": worst[1], "delay_s": worst[0]} if worst else {}
+    spans.mark("judged")
+    result.timing["spans"] = spans.to_json()
     result.timing["cell_wall_s"] = time.monotonic() - cell_started
     result.timing.update({f"pass_{k}": v for k, v in pas.timing.items()})
     return result

@@ -72,6 +72,42 @@ def test_file_watcher_dates_a_provider_write_and_ship_lag_is_lane_minus_write(tm
     assert stats.delays == {"WROTE0001": 4.0} and stats.ship_lag == {"WROTE0001": 1.0}
 
 
+def test_the_file_watcher_reads_only_where_it_was_pointed_and_follows_a_linked_file(tmp_path) -> None:
+    """Codex's transcript is its rollout file; its debug logs carry the same text and are not the transcript."""
+    import threading
+
+    sessions = tmp_path / ".codex" / "sessions" / "2026" / "11"
+    sessions.mkdir(parents=True)
+    (tmp_path / ".codex" / "logs.sqlite").write_text("WROTE0002 in a debug log")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "x.js").write_text("WROTE0002 WROTE0003 in a dependency")
+    (sessions / "rollout.jsonl").write_text('{"text":"WROTE0003"}')
+    (tmp_path / "elsewhere.jsonl").write_text('{"text":"WROTE0004"}')
+    (tmp_path / "linked.jsonl").symlink_to(tmp_path / "elsewhere.jsonl")
+
+    codex = tt.FileWatcher(tmp_path, ["WROTE0002", "WROTE0003", "WROTE0004"], threading.Event(), only_under=(".codex/sessions",))
+    codex.scan_once()
+    assert codex.first_path == {"WROTE0003": ".codex/sessions/2026/11/rollout.jsonl"}
+
+    whole = tt.FileWatcher(tmp_path, ["WROTE0002", "WROTE0003", "WROTE0004"], threading.Event())
+    whole.scan_once()
+    assert (
+        whole.first_path["WROTE0002"] == ".codex/logs.sqlite" and whole.first_path["WROTE0003"] == ".codex/sessions/2026/11/rollout.jsonl"
+    )
+    assert whole.first_path["WROTE0004"] in {"elsewhere.jsonl", "linked.jsonl"}
+    missing = tt.FileWatcher(tmp_path, ["WROTE0003"], threading.Event(), only_under=(".pi/agent",))  # not written yet: no error
+    missing.scan_once()
+    assert missing.first_path == {}
+
+
+def test_every_provider_the_harness_drives_is_watched_where_it_writes_its_transcript_and_not_over_its_whole_home() -> None:
+    from zerg.qa.terminal_truth_lanes import TRANSCRIPT_ROOTS
+    from zerg.qa.terminal_truth_providers import PROVIDERS
+
+    assert not set(PROVIDERS) - set(TRANSCRIPT_ROOTS)
+    assert all(roots and not any(root.startswith("/") or ".." in root for root in roots) for roots in TRANSCRIPT_ROOTS.values())
+
+
 def test_stream_watcher_keeps_the_last_preview_per_session_after_the_last_marker() -> None:
     import json
     import threading

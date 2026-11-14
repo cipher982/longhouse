@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 352,
+  "file_count": 353,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2228,6 +2228,7 @@
     {
       "path": "server/tests_lite/test_terminal_truth_parallel.py",
       "providers": [
+        "claude",
         "codex",
         "omp",
         "pi"
@@ -2563,6 +2564,18 @@
         "antigravity",
         "claude",
         "codex",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/terminal_truth_lanes.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
         "omp",
         "opencode",
         "pi"

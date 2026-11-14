@@ -98,6 +98,30 @@ def lane_stats(
     )
 
 
+class Spans:
+    """Where a cell's wall time went. ``mark(name)`` gives the time since the last mark to ``name``; the spans add up to the cell.
+
+    Kept in every result row so that a run says what its cells waited on. 2026-11-13: a Console reply cell was 17 s of which
+    the reply was 7; the other 10 were found by reading the code, because no run had recorded them.
+    """
+
+    def __init__(self) -> None:
+        self.started = self._last = time.monotonic()
+        self.seconds: dict[str, float] = {}
+
+    def mark(self, name: str) -> None:
+        now = time.monotonic()
+        self.seconds[name] = self.seconds.get(name, 0.0) + now - self._last
+        self._last = now
+
+    def to_json(self) -> dict[str, float]:
+        return {name: round(seconds, 2) for name, seconds in self.seconds.items()}
+
+
+# How old a cell's list of its own sessions may be before the host is asked again (see ``RuntimeApi.session_ids``).
+LISTING_MAX_AGE_S = 0.5
+
+
 @dataclass
 class Lane:
     """A served surface that can be asked "what do you show now". Polled lanes set ``interval``."""
@@ -144,18 +168,38 @@ class LaneWatcher(threading.Thread):
                 self._stop_event.wait(self.lane.interval)
 
 
+# Where each provider writes its transcript, below HOME. The watcher reads only there: a HOME also fills with what a
+# provider downloads for itself (Codex clones its plugin catalogue into ``.codex/.tmp``, 8000 files and 91 MB, on some
+# starts and not others; reading it was 5 to 7 of a four-cell shard's 10 to 12 CPU seconds, bench 2026-11-13), and
+# Codex writes streamed text to debug SQLite logs that are not its transcript. The paths are the ones every marker was
+# found under in the whole-gate bench run of 2026-11-13; Cursor's were never found in a file, so its stores are named.
+# A provider that is not listed is watched over its whole HOME.
+TRANSCRIPT_ROOTS: dict[str, tuple[str, ...]] = {
+    "claude": (".claude/projects",),
+    "codex": (".codex/sessions",),
+    "antigravity": (".gemini/antigravity-cli", ".gemini/antigravity"),
+    "opencode": (".local/share/opencode",),
+    "pi": (".pi/agent/sessions",),
+    "omp": (".omp/agent/sessions", ".local/share/omp"),
+    "cursor": (".cursor/projects", ".config/cursor/chats"),
+}
+
+
 class FileWatcher(threading.Thread):
     """When a marker first appears in a file under the provider's HOME (its transcript, session file or store).
 
     Walks the tree every ``interval`` seconds, reads files whose size or mtime changed, and searches them for the markers.
     Resolution is the worst gap between completed scans (reported). The Machine Agent's own state (``.longhouse``) is
-    excluded: this watches what the provider wrote, not what Longhouse did with it.
+    excluded: this watches what the provider wrote, not what Longhouse did with it. No verdict reads these times: they
+    say how much of a durable delay was the provider writing late. Until 2026-11-13 the walk ran 33 times a second over
+    the whole HOME and was 34 of the 54 CPU seconds of a four-cell shard, more than the providers and the engine together.
     """
 
+    # Never a transcript, and most of the files in a HOME (3700 of 4812 were under node_modules, bench 2026-11-13).
     SKIP_DIRS = {".longhouse", "node_modules", ".git", "bin"}
 
     def __init__(
-        self, root: Path, markers: Sequence[str], stop: threading.Event, interval: float = 0.03, only_under: Sequence[str] = ()
+        self, root: Path, markers: Sequence[str], stop: threading.Event, interval: float = 0.2, only_under: Sequence[str] = ()
     ) -> None:
         super().__init__(daemon=True, name="provider-files")
         self.root = root
@@ -173,32 +217,45 @@ class FileWatcher(threading.Thread):
         gaps = [b - a for a, b in zip(self.scan_times, self.scan_times[1:], strict=False)]
         return max(gaps) if gaps else None
 
+    def _files(self) -> Iterator[tuple[str, os.stat_result]]:
+        """Every file below the root (below ``only_under`` when set), with its stat; directories in ``SKIP_DIRS`` are not entered."""
+
+        root = str(self.root)
+        tops = [os.path.join(root, prefix) for prefix in self.only_under] if self.only_under else [root]
+        while tops:
+            try:
+                entries = os.scandir(tops.pop())
+            except OSError:
+                continue
+            with entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name not in self.SKIP_DIRS:
+                                tops.append(entry.path)
+                        elif entry.is_file():
+                            yield entry.path, entry.stat()
+                    except OSError:
+                        continue
+
     def scan_once(self) -> None:
         pending = [m for m in self.markers if m not in self.first_seen]
-        for directory, names, files in os.walk(self.root):
-            names[:] = [n for n in names if n not in self.SKIP_DIRS]
-            for name in files:
-                path = os.path.join(directory, name)
-                if self.only_under and not os.path.relpath(path, self.root).startswith(self.only_under):
-                    continue
-                try:
-                    info = os.stat(path)
-                except OSError:
-                    continue
-                key = (info.st_mtime_ns, info.st_size)
-                if self._stat.get(path) == key or info.st_size > 64 * 1024 * 1024 or not pending:
-                    self._stat[path] = key
-                    continue
+        cut = len(str(self.root)) + 1
+        for path, info in self._files():
+            key = (info.st_mtime_ns, info.st_size)
+            if self._stat.get(path) == key or info.st_size > 64 * 1024 * 1024 or not pending:
                 self._stat[path] = key
-                try:
-                    data = Path(path).read_bytes()
-                except OSError:
-                    continue
-                now = time.monotonic()
-                for marker in [m for m in pending if m.encode() in data]:
-                    self.first_seen[marker] = now
-                    self.first_path[marker] = os.path.relpath(path, self.root)
-                pending = [m for m in pending if m not in self.first_seen]
+                continue
+            self._stat[path] = key
+            try:
+                data = Path(path).read_bytes()
+            except OSError:
+                continue
+            now = time.monotonic()
+            for marker in [m for m in pending if m.encode() in data]:
+                self.first_seen[marker] = now
+                self.first_path[marker] = path[cut:]
+            pending = [m for m in pending if m not in self.first_seen]
 
     def run(self) -> None:
         while not self._stop_event.is_set():
@@ -346,6 +403,9 @@ class RuntimeApi:
         self.launched_listed_s: float | None = None  # how long wait_for_launched_session waited for one
         self.subscribed_streams: set[str] = set()  # sessions whose workspace stream the host has subscribed (first workspace_changed seen)
         self.on_wake: Callable[[str], None] | None = None  # called with the session id for every workspace_changed frame
+        self._listing: list[str] = []
+        self._listed_at: float | None = None
+        self._listing_lock = threading.Lock()
         self.legacy_stream = True  # True: connect as a client that predates preview kinds (no `preview_kinds` parameter); the live-kinds scenarios set False so thinking frames arrive
 
     def _headers(self, browser: bool) -> dict[str, str]:
@@ -378,10 +438,26 @@ class RuntimeApi:
             raise RuntimeError(f"POST {path}: HTTP {status} {body[:300]}")
         return json.loads(body)
 
-    def session_ids(self) -> list[str]:
-        """This cell's sessions: the pinned ones plus every session whose cwd is this cell's workspace."""
+    def session_ids(self, *, fresh: bool = False) -> list[str]:
+        """This cell's sessions: the pinned ones plus every session whose cwd is this cell's workspace.
 
-        ids = list(self.pinned_sessions)
+        The host is asked for the list at most every ``LISTING_MAX_AGE_S`` unless ``fresh``. Every lane asks before each
+        read, and until 2026-11-13 each ask was a request: a cell sent the host about 40 list requests a second on top of
+        its reads, and one host could carry two cells. A wait that needs the moment a session appears passes ``fresh``.
+        """
+
+        with self._listing_lock:
+            now = time.monotonic()
+            if fresh or self._listed_at is None or now - self._listed_at >= LISTING_MAX_AGE_S:
+                self._listing = self._list_sessions()
+                self._listed_at = time.monotonic()
+            ids = list(self.pinned_sessions)
+            ids += [sid for sid in self._listing if sid not in ids]
+        self.known_sessions.update(ids)
+        return ids
+
+    def _list_sessions(self) -> list[str]:
+        ids: list[str] = []
         if self.workspace is not None:
             scope = f"&device_id={quote(self.device_id)}" if self.device_id else ""
             status, body = self.get(f"/api/agents/sessions?limit=100&include_test=true{scope}")
@@ -393,7 +469,8 @@ class RuntimeApi:
                             self.launched_sessions.add(str(item["id"]))
                         if str(item["id"]) not in ids:
                             ids.append(str(item["id"]))
-        self.known_sessions.update(ids)
+            else:
+                return list(self._listing)  # a refused list is not "no sessions": keep the last answer
         return ids
 
     def wait_for_launched_session(self, timeout: float = 15.0) -> bool:
@@ -414,13 +491,13 @@ class RuntimeApi:
             return True
         while time.monotonic() - started < timeout:
             with contextlib.suppress(Exception):
-                sessions = set(self.session_ids())
+                sessions = set(self.session_ids(fresh=True))
                 if not sessions:
                     return True
                 if sessions & self.launched_sessions:
                     self.launched_listed_s = time.monotonic() - started
                     return True
-            time.sleep(0.05)
+            time.sleep(0.1)
         return False
 
     def wait_for_session_stream(self, timeout: float = 15.0) -> tuple[float | None, float | None]:
@@ -439,7 +516,7 @@ class RuntimeApi:
         listed: float | None = None
         while time.monotonic() - started < timeout:
             with contextlib.suppress(Exception):
-                sessions = set(self.session_ids())
+                sessions = set(self.session_ids(fresh=True))
                 if sessions and listed is None:
                     listed = time.monotonic() - started
                 # Found by its workspace, the cell waits for the session the launch made, not only one found from a file
@@ -449,7 +526,7 @@ class RuntimeApi:
                     self.launched_listed_s = time.monotonic() - started
                 if sessions and launched and sessions <= self.subscribed_streams:
                     return listed, time.monotonic() - started
-            time.sleep(0.05)
+            time.sleep(0.1)
         return listed, None
 
     def _lane(self, name: str, path: str, *, browser: bool, interval: float) -> Lane:
@@ -469,8 +546,10 @@ class RuntimeApi:
 
     def poll_lanes(self) -> list[Lane]:
         return [
-            self._lane("events (durable archive)", "/api/agents/sessions/{id}/events?limit=1000", browser=False, interval=0.05),
-            self._lane("workspace (served to web)", "/api/timeline/sessions/{id}/workspace", browser=True, interval=0.1),
+            # Neither lane's time is judged: the events lane says when a turn is over and where a marker ended up, the
+            # workspace lane where the live path ends. The archive read returns up to 1000 events, so it is the slower.
+            self._lane("events (durable archive)", "/api/agents/sessions/{id}/events?limit=1000", browser=False, interval=0.5),
+            self._lane("workspace (served to web)", "/api/timeline/sessions/{id}/workspace", browser=True, interval=0.5),
         ]
 
     def _stream_one(self, session: str, out: queue.Queue[TimedLine | str], stop: threading.Event) -> None:
@@ -601,9 +680,13 @@ class StateObserver(threading.Thread):
     refetches that response on every stream wake, so polling it at ``interval`` sees what a client sees, up to the poll gap (reported).
     Every change of what the strip would draw is kept with its time; ``reads`` and ``shaped`` count responses and how many carried the
     facts, so an observer that read nothing is distinguishable from a session in which nothing happened.
+
+    Five reads a second. A workspace read costs the host about 50 ms of CPU, so ten a second (the rate until 2026-11-13) was
+    half a core of host for every cell, and the hosts were then the largest user of CPU in a run. The budgets these times are
+    judged against are 1.0 s (``WOKEN_STATE_BUDGET_S``) and half a state's window.
     """
 
-    def __init__(self, api: RuntimeApi, stop: threading.Event, interval: float = 0.1) -> None:
+    def __init__(self, api: RuntimeApi, stop: threading.Event, interval: float = 0.2) -> None:
         super().__init__(daemon=True, name="lane-state-facts")
         self.api, self.interval, self._stop_event = api, interval, stop
         self.timeline: list[tuple[float, dict[str, Any]]] = []

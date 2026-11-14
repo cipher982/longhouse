@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -96,6 +98,9 @@ def mint_device_token(url: str, device_id: str) -> str:
     return str(_post_json(f"{url}/api/devices/tokens", {"device_id": device_id, "name": device_id})["token"])
 
 
+ATTACH_WAIT_S = 20.0  # how long a pass keeps asking a busy shared host to let it in
+
+
 class AttachedRuntimeHost:
     """A Runtime Host somebody else started (``terminal_truth_parallel`` starts one for a whole run), used as one more machine.
 
@@ -109,9 +114,19 @@ class AttachedRuntimeHost:
         self.token = ""
 
     def start(self) -> None:
-        with urllib.request.urlopen(f"{self.url}/api/health", timeout=5):
-            pass
-        self.token = mint_device_token(self.url, self.device_id)
+        # A host that is carrying other shards can refuse a request while it is busy (HTTP 503 when its catalog's read
+        # lane is full). 2026-11-13, twelve shards on six hosts: one pass in 61 failed its setup on the first refusal.
+        deadline = time.monotonic() + ATTACH_WAIT_S
+        while True:
+            try:
+                with urllib.request.urlopen(f"{self.url}/api/health", timeout=5):
+                    pass
+                self.token = mint_device_token(self.url, self.device_id)
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code != 503 or time.monotonic() >= deadline:
+                    raise
+            time.sleep(0.5)
 
     def stop(self) -> None:
         pass  # not this pass's to stop
@@ -321,7 +336,10 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
     return environment
 
 
+@functools.cache
 def _version(binary: str) -> str | None:
+    """The first line of ``binary --version``. Asked once a process: every cell asked again, and a provider CLI takes up to a second to say."""
+
     try:
         out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=15, env=clean_environ()).stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -334,17 +352,13 @@ def _prepare_provider(
 ) -> None:
     """Set one provider up inside the pass's HOME (config, login, hooks) before the Machine Agent starts."""
 
-    from zerg.qa import live_session_toolkit as toolkit
-
     if provider == "codex":
         from zerg.qa.codex_auth import login_with_api_key
 
         key = penv.pop("CODEX_API_KEY")
         login_with_api_key(Path(binary), api_key=key, environment=penv, cwd=workspace_root, timeout=30)
     if provider == "claude":
-        toolkit.prepare_claude_profile(
-            binary=Path(binary), home=home, workspace=workspace_root, environment=penv, recording=root / "claude-onboarding.raw"
-        )
+        onboard_claude(Path(binary), home=home, root=root, penv=penv, workspace_root=workspace_root)
         settings = Path(penv["CLAUDE_CONFIG_DIR"]) / "settings.json"
         current = json.loads(settings.read_text()) if settings.exists() else {}
         current["skipDangerousModePermissionPrompt"] = True  # the Bypass Permissions screen Helm's flags trigger
@@ -369,6 +383,66 @@ def _prepare_provider(
         # The state that made the launcher pick a session directory OMP does not write: XDG_DATA_HOME unset and
         # ~/.local/share/omp present. Linux runners have it; the harness HOME must too, or the gate cannot see that defect.
         (home / ".local" / "share" / "omp").mkdir(parents=True, exist_ok=True)
+
+
+PROFILE_CACHE_ENV = "TT_PROFILE_CACHE"
+
+
+def onboard_claude(binary: Path, *, home: Path, root: Path, penv: dict[str, str], workspace_root: Path) -> str:
+    """Claude's first-run onboarding in this pass's HOME: done for real once a run, copied after that. Returns which.
+
+    The onboarding drives Claude's own first-run screens (theme, API key, security notes, folder trust) and takes 13 s. A
+    run did it in every pass that had a Claude cell, about twenty times (2026-11-13). With ``TT_PROFILE_CACHE`` set to a
+    directory (``terminal_truth_parallel`` sets it for its shards), the first pass to get here onboards and keeps a copy of
+    the profile it made; every later pass copies it and renames the first pass's directory to its own in the copy, since
+    the profile records the trusted folder by path. Passes that arrive while the first is onboarding wait for it. Without
+    the variable every pass onboards, as before.
+    """
+
+    from zerg.qa import live_session_toolkit as toolkit
+
+    def onboard() -> None:
+        toolkit.prepare_claude_profile(
+            binary=binary, home=home, workspace=workspace_root, environment=penv, recording=root / "claude-onboarding.raw"
+        )
+
+    cache = os.environ.get(PROFILE_CACHE_ENV)
+    if not cache:
+        onboard()
+        return "onboarded"
+    import fcntl
+
+    kept = Path(cache) / "claude"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    with (kept.parent / "claude.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not (kept / "made.json").exists():
+            onboard()
+            shutil.rmtree(kept, ignore_errors=True)
+            shutil.copytree(penv["CLAUDE_CONFIG_DIR"], kept / "profile", symlinks=True)
+            # Written last: a copy that was cut short has no made.json and is made again.
+            (kept / "made.json").write_text(json.dumps({"given": str(root), "resolved": str(root.resolve())}))
+            return "onboarded"
+    made = json.loads((kept / "made.json").read_text())
+    config_dir = Path(penv.get("CLAUDE_CONFIG_DIR") or home / ".claude")
+    shutil.copytree(kept / "profile", config_dir, symlinks=True, dirs_exist_ok=True)
+    # The first pass's directory as Claude was given it and as it resolves (the scratch root can be a link), each to this
+    # pass's in the same form; the longer first, since one can end with the other.
+    renames = sorted({(made["resolved"], str(root.resolve())), (made["given"], str(root))}, key=lambda pair: -len(pair[0]))
+    for path in config_dir.rglob("*"):
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 8 * 2**20:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        renamed = text
+        for theirs, mine in renames:
+            renamed = renamed.replace(theirs, mine)
+        if renamed != text:
+            path.write_text(renamed, encoding="utf-8")
+    penv["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    return "copied"
 
 
 def _install_antigravity_hook(home: Path, environment: dict[str, str]) -> None:

@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyte
+from wcwidth import wcwidth
 
 from zerg.qa.pty_reader import TimedChunk
 
@@ -34,6 +35,22 @@ def _row_text(row: dict[int, pyte.screens.Char], columns: int) -> str:
     return "".join(row[column].data if column in row else " " for column in range(columns))
 
 
+def _display_line(line: dict[int, pyte.screens.Char], columns: int) -> str:
+    """One screen line as ``pyte.Screen.display`` renders it (the cell after a wide character is its stub and is skipped)."""
+
+    out: list[str] = []
+    stub = False
+    for column in range(columns):
+        if stub:
+            stub = False
+            continue
+        char = line[column].data
+        # A stub left behind when its wide character was erased or shifted holds no text; pyte's own display raises on it.
+        stub = bool(char) and wcwidth(char[0]) == 2
+        out.append(char)
+    return "".join(out)
+
+
 class ScreenReplay:
     """Feed timestamped chunks; read back when each needle first became visible."""
 
@@ -48,13 +65,26 @@ class ScreenReplay:
         self._found: dict[str, tuple[float, int]] = {}
         self._history_seen = 0
         self._chunks = 0
+        # The visible lines as last rendered. Only the lines the emulator marks as changed are rendered again: rendering
+        # all of them after every chunk was 13 of the 18 CPU seconds a four-cell shard's main thread used (2026-11-13).
+        self._lines: list[str] = [""] * rows
+        self._screen.dirty.update(range(rows))
 
-    def _haystacks(self) -> list[str]:
-        display = [line.rstrip() for line in self._screen.display]
-        history = self._screen.history.top
+    def _haystacks(self) -> list[str] | None:
+        """The text to search after a chunk, or None when the chunk changed nothing a reader could see."""
+
+        screen = self._screen
+        history = screen.history.top
+        changed = bool(screen.dirty) or len(history) != self._history_seen
+        if not changed:
+            return None
+        for row in screen.dirty:
+            if 0 <= row < self.rows:
+                self._lines[row] = _display_line(screen.buffer[row], self.columns).rstrip()
+        screen.dirty.clear()
         scrolled = [_row_text(row, self.columns).rstrip() for row in list(history)[self._history_seen :]]
         self._history_seen = len(history)
-        rows = scrolled + display
+        rows = scrolled + self._lines
         # Unwrapped too: a long word that wrapped at the right edge is one word to the reader.
         return ["\n".join(rows), "".join(rows)]
 
@@ -65,6 +95,8 @@ class ScreenReplay:
         if not self._pending:
             return
         haystacks = self._haystacks()
+        if haystacks is None:  # what was searched after the last chunk is still what is there
+            return
         still = []
         for needle in self._pending:
             if any(needle in haystack for haystack in haystacks):

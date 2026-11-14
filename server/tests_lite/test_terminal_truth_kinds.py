@@ -307,11 +307,12 @@ class _ListHandler(http.server.BaseHTTPRequestHandler):
 
     sessions: list[dict] = []
     paths: list[str] = []
+    status = 200
 
     def do_GET(self) -> None:  # noqa: N802 - http.server's name
         self.paths.append(self.path)
         body = json.dumps({"sessions": self.sessions}).encode()
-        self.send_response(200)
+        self.send_response(self.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -378,6 +379,41 @@ def test_a_cell_on_a_host_shared_by_a_run_lists_only_its_own_machines_sessions(t
         own, scoped = _ListHandler.paths
         assert "device_id" not in own and scoped == own + "&device_id=tt-a1001-0f3c"
     finally:
+        host.shutdown()
+        host.server_close()
+
+
+def test_a_cell_asks_the_host_for_its_session_list_twice_a_second_and_not_before_every_read(tmp_path, monkeypatch) -> None:
+    """Until 2026-11-13 every lane listed the host's sessions before each read: about 40 list requests a second from one cell."""
+    from zerg.qa import terminal_truth_lanes as lanes
+
+    mine = {"id": "s-1", "cwd": str(tmp_path), "launch_surface": "terminal"}
+    later = {"id": "s-2", "cwd": str(tmp_path), "launch_surface": "terminal"}
+    host = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ListHandler)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
+    try:
+        _ListHandler.sessions, _ListHandler.paths, _ListHandler.status = [mine], [], 200
+        api = RuntimeApi(f"http://127.0.0.1:{host.server_address[1]}", "token", workspace=tmp_path)
+        assert [api.session_ids() for _ in range(20)] == [["s-1"]] * 20
+        assert len(_ListHandler.paths) == 1
+
+        # A wait for a session to appear asks every time; the answer is then the one every lane reads.
+        _ListHandler.sessions = [mine, later]
+        assert api.session_ids() == ["s-1"]
+        assert api.session_ids(fresh=True) == ["s-1", "s-2"] and len(_ListHandler.paths) == 2
+        assert api.session_ids() == ["s-1", "s-2"] and len(_ListHandler.paths) == 2
+
+        # An old answer is asked for again, and a session the cell was given by id is always in it.
+        monkeypatch.setattr(lanes, "LISTING_MAX_AGE_S", 0.0)
+        _ListHandler.sessions = [later]
+        api.pinned_sessions = ["console-1"]
+        assert api.session_ids() == ["console-1", "s-2"] and len(_ListHandler.paths) == 3
+
+        # A list the host refused is not "no sessions": a lane that read it so would count every session as gone.
+        _ListHandler.status = 503
+        assert api.session_ids() == ["console-1", "s-2"] and len(_ListHandler.paths) == 4
+    finally:
+        _ListHandler.status = 200
         host.shutdown()
         host.server_close()
 
@@ -516,6 +552,34 @@ def test_a_session_the_host_removed_stops_being_served_then_and_not_at_the_end_o
     assert [(lag["shown"], lag["served_for_s"], lag["lag_s"]) for lag in from_file] == [(False, 0.6, 0.6)]
     # A session that is still served keeps its last state until the run stops looking, shown or not.
     assert [lag["served_for_s"] for lag in lags if lag["session_id"] == "launched"][-1] == 20.84
+
+
+def _served(sid: str, headline: str, activity: str = "quiescent", delegated: int = 0) -> dict:
+    return {"session_id": sid, "headline": headline, "detail": None, "activity_state": activity, "delegation_count": delegated}
+
+
+def test_a_cell_leaves_when_the_turn_is_at_rest_for_a_client_and_not_before():
+    """A kinds cell looked for 5 s after the turn's last durable event whatever it had seen (2026-11-13: a fifth of a cell)."""
+    hold = kinds.AT_REST_HOLD_S
+    polled = [(0.0, _served("s", "Idle")), (1.0, _served("s", "Thinking", "thinking")), (9.0, _served("s", "Idle"))]
+    woken = [(0.1, _served("s", "Idle")), (1.1, _served("s", "Thinking", "thinking")), (9.1, _served("s", "Idle"))]
+
+    assert kinds.turn_at_rest(polled, woken, ["s"], 9.0 + hold)
+    assert not kinds.turn_at_rest(polled, woken, ["s"], 9.0 + hold - 0.1), "the last state has not been served for the hold yet"
+    assert not kinds.turn_at_rest(polled[:2], woken[:2], ["s"], 30.0), "still thinking"
+    assert not kinds.turn_at_rest(polled, woken, [], 30.0) and not kinds.turn_at_rest(polled, woken, ["never-read"], 30.0)
+    assert kinds.turn_at_rest(polled, woken, ["s", "never-read"], 30.0), "a session the host served no state for is not waited on"
+
+    # The defect the 5 s is there to catch: the host serves "Idle" and announces nothing, so the page still says "Thinking".
+    # The cell must not leave early on it; it stays its whole settle time and fails on the unshown state.
+    assert not kinds.turn_at_rest(polled, woken[:2], ["s"], 30.0)
+
+    # Work a subagent is still doing keeps the turn open although the headline is at rest; a second session is judged too.
+    delegating = [*polled[:2], (9.0, _served("s", "Idle", delegated=1))]
+    assert not kinds.turn_at_rest(delegating, woken, ["s"], 30.0)
+    both = [*polled, (9.5, _served("t", "Using Bash", "executing"))]
+    assert not kinds.turn_at_rest(both, [*woken, (9.6, _served("t", "Using Bash", "executing"))], ["s", "t"], 30.0)
+    assert kinds.AT_REST_HOLD_S > kinds.WOKEN_STATE_BUDGET_S, "a last state unshown for the whole budget must be seen before leaving"
 
 
 class _SessionsThatGo:

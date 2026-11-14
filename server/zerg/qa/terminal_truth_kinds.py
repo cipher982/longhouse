@@ -25,6 +25,7 @@ import statistics
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
@@ -36,13 +37,17 @@ from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.scripted_model_server import Pacing
 from zerg.qa.scripted_model_server import pace_schedule
 from zerg.qa.scripted_model_server import paced_text
+from zerg.qa.terminal_truth_lanes import TRANSCRIPT_ROOTS
 from zerg.qa.terminal_truth_lanes import FileWatcher
 from zerg.qa.terminal_truth_lanes import LaneWatcher
 from zerg.qa.terminal_truth_lanes import RuntimeApi
+from zerg.qa.terminal_truth_lanes import Spans
 from zerg.qa.terminal_truth_lanes import StateObserver
 from zerg.qa.terminal_truth_lanes import StreamWatcher
 from zerg.qa.terminal_truth_lanes import WokenStateReader
+from zerg.qa.terminal_truth_lanes import _strip_text
 from zerg.qa.terminal_truth_lanes import host_publishes
+from zerg.qa.terminal_truth_lanes import state_snapshot
 from zerg.qa.terminal_truth_lanes import woken_view_lags
 from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
 from zerg.qa.terminal_truth_providers import PROVIDERS
@@ -563,7 +568,7 @@ class SubagentProbe(threading.Thread):
             except Exception as exc:  # noqa: BLE001 - a probe failure is data
                 if len(self.errors) < 10:
                     self.errors.append(f"{type(exc).__name__}: {exc}")
-            self._stop_event.wait(0.1)
+            self._stop_event.wait(0.5)  # recorded, not judged; each pass is three or more reads of the host
 
     def _once(self) -> None:
         for sid in self.api.session_ids():
@@ -653,9 +658,67 @@ def _warm_helm_session(session: ProviderPtySession, api: RuntimeApi, nonce: str)
 
     session.submit_line(f"TTWARM{nonce} reply with the word ok")
     deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and not api.session_ids():
+    while time.monotonic() < deadline and not api.session_ids(fresh=True):
         time.sleep(0.2)
-    time.sleep(6)  # the warm-up reply finishes and the provider is idle again
+    # The warm-up reply finishes and the provider is idle again: the state the host serves went busy and came back to
+    # rest, or WARM_UP_S passed (the fixed pause this was until 2026-11-13, and still the longest it waits).
+    listed = time.monotonic()
+    was_busy, at_rest = False, 0
+    while time.monotonic() < listed + WARM_UP_S and at_rest < 2:
+        time.sleep(0.3)
+        busy = _any_session_busy(api)
+        was_busy = was_busy or bool(busy)
+        if busy is False and (was_busy or time.monotonic() > listed + WARM_UP_UNSEEN_S):
+            at_rest += 1
+        else:
+            at_rest = 0
+
+
+def _any_session_busy(api: RuntimeApi) -> bool | None:
+    """Whether a session of the cell is thinking, running a tool or delegating, as the host serves it; None when it cannot be read."""
+
+    try:
+        snaps = []
+        for sid in api.session_ids():
+            status, body = api.get(f"/api/timeline/sessions/{sid}/workspace", browser=True)
+            snaps.append(state_snapshot(body, sid) if status == 200 else None)
+    except Exception:  # noqa: BLE001 - not readable now; the caller looks again
+        return None
+    if not snaps or any(snap is None for snap in snaps):
+        return None
+    return any(_busy(snap) for snap in snaps)
+
+
+def _busy(snap: dict[str, Any]) -> bool:
+    return snap.get("activity_state") in {"thinking", "executing"} or (snap.get("delegation_count") or 0) > 0
+
+
+def turn_at_rest(
+    polled: Sequence[tuple[float, dict[str, Any]]],
+    woken: Sequence[tuple[float, dict[str, Any]]],
+    sessions: Iterable[str],
+    now: float,
+) -> bool:
+    """Whether the turn is over as a client is shown it, so that a cell has nothing left to see.
+
+    True when, for every session of ``sessions`` the host still serves: the last state it served is at rest (not thinking,
+    no tool, no delegated work), a client that reads only when woken holds that state, and it has been served for
+    ``AT_REST_HOLD_S``. That is longer than ``WOKEN_STATE_BUDGET_S``, so a last state the host served and never announced
+    is not passed over: the woken client does not hold it, this stays False, and the cell waits its whole ``SETTLE_S``
+    and fails on the unshown state as before.
+    """
+
+    judged = 0
+    for sid in sessions:
+        served = [(t, snap) for t, snap in polled if snap.get("session_id") == sid]
+        if not served:
+            continue
+        judged += 1
+        since, last = served[-1]
+        shown = [snap for _, snap in woken if snap.get("session_id") == sid]
+        if _busy(last) or not shown or _strip_text(shown[-1]) != _strip_text(last) or now < since + AT_REST_HOLD_S:
+            return False
+    return judged > 0
 
 
 STREAM_OPEN_WAIT_S = 15.0
@@ -663,6 +726,12 @@ STREAM_OPEN_WAIT_S = 15.0
 # budgets are 1.0 s; a state that changes with no frame is unshown until an unrelated frame arrives, which is seconds.
 WOKEN_STATE_BUDGET_S = 1.0
 WOKEN_STATE_CHECK = "a client that reads state only when woken shows every served state"
+# After the turn's last durable event: a cell leaves once the turn is at rest for a client (``turn_at_rest``) and no lane
+# has seen anything new for AT_REST_HOLD_S; otherwise it looks for SETTLE_S, as every cell did until 2026-11-13.
+AT_REST_HOLD_S = WOKEN_STATE_BUDGET_S + 0.5
+SETTLE_S = 5.0
+WARM_UP_S = 6.0  # the longest a Helm warm-up turn is waited for
+WARM_UP_UNSEEN_S = 2.0  # a warm-up never seen busy counts as over after this long at rest
 
 
 def _wait_for_open_streams(api: RuntimeApi, timeout: float = STREAM_OPEN_WAIT_S) -> tuple[int, int, float]:
@@ -753,6 +822,7 @@ def run_kind_cell_in(
     provider, mode = spec.provider, spec.mode
     driver, binary = drivers[provider], pas.binaries[provider]
     started = time.monotonic()
+    spans = Spans()
     out: dict[str, Any] = {
         "cell": spec.key,
         "provider": provider,
@@ -765,6 +835,7 @@ def run_kind_cell_in(
     if plan.not_measured:
         out.update(outcome="not_measured", reason=plan.not_measured)
         return out
+    spans.mark("versions")
     obs = KindObservation(plan)
     workspace = pas.root / "w" / provider / f"{mode}-{plan.nonce}"
     workspace.mkdir(parents=True)
@@ -801,8 +872,12 @@ def run_kind_cell_in(
                 columns=COLUMNS,
             )
             obs.ready_evidence = _wait_ready(session, recording, timing_file, driver.ready_text, ready_timeout, driver.answers)
+        prompt_ready_at = time.monotonic()
+        spans.mark("provider ready")
         if warm_session and session is not None:
             _warm_helm_session(session, api, plan.nonce)
+            out["warm_up_s"] = round(time.monotonic() - prompt_ready_at, 2)
+            spans.mark("warm-up turn")
         watchers = [LaneWatcher(lane, markers, stop) for lane in api.poll_lanes()]
         stream = FramingStreamWatcher("workspace stream (SSE)", lambda: api.stream_lines(stop), markers, stop)
         stream.prompt = plan.prompt
@@ -816,7 +891,7 @@ def run_kind_cell_in(
             console_session = str(created["session_id"])
             api.pinned_sessions = [console_session]
             obs.ready_evidence = f"console session {console_session} created; adapter available"
-        files = FileWatcher(pas.home, markers, stop, only_under=(".codex/sessions",) if provider == "codex" else ())
+        files = FileWatcher(pas.home, markers, stop, only_under=TRANSCRIPT_ROOTS.get(provider, ()))
         files.scan_once()
         side_markers = [s.marker for s in plan.signals if s.group in plan.side_file_groups]
         if side_markers:
@@ -839,6 +914,7 @@ def run_kind_cell_in(
         if observer is not None:
             observer.before_submit(pas.host.url, api.session_ids(), plan)
         prompted_sessions = set(api.known_sessions)
+        spans.mark("session listed, lanes open")
         submitted = time.monotonic()
         if mode == "console":
             api.post(
@@ -856,8 +932,16 @@ def run_kind_cell_in(
         events_lane = next(w for w in watchers if isinstance(w, LaneWatcher) and w.lane.name.startswith("events"))
         deadline = submitted + plan.max_seconds
         done_at: float | None = None
+        seen_count, seen_changed_at = -1, submitted
+
+        def everything_seen() -> int:
+            count = sum(len(w.first_seen) for w in watchers) + len(files.first_seen) + (len(side.first_seen) if side else 0)
+            return count + (len(probe.children) + len(probe.child_marker_first) if probe else 0)
+
         while time.monotonic() < deadline:
             now = time.monotonic()
+            if (count := everything_seen()) != seen_count:
+                seen_count, seen_changed_at = count, now
             if key and obs.press_t is None and session is not None:
                 anchored = pas.model.sent_times([anchor_marker])[anchor_marker]
                 if anchored is not None and now >= anchored + PRESS_AFTER_ANCHOR_S[spec.scenario]:
@@ -865,11 +949,22 @@ def run_kind_cell_in(
                     session.write(key)
             if done_at is None and last_markers & set(events_lane.first_seen) and None not in pas.model.sent_times(model_markers).values():
                 done_at = now
-            if done_at is not None and now > done_at + 5:
-                break
+                spans.mark("prompt to last event")
+            if done_at is not None:
+                served = [sid for sid in prompted_sessions if sid not in state_observer.gone]
+                if now >= seen_changed_at + AT_REST_HOLD_S and turn_at_rest(
+                    list(state_observer.timeline), list(woken_reader.timeline), served, now
+                ):
+                    out["left_on"] = "turn at rest"
+                    break
+                if now > done_at + SETTLE_S:
+                    out["left_on"] = "settle time"
+                    break
             if session is not None and not session.alive():
+                out["left_on"] = "provider exited"
                 break
-            time.sleep(0.25)
+            time.sleep(0.2)
+        spans.mark("after last event" if done_at is not None else "prompt to deadline")
         if observer is not None:
             observer.turn_over()
             out["observer"] = observer.finish()
@@ -882,6 +977,7 @@ def run_kind_cell_in(
         files.join(timeout=5)
         if side:
             side.join(timeout=5)
+        spans.mark("lanes closed")
         if probe:
             probe.join(timeout=5)
             out["subagent_probe"] = {
@@ -966,8 +1062,10 @@ def run_kind_cell_in(
             out["last_output"] = _tail_text(recording)
     finally:
         stop.set()
+        spans.mark("read back")
         if session is not None:
             session.close()
+        spans.mark("provider stopped")
     receipt = _served_per_turn(pas, plan)
     obs.turns_served = receipt
     checks = judge_kinds(obs)
@@ -1008,6 +1106,12 @@ def run_kind_cell_in(
     out["press_after_s"] = _rel(obs.press_t, submitted)
     out["model_requests_per_turn"] = receipt
     out["signals"] = _signal_rows(obs, submitted, mode)
+    spans.mark("judged")
+    out["timing"] = {
+        "spans": spans.to_json(),
+        "prepare_home_s": pas.prepared.get(provider),
+        **{f"pass_{name}": seconds for name, seconds in pas.timing.items()},
+    }
     out["wall_s"] = round(time.monotonic() - started, 1)
     return out
 

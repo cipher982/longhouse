@@ -18,14 +18,15 @@ Every shard's Runtime Host runs without the embedding lane (recall is not what a
 four inference threads per host) except the one shard named by ``EMBEDDING_SHARD``, so that a change which lets that
 lane hold up live delivery still fails a cell. ``--jobs`` is lowered to what the memory limit holds (``fit_jobs``).
 
-Each shard has its own host because one host does not carry many cells. ``--shared-host`` starts one Runtime Host for
-the run and every shard's Machine Agent connects to it under its own device id, as machines do in production. Measured
-2026-11-13 on a Linux bench with the Codex and Claude cells (a cell asks its host about 20 reads a second): one shard at
-a time, every cell passed and a session read took 51 ms at the median and 117 ms at the 90th percentile; two at a
-time, every cell passed, 289 ms at the 90th and 15 requests refused; three at a time, 4 of 20 cells failed (state shown
-1 to 2.6 s late), 612 ms at the 90th and 22 refused; six at a time, 4 of 20 failed and 4 in 10 reads took over half a
-second. The refusals are the catalog's own limit of two reads at once ("catalog read lane is full"). The option stays as
-the way to measure what one host carries.
+Shards share Runtime Hosts (``HostPool``): a shard's Machine Agent connects to a host that is already up, under its own
+device id, as machines do in production, and at most ``--shards-per-host`` shards use one host at a time. A host of its
+own cost every pass 6 to 8 s of start-up and 0.9 GiB, about 80 times a run. A pass that needs its own host still starts
+one: a mutation in the server package, and the shard that runs the embedding lane. ``--shards-per-host 0`` gives every
+pass its own host again. What one host carries, measured 2026-11-13 on a Linux bench with the Codex and Claude cells when
+a cell still asked its host about 20 reads and 40 session lists a second: one shard at a time, every cell passed and a
+session read took 51 ms at the median; two at a time, every cell passed, 289 ms at the 90th percentile and 15 requests
+refused; three at a time, 4 of 20 cells failed (state shown 1 to 2.6 s late) and 22 refused. The refusals are the
+catalog's own limit of two reads at once ("catalog read lane is full").
 
 Scratch paths must be short: Codex binds ``<home>/.longhouse/managed-local/codex-bridge/<uuid>.sock`` and a socket path
 holds 107 bytes on Linux, which leaves the home 27 (``short_scratch``; a CI run on 2026-11-13 failed every Codex Helm
@@ -70,6 +71,7 @@ from zerg.qa.terminal_truth_kinds import KIND_EXPECTATIONS
 from zerg.qa.terminal_truth_kinds import KNOWN_LATE_STATE
 from zerg.qa.terminal_truth_kinds import SCENARIOS as KIND_SCENARIOS
 from zerg.qa.terminal_truth_kinds import kinds_verdict
+from zerg.qa.terminal_truth_providers import PROFILE_CACHE_ENV
 from zerg.qa.terminal_truth_providers import ScratchRuntimeHost
 from zerg.qa.terminal_truth_pty import REPO_ROOT
 from zerg.qa.terminal_truth_pty import SCRATCH_ROOT
@@ -94,9 +96,11 @@ EMBEDDING_LOADED = "Local embedder loaded"  # the host's log line once the model
 # and 2.16 GiB with the embedding lane. ``fit_jobs`` budgets a little more per shard and sets aside the lane's extra.
 SHARD_MEMORY_GIB = 1.5
 RESERVED_MEMORY_GIB = 1.5
-# With --shared-host a shard has no host of its own (0.9 GiB less) and the one host has the embedding model.
-SHARED_HOST_SHARD_MEMORY_GIB = 0.6
-SHARED_HOST_RESERVED_MEMORY_GIB = 2.5
+# A shard on a shared host has no host of its own (0.9 GiB less, measured the same day); a shared host is 0.2 GiB.
+POOLED_SHARD_MEMORY_GIB = 0.7
+# Shards one shared host carries at a time (``HostPool``). Two is what passed every cell when a cell read its host five
+# times as often as it does now; the bench run of 2026-11-13 recorded in the gate's spec is what this number rests on.
+SHARDS_PER_HOST = 2
 # The longest socket path a provider binds under its home is Codex's bridge: this much after the home directory.
 SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
 CODEX_SOCKET_TAIL = len("/.longhouse/managed-local/codex-bridge/") + 36 + len(".sock")
@@ -298,6 +302,7 @@ class ShardRun:
     log: Path
     note: str = ""
     keep: bool = True  # its scratch (recordings, host and engine logs) stays for the receipt
+    host: str | None = None  # the shared host it ran on (a directory under the scratch root), if it did not start its own
     embedding_loaded: bool | None = None  # for the shard that runs the embedding lane: did the model load
 
 
@@ -313,7 +318,7 @@ class Runner:
         self._serial = 0
         self._token = secrets.token_hex(1)  # two runs on one machine never share a shard directory
         self.epoch = time.monotonic()
-        self.child_environment: dict[str, str] = {}  # TT_RUNTIME_HOST and its log, when the run has one host
+        self.hosts: HostPool | None = None  # the hosts shards share; None: every pass starts its own
         self.stopped = threading.Event()  # set by SIGINT, SIGTERM or SIGHUP: start nothing more
 
     def argv(self, shard: Shard, out: Path) -> list[str]:
@@ -347,7 +352,21 @@ class Runner:
             )
         scratch.mkdir(parents=True, exist_ok=True)
         out.unlink(missing_ok=True)
-        environment = {**os.environ, "TT_SCRATCH_ROOT": str(scratch), **self.child_environment}
+        # One Claude onboarding a run: the first pass that needs the profile makes it there, the others copy it.
+        environment = {**os.environ, "TT_SCRATCH_ROOT": str(scratch), PROFILE_CACHE_ENV: str(self.scratch_base / "profiles")}
+        # A shard with a host environment of its own (a patched server, the embedding lane) starts its own host.
+        host = self.hosts.take() if self.hosts is not None and "--host-env" not in shard.flags else None
+        try:
+            return self._run(shard, name, out, log_path, scratch, environment, host)
+        finally:
+            if host is not None and self.hosts is not None:
+                self.hosts.give_back(host)
+
+    def _run(
+        self, shard: Shard, name: str, out: Path, log_path: Path, scratch: Path, environment: dict[str, str], host: PooledHost | None
+    ) -> ShardRun:
+        if host is not None:
+            environment.update(TT_RUNTIME_HOST=host.host.url, TT_RUNTIME_HOST_LOG=str(host.host.log_path))
         started = time.monotonic()
         note = ""
         with log_path.open("wb") as log_file:
@@ -372,6 +391,7 @@ class Runner:
         rows = self._rows(shard, out, code, note, log_path)
         self.log(f"{name}: exit {code} in {seconds:.0f} s ({', '.join(u.cell for u in shard.units)})")
         run = ShardRun(shard, rows, code, seconds, started - self.epoch, scratch, log_path, note)
+        run.host = host.name if host is not None else None
         if shard.embedding:
             run.embedding_loaded = _host_log_has(scratch, EMBEDDING_LOADED)
         return run
@@ -443,17 +463,82 @@ def short_scratch(root: Path, tmp: Path = Path("/tmp")) -> tuple[Path, Path | No
     return alias, alias
 
 
-def start_shared_host(root: Path, embed_model_dir: Path | None, *, embedding: bool = True) -> ScratchRuntimeHost:
-    """One Runtime Host for the whole run (--shared-host), with the embedding lane on as a real host has it."""
+@dataclass
+class PooledHost:
+    name: str
+    host: ScratchRuntimeHost
+    shards: int = 0  # using it now
+    served: int = 0  # ever
+    boot_s: float | None = None
+    error: str = ""
+    up: threading.Event = field(default_factory=threading.Event)
 
-    shutil.rmtree(root, ignore_errors=True)
-    root.mkdir(parents=True)
-    environment = {"LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED": "0" if embedding else "1"}
-    if embed_model_dir is not None:
-        environment["LONGHOUSE_EMBED_MODEL_DIR"] = str(embed_model_dir)
-    host = ScratchRuntimeHost(root, environment)
-    host.start()
-    return host
+
+class HostPool:
+    """The Runtime Hosts the shards of a run share: started when first needed, each used by at most ``per_host`` shards at a time.
+
+    A shard asks for a host when it starts and gives it back when it ends. It gets the least busy host with room, or a new
+    one when every host is full, so the number of hosts follows the number of shards running and nobody sets it. A host
+    that exited is not handed out again; its exit fails the run, as a host that dies under load is a finding and not noise.
+    """
+
+    def __init__(self, root: Path, per_host: int, log: Callable[[str], None]) -> None:
+        self.root, self.per_host, self.log = root, max(1, per_host), log
+        self.hosts: list[PooledHost] = []
+        self._lock = threading.Lock()
+
+    def _alive(self, pooled: PooledHost) -> bool:
+        return not pooled.error and (pooled.host.process is None or pooled.host.process.poll() is None)
+
+    def take(self) -> PooledHost:
+        with self._lock:
+            open_hosts = [h for h in self.hosts if self._alive(h) and h.shards < self.per_host]
+            pooled = min(open_hosts, key=lambda h: h.shards, default=None)
+            starts = pooled is None
+            if pooled is None:
+                name = f"host-{len(self.hosts)}"
+                pooled = PooledHost(name, ScratchRuntimeHost(self.root / name, device_id=f"terminal-truth-{name}"))
+                self.hosts.append(pooled)
+            pooled.shards += 1
+            pooled.served += 1
+        if starts:
+            boot = time.monotonic()
+            try:
+                shutil.rmtree(pooled.host.root, ignore_errors=True)
+                pooled.host.root.mkdir(parents=True)
+                pooled.host.start()
+                pooled.boot_s = round(time.monotonic() - boot, 1)
+                self.log(f"{pooled.name}: a Runtime Host for up to {self.per_host} shards at a time, up in {pooled.boot_s} s")
+            except Exception as exc:  # noqa: BLE001 - the shards given this host fail with the reason; the next shard gets a new host
+                pooled.error = f"{type(exc).__name__}: {exc}"
+                self.log(f"{pooled.name}: did not start: {pooled.error}")
+            finally:
+                pooled.up.set()
+        pooled.up.wait(timeout=120)
+        return pooled
+
+    def give_back(self, pooled: PooledHost) -> None:
+        with self._lock:
+            pooled.shards -= 1
+
+    def stop(self) -> list[dict[str, Any]]:
+        """Stop every host; one row per host for fleet.json (``exited`` is its status if it died before this)."""
+
+        state = []
+        for pooled in self.hosts:
+            process = pooled.host.process
+            state.append(
+                {
+                    "name": pooled.name,
+                    "root": str(SCRATCH_ROOT / self.root.name / pooled.name),
+                    "boot_s": pooled.boot_s,
+                    "shards": pooled.served,
+                    "exited": process.poll() if process is not None else None,
+                    "error": pooled.error,
+                }
+            )
+            pooled.host.stop()
+        return state
 
 
 def _memory_in_use() -> int | None:
@@ -697,18 +782,17 @@ def run_all(args: argparse.Namespace) -> int:
         mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
     )  # fmt: skip
     args.jobs_asked = args.jobs
-    budget = (
-        (SHARED_HOST_SHARD_MEMORY_GIB, SHARED_HOST_RESERVED_MEMORY_GIB) if args.shared_host else (SHARD_MEMORY_GIB, RESERVED_MEMORY_GIB)
-    )
-    args.jobs, why = fit_jobs(args.jobs, memory_room_gib(), *budget)
+    per_shard = POOLED_SHARD_MEMORY_GIB if args.shards_per_host else SHARD_MEMORY_GIB
+    args.jobs, why = fit_jobs(args.jobs, memory_room_gib(), per_shard, RESERVED_MEMORY_GIB)
     if why:
         log(why)
     scratch_root, alias = short_scratch(SCRATCH_ROOT)
     if alias is not None:
         log(f"scratch is {alias}, a link to {SCRATCH_ROOT}: provider socket paths have to fit in {SOCKET_PATH_MAX} bytes")
     runner = Runner(out_dir, scratch_root, log)
-    shared_host: ScratchRuntimeHost | None = None
-    args.shared_host_state = None
+    if args.shards_per_host:
+        runner.hosts = HostPool(scratch_root / "hosts", args.shards_per_host, log)
+    args.hosts = []
     watch = MemoryWatch()
     watch.start()
     by_name = {m.name: m for m in plan.selected}
@@ -739,11 +823,6 @@ def run_all(args: argparse.Namespace) -> int:
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             previous_handlers[number] = signal.signal(number, on_signal)
     try:
-        if args.shared_host:
-            boot = time.monotonic()
-            shared_host = start_shared_host(scratch_root / "shared-host", args.embed_model_cache, embedding=args.embedding_lane)
-            runner.child_environment = {"TT_RUNTIME_HOST": shared_host.url, "TT_RUNTIME_HOST_LOG": str(shared_host.log_path)}
-            log(f"one Runtime Host for the run, up in {time.monotonic() - boot:.1f} s at {shared_host.url}")
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
             runs = list(pool.map(run_shard, sorted(shards, key=lambda s: -s.weight)))
         for run in runs:
@@ -770,28 +849,28 @@ def run_all(args: argparse.Namespace) -> int:
     finally:
         args.memory = watch.finish()
         runner.kill_all()
-        if shared_host is not None:
-            args.shared_host_state = {
-                "exited_during_the_run": shared_host.process.poll() if shared_host.process is not None else None,
-                "embedding_model_loaded": _log_has(shared_host.log_path, EMBEDDING_LOADED),
-                "root": str(SCRATCH_ROOT / "shared-host"),
-            }
-            shared_host.stop()
+        if runner.hosts is not None:
+            args.hosts = runner.hosts.stop()
         if alias is not None:
             with contextlib.suppress(OSError):
                 alias.unlink()
         shutil.rmtree(copies_root, ignore_errors=True)
+        shutil.rmtree(SCRATCH_ROOT / "profiles", ignore_errors=True)
         for number, handler in previous_handlers.items():
             signal.signal(number, handler)
     args.stopped = runner.stopped.is_set()
-    host_exit = (args.shared_host_state or {}).get("exited_during_the_run")
-    if host_exit is not None:
-        log(f"the run's Runtime Host exited before the run ended (status {host_exit}): the run fails")
-    args.ok = judged.ok and host_exit is None
+    died = [h for h in args.hosts if h["exited"] is not None or h["error"]]
+    for h in died:
+        log(f"{h['name']} exited before the run ended (status {h['exited']}{', ' + h['error'] if h['error'] else ''}): the run fails")
+    args.ok = judged.ok and not died
     kept = _write(args, plan, judged, rows, runs, reruns, builds, shards, parallel_s, time.monotonic() - started)
-    if args.shared_host_state and args.shared_host_state["root"] not in kept:
-        shutil.rmtree(args.shared_host_state["root"], ignore_errors=True)
+    for h in args.hosts:
+        if h["root"] not in kept:
+            shutil.rmtree(h["root"], ignore_errors=True)
+    if args.hosts and not any(h["root"] in kept for h in args.hosts):
+        shutil.rmtree(SCRATCH_ROOT / "hosts", ignore_errors=True)
     print(render(plan, judged, rows, reruns))
+    print("\n" + render_time(where_the_time_went(runs)))
     wall = time.monotonic() - started
     print(
         f"\nterminal truth, all checks: {'PASS' if args.ok else 'FAIL'} "
@@ -808,6 +887,49 @@ def _all_units(plan: Plan) -> dict[str, Unit]:
 def _brief(verdict: tuple[str, str | None, str]) -> str:
     outcome, stage, reason = verdict
     return f"{outcome} at {stage or '-'}: {' '.join(reason.split())[:300]}" if outcome != "pass" else "pass"
+
+
+def where_the_time_went(runs: Sequence[ShardRun]) -> dict[str, Any]:
+    """The shards' seconds, split into what was inside a cell and what was not, and the cells' seconds by span.
+
+    Outside a cell is the shard's own start, its hosts and Machine Agents starting, provider homes being prepared and the
+    teardown. The spans are ``Spans`` in each result row. All of it is seconds one after another, not wall time.
+    """
+
+    spans: dict[str, float] = {}
+    in_cells = 0.0
+    cells = 0
+    for run in runs:
+        for row in run.rows.values():
+            timing = row.get("timing") or {}
+            wall = timing.get("cell_wall_s") or row.get("wall_s")
+            if not wall:
+                continue
+            cells += 1
+            in_cells += float(wall)
+            for name, seconds in (timing.get("spans") or {}).items():
+                spans[name] = spans.get(name, 0.0) + float(seconds)
+    shards = sum(run.seconds for run in runs)
+    return {
+        "shards_s": round(shards, 1),
+        "cells_timed": cells,
+        "in_cells_s": round(in_cells, 1),
+        "outside_cells_s": round(shards - in_cells, 1),
+        "cell_spans_s": {name: round(seconds, 1) for name, seconds in sorted(spans.items(), key=lambda item: -item[1])},
+    }
+
+
+def render_time(time_spent: dict[str, Any]) -> str:
+    shards = time_spent["shards_s"] or 1.0
+    lines = ["### Where the time went", "", "Seconds one after another, over every shard of the run.", ""]
+    lines += ["| where | seconds | share |", "|---|---|---|"]
+    lines.append(
+        f"| outside a cell: shard, host and engine start, provider homes, teardown | {time_spent['outside_cells_s']:.0f} | "
+        f"{time_spent['outside_cells_s'] / shards:.0%} |"
+    )
+    for name, seconds in time_spent["cell_spans_s"].items():
+        lines.append(f"| cell: {name} | {seconds:.0f} | {seconds / shards:.0%} |")
+    return "\n".join(lines)
 
 
 def _write(
@@ -849,21 +971,17 @@ def _write(
             shutil.rmtree(SCRATCH_ROOT / run.scratch.name, ignore_errors=True)
     # By the scratch root's own name: a short link the run made for it (``short_scratch``) is gone by now.
     kept = [str(SCRATCH_ROOT / run.scratch.name) for run in runs if run.keep]
-    host = getattr(args, "shared_host_state", None)
-    if host and (kept or host["exited_during_the_run"] is not None):
-        kept.append(host["root"])  # the host's log is the other half of every kept shard's evidence
+    hosts = getattr(args, "hosts", None) or []
+    used_by_kept = {run.host for run in runs if run.keep and run.host}
+    for host in hosts:
+        if host["name"] in used_by_kept or host["exited"] is not None or host["error"]:
+            kept.append(host["root"])  # the host's log is the other half of a kept shard's evidence
     fleet = {
         "state": "success" if getattr(args, "ok", judged.ok) else "failure",
         # False only for the whole gate: every scenario, provider and mode, every mutation test, the gate's stream.
         "stopped": getattr(args, "stopped", False),
         "narrowed": bool(
-            args.scenario
-            or args.provider
-            or args.mode
-            or args.only
-            or not args.mutations
-            or (args.tokens, args.rate) != (100, 20.0)
-            or getattr(args, "shared_host", False)
+            args.scenario or args.provider or args.mode or args.only or not args.mutations or (args.tokens, args.rate) != (100, 20.0)
         ),
         "reruns_allowed": bool(args.rerun),
         "jobs": args.jobs,
@@ -878,13 +996,15 @@ def _write(
             ),
             None,
         ),
-        # With --shared-host: whether the run's one host was still up at the end and whether its embedding model loaded.
-        "shared_host": host,
+        # The hosts the shards shared: how long each took to start, how many shards used it, its exit status if it died.
+        "hosts": hosts,
+        "shards_per_host": getattr(args, "shards_per_host", 0),
         # Memory in use (anonymous and shared, as fit_jobs counts it) before the shards started and at its highest.
         "memory": getattr(args, "memory", None),
         "wall_s": round(wall_s, 1),
         "parallel_phase_s": round(parallel_s, 1),
         "one_after_another_s": round(sum(r.seconds for r in runs), 1),
+        "time": where_the_time_went(runs),
         "planned": {
             "cells": sorted(plan.units),
             "mutations": [m.name for m in plan.selected] + list(plan.extras),
@@ -900,6 +1020,7 @@ def _write(
                 "exit": run.exit,
                 "started_s": round(run.started_s, 1),
                 "seconds": round(run.seconds, 1),
+                "host": run.host,
                 "note": run.note,
             }
             for run in runs
@@ -920,12 +1041,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 4, 8), help="shards running at once")
     parser.add_argument(
-        "--shared-host",
-        action="store_true",
-        help="one Runtime Host for the whole run instead of one per shard: measures what one host carries; not the gate",
-    )
-    parser.add_argument(
-        "--no-embedding-lane", dest="embedding_lane", action="store_false", help="with --shared-host: that host without the embedding lane"
+        "--shards-per-host",
+        type=int,
+        default=SHARDS_PER_HOST,
+        help="shards that use one shared Runtime Host at a time; 0: every pass starts a host of its own",
     )
     parser.add_argument("--providers-per-shard", type=int, default=2, help="providers whose unmutated cells share one host, per scenario")
     parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS, help="repeatable; default all five")
