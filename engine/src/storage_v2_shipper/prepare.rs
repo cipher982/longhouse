@@ -566,8 +566,18 @@ fn prepare_file_envelope(
     let epoch_opened_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .context("source epoch opened_at is not RFC 3339")?
         .with_timezone(&Utc);
-    let file_source = crate::pipeline::source::FileSource::new(path);
-    let capturing = crate::pipeline::source::CapturingWitness::new(path, epoch_opened_at);
+    let file_source = crate::pipeline::source::FileSource::named(path, view.identity_path);
+    // A record with no clock of its own takes the last clock before it. The
+    // range ending here recorded where its parse ended; the first range
+    // starts from the epoch's opening.
+    let starting_clock = if position > 0 {
+        source_epoch::last_clock_at(conn, resolution.source_epoch, position)?
+    } else {
+        None
+    }
+    .unwrap_or(epoch_opened_at);
+    let capturing =
+        crate::pipeline::source::CapturingWitness::new(view.identity_path, starting_clock);
     let mut parse_result = parser::parse_source(
         &file_source,
         &capturing,
@@ -593,6 +603,7 @@ fn prepare_file_envelope(
     parse_result.metadata.managed_binding_is_exact = binding_thread
         .as_deref()
         .is_some_and(|thread| thread == parse_result.metadata.session_id);
+    captured_witness.managed_binding_is_exact = parse_result.metadata.managed_binding_is_exact;
     if framing == RawSourceFraming::LfDelimited
         && raw_batch.range_end > parse_result.last_good_offset
     {
@@ -621,6 +632,12 @@ fn prepare_file_envelope(
             conn,
             resolution.source_epoch,
             &source_epoch::ContentAnchor::new(raw_batch.range_end, &batch_tail(&raw_batch)),
+        )?;
+        source_epoch::record_last_clock(
+            conn,
+            resolution.source_epoch,
+            raw_batch.range_end,
+            parse_result.last_clock.unwrap_or(starting_clock),
         )?;
     }
     let session_id = resolve_session_id(
@@ -761,6 +778,14 @@ fn prepare_file_envelope(
             payload: fact.payload.clone(),
         })
         .collect::<Vec<_>>();
+    // Cursor's agent-transcripts JSONL is raw evidence only (see the render
+    // field below); the host must withhold its render exactly when the laptop
+    // does.
+    let render_shipped = !cursor_projection_is_raw_only(provider, path)
+        && (!is_cursor_agent_transcript_path(provider, path)
+            || parse_result.metadata.started_at.is_some()
+            || !render_records.is_empty());
+    captured_witness.render_withheld = !render_shipped;
     // First, so a host that truncates an oversized fact list keeps it.
     facts.insert(
         0,
@@ -841,11 +866,7 @@ fn prepare_file_envelope(
             // Suppressed outright when store.db owns this conversation's render;
             // otherwise the original rule stands, because a Cursor snapshot
             // without a clock cannot certify an empty transcript.
-            render: (!cursor_projection_is_raw_only(provider, path)
-                && (!is_cursor_agent_transcript_path(provider, path)
-                    || parse_result.metadata.started_at.is_some()
-                    || !render_records.is_empty()))
-            .then(|| StorageV2Render {
+            render: render_shipped.then(|| StorageV2Render {
                 generation_id: render_generation.to_string(),
                 parser_revision: PARSER_REVISION.to_string(),
                 ordering_revision: ORDERING_REVISION.to_string(),
@@ -1115,12 +1136,32 @@ pub(super) fn capture_witness_fact(
     witness: &crate::pipeline::source::CapturedWitness,
     range_start: u64,
 ) -> Result<StorageV2ProviderFact> {
-    Ok(StorageV2ProviderFact {
-        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
-        at: witness
+    Ok(witness_fact(
+        witness
             .fallback_time
             .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        range_start,
+        serde_json::to_value(witness).context("capture witness is not JSON")?,
+    ))
+}
+
+/// The Runtime Host keeps a capture fact up to this size and drops a larger
+/// one, leaving that envelope impossible to rebuild from raw.
+pub(super) const MAX_CAPTURE_WITNESS_BYTES: usize = 64 * 1024;
+
+pub(super) fn witness_fact(at: String, range_start: u64, payload: Value) -> StorageV2ProviderFact {
+    let size = payload.to_string().len();
+    if size > MAX_CAPTURE_WITNESS_BYTES {
+        tracing::warn!(
+            size,
+            range_start,
+            "Capture witness exceeds the host's limit; this envelope will not be rebuildable from raw"
+        );
+    }
+    StorageV2ProviderFact {
+        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
+        at,
         source_position: range_start,
-        payload: serde_json::to_value(witness).context("capture witness is not JSON")?,
-    })
+        payload,
+    }
 }

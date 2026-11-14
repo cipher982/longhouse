@@ -827,6 +827,7 @@ fn parse_rows_with_context(
             ..Default::default()
         },
         candidate_records,
+        last_clock: None,
     };
     Ok(OpenCodeParse {
         result,

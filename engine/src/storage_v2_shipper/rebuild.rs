@@ -82,7 +82,12 @@ pub(crate) fn envelope_witness(
     Ok(witness)
 }
 
+#[derive(Debug, Serialize)]
 pub(crate) struct RebuiltRender {
+    /// The laptop shipped no render for this envelope, and neither does the
+    /// host; `records` is then empty.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub withheld: bool,
     pub records: Vec<StorageV2RenderRecord>,
     pub session: StorageV2SessionFacts,
     pub media: Vec<StorageV2MediaRef>,
@@ -97,14 +102,19 @@ pub(crate) fn rebuild_envelope(
     envelope: &StorageV2Envelope,
     witness: &CapturedWitness,
 ) -> Result<RebuiltRender> {
-    let source = MemorySource::at(witness.identity.clone(), stored.base, stored.bytes.clone());
-    let parse_result = parser::parse_source(
+    let source = MemorySource::at(
+        witness.identity.clone(),
+        stored.base,
+        stored.bytes.as_slice(),
+    );
+    let mut parse_result = parser::parse_source(
         &source,
         witness,
         envelope.range_start,
         Some(envelope.range_end),
         Some(&envelope.provider),
     )?;
+    parse_result.metadata.managed_binding_is_exact = witness.managed_binding_is_exact;
     let mut records = Vec::with_capacity(envelope.records.len());
     for record in &envelope.records {
         let bytes = record.bytes()?;
@@ -166,7 +176,12 @@ pub(crate) fn rebuild_envelope(
         })
         .collect();
     Ok(RebuiltRender {
-        records: render_records,
+        withheld: witness.render_withheld,
+        records: if witness.render_withheld {
+            Vec::new()
+        } else {
+            render_records
+        },
         session,
         media: storage_v2_media_refs(&media_objects),
         facts,
@@ -251,6 +266,7 @@ pub(crate) fn rebuild_opencode_envelope(
         envelope.range_end,
     )?;
     Ok(RebuiltRender {
+        withheld: false,
         records: render_records,
         session,
         media: storage_v2_media_refs(&media_objects),
@@ -354,12 +370,199 @@ pub(crate) fn rebuild_cursor_envelope(
     apply_cursor_thread(&mut records, &witness);
     let session = cursor_session_facts(&witness, !records.is_empty())?;
     Ok(RebuiltRender {
+        // The laptop ships a Cursor store render only when it has records.
+        withheld: records.is_empty(),
         records,
         session,
         // Cursor ships no provider facts beyond its capture witness.
         media: Vec::new(),
         facts: Vec::new(),
     })
+}
+
+/// One source epoch as a Runtime Host stores it: its accepted envelopes in
+/// range order, each with its raw records and its facts (the capture witness
+/// among them), plus the media bytes those envelopes reference.
+#[derive(Debug, Deserialize)]
+pub(crate) struct EpochRequest {
+    #[serde(default)]
+    pub id: Value,
+    pub provider: String,
+    pub session_id: String,
+    pub source_epoch: String,
+    pub epoch_opened_at: String,
+    pub range_kind: String,
+    pub envelopes: Vec<StoredEnvelope>,
+    /// Media bytes by sha256, base64.
+    #[serde(default)]
+    pub media: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StoredEnvelope {
+    pub range_start: u64,
+    pub range_end: u64,
+    pub records: Vec<StorageV2Record>,
+    #[serde(default)]
+    pub facts: Vec<StorageV2ProviderFact>,
+    #[serde(default)]
+    pub media: Vec<StorageV2MediaRef>,
+}
+
+/// The rebuild of each envelope of an epoch, or why one could not be rebuilt
+/// (an envelope from an engine that shipped no capture witness, for one).
+#[derive(Debug, Serialize)]
+pub(crate) struct EpochRender {
+    pub range_start: u64,
+    pub range_end: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render: Option<RebuiltRender>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl EpochRequest {
+    fn envelopes(&self) -> Vec<StorageV2Envelope> {
+        self.envelopes
+            .iter()
+            .map(|stored| StorageV2Envelope {
+                protocol_version: 2,
+                tenant_id: String::new(),
+                machine_id: String::new(),
+                session_id: self.session_id.clone(),
+                provider: self.provider.clone(),
+                opaque_source_id: String::new(),
+                source_epoch: self.source_epoch.clone(),
+                predecessor_source_epoch: None,
+                epoch_opened_at: self.epoch_opened_at.clone(),
+                range_kind: self.range_kind.clone(),
+                range_start: stored.range_start,
+                range_end: stored.range_end,
+                render: None,
+                media: stored.media.clone(),
+                session: StorageV2SessionFacts {
+                    provider_session_id: None,
+                    environment: String::new(),
+                    project: None,
+                    cwd: None,
+                    git_repo: None,
+                    git_branch: None,
+                    provider_version: None,
+                    started_at: String::new(),
+                    last_activity_at: String::new(),
+                    ended_at: None,
+                    origin_kind: None,
+                    hidden_from_default_timeline: false,
+                    launch_actor: None,
+                    launch_surface: None,
+                    is_subagent: false,
+                    parent_provider_session_id: None,
+                    parent_tool_call_id: None,
+                    workflow_run_id: None,
+                },
+                records: stored.records.clone(),
+                facts: stored.facts.clone(),
+                expected_envelope_id: String::new(),
+            })
+            .collect()
+    }
+}
+
+/// Rebuild every envelope of one stored epoch. The epoch's bytes are laid
+/// out once; each envelope parses its own range of them.
+pub(crate) fn rebuild_epoch(request: &EpochRequest) -> Result<Vec<EpochRender>> {
+    let envelopes = request.envelopes();
+    let media: HashMap<String, Vec<u8>> = request
+        .media
+        .iter()
+        .filter_map(|(sha, encoded)| {
+            BASE64_STANDARD
+                .decode(encoded)
+                .ok()
+                .map(|bytes| (sha.clone(), bytes))
+        })
+        .collect();
+    let provider = request.provider.to_ascii_lowercase();
+    let byte_offset = request.range_kind == "byte_offset";
+    let stored = if byte_offset {
+        Some(StoredSource::from_envelopes(envelopes.iter())?)
+    } else {
+        None
+    };
+    let mut out = Vec::with_capacity(envelopes.len());
+    for (index, envelope) in envelopes.iter().enumerate() {
+        let rebuilt = (|| -> Result<RebuiltRender> {
+            if let Some(stored) = stored.as_ref() {
+                let witness = envelope_witness(envelope, |sha| media.get(sha).cloned())?;
+                rebuild_envelope(stored, envelope, &witness)
+            } else {
+                let through: Vec<&StorageV2Envelope> = envelopes[..=index].iter().collect();
+                match provider.as_str() {
+                    "opencode" => rebuild_opencode_envelope(&through, envelope),
+                    "cursor" => rebuild_cursor_envelope(&through, envelope),
+                    other => anyhow::bail!("no record-ordinal rebuild for provider {other}"),
+                }
+            }
+        })();
+        out.push(match rebuilt {
+            Ok(render) => EpochRender {
+                range_start: envelope.range_start,
+                range_end: envelope.range_end,
+                render: Some(render),
+                error: None,
+            },
+            Err(error) => EpochRender {
+                range_start: envelope.range_start,
+                range_end: envelope.range_end,
+                render: None,
+                error: Some(format!("{error:#}")),
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// The Runtime Host's normalizer process: one JSON request per line on
+/// stdin, one JSON response per line on stdout, until stdin closes. A request
+/// that fails or panics answers with an error and the worker keeps serving.
+pub(crate) fn serve_normalize_worker(
+    input: impl std::io::BufRead,
+    mut output: impl std::io::Write,
+) -> Result<()> {
+    for line in input.lines() {
+        let line = line.context("reading a normalize request")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<EpochRequest>(&line) {
+            Err(error) => {
+                serde_json::json!({ "id": Value::Null, "error": format!("bad request: {error}") })
+            }
+            Ok(request) => {
+                let started = std::time::Instant::now();
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    rebuild_epoch(&request)
+                })) {
+                    Ok(Ok(envelopes)) => serde_json::json!({
+                        "id": request.id,
+                        "envelopes": envelopes,
+                        "elapsed_us": started.elapsed().as_micros() as u64,
+                        "revision": PARSER_REVISION,
+                    }),
+                    Ok(Err(error)) => {
+                        serde_json::json!({ "id": request.id, "error": format!("{error:#}") })
+                    }
+                    Err(_) => {
+                        serde_json::json!({ "id": request.id, "error": "normalizer panicked" })
+                    }
+                }
+            }
+        };
+        serde_json::to_writer(&mut output, &response)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -523,8 +726,12 @@ mod tests {
                     .render
                     .as_ref()
                     .map(|render| serde_json::to_value(&render.records).unwrap())
-                    .unwrap_or(serde_json::json!([])),
-                serde_json::to_value(&rebuilt.records).unwrap(),
+                    .unwrap_or(Value::Null),
+                if rebuilt.withheld {
+                    Value::Null
+                } else {
+                    serde_json::to_value(&rebuilt.records).unwrap()
+                },
             ),
             (
                 "session",
@@ -618,7 +825,8 @@ mod tests {
             envelopes.extend(opencode_envelopes(state, db_path));
         }
         assert!(envelopes.len() >= 6, "{} envelopes", envelopes.len());
-        let problems = opencode_mismatches(&envelopes);
+        let mut problems = opencode_mismatches(&envelopes);
+        problems.extend(worker_mismatches(&envelopes, &HashMap::new()));
         assert!(problems.is_empty(), "{}", problems.join("\n"));
         let witness_bytes: usize = envelopes
             .iter()
@@ -745,6 +953,164 @@ mod tests {
     }
 
     #[test]
+    fn host_rebuild_keeps_a_longhouse_fork_visible() {
+        // A fork Longhouse started is bound to its own thread on the laptop,
+        // which keeps it in the default timeline. Only the laptop's binding
+        // says so; the witness carries it.
+        use crate::storage_v2_shipper::tests::{codex_forked_child_lines, FORK_CHILD_THREAD};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-dddd1111.jsonl");
+        fs::write(&path, codex_forked_child_lines()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind_for_thread(
+                &stable_source_path(&path).to_string_lossy(),
+                "019d2869-1111-7222-8333-aaaaaaaaaaaa",
+                "codex",
+                Some(FORK_CHILD_THREAD),
+            )
+            .unwrap();
+        let prepared = prepare::prepare_next_envelope_with_limit(
+            &mut conn,
+            &crate::storage_v2_shipper::tests::capabilities(),
+            &path,
+            "codex",
+            None,
+            usize::MAX / 2,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!prepared.envelope.session.hidden_from_default_timeline);
+        let shipped = Shipped {
+            envelopes: vec![prepared.envelope],
+            media: HashMap::new(),
+        };
+        let problems = rebuild_mismatches(&shipped);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let mut without = shipped.clone();
+        for fact in &mut without.envelopes[0].facts {
+            if fact.kind == CAPTURE_WITNESS_FACT_KIND {
+                fact.payload
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("managed_binding_is_exact");
+            }
+        }
+        assert!(!rebuild_mismatches(&without).is_empty());
+    }
+
+    #[test]
+    fn host_rebuild_withholds_the_render_the_laptop_withheld() {
+        // A Cursor agent transcript with no clock and no events ships raw only;
+        // the host must not mint a render for it either.
+        let dir = tempfile::tempdir().unwrap();
+        let transcripts = dir.path().join("agent-transcripts");
+        fs::create_dir_all(&transcripts).unwrap();
+        let path = transcripts.join("not-a-uuid.jsonl");
+        fs::write(&path, "{}\n").unwrap();
+        let shipped = ship_all(&path, "cursor", dir.path(), usize::MAX / 2);
+        assert!(!shipped.envelopes.is_empty());
+        assert!(shipped
+            .envelopes
+            .iter()
+            .all(|envelope| envelope.render.is_none()));
+        let problems = rebuild_mismatches(&shipped);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let mut without = Shipped {
+            envelopes: shipped.envelopes.clone(),
+            media: HashMap::new(),
+        };
+        for envelope in &mut without.envelopes {
+            for fact in &mut envelope.facts {
+                if fact.kind == CAPTURE_WITNESS_FACT_KIND {
+                    fact.payload
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("render_withheld");
+                }
+            }
+        }
+        assert!(!rebuild_mismatches(&without).is_empty());
+    }
+
+    #[test]
+    fn render_does_not_depend_on_where_envelopes_were_cut() {
+        // The served timeline must be a function of the transcript, not of how
+        // the shipper happened to batch it: whole-file and 512-byte envelopes
+        // render the same rows (apart from each row's index within its own
+        // envelope).
+        let _guard = crate::console_adapter::agent_state_guard();
+        let scratch = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", scratch.path().join("longhouse"));
+        }
+        let rows = |shipped: &Shipped| -> Vec<Value> {
+            let mut rows: Vec<Value> = shipped
+                .envelopes
+                .iter()
+                .flat_map(|envelope| {
+                    envelope
+                        .render
+                        .iter()
+                        .flat_map(|render| render.records.iter())
+                })
+                .map(|record| {
+                    let mut value = serde_json::to_value(record).unwrap();
+                    value.as_object_mut().unwrap().remove("raw_record_ordinal");
+                    value
+                })
+                .collect();
+            rows.sort_by_key(|row| row.to_string());
+            rows
+        };
+        let mut failures = Vec::new();
+        for (tree, provider) in fixture_sets() {
+            let source_root = fixtures_root().join(tree);
+            let mut files = Vec::new();
+            files_in(&source_root, &mut files);
+            for fixture in files.into_iter().filter(|path| is_transcript(path)) {
+                let relative = fixture.strip_prefix(&source_root).unwrap();
+                let mut renders = Vec::new();
+                for batch_bytes in [usize::MAX / 2, 512] {
+                    let case = tempfile::tempdir().unwrap();
+                    let copy_root = case.path().join("src");
+                    let mut tree_files = Vec::new();
+                    files_in(&source_root, &mut tree_files);
+                    for file in tree_files {
+                        let target = copy_root.join(file.strip_prefix(&source_root).unwrap());
+                        fs::create_dir_all(target.parent().unwrap()).unwrap();
+                        fs::copy(&file, &target).unwrap();
+                    }
+                    let path = copy_root.join(relative);
+                    renders.push(rows(&ship_all(&path, provider, case.path(), batch_bytes)));
+                }
+                if renders[0] != renders[1] {
+                    let whole: std::collections::HashSet<String> =
+                        renders[0].iter().map(Value::to_string).collect();
+                    let cut: std::collections::HashSet<String> =
+                        renders[1].iter().map(Value::to_string).collect();
+                    failures.push(format!(
+                        "{tree}/{}: only whole {:?}\n  only cut {:?}",
+                        relative.display(),
+                        whole.difference(&cut).take(2).collect::<Vec<_>>(),
+                        cut.difference(&whole).take(2).collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
+                None => std::env::remove_var("LONGHOUSE_HOME"),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn host_rebuild_resolves_provider_blobs_from_shipped_media() {
         // A pasted image lives in the provider's blob store, not the
         // transcript. The host has only the shipped media object, keyed by the
@@ -782,6 +1148,134 @@ mod tests {
         );
     }
 
+    /// Rebuild through the worker protocol, as the Runtime Host will: each
+    /// epoch serialized to one request line, answers read back from stdout.
+    fn worker_mismatches(
+        envelopes: &[StorageV2Envelope],
+        media: &HashMap<String, Vec<u8>>,
+    ) -> Vec<String> {
+        let mut epochs: Vec<Vec<&StorageV2Envelope>> = Vec::new();
+        for envelope in envelopes {
+            match epochs
+                .iter_mut()
+                .find(|epoch| epoch[0].source_epoch == envelope.source_epoch)
+            {
+                Some(epoch) => epoch.push(envelope),
+                None => epochs.push(vec![envelope]),
+            }
+        }
+        let mut input = String::new();
+        for (index, epoch) in epochs.iter().enumerate() {
+            let first = epoch[0];
+            let request = serde_json::json!({
+                "id": index,
+                "provider": first.provider,
+                "session_id": first.session_id,
+                "source_epoch": first.source_epoch,
+                "epoch_opened_at": first.epoch_opened_at,
+                "range_kind": first.range_kind,
+                "envelopes": epoch.iter().map(|envelope| serde_json::json!({
+                    "range_start": envelope.range_start,
+                    "range_end": envelope.range_end,
+                    "records": envelope.records,
+                    "facts": envelope.facts,
+                    "media": envelope.media,
+                })).collect::<Vec<_>>(),
+                "media": media.iter().map(|(sha, bytes)| (sha.clone(), BASE64_STANDARD.encode(bytes))).collect::<HashMap<_, _>>(),
+            });
+            input.push_str(&serde_json::to_string(&request).unwrap());
+            input.push('\n');
+        }
+        let mut output = Vec::new();
+        serve_normalize_worker(input.as_bytes(), &mut output).unwrap();
+        let mut problems = Vec::new();
+        for (epoch, line) in epochs
+            .iter()
+            .zip(String::from_utf8(output).unwrap().lines())
+        {
+            let response: Value = serde_json::from_str(line).unwrap();
+            if let Some(error) = response.get("error") {
+                problems.push(format!("worker error: {error}"));
+                continue;
+            }
+            for (envelope, answer) in epoch.iter().zip(response["envelopes"].as_array().unwrap()) {
+                if let Some(error) = answer.get("error") {
+                    problems.push(format!(
+                        "range {}..{}: {error}",
+                        envelope.range_start, envelope.range_end
+                    ));
+                    continue;
+                }
+                let render = &answer["render"];
+                let shipped_facts: Vec<&StorageV2ProviderFact> = envelope
+                    .facts
+                    .iter()
+                    .filter(|fact| fact.kind != CAPTURE_WITNESS_FACT_KIND)
+                    .collect();
+                let pairs = [
+                    (
+                        "render",
+                        envelope
+                            .render
+                            .as_ref()
+                            .map(|r| serde_json::to_value(&r.records).unwrap())
+                            .unwrap_or(Value::Null),
+                        if render["withheld"].as_bool() == Some(true) {
+                            Value::Null
+                        } else {
+                            render["records"].clone()
+                        },
+                    ),
+                    (
+                        "session",
+                        serde_json::to_value(&envelope.session).unwrap(),
+                        render["session"].clone(),
+                    ),
+                    (
+                        "media",
+                        serde_json::to_value(&envelope.media).unwrap(),
+                        render["media"].clone(),
+                    ),
+                    (
+                        "facts",
+                        serde_json::to_value(&shipped_facts).unwrap(),
+                        render["facts"].clone(),
+                    ),
+                ];
+                for (what, shipped, rebuilt) in pairs {
+                    if shipped != rebuilt {
+                        problems.push(format!(
+                            "worker range {}..{} {what} differs:\n  shipped {shipped}\n  rebuilt {rebuilt}",
+                            envelope.range_start, envelope.range_end
+                        ));
+                    }
+                }
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn normalize_worker_answers_errors_and_keeps_serving() {
+        let input = "not json\n{\"provider\":\"claude\",\"session_id\":\"s\",\"source_epoch\":\"e\",\"epoch_opened_at\":\"2026-11-14T00:00:00Z\",\"range_kind\":\"byte_offset\",\"envelopes\":[]}\n";
+        let mut output = Vec::new();
+        serve_normalize_worker(input.as_bytes(), &mut output).unwrap();
+        let lines: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("bad request"));
+        assert!(lines[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("no stored envelopes"));
+    }
+
     #[test]
     fn host_rebuild_from_shipped_envelopes_equals_laptop_render() {
         let _guard = crate::console_adapter::agent_state_guard();
@@ -813,7 +1307,14 @@ mod tests {
                     let path = copy_root.join(relative);
                     let shipped = ship_all(&path, provider, case.path(), batch_bytes);
                     checked += shipped.envelopes.len();
-                    for problem in rebuild_mismatches(&shipped) {
+                    // The host has none of the laptop's files: delete them
+                    // before rebuilding, so a hidden disk read cannot pass.
+                    drop(case);
+                    assert!(!path.exists());
+                    for problem in rebuild_mismatches(&shipped)
+                        .into_iter()
+                        .chain(worker_mismatches(&shipped.envelopes, &shipped.media))
+                    {
                         failures.push(format!(
                             "{tree}/{} (batch {batch_bytes}): {problem}",
                             relative.display()

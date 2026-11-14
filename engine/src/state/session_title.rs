@@ -350,6 +350,7 @@ mod tests {
             last_good_offset: 1,
             metadata: SessionMetadata::default(),
             candidate_records: 1,
+            last_clock: None,
         }
     }
 

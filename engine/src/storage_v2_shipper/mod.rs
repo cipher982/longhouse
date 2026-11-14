@@ -49,6 +49,7 @@ mod opencode_source;
 mod pending;
 mod prepare;
 mod rebuild;
+pub(crate) use rebuild::serve_normalize_worker;
 mod reconcile;
 mod render;
 mod resume;
@@ -3401,7 +3402,7 @@ mod tests {
         assert!(wire.get("provider_version").is_none());
     }
 
-    fn codex_forked_child_lines() -> String {
+    pub(super) fn codex_forked_child_lines() -> String {
         concat!(
             r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"dddddddd-1111-2222-3333-444455556666","forked_from_id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#,
             "\n",
@@ -3411,7 +3412,7 @@ mod tests {
         .to_string()
     }
 
-    const FORK_CHILD_THREAD: &str = "dddddddd-1111-2222-3333-444455556666";
+    pub(super) const FORK_CHILD_THREAD: &str = "dddddddd-1111-2222-3333-444455556666";
 
     /// A fork Longhouse started binds the child's path to the child's session
     /// and records the thread it bound. That binding names this transcript's own

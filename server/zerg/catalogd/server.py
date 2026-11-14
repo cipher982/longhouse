@@ -2536,10 +2536,30 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "session.provider_facts.insert.v2 has invalid parameters")
         if not _is_canonical_uuid(request.params.get("source_epoch")):
             return self._error(request, "invalid_request", "session.provider_facts.insert.v2 requires a canonical source_epoch")
+        raw_facts = request.params["provider_facts"]
+        # Provider facts stay strict here. A capture witness is the laptop's
+        # record of what it read: one the commit path dropped (too large) must
+        # not turn a later exact replay of the same bytes into a rejection that
+        # blocks the source, so a bad one is dropped and named.
+        capture = (
+            [item for item in raw_facts if isinstance(item, dict) and str(item.get("kind", "")).startswith("capture.")]
+            if isinstance(raw_facts, list)
+            else []
+        )
+        provider = [item for item in raw_facts if item not in capture] if isinstance(raw_facts, list) else raw_facts
         try:
-            facts = _validate_provider_facts(request.params["provider_facts"])
+            facts = _validate_provider_facts(provider)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
+        kept_capture, dropped_capture = _partition_provider_facts(capture)
+        if dropped_capture:
+            logger.warning(
+                "session.provider_facts.insert.v2 dropped %d capture fact(s) for session %s: %s",
+                len(dropped_capture),
+                request.params.get("session_id"),
+                "; ".join(dropped_capture[:3]),
+            )
+        facts = (*facts, *kept_capture)
         assert self._store is not None
         result = await self._run_store(
             self._store.insert_session_provider_facts,

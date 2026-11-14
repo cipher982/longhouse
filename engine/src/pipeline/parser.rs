@@ -195,6 +195,9 @@ pub struct ParseResult {
     /// Used by the shipper to detect suspicious zero-event outcomes:
     /// if candidate_records > 0 but events is empty, something likely went wrong.
     pub candidate_records: usize,
+    /// The clock the last clocked record in this parse carried, which the next
+    /// parse of the same source starts from.
+    pub last_clock: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -782,6 +785,18 @@ pub fn parse_source(
     provider: Option<&str>,
 ) -> Result<ParseResult> {
     let _clock = FallbackClock::set(witness.fallback_time());
+    let mut result = parse_source_clocked(source, witness, offset, end_limit, provider)?;
+    result.last_clock = LAST_CLOCK.with(|cell| cell.get());
+    Ok(result)
+}
+
+fn parse_source_clocked(
+    source: &dyn SourceBytes,
+    witness: &dyn Witness,
+    offset: u64,
+    end_limit: Option<u64>,
+    provider: Option<&str>,
+) -> Result<ParseResult> {
     let identity = source.identity();
     let native_flavor = match provider.map(|value| value.to_ascii_lowercase()).as_deref() {
         Some("omp") => Some(NativeFlavor::Omp),
@@ -842,6 +857,7 @@ pub fn parse_source(
             provider_facts: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
+            last_clock: None,
             metadata: SessionMetadata {
                 session_id,
                 forked_from_session_id: scanned_session_meta
@@ -858,8 +874,14 @@ pub fn parse_source(
 
     let cursor_timestamps = witness.cursor_transcript_timestamps();
     let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
-    // JSONL: choose strategy based on file size
-    let mut result = if file_size > LARGE_FILE_THRESHOLD {
+    // JSONL: stream a large span, buffer a small one. The span is the bytes
+    // this parse covers, not the whole file, so a laptop reading a file that
+    // has since grown and a host holding only the shipped bytes choose alike.
+    let span = end_limit
+        .unwrap_or(file_size)
+        .min(file_size)
+        .saturating_sub(offset);
+    let mut result = if span > LARGE_FILE_THRESHOLD {
         parse_large_file(
             source,
             witness,
@@ -1007,7 +1029,7 @@ impl Drop for FallbackClock {
 /// Fail-closed: a missing, unreadable, oversized, or malformed sidecar yields
 /// no binding, and the child renders as an unattached subagent rather than
 /// being attached to a guess.
-fn subagent_tool_use_id_from_meta(raw: &str) -> Option<String> {
+pub(crate) fn subagent_tool_use_id_from_meta(raw: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     let tool_use_id = parsed.get("toolUseId")?.as_str()?.trim();
     (!tool_use_id.is_empty()).then(|| tool_use_id.to_string())
@@ -1343,6 +1365,7 @@ fn empty_gemini_result(session_id: &str, file_size: u64) -> ParseResult {
         provider_facts: Vec::new(),
         last_good_offset: file_size,
         candidate_records: 0,
+        last_clock: None,
         metadata: SessionMetadata {
             session_id: session_id.to_string(),
             ..Default::default()
@@ -1610,6 +1633,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
         provider_facts: Vec::new(),
         last_good_offset: file_size,
         candidate_records,
+        last_clock: None,
         metadata,
     })
 }
@@ -1776,6 +1800,7 @@ fn parse_large_file(
             provider_facts: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
+            last_clock: None,
             metadata: SessionMetadata {
                 session_id: session_id.to_string(),
                 ..Default::default()
@@ -1826,7 +1851,9 @@ fn parse_large_file(
         let after_line = line_offset + bytes_read as u64; // past the \n
         next_line_offset = after_line;
 
+        // Without its newline and a CR before it, as the buffered path reads it.
         let line_bytes = &line_buf[..bytes_read - 1];
+        let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
 
         let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
             let redacted =
@@ -1910,6 +1937,7 @@ fn parse_large_file(
         provider_facts,
         last_good_offset,
         candidate_records: candidate_lines,
+        last_clock: None,
         metadata,
     })
 }
@@ -2049,6 +2077,7 @@ fn parse_buffered(
         provider_facts,
         last_good_offset: current_offset,
         candidate_records: candidate_lines,
+        last_clock: None,
         metadata,
     })
 }

@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
@@ -421,6 +421,51 @@ pub fn record_content_anchor(
         ],
     )?;
     Ok(())
+}
+
+/// Remember the clock the parse of the range ending at `position` ended on.
+/// Written after the anchor for the same position; a row anchored elsewhere
+/// is left alone.
+pub fn record_last_clock(
+    conn: &Connection,
+    source_epoch: Uuid,
+    position: u64,
+    clock: DateTime<Utc>,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE source_epoch_content_anchor SET last_clock = ?3
+         WHERE source_epoch = ?1 AND position = ?2",
+        params![
+            source_epoch.to_string(),
+            i64::try_from(position).context("anchor position exceeds SQLite INTEGER")?,
+            clock.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        ],
+    )?;
+    Ok(())
+}
+
+/// The clock a parse starting at `position` continues from, if the range
+/// ending there recorded one.
+pub fn last_clock_at(
+    conn: &Connection,
+    source_epoch: Uuid,
+    position: u64,
+) -> Result<Option<DateTime<Utc>>> {
+    let stored: Option<Option<String>> = conn
+        .query_row(
+            "SELECT last_clock FROM source_epoch_content_anchor
+             WHERE source_epoch = ?1 AND position = ?2",
+            params![
+                source_epoch.to_string(),
+                i64::try_from(position).context("anchor position exceeds SQLite INTEGER")?,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(stored
+        .flatten()
+        .and_then(|text| DateTime::parse_from_rfc3339(&text).ok())
+        .map(|time| time.with_timezone(&Utc)))
 }
 
 pub fn content_anchor(conn: &Connection, source_epoch: Uuid) -> Result<Option<ContentAnchor>> {

@@ -495,15 +495,14 @@ pub(super) fn opencode_capture_witness_fact(
     epoch_opened_at: &str,
     range_start: u64,
 ) -> Result<StorageV2ProviderFact> {
-    Ok(StorageV2ProviderFact {
-        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
-        at: DateTime::parse_from_rfc3339(epoch_opened_at)
+    Ok(super::prepare::witness_fact(
+        DateTime::parse_from_rfc3339(epoch_opened_at)
             .context("source epoch opened_at is not RFC 3339")?
             .with_timezone(&Utc)
             .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-        source_position: range_start,
-        payload: serde_json::json!({ "opencode": witness }),
-    })
+        range_start,
+        serde_json::json!({ "opencode": witness }),
+    ))
 }
 
 /// `source_ordinals` pairs each part's source offset with the ordinal of its

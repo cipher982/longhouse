@@ -713,3 +713,24 @@ async def test_capture_witness_is_accepted_but_never_listed_as_a_provider_fact(m
                 (str(session_id),),
             ).fetchall()
         assert [row[0] for row in stored] == ["capture.witness", "turn.duration"]
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_capture_witness_never_blocks_an_exact_replay(monkeypatch):
+    """The commit drops a witness over the cap; replaying the same bytes must still answer with the receipt."""
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-capture-big-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        at = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
+        payload["facts"] = [
+            {"kind": "capture.witness", "at": at.isoformat(), "source_position": 0, "payload": {"blob": "x" * 70_000}},
+            _fact(at),
+        ]
+        first = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert first.status_code == 200, first.text
+        replay = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert replay.status_code == 200, replay.text
+        listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
+        assert [fact["kind"] for fact in listed["facts"]] == ["turn.duration"]

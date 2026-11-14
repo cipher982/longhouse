@@ -1702,10 +1702,9 @@ fn cursor_witness_fact(
     witness: &CursorStoreWitness,
     range_start: u64,
 ) -> Result<StorageV2ProviderFact> {
-    Ok(StorageV2ProviderFact {
-        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
-        at: witness.started_at.clone(),
-        source_position: range_start,
-        payload: serde_json::json!({ "cursor": witness }),
-    })
+    Ok(super::prepare::witness_fact(
+        witness.started_at.clone(),
+        range_start,
+        serde_json::json!({ "cursor": witness }),
+    ))
 }

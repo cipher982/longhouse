@@ -372,6 +372,11 @@ enum Commands {
         json: bool,
     },
 
+    /// Runtime Host normalizer: rebuild renders from stored raw epochs, one
+    /// JSON request per stdin line, one JSON response per stdout line
+    #[command(hide = true)]
+    NormalizeWorker,
+
     /// Parse a JSONL file and report event counts (dev/validation tool)
     Parse {
         /// Path to session JSONL file
@@ -1870,6 +1875,11 @@ fn main() -> anyhow::Result<()> {
             compress,
         } => {
             commands::cmd_parse::cmd_parse(&path, offset, dump_events, dump_facts, compress)?;
+        }
+        Commands::NormalizeWorker => {
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            storage_v2_shipper::serve_normalize_worker(stdin.lock(), stdout.lock())?;
         }
         Commands::RecoverState { db, dry_run, json } => {
             let db_path = state::db::resolve_db_path(db.as_deref())?;

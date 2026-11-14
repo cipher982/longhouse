@@ -370,6 +370,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         .prepare("PRAGMA table_info(file_state)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<_, _>>()?;
+    // The clock the parse of the range ending at `position` ended on. The next
+    // range's parse starts from it, so a record with no clock of its own that
+    // opens an envelope sorts beside its neighbours, and the host, given the
+    // same value in the capture witness, renders it identically.
+    let anchor_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(source_epoch_content_anchor)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !anchor_columns.contains("last_clock") {
+        conn.execute_batch("ALTER TABLE source_epoch_content_anchor ADD COLUMN last_clock TEXT;")?;
+    }
     if !file_state_columns.contains("file_identity") {
         conn.execute_batch("ALTER TABLE file_state ADD COLUMN file_identity TEXT;")?;
     }

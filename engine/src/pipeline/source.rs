@@ -131,9 +131,16 @@ pub struct FileSource<'a> {
 
 impl<'a> FileSource<'a> {
     pub fn new(path: &'a Path) -> Self {
+        Self::named(path, path)
+    }
+
+    /// Bytes read from `path`, identified as the source at `identity_path`: a
+    /// compressed Codex rollout is read from its decompressed cache copy but
+    /// is still the rollout it names.
+    pub fn named(path: &'a Path, identity_path: &Path) -> Self {
         Self {
             path,
-            identity: SourceIdentity::from_path(path),
+            identity: SourceIdentity::from_path(identity_path),
         }
     }
 }
@@ -171,31 +178,37 @@ impl SourceBytes for FileSource<'_> {
 
 /// Transcript bytes held in memory: a host's stored raw records, concatenated
 /// in source order from offset 0.
-pub struct MemorySource {
+pub struct MemorySource<'a> {
     identity: SourceIdentity,
     /// Source offset of `bytes[0]`. A host holds a source from the first
     /// position the laptop shipped, which is not always 0: Claude startup
     /// metadata before the first event is acknowledged locally and never sent.
     base: u64,
-    bytes: Vec<u8>,
+    bytes: std::borrow::Cow<'a, [u8]>,
 }
 
-impl MemorySource {
+impl MemorySource<'static> {
     pub fn new(identity: SourceIdentity, bytes: Vec<u8>) -> Self {
         Self::at(identity, 0, bytes)
     }
+}
 
+impl<'a> MemorySource<'a> {
     /// Bytes that start at source offset `base`; reads before it see nothing.
-    pub fn at(identity: SourceIdentity, base: u64, bytes: Vec<u8>) -> Self {
+    pub fn at(
+        identity: SourceIdentity,
+        base: u64,
+        bytes: impl Into<std::borrow::Cow<'a, [u8]>>,
+    ) -> Self {
         Self {
             identity,
             base,
-            bytes,
+            bytes: bytes.into(),
         }
     }
 }
 
-impl SourceBytes for MemorySource {
+impl SourceBytes for MemorySource<'_> {
     fn identity(&self) -> &SourceIdentity {
         &self.identity
     }
@@ -205,9 +218,14 @@ impl SourceBytes for MemorySource {
     }
 
     fn reader(&self, start: u64, end: u64) -> Result<Box<dyn Read + '_>> {
+        // A read that starts before the stored bytes asks for bytes the host
+        // never received; it sees nothing rather than the stored bytes shifted.
+        if start < self.base {
+            return Ok(Box::new(Cursor::new(&self.bytes[..0])));
+        }
         let len = self.bytes.len() as u64;
         let end = end.saturating_sub(self.base).min(len) as usize;
-        let start = (start.saturating_sub(self.base) as usize).min(end);
+        let start = ((start - self.base) as usize).min(end);
         Ok(Box::new(Cursor::new(&self.bytes[start..end])))
     }
 }
@@ -422,6 +440,15 @@ pub struct CapturedWitness {
     /// same Longhouse session). The render opens with a reset boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_provider_session_id: Option<String>,
+    /// The laptop's session binding names this very thread (a fork Longhouse
+    /// started), which keeps a plain fork visible in the default timeline.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed_binding_is_exact: bool,
+    /// The laptop shipped no render for this envelope (a Cursor agent
+    /// transcript whose conversation `store.db` renders, or one with no clock
+    /// and no events), so the host must not mint one either.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub render_withheld: bool,
     /// Blob bytes by sha256, from the shipped content-addressed media. Not
     /// serialized: media travels as media objects, not inside the fact.
     #[serde(skip)]
@@ -489,6 +516,8 @@ impl<'a> CapturingWitness<'a> {
             workspace: self.workspace.into_inner(),
             git: self.git.into_inner(),
             previous_provider_session_id: None,
+            managed_binding_is_exact: false,
+            render_withheld: false,
             media: std::collections::HashMap::new(),
         }
     }
@@ -497,7 +526,12 @@ impl<'a> CapturingWitness<'a> {
 impl Witness for CapturingWitness<'_> {
     fn subagent_meta(&self) -> Option<String> {
         let value = self.inner.subagent_meta();
-        *self.subagent_meta.borrow_mut() = value.clone();
+        // The parser reads only the spawning tool call's id from the sidecar;
+        // ship that, not the whole file.
+        *self.subagent_meta.borrow_mut() = value
+            .as_deref()
+            .and_then(super::parser::subagent_tool_use_id_from_meta)
+            .map(|id| serde_json::json!({ "toolUseId": id }).to_string());
         value
     }
     fn cursor_transcript_timestamps(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
