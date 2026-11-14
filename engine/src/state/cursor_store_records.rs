@@ -1411,3 +1411,22 @@ mod tests {
         );
     }
 }
+
+/// Where an epoch holds a record with these exact bytes, if it holds one.
+pub fn record_position(
+    conn: &Connection,
+    source_epoch: Uuid,
+    record_hash: &str,
+) -> Result<Option<u64>> {
+    let position: Option<i64> = conn
+        .query_row(
+            "SELECT source_position FROM cursor_store_raw_record
+             WHERE source_epoch = ?1 AND record_hash = ?2",
+            params![source_epoch.to_string(), record_hash],
+            |row| row.get(0),
+        )
+        .optional()?;
+    position
+        .map(|value| u64::try_from(value).context("Cursor source position is negative"))
+        .transpose()
+}

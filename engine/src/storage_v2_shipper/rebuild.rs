@@ -258,6 +258,110 @@ pub(crate) fn rebuild_opencode_envelope(
     })
 }
 
+/// Rebuild one Cursor store envelope from the epoch's stored envelopes up to
+/// and including it, plus its capture witness.
+///
+/// The root order comes from the epoch's own `root_observation` record when
+/// one precedes the envelope's end, else from the witness. Visibility, prompt
+/// authorship and turn failure are the laptop's shipped answers: the hook
+/// journal and `prompt_history.json` are not raw on the host, so a change to
+/// those rules still needs the laptop.
+pub(crate) fn rebuild_cursor_envelope(
+    stored: &[&StorageV2Envelope],
+    envelope: &StorageV2Envelope,
+) -> Result<RebuiltRender> {
+    use super::cursor_store_source::{
+        apply_cursor_thread, cursor_session_facts, render_cursor_records, CursorStoreWitness,
+    };
+    let fact = envelope
+        .facts
+        .iter()
+        .find(|fact| fact.kind == CAPTURE_WITNESS_FACT_KIND)
+        .context("Cursor envelope carries no capture witness")?;
+    let witness: CursorStoreWitness = serde_json::from_value(
+        fact.payload
+            .get("cursor")
+            .cloned()
+            .context("capture witness is not a Cursor witness")?,
+    )
+    .context("decoding the Cursor capture witness")?;
+    let root_ids = if !witness.root_available {
+        None
+    } else if let Some(ids) = witness.root_message_blob_ids.clone() {
+        Some(ids)
+    } else {
+        let root_blob_id = witness
+            .root_blob_id
+            .as_deref()
+            .context("Cursor witness has a root order but no root blob id")?;
+        let mut found = None;
+        'search: for stored_envelope in stored {
+            for record in &stored_envelope.records {
+                if record.source_position >= envelope.range_end {
+                    continue;
+                }
+                let value: Value = serde_json::from_slice(&record.bytes()?)?;
+                if value.get("kind").and_then(Value::as_str) == Some("root_observation")
+                    && value.get("root_blob_id").and_then(Value::as_str) == Some(root_blob_id)
+                {
+                    let encoded = value
+                        .get("root_blob_bytes_b64")
+                        .and_then(Value::as_str)
+                        .context("root observation has no bytes")?;
+                    found = Some(BASE64_STANDARD.decode(encoded)?);
+                    break 'search;
+                }
+            }
+        }
+        let bytes = found.with_context(|| {
+            format!(
+                "no stored root observation for {root_blob_id} before {}",
+                envelope.range_end
+            )
+        })?;
+        Some(crate::cursor_store::parse_root_message_blob_ids(&bytes)?)
+    };
+    let selected = envelope
+        .records
+        .iter()
+        .map(|record| {
+            Ok(cursor_store_records::CursorRawRecord {
+                source_position: record.source_position,
+                bytes: record.bytes()?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let started_at_us = DateTime::parse_from_rfc3339(&witness.started_at)
+        .context("Cursor witness started_at is not RFC 3339")?
+        .timestamp_micros();
+    let mut records = render_cursor_records(
+        root_ids.as_deref(),
+        &selected,
+        started_at_us,
+        &witness.render,
+    )?;
+    if let Some(previous) = witness.previous_provider_session_id.as_deref() {
+        super::render::insert_conversation_reset_boundary(
+            &mut records,
+            Uuid::parse_str(&envelope.source_epoch).context("source epoch is not a UUID")?,
+            envelope.range_start,
+            &envelope.epoch_opened_at,
+            &envelope.session_id,
+            previous,
+            &witness.conversation_uuid,
+        )?;
+    }
+    apply_cursor_thread(&mut records, &witness);
+    let session = cursor_session_facts(&witness, !records.is_empty())?;
+    Ok(RebuiltRender {
+        records,
+        session,
+        // Cursor ships no provider facts beyond its capture witness.
+        media: Vec::new(),
+        facts: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! Phase 2 check: for every transcript fixture, ship it through the real
@@ -731,5 +835,353 @@ mod tests {
             failures.len(),
             failures.join("\n")
         );
+    }
+
+    // ---- Cursor store ----
+
+    const CURSOR_CONVERSATION: &str = "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f";
+    const MANAGED_SESSION: &str = "018f0c3a-7b2d-7f10-8a11-1234567890ab";
+
+    fn blob_id(byte: u8) -> String {
+        format!("{byte:02x}").repeat(32)
+    }
+
+    fn hex_text(text: &str) -> String {
+        text.bytes().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// A Cursor store: `meta['0']` names the root, the root lists messages.
+    fn write_cursor_store(path: &Path, root_byte: u8, messages: &[(u8, serde_json::Value)]) {
+        let store = rusqlite::Connection::open(path).unwrap();
+        store
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB);
+                 CREATE TABLE IF NOT EXISTS blobs (id TEXT PRIMARY KEY, data BLOB);",
+            )
+            .unwrap();
+        let root_id = blob_id(root_byte);
+        let metadata = format!(
+            r#"{{"agentId":"{CURSOR_CONVERSATION}","latestRootBlobId":"{root_id}","createdAt":1773403200000}}"#
+        );
+        store
+            .execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('0', ?1)",
+                [hex_text(&metadata)],
+            )
+            .unwrap();
+        let mut root = Vec::new();
+        for (byte, message) in messages {
+            root.extend_from_slice(&[0x0a, 0x20]);
+            root.extend_from_slice(&[*byte; 32]);
+            store
+                .execute(
+                    "INSERT OR IGNORE INTO blobs (id, data) VALUES (?1, ?2)",
+                    rusqlite::params![blob_id(*byte), serde_json::to_vec(message).unwrap()],
+                )
+                .unwrap();
+        }
+        store
+            .execute(
+                "INSERT OR IGNORE INTO blobs (id, data) VALUES (?1, ?2)",
+                rusqlite::params![root_id, root],
+            )
+            .unwrap();
+    }
+
+    fn user(text: &str) -> serde_json::Value {
+        serde_json::json!({"role":"user","content":[{"type":"text","text":format!("<user_query>{text}</user_query>")}]})
+    }
+
+    fn assistant(text: &str) -> serde_json::Value {
+        serde_json::json!({"role":"assistant","content":[
+            {"type":"reasoning","text":format!("thinking about {text}")},
+            {"type":"text","text":text},
+            {"type":"tool-call","toolName":"Shell","toolCallId":format!("call-{text}"),"args":{"command":"ls"}}
+        ]})
+    }
+
+    fn first_turns() -> Vec<(u8, serde_json::Value)> {
+        vec![
+            (0x11, user("do work")),
+            (0x12, assistant("first answer")),
+            (0x13, user("Briefly inform the user about the task result")),
+            (0x14, assistant("auto answer")),
+        ]
+    }
+
+    fn later_turns() -> Vec<(u8, serde_json::Value)> {
+        let mut turns = first_turns();
+        turns.push((0x15, user("keep going")));
+        turns.push((0x16, assistant("second answer")));
+        turns
+    }
+
+    fn ship_cursor(
+        conn: &mut rusqlite::Connection,
+        path: &Path,
+        batch: u64,
+    ) -> Vec<StorageV2Envelope> {
+        let mut shipped = Vec::new();
+        for _ in 0..10_000 {
+            match super::super::cursor_store_source::prepare_next_cursor_envelope_outcome_with_limit(
+                conn,
+                &crate::storage_v2_shipper::tests::capabilities(),
+                path,
+                batch,
+            )
+            .unwrap()
+            {
+                CursorPreparationOutcome::Envelope(prepared) => {
+                    pending_source_envelope::acknowledge_and_delete(
+                        conn,
+                        prepared.source_epoch,
+                        &prepared.envelope.expected_envelope_id,
+                        prepared.range_start,
+                        prepared.range_end,
+                    )
+                    .unwrap();
+                    shipped.push(prepared.envelope);
+                }
+                CursorPreparationOutcome::Continue => continue,
+                CursorPreparationOutcome::Current | CursorPreparationOutcome::WaitingOnClaim => {
+                    return shipped;
+                }
+            }
+        }
+        panic!("Cursor store never finished shipping");
+    }
+
+    /// Rebuild every envelope from what the host holds and compare.
+    fn cursor_rebuild_mismatches(envelopes: &[StorageV2Envelope]) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (index, envelope) in envelopes.iter().enumerate() {
+            let stored: Vec<&StorageV2Envelope> = envelopes[..=index]
+                .iter()
+                .filter(|earlier| earlier.source_epoch == envelope.source_epoch)
+                .collect();
+            let rebuilt = match rebuild_cursor_envelope(&stored, envelope) {
+                Ok(rebuilt) => rebuilt,
+                Err(error) => {
+                    problems.push(format!("{}: {error:#}", envelope.range_start));
+                    continue;
+                }
+            };
+            problems.extend(compare_rebuilt(envelope, &rebuilt));
+        }
+        problems
+    }
+
+    struct CursorCase {
+        envelopes: Vec<StorageV2Envelope>,
+    }
+
+    /// Ship a store, grow it by one turn, ship again. `managed` binds it to a
+    /// launch with hook receipts whose last turn failed.
+    fn run_cursor_case(batch: u64, prompt_history: bool, managed: bool) -> CursorCase {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir
+            .path()
+            .join("cursor/chats/workspace")
+            .join(CURSOR_CONVERSATION);
+        fs::create_dir_all(&store_dir).unwrap();
+        fs::write(
+            store_dir.join("meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1,
+                "createdAtMs": 1_773_403_200_000_i64,
+                "updatedAtMs": 1_773_403_260_000_i64,
+                "cwd": "/tmp/longhouse-test/cursor-project",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        if prompt_history {
+            fs::write(
+                store_dir.join("prompt_history.json"),
+                serde_json::to_vec(&serde_json::json!(["do work", "keep going", "unrelated"]))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+        let helm = dir.path().join("longhouse/managed-local/cursor-helm");
+        if managed {
+            fs::create_dir_all(helm.join("binding-probes")).unwrap();
+            fs::create_dir_all(helm.join("hook-events")).unwrap();
+            fs::write(
+                helm.join("binding-probes")
+                    .join(format!("{MANAGED_SESSION}.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 2,
+                    "provider": "cursor",
+                    "status": "observed",
+                    "session_id": MANAGED_SESSION,
+                    "thread_id": "thread-main",
+                    "launch_id": "launch-1",
+                    "conversation_uuid": CURSOR_CONVERSATION,
+                    // The managed session ran this conversation before: its
+                    // first envelope opens with a reset boundary.
+                    "previous_conversation_uuids": ["5f0e1d2c-3b4a-4968-8776-655443322110"],
+                    "hook_observed_at": "2026-07-17T00:00:00Z"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let write_receipts = |rows: &[serde_json::Value]| {
+            if !managed {
+                return;
+            }
+            let text = rows
+                .iter()
+                .map(|row| row.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(
+                helm.join("hook-events")
+                    .join(format!("{MANAGED_SESSION}.ndjson")),
+                format!("{text}\n"),
+            )
+            .unwrap();
+        };
+        let receipt = |event: &str, generation: &str, payload: serde_json::Value| {
+            let mut payload = payload;
+            payload["generation_id"] = serde_json::json!(generation);
+            serde_json::json!({
+                "conversation_id": CURSOR_CONVERSATION,
+                "event": event,
+                "launch_id": "launch-1",
+                "observed_at": "2026-07-17T00:01:00Z",
+                "payload": payload,
+            })
+        };
+        let first_receipts = vec![
+            receipt(
+                "beforeSubmitPrompt",
+                "g1",
+                serde_json::json!({"prompt":"do work"}),
+            ),
+            receipt(
+                "afterAgentResponse",
+                "g1",
+                serde_json::json!({"text":"first answer"}),
+            ),
+            receipt("stop", "g1", serde_json::json!({"status":"completed"})),
+        ];
+        let mut later_receipts = first_receipts.clone();
+        later_receipts.push(receipt(
+            "beforeSubmitPrompt",
+            "g2",
+            serde_json::json!({"prompt":"keep going"}),
+        ));
+        later_receipts.push(receipt("stop", "g2", serde_json::json!({"status":"error"})));
+
+        let path = store_dir.join("store.db");
+        let envelopes = temp_env::with_vars(
+            [
+                (
+                    "CURSOR_HOME",
+                    Some(dir.path().join("cursor").into_os_string()),
+                ),
+                (
+                    "XDG_CONFIG_HOME",
+                    Some(dir.path().join("config").into_os_string()),
+                ),
+                (
+                    "LONGHOUSE_HOME",
+                    Some(dir.path().join("longhouse").into_os_string()),
+                ),
+            ],
+            || {
+                let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+                write_cursor_store(&path, 0xa1, &first_turns());
+                write_receipts(&first_receipts);
+                let mut envelopes = ship_cursor(&mut conn, &path, batch);
+                write_cursor_store(&path, 0xa2, &later_turns());
+                write_receipts(&later_receipts);
+                envelopes.extend(ship_cursor(&mut conn, &path, batch));
+                envelopes
+            },
+        );
+        CursorCase { envelopes }
+    }
+
+    #[test]
+    fn host_rebuilds_cursor_store_envelopes_from_stored_records_and_witness() {
+        let mut checked = 0;
+        let mut failures = Vec::new();
+        for (batch, prompt_history, managed) in [
+            (u64::MAX / 2, false, false),
+            (1, false, false),
+            (u64::MAX / 2, true, false),
+            (u64::MAX / 2, true, true),
+            (1, true, true),
+        ] {
+            let case = run_cursor_case(batch, prompt_history, managed);
+            assert!(
+                case.envelopes.iter().any(|envelope| envelope.render.is_some()),
+                "case (batch {batch}, history {prompt_history}, managed {managed}) rendered nothing"
+            );
+            let witness_bytes = case
+                .envelopes
+                .iter()
+                .map(|envelope| {
+                    serde_json::to_vec(&envelope.facts[0].payload)
+                        .unwrap()
+                        .len()
+                })
+                .max()
+                .unwrap();
+            eprintln!(
+                "cursor case batch={batch} history={prompt_history} managed={managed}: {} envelopes, largest witness {witness_bytes} bytes",
+                case.envelopes.len()
+            );
+            checked += case.envelopes.len();
+            for problem in cursor_rebuild_mismatches(&case.envelopes) {
+                failures.push(format!(
+                    "(batch {batch}, history {prompt_history}, managed {managed}) {problem}"
+                ));
+            }
+        }
+        assert!(checked > 0);
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn cursor_rebuild_depends_on_the_witness_answers() {
+        // The managed case exercises suppression, the failure row, the thread
+        // and the typed-prompt labels: blanking the witness answers must break
+        // the rebuild, or the check above proves nothing.
+        let case = run_cursor_case(u64::MAX / 2, true, true);
+        assert!(
+            case.envelopes
+                .iter()
+                .any(|envelope| envelope.facts[0].payload["cursor"]
+                    .get("previous_provider_session_id")
+                    .is_some()),
+            "the managed case must ship a reset boundary"
+        );
+        assert!(cursor_rebuild_mismatches(&case.envelopes).is_empty());
+        // Each answer on its own is load-bearing.
+        for field in [
+            "typed_prompts",
+            "suppressed",
+            "abandoned",
+            "turn_failure",
+            "thread_id",
+            "previous_provider_session_id",
+        ] {
+            let mut stripped = case.envelopes.clone();
+            for envelope in &mut stripped {
+                envelope.facts[0].payload["cursor"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+            }
+            assert!(
+                !cursor_rebuild_mismatches(&stripped).is_empty(),
+                "stripping {field} from the witness did not change the rebuild"
+            );
+        }
     }
 }

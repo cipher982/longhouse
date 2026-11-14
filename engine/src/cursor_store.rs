@@ -847,7 +847,7 @@ fn hex_nibble(byte: u8) -> Result<u8> {
     }
 }
 
-fn parse_root_message_blob_ids(bytes: &[u8]) -> Result<Vec<String>> {
+pub(crate) fn parse_root_message_blob_ids(bytes: &[u8]) -> Result<Vec<String>> {
     let mut index = 0usize;
     let mut ids = Vec::new();
     while index < bytes.len() {

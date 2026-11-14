@@ -428,18 +428,75 @@ pub(super) fn unique_cursor_receipt_path(
     (paths.len() == 1).then(|| paths.into_iter().next().expect("one receipt path exists"))
 }
 
-pub(super) fn cursor_render_records(
-    snapshot: &cursor_store::CursorStoreSnapshot,
+/// What the Cursor render needs beyond the envelope's own records, answered
+/// on the laptop from the whole store, the hook receipts and the prompt
+/// history, and shipped as the envelope's capture witness. Keys are
+/// `(message_order, subordinal)`: a block's place in the root order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CursorRenderInputs {
+    /// SHA-256 of each trimmed user text in this envelope that Cursor's prompt
+    /// history records as typed. Absent when the history does not cover this
+    /// conversation, which leaves every user turn a user turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_prompts: Option<Vec<String>>,
+    /// Text and reasoning blocks no provider receipt authorizes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suppressed: Vec<(usize, usize)>,
+    /// Text a failed or aborted turn produced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abandoned: Vec<(usize, usize)>,
+    /// The newest turn failed and nothing has superseded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_failure: Option<CursorTurnFailureWitness>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CursorTurnFailureWitness {
+    pub generation_id: String,
+    pub status: String,
+    /// Cursor's own words for the failure, when its projection carried them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_error: Option<String>,
+}
+
+/// Everything a host needs, with the envelope's records and the epoch's
+/// earlier records, to rebuild a Cursor store envelope exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CursorStoreWitness {
+    pub conversation_uuid: String,
+    pub root_blob_id: Option<String>,
+    /// False when the store's root order could not be read; nothing renders.
+    pub root_available: bool,
+    /// The root order, shipped only when no `root_observation` record for
+    /// `root_blob_id` sits in this epoch before the envelope's end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_message_blob_ids: Option<Vec<String>>,
+    pub started_at: String,
+    pub last_activity_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<crate::pipeline::source::WorkspaceWitness>,
+    /// A managed launch owns this conversation.
+    pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    /// The provider session this managed session ran before, set only when
+    /// this envelope opens with a conversation reset boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_provider_session_id: Option<String>,
+    #[serde(flatten)]
+    pub render: CursorRenderInputs,
+}
+
+pub(super) fn cursor_typed_prompt_hash(text: &str) -> String {
+    cursor_store_records::cursor_record_hash(text.trim().as_bytes())
+}
+
+type SelectedCursorBlobs = HashMap<String, (u64, usize, Vec<u8>)>;
+
+fn selected_cursor_blobs(
     selected: &[cursor_store_records::CursorRawRecord],
-    started_at_us: i64,
-    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
-    witness: Option<&CursorPromptHistory>,
-    provider_error: Option<&str>,
-) -> Result<Vec<StorageV2RenderRecord>> {
-    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
-        return Ok(Vec::new());
-    };
-    let mut selected_blobs: HashMap<String, (u64, usize, Vec<u8>)> = HashMap::new();
+) -> SelectedCursorBlobs {
+    let mut selected_blobs = HashMap::new();
     for (raw_record_ordinal, record) in selected.iter().enumerate() {
         let Ok(wrapper) = serde_json::from_slice::<Value>(&record.bytes) else {
             continue;
@@ -464,7 +521,128 @@ pub(super) fn cursor_render_records(
             (record.source_position, raw_record_ordinal, bytes),
         );
     }
+    selected_blobs
+}
+
+/// Answer, from the laptop's whole view, the questions the render asks
+/// about this envelope's blocks.
+pub(super) fn cursor_render_inputs(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    selected: &[cursor_store_records::CursorRawRecord],
+    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+    history: Option<&CursorPromptHistory>,
+    provider_error: Option<&str>,
+) -> CursorRenderInputs {
+    let mut inputs = CursorRenderInputs {
+        typed_prompts: history.map(|_| Vec::new()),
+        turn_failure: visibility_evidence
+            .and_then(|evidence| evidence.unsuperseded_failure())
+            .map(|failure| CursorTurnFailureWitness {
+                generation_id: failure.generation_id.clone(),
+                status: failure.status.clone(),
+                provider_error: provider_error.map(str::to_owned),
+            }),
+        ..Default::default()
+    };
+    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
+        return inputs;
+    };
+    let selected_blobs = selected_cursor_blobs(selected);
     let projection = cursor_text_projection(snapshot, visibility_evidence);
+    for (message_order, blob_id) in root_ids.iter().enumerate() {
+        let Some((_, _, blob_bytes)) = selected_blobs.get(blob_id) else {
+            continue;
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(blob_bytes) else {
+            continue;
+        };
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("assistant");
+        for (subordinal, block) in cursor_message_blocks(&message).iter().enumerate() {
+            let kind = block.get("type").and_then(Value::as_str);
+            if !matches!(kind, Some("text" | "reasoning")) {
+                continue;
+            }
+            let key = (blob_id.clone(), subordinal);
+            if projection.suppressed.contains(&key) {
+                inputs.suppressed.push((message_order, subordinal));
+                continue;
+            }
+            if projection.abandoned.contains(&key) {
+                inputs.abandoned.push((message_order, subordinal));
+            }
+            if kind != Some("text") {
+                continue;
+            }
+            let (Some(history), Some(typed)) = (history, inputs.typed_prompts.as_mut()) else {
+                continue;
+            };
+            let text = block
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let (effective_role, effective_text) = classify_cursor_text(role, text);
+            if effective_role == "user" && history.contains(&effective_text) {
+                let hash = cursor_typed_prompt_hash(&effective_text);
+                if !typed.contains(&hash) {
+                    typed.push(hash);
+                }
+            }
+        }
+    }
+    inputs
+}
+
+/// The laptop render: answer the witness questions, then render from them.
+#[cfg(test)]
+pub(super) fn cursor_render_records(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    selected: &[cursor_store_records::CursorRawRecord],
+    started_at_us: i64,
+    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+    witness: Option<&CursorPromptHistory>,
+    provider_error: Option<&str>,
+) -> Result<Vec<StorageV2RenderRecord>> {
+    let inputs = cursor_render_inputs(
+        snapshot,
+        selected,
+        visibility_evidence,
+        witness,
+        provider_error,
+    );
+    let root_ids = match &snapshot.root_message_blob_ids {
+        cursor_store::RootMessageBlobIds::Parsed(ids) => Some(ids.as_slice()),
+        cursor_store::RootMessageBlobIds::Unavailable { .. } => None,
+    };
+    render_cursor_records(root_ids, selected, started_at_us, &inputs)
+}
+
+/// The Cursor render as a function of the root order, the envelope's records
+/// and the witness answers. Laptop and Runtime Host both call this.
+pub(crate) fn render_cursor_records(
+    root_ids: Option<&[String]>,
+    selected: &[cursor_store_records::CursorRawRecord],
+    started_at_us: i64,
+    inputs: &CursorRenderInputs,
+) -> Result<Vec<StorageV2RenderRecord>> {
+    let Some(root_ids) = root_ids else {
+        return Ok(Vec::new());
+    };
+    let selected_blobs = selected_cursor_blobs(selected);
+    let suppressed: HashSet<(usize, usize)> = inputs.suppressed.iter().copied().collect();
+    let abandoned_blocks: HashSet<(usize, usize)> = inputs.abandoned.iter().copied().collect();
+    let typed: Option<HashSet<&str>> = inputs
+        .typed_prompts
+        .as_ref()
+        .map(|hashes| hashes.iter().map(String::as_str).collect());
+    let is_typed = |text: &str| {
+        typed
+            .as_ref()
+            .is_some_and(|typed| typed.contains(cursor_typed_prompt_hash(text).as_str()))
+    };
+    let typed_check: Option<&dyn Fn(&str) -> bool> = typed.is_some().then_some(&is_typed as _);
     // The conversation's last message decides which page owns a turn-outcome
     // row, so a paged capture emits it once instead of once per page.
     let carries_conversation_tail = root_ids
@@ -507,16 +685,16 @@ pub(super) fn cursor_render_records(
                         .unwrap_or_default()
                         .to_string();
                     if matches!(kind, "text" | "reasoning") {
-                        let key = (blob_id.clone(), subordinal);
-                        if projection.suppressed.contains(&key) {
+                        let key = (message_order, subordinal);
+                        if suppressed.contains(&key) {
                             continue;
                         }
-                        abandoned = projection.abandoned.contains(&key);
+                        abandoned = abandoned_blocks.contains(&key);
                     }
                     let (effective_role, effective_text, kind_override) = if kind == "reasoning" {
                         ("assistant".to_string(), text, None)
                     } else {
-                        classify_cursor_text_with_witness(role, &text, witness)
+                        classify_cursor_text_with(role, &text, typed_check)
                     };
                     interaction_kind = kind_override;
                     (effective_role, Some(effective_text), None, None, None, None)
@@ -587,12 +765,7 @@ pub(super) fn cursor_render_records(
         }
     }
     if carries_conversation_tail {
-        append_cursor_turn_failure(
-            &mut records,
-            visibility_evidence,
-            started_at_us,
-            provider_error,
-        );
+        append_cursor_turn_failure(&mut records, inputs.turn_failure.as_ref(), started_at_us);
     }
     Ok(records)
 }
@@ -609,14 +782,13 @@ pub(super) fn cursor_render_records(
 /// one duplicate in the timeline per page.
 pub(super) fn append_cursor_turn_failure(
     records: &mut Vec<StorageV2RenderRecord>,
-    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+    failure: Option<&CursorTurnFailureWitness>,
     started_at_us: i64,
-    provider_error: Option<&str>,
 ) {
-    let Some(failure) = visibility_evidence.and_then(|evidence| evidence.unsuperseded_failure())
-    else {
+    let Some(failure) = failure else {
         return;
     };
+    let provider_error = failure.provider_error.as_deref();
     // Anchor to the last selected record: the row reads raw evidence this
     // envelope already carries rather than inventing a record of its own.
     let Some((source_position, raw_record_ordinal, last_order_time_us)) =
@@ -672,17 +844,29 @@ pub(super) fn append_cursor_turn_failure(
 /// rotated, so the cost of being wrong has to be a mislabelled row rather than
 /// a real message the user can no longer find — the same treatment Claude's
 /// background-task envelope already gets.
+#[cfg(test)]
 pub(super) fn classify_cursor_text_with_witness(
     role: &str,
     text: &str,
     witness: Option<&CursorPromptHistory>,
 ) -> (String, String, Option<String>) {
+    let contains = |text: &str| witness.is_some_and(|history| history.contains(text));
+    classify_cursor_text_with(role, text, witness.is_some().then_some(&contains as _))
+}
+
+/// `typed` answers whether the prompt history records a text as typed; absent
+/// when the history does not cover the conversation.
+pub(super) fn classify_cursor_text_with(
+    role: &str,
+    text: &str,
+    typed: Option<&dyn Fn(&str) -> bool>,
+) -> (String, String, Option<String>) {
     let (effective_role, effective_text) = classify_cursor_text(role, text);
     if effective_role != "user" {
         return (effective_role, effective_text, None);
     }
-    match witness {
-        Some(history) if !history.contains(&effective_text) => (
+    match typed {
+        Some(typed) if !typed(&effective_text) => (
             "system".to_string(),
             effective_text,
             Some("provider_notification".to_string()),
@@ -1308,13 +1492,61 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
         .and_then(|_| {
             crate::cursor_visibility::cursor_projection_turn_error(&snapshot.conversation_uuid)
         });
-    let mut render_records = cursor_render_records(
+    // Answer every question the render asks of the whole store, the hook
+    // receipts and the prompt history, ship those answers as the envelope's
+    // capture witness, and render from them, exactly as a host will.
+    let render_inputs = cursor_render_inputs(
         &store_snapshot,
         &selected,
-        started_at.timestamp_micros(),
         visibility_evidence.as_ref(),
         prompt_witness.as_ref(),
         provider_error.as_deref(),
+    );
+    let root_ids = match &store_snapshot.root_message_blob_ids {
+        cursor_store::RootMessageBlobIds::Parsed(ids) => Some(ids.clone()),
+        cursor_store::RootMessageBlobIds::Unavailable { .. } => None,
+    };
+    // A host finds the root order in the epoch's own `root_observation`
+    // record when one precedes this envelope's end; ship it otherwise.
+    let root_order_is_stored = match snapshot.records.iter().find(|record| {
+        serde_json::from_slice::<Value>(record).is_ok_and(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("root_observation")
+        })
+    }) {
+        Some(record) => cursor_store_records::record_position(
+            conn,
+            resolution.source_epoch,
+            &cursor_store_records::cursor_record_hash(record),
+        )?
+        .is_some_and(|position| position < range_end),
+        None => false,
+    };
+    let mut cursor_witness = CursorStoreWitness {
+        conversation_uuid: snapshot.conversation_uuid.clone(),
+        root_blob_id: store_snapshot.root_blob_id.clone(),
+        root_available: root_ids.is_some(),
+        root_message_blob_ids: root_ids.clone().filter(|_| !root_order_is_stored),
+        started_at: started_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        last_activity_at: last_activity_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        workspace: workspace_facts.as_ref().map(|(cwd, project, git_repo)| {
+            crate::pipeline::source::WorkspaceWitness {
+                cwd: cwd.clone(),
+                project: project.clone(),
+                git_repo: git_repo.clone(),
+            }
+        }),
+        managed: managed_session_id.is_some(),
+        thread_id: claimed_binding
+            .as_ref()
+            .and_then(|binding| binding.thread_id.clone()),
+        previous_provider_session_id: None,
+        render: render_inputs,
+    };
+    let mut render_records = render_cursor_records(
+        root_ids.as_deref(),
+        &selected,
+        started_at.timestamp_micros(),
+        &cursor_witness.render,
     )?;
     let previous_provider_session_id = if range_start == 0 {
         if let Some(managed_session_id) = managed_session_id.as_deref() {
@@ -1358,15 +1590,9 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
             previous_provider_session_id.as_deref().unwrap_or_default(),
             &snapshot.conversation_uuid,
         )?;
+        cursor_witness.previous_provider_session_id = previous_provider_session_id.clone();
     }
-    if let Some(thread_id) = claimed_binding
-        .as_ref()
-        .and_then(|binding| binding.thread_id.as_ref())
-    {
-        for record in &mut render_records {
-            record.thread_id = Some(thread_id.clone());
-        }
-    }
+    apply_cursor_thread(&mut render_records, &cursor_witness);
     let render_generation = cursor_render_generation_id(&session_id);
     let has_reply_evidence = render_records
         .iter()
@@ -1395,36 +1621,12 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
             range_end,
             render,
             media: Vec::new(),
-            session: StorageV2SessionFacts {
-                provider_session_id: Some(snapshot.conversation_uuid.clone()),
-                environment: "local".to_string(),
-                project: workspace_facts
-                    .as_ref()
-                    .and_then(|(_, project, _)| project.clone()),
-                cwd: workspace_facts.as_ref().map(|(cwd, _, _)| cwd.clone()),
-                git_repo: workspace_facts
-                    .as_ref()
-                    .and_then(|(_, _, git_repo)| git_repo.clone()),
-                git_branch: None,
-                provider_version: None,
-                started_at: started_at.to_rfc3339(),
-                last_activity_at: last_activity_at.to_rfc3339(),
-                ended_at: None,
-                origin_kind: Some("cursor_store".to_string()),
-                hidden_from_default_timeline: managed_session_id.is_none() || !render_ready,
-                launch_actor: None,
-                launch_surface: None,
-                // Cursor stores no subagent lineage.
-                is_subagent: false,
-                parent_provider_session_id: None,
-                parent_tool_call_id: None,
-                workflow_run_id: None,
-            },
+            session: cursor_session_facts(&cursor_witness, render_ready)?,
             records: selected
                 .into_iter()
                 .map(|record| StorageV2Record::from_bytes(record.source_position, record.bytes))
                 .collect(),
-            facts: Vec::new(),
+            facts: vec![cursor_witness_fact(&cursor_witness, range_start)?],
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
         },
         source_epoch: resolution.source_epoch,
@@ -1439,4 +1641,71 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
         media_objects: Vec::new(),
     };
     persist_prepared(conn, &path_text, prepared).map(CursorPreparationOutcome::Envelope)
+}
+
+/// Every render record of a conversation a managed launch bound to a thread
+/// carries that thread.
+pub(crate) fn apply_cursor_thread(
+    records: &mut [StorageV2RenderRecord],
+    witness: &CursorStoreWitness,
+) {
+    if let Some(thread_id) = witness.thread_id.as_ref() {
+        for record in records {
+            record.thread_id = Some(thread_id.clone());
+        }
+    }
+}
+
+pub(crate) fn cursor_session_facts(
+    witness: &CursorStoreWitness,
+    render_ready: bool,
+) -> Result<StorageV2SessionFacts> {
+    let time = |value: &str| -> Result<String> {
+        Ok(DateTime::parse_from_rfc3339(value)
+            .context("Cursor witness time is not RFC 3339")?
+            .with_timezone(&Utc)
+            .to_rfc3339())
+    };
+    Ok(StorageV2SessionFacts {
+        provider_session_id: Some(witness.conversation_uuid.clone()),
+        environment: "local".to_string(),
+        project: witness
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.project.clone()),
+        cwd: witness
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.cwd.clone()),
+        git_repo: witness
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.git_repo.clone()),
+        git_branch: None,
+        provider_version: None,
+        started_at: time(&witness.started_at)?,
+        last_activity_at: time(&witness.last_activity_at)?,
+        ended_at: None,
+        origin_kind: Some("cursor_store".to_string()),
+        hidden_from_default_timeline: !witness.managed || !render_ready,
+        launch_actor: None,
+        launch_surface: None,
+        // Cursor stores no subagent lineage.
+        is_subagent: false,
+        parent_provider_session_id: None,
+        parent_tool_call_id: None,
+        workflow_run_id: None,
+    })
+}
+
+fn cursor_witness_fact(
+    witness: &CursorStoreWitness,
+    range_start: u64,
+) -> Result<StorageV2ProviderFact> {
+    Ok(StorageV2ProviderFact {
+        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
+        at: witness.started_at.clone(),
+        source_position: range_start,
+        payload: serde_json::json!({ "cursor": witness }),
+    })
 }
