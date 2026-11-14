@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,11 +240,13 @@ class FakeRunner:
 
     def __init__(self, script: dict[str, list[tuple[str, str | None, str]]], scratch: Path) -> None:
         self.script, self.scratch, self.calls, self.epoch = script, scratch, [], 0.0
+        self.hold = 0.0  # seconds a shard takes, so shards can be made to overlap
         self.hosts: parallel.HostPool | None = None
         self.stopped = parallel.threading.Event()
 
     def run(self, shard: parallel.Shard, attempt: str = "") -> parallel.ShardRun:
         self.calls.append((shard.name, attempt, [u.id for u in shard.units]))
+        time.sleep(self.hold)
         rows = {}
         for unit in shard.units:
             queue = self.script.get(unit.id) or []
@@ -274,7 +277,7 @@ def run_with(monkeypatch, tmp_path, script, *extra: str) -> tuple[int, dict, Fak
     monkeypatch.setattr(parallel, "Runner", lambda *a, **k: fake)
     monkeypatch.setattr(parallel, "verdict_of", verdict_of)
     monkeypatch.setattr(parallel, "SCRATCH_ROOT", tmp_path / "scratch")
-    monkeypatch.setattr(parallel, "memory_room_gib", lambda: None)
+    monkeypatch.setattr(parallel, "memory_limit", lambda: None)
     monkeypatch.setattr(parallel, "short_scratch", lambda root: (root, None))
     built = {"hits": 0, "built": 0, "seconds": 0.0, "inputs_digest": "x"}
     engines = {m.name: (ENGINE, CLI) for m in mutations.MUTATIONS if m.side == "engine"}
@@ -434,31 +437,143 @@ def test_the_log_line_the_run_looks_for_is_the_one_the_embedder_writes() -> None
     assert f'logger.info("{parallel.EMBEDDING_LOADED} ' in source
 
 
-def test_fewer_shards_run_at_once_when_the_memory_limit_holds_fewer_and_never_none() -> None:
-    assert parallel.fit_jobs(8, None) == (8, "")
-    assert parallel.fit_jobs(8, (64.0, "a limit of 64.0 GiB")) == (8, "")
-    jobs, why = parallel.fit_jobs(8, (7.6, "a limit of 8.0 GiB with 0.4 GiB in use"))
-    assert jobs == int((7.6 - parallel.RESERVED_MEMORY_GIB) / parallel.SHARD_MEMORY_GIB) == 4
-    assert "4 at a time, not 8" in why and "a limit of 8.0 GiB with 0.4 GiB in use" in why
-    assert parallel.fit_jobs(8, (0.5, "0.5 GiB available on the machine"))[0] == 1
-    assert parallel.fit_jobs(2, (7.6, "x")) == (2, "")
+GIB = 2**30
+
+
+def gate_with(monkeypatch, limit_gib: float | None, in_use_gib: float) -> tuple[parallel.MemoryGate, list[float]]:
+    """A gate that is read by hand (its thread is never started), and the reading it will see next."""
+
+    reading = [in_use_gib * GIB]
+    monkeypatch.setattr(parallel, "_memory_in_use", lambda: int(reading[0]))
+    limit = None if limit_gib is None else (int(limit_gib * GIB), f"a limit of {limit_gib:.1f} GiB")
+    return parallel.MemoryGate(limit), reading
+
+
+def test_memory_is_read_from_the_cgroup_whose_limit_the_run_meets_first(tmp_path) -> None:
+    root = tmp_path / "cgroup"
+    scope = root / "user.slice" / "app.slice" / "run-1.scope"
+    scope.mkdir(parents=True)
+    own = tmp_path / "self"
+    own.write_text("0::/user.slice/app.slice/run-1.scope\n")
+    (root / "memory.max").write_text("25769803776\n")
+    (root / "user.slice" / "memory.max").write_text("max\n")
+    (scope / "memory.max").write_text("max\n")
+    assert parallel.limiting_cgroup(root, own) == root  # only the container is limited
+    (scope / "memory.max").write_text("8589934592\n")
+    assert parallel.limiting_cgroup(root, own) == scope  # a scope with less than the container
+    (root / "user.slice" / "memory.max").write_text("4294967296\n")
+    assert parallel.limiting_cgroup(root, own) == root / "user.slice"
+    own.write_text("0::/\n")
+    assert parallel.limiting_cgroup(root, own) == root  # a pod: the process sees its container as the root
+    assert parallel.limiting_cgroup(root, tmp_path / "absent") == root
+
+
+def test_a_shard_starts_only_when_the_memory_limit_has_room_for_one_more_and_one_always_runs(monkeypatch) -> None:
+    gate, reading = gate_with(monkeypatch, 8.0, 0.4)
+    for _ in range(4):
+        assert gate._room()
+        gate.enter()
+    assert not gate._room()  # 0.4 in use, four shards at 1.5, one more at 1.5 and 1.5 left free is over 8
+    gate.leave()
+    assert gate._room()
+    gate.enter()
+    assert gate.widest == 4
+
+    nothing_free, reading = gate_with(monkeypatch, 8.0, 7.9)
+    assert nothing_free._room()  # nothing is running: one shard runs whatever the reading says
+    nothing_free.enter()
+    assert not nothing_free._room()
+
+    unlimited, _ = gate_with(monkeypatch, None, 0.4)
+    for _ in range(40):
+        unlimited.enter()
+    assert unlimited._room()
+
+
+def test_what_a_shard_holds_is_read_from_the_run_once_a_whole_wave_has_finished_and_only_ever_raised(monkeypatch) -> None:
+    lines: list[str] = []
+    gate, reading = gate_with(monkeypatch, 8.0, 0.4)
+    gate._log = lines.append
+    for _ in range(4):
+        gate.enter()
+    reading[0] = 4.4 * GIB  # four shards hold 4.0 GiB between them
+    gate.read()
+    assert not gate.measured and not gate._room()  # none has finished: a shard that is still starting says nothing yet
+    for _ in range(3):
+        gate.leave()
+        gate.enter()
+    gate.read()
+    assert not gate.measured
+    gate.leave()
+    gate.enter()
+    gate.read()
+    assert gate.measured and gate.per_shard == 1.0 * GIB
+    assert lines == ["memory: a shard holds 1.00 GiB here, so a limit of 8.0 GiB holds 6 at a time"]
+
+    assert gate._room()  # 0.4 + 4 x 1.0 + 1.0 + 1.5 is under 8
+    gate.enter()
+    assert not gate._room()  # one start a reading
+    gate.read()
+    assert gate._room()
+    gate.enter()
+    gate.read()
+    assert not gate._room() and gate.widest == 6  # a seventh would leave less than 1.5 free
+
+    reading[0] = 7.6 * GIB  # six shards now hold 7.2 GiB: more each than was measured
+    gate.read()
+    assert gate.per_shard == pytest.approx(1.2 * GIB)
+    gate.leave()
+    gate.leave()
+    reading[0] = 5.2 * GIB
+    gate.read()
+    assert gate.per_shard == pytest.approx(1.2 * GIB) and gate._room()  # the figure stays: 0.4 + 4 x 1.2 + 1.2 + 1.5 is under 8
+    gate.enter()
+    gate.read()
+    assert not gate._room()  # five at a time now, not six
+    assert gate.finish() == {"before_gib": 0.4, "peak_gib": 7.6, "per_shard_gib": 1.2, "limit_gib": 8.0}
+
+
+def test_a_start_is_held_by_what_is_in_use_now_when_that_is_more_than_the_shards_were_taken_to_need(monkeypatch) -> None:
+    gate, reading = gate_with(monkeypatch, 16.0, 0.4)
+    gate.enter()
+    assert gate._room()
+    reading[0] = 13.2 * GIB  # something else in this limit took the memory
+    assert not gate._room()
+
+
+def test_a_waiting_shard_starts_when_another_finishes_and_when_the_run_is_stopped(monkeypatch) -> None:
+    gate, _ = gate_with(monkeypatch, 5.0, 0.0)
+    gate.interval = 0.01
+    gate.enter()
+    gate.enter()
+    started = threading.Event()
+    waiter = threading.Thread(target=lambda: (gate.enter(), started.set()), daemon=True)
+    waiter.start()
+    assert not started.wait(0.1)
+    gate.leave()
+    assert started.wait(2.0) and gate.waited == 1 and gate.widest == 2
+
+    stopped, _ = gate_with(monkeypatch, 5.0, 0.0)
+    stopped.interval = 0.01
+    stopped.enter()
+    stopped.enter()
+    stopped._stopped.set()
+    stopped.enter()  # returns: the shard is started and fails as a stopped run's shards do
+    assert stopped.running == 3
 
 
 def test_a_run_that_was_given_less_memory_says_so_and_records_both_numbers(monkeypatch, tmp_path, capsys) -> None:
-    code, fleet, _fake = run_with(monkeypatch, tmp_path, {})
-    monkeypatch.setattr(parallel, "memory_room_gib", lambda: (5.0, "a limit of 5.0 GiB with 0.0 GiB in use"))
+    code, fleet, fake = run_with(monkeypatch, tmp_path, {})
+    assert (fleet["jobs"], fleet["jobs_asked"]) == (4, 4)
+    fake.hold = 0.05
+    monkeypatch.setattr(parallel, "memory_limit", lambda: (5 * GIB, "a limit of 5.0 GiB"))
+    monkeypatch.setattr(parallel, "_memory_in_use", lambda: 0)
     out = tmp_path / "second"
     engine = tmp_path / "longhouse-engine"
     code = parallel.main(["--engine", str(engine), "--longhouse-cli", str(engine), "--out-dir", str(out), "--jobs", "8", "--no-mutations"])
     fleet = json.loads((out / "fleet.json").read_text())
-    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (5, 8)
-    assert "5 at a time, not 8: a limit of 5.0 GiB" in capsys.readouterr().err
-    code = parallel.main([
-        "--engine", str(engine), "--longhouse-cli", str(engine), "--out-dir", str(out), "--jobs", "8", "--no-mutations",
-        "--shards-per-host", "0",
-    ])  # fmt: skip
-    fleet = json.loads((out / "fleet.json").read_text())
-    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (2, 8)  # a host for every pass is 0.8 GiB more a shard
+    assert code == 0 and (fleet["jobs"], fleet["jobs_asked"]) == (2, 8)
+    assert "2 shards at a time, not 8: a limit of 5.0 GiB" in capsys.readouterr().err
 
 
 # ----- the mutated engine cache
@@ -708,7 +823,7 @@ def test_a_run_with_a_long_scratch_root_gives_shards_the_link_and_records_and_re
     root = tmp_path / "scratch"
     root.mkdir()
     monkeypatch.setattr(parallel, "SCRATCH_ROOT", root)
-    monkeypatch.setattr(parallel, "memory_room_gib", lambda: None)
+    monkeypatch.setattr(parallel, "memory_limit", lambda: None)
     monkeypatch.setattr(parallel, "short_scratch", fake_short)
     engine = tmp_path / "longhouse-engine"
     engine.write_text("")
@@ -995,18 +1110,12 @@ def test_a_pass_keeps_asking_a_busy_shared_host_and_gives_up_on_any_other_refusa
         host.start()
 
 
-def test_fewer_shards_fit_with_a_host_each_than_on_shared_hosts() -> None:
-    room = (7.6, "a limit of 8.0 GiB with 0.4 GiB in use")
-    own = parallel.fit_jobs(12, room)[0]
-    shared = parallel.fit_jobs(12, room, parallel.POOLED_SHARD_MEMORY_GIB, parallel.RESERVED_MEMORY_GIB)[0]
-    assert (own, shared) == (4, 8)
-
-
-def test_the_memory_watch_records_the_highest_use_it_saw_and_nothing_where_it_cannot_read(monkeypatch) -> None:
+def test_the_memory_gate_records_the_highest_use_it_saw_and_nothing_where_it_cannot_read(monkeypatch) -> None:
     readings = iter([1 * 2**30, 3 * 2**30, 2 * 2**30])
     monkeypatch.setattr(parallel, "_memory_in_use", lambda: next(readings, 2 * 2**30))
-    watch = parallel.MemoryWatch()
-    watch.peak = max(parallel._memory_in_use() or 0, parallel._memory_in_use() or 0)
+    watch = parallel.MemoryGate(None)
+    watch.read()
+    watch.read()
     assert watch.finish() == {"before_gib": 1.0, "peak_gib": 3.0}
     monkeypatch.setattr(parallel, "_memory_in_use", lambda: None)
-    assert parallel.MemoryWatch().finish() is None
+    assert parallel.MemoryGate(None).finish() is None

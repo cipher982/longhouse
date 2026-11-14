@@ -16,7 +16,8 @@ needs another cell to have finished, so this command runs them at the same time:
 
 Every shard's Runtime Host runs without the embedding lane (recall is not what a cell measures; the lane is 0.9 GiB and
 four inference threads per host) except the one shard named by ``EMBEDDING_SHARD``, so that a change which lets that
-lane hold up live delivery still fails a cell. ``--jobs`` is lowered to what the memory limit holds (``fit_jobs``).
+lane hold up live delivery still fails a cell. A shard starts only when the memory limit has room for it
+(``MemoryGate``), so fewer than ``--jobs`` run at a time where memory holds fewer.
 
 Shards share Runtime Hosts (``HostPool``): a shard's Machine Agent connects to a host that is already up, under its own
 device id, as machines do in production, and at most ``--shards-per-host`` shards use one host at a time. A host of its
@@ -92,12 +93,11 @@ MAX_RERUNS = 8
 EMBEDDING_SHARD = ("long_reply", "claude")
 EMBEDDING_ON = "LONGHOUSE_EMBEDDING_PROJECTOR_DISABLED=0"
 EMBEDDING_LOADED = "Local embedder loaded"  # the host's log line once the model is in memory
-# Memory, measured 2026-11-13 on a Linux bench (sum of resident memory of everything a one-cell shard starts): 1.36 GiB,
-# and 2.16 GiB with the embedding lane. ``fit_jobs`` budgets a little more per shard and sets aside the lane's extra.
+# What a shard is taken to need until the run has measured its own (``MemoryGate``): a one-cell shard with a host of
+# its own was 1.36 GiB on a Linux bench, 2026-11-13 (sum of resident memory of everything it starts).
 SHARD_MEMORY_GIB = 1.5
+# Left free of the limit at every start: what shards already running may still grow by between two readings.
 RESERVED_MEMORY_GIB = 1.5
-# A shard on a shared host has no host of its own (0.9 GiB less, measured the same day); a shared host is 0.2 GiB.
-POOLED_SHARD_MEMORY_GIB = 0.7
 # Shards one shared host carries at a time (``HostPool``). Two is what passed every cell when a cell read its host five
 # times as often as it does now; the bench run of 2026-11-13 recorded in the gate's spec is what this number rests on.
 SHARDS_PER_HOST = 2
@@ -541,65 +541,144 @@ class HostPool:
         return state
 
 
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+def limiting_cgroup(root: Path = CGROUP_ROOT, own: Path = Path("/proc/self/cgroup")) -> Path:
+    """The cgroup (v2) whose memory limit this process meets first: its own or the ancestor with the lowest ``memory.max``.
+
+    In a container that is the root of what the process can see. Under a limited scope or slice inside one it is that
+    scope, which the root's files say nothing about.
+    """
+
+    lowest, where = None, root
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        path = root / own.read_text().splitlines()[0].split("::", 1)[1].strip().lstrip("/")
+        for group in (path, *path.parents):
+            with contextlib.suppress(OSError, ValueError):
+                limit = (group / "memory.max").read_text().strip()
+                if limit != "max" and (lowest is None or int(limit) < lowest):
+                    lowest, where = int(limit), group
+            if group == root:
+                break
+    return where
+
+
 def _memory_in_use() -> int | None:
-    """Bytes of this cgroup's memory that cannot be given back (cgroup v2): what ``memory_room_gib`` counts as used."""
+    """Bytes of the limiting cgroup's memory that cannot be given back: what ``MemoryGate`` counts as used."""
 
     with contextlib.suppress(OSError, ValueError, KeyError):
-        stat = dict(line.split() for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines())
-        return int(stat["anon"]) + int(stat["shmem"])
+        stat = dict(line.split() for line in (limiting_cgroup() / "memory.stat").read_text().splitlines())
+        return int(stat["anon"]) + int(stat["shmem"])  # file cache is given back under pressure; these are not
     return None
 
 
-class MemoryWatch(threading.Thread):
-    """The most memory in use while the shards ran, for the record: the number ``SHARD_MEMORY_GIB`` is checked against."""
+def memory_limit() -> tuple[int, str] | None:
+    """Bytes this process tree may hold (as ``_memory_in_use`` counts them), and where the number came from. None when unknown."""
 
-    def __init__(self) -> None:
-        super().__init__(daemon=True, name="memory-watch")
+    with contextlib.suppress(OSError, ValueError):
+        limit = (limiting_cgroup() / "memory.max").read_text().strip()
+        if limit != "max" and _memory_in_use() is not None:
+            return int(limit), f"a limit of {int(limit) / 2**30:.1f} GiB"
+    with contextlib.suppress(OSError, ValueError, StopIteration):
+        line = next(row for row in Path("/proc/meminfo").read_text().splitlines() if row.startswith("MemAvailable:"))
+        used = _memory_in_use()
+        if used is not None:
+            available = int(line.split()[1]) * 1024
+            return used + available, f"{available / 2**30:.1f} GiB available on the machine"
+    return None
+
+
+class MemoryGate(threading.Thread):
+    """Starts a shard only when the memory limit has room for one more, and records the most memory in use.
+
+    What a shard takes is read from this run, on this machine. Until as many shards have finished as ever ran at once,
+    a shard is taken to need ``SHARD_MEMORY_GIB``; from then on it is the most the run has held per running shard. Room
+    is counted against whichever is larger: what is in use now, or what the running shards will come to hold. One shard
+    always runs. 2026-11-14: a run sized before it started, at 0.7 GiB a shard, ran eight at a time in an 8 GiB pod; the
+    pod ran out six minutes in and the kernel killed the runner (https://github.com/cipher982/longhouse/actions/runs/43543367456).
+    """
+
+    def __init__(
+        self,
+        limit: tuple[int, str] | None,
+        stopped: threading.Event | None = None,
+        log: Callable[[str], None] = lambda _line: None,
+        interval: float = 2.0,
+    ) -> None:
+        super().__init__(daemon=True, name="memory-gate")
         self.before, self.peak = _memory_in_use(), 0
+        self.limit, self.source = limit if limit is not None and self.before is not None else (None, "")
+        self.per_shard = SHARD_MEMORY_GIB * 2**30
+        self.measured = False  # ``per_shard`` is this run's own reading
+        self.running = self.widest = self.finished = self.waited = 0
+        self.interval = interval
+        self._log = log
+        self._stopped = stopped or threading.Event()
+        self._fresh = True  # a reading was taken since the last start that went by this run's own figure
+        self._cond = threading.Condition()
         self._done = threading.Event()
 
     def run(self) -> None:
-        while self.before is not None and not self._done.wait(2.0):
-            self.peak = max(self.peak, _memory_in_use() or 0)
+        while self.before is not None and not self._done.wait(self.interval):
+            self.read()
+
+    def read(self) -> None:
+        """Take one reading: the peak, and what a running shard holds once enough have finished to say."""
+
+        now = _memory_in_use()
+        if now is None or self.before is None:
+            return
+        with self._cond:
+            self.peak = max(self.peak, now)
+            if self.running and (self.measured or self.finished >= self.widest):
+                seen = (self.peak - self.before) / self.widest
+                if not self.measured or seen > self.per_shard:
+                    self.per_shard, was = seen, self.measured
+                    self.measured = True
+                    if not was and self.limit is not None:
+                        fits = max(1, int((self.limit - self.before - RESERVED_MEMORY_GIB * 2**30) / seen))
+                        self._log(f"memory: a shard holds {seen / 2**30:.2f} GiB here, so {self.source} holds {fits} at a time")
+            self._fresh = True
+            self._cond.notify_all()
+
+    def _room(self) -> bool:
+        if self.running == 0 or self.limit is None or self.before is None:
+            return True
+        if self.measured and not self._fresh:
+            return False  # one start a reading, so a figure that is too low is corrected before many shards start on it
+        held = max(_memory_in_use() or 0, self.before + self.running * self.per_shard)
+        return held + self.per_shard + RESERVED_MEMORY_GIB * 2**30 <= self.limit
+
+    def enter(self) -> None:
+        """Wait until there is room for one more shard (or the run was stopped), then count it as running."""
+
+        with self._cond:
+            waited = False
+            while not self._room() and not self._stopped.is_set():
+                waited = True
+                self._cond.wait(self.interval)
+            self.waited += waited
+            self.running += 1
+            self.widest = max(self.widest, self.running)
+            self._fresh = not self.measured
+
+    def leave(self) -> None:
+        with self._cond:
+            self.running -= 1
+            self.finished += 1
+            self._cond.notify_all()
 
     def finish(self) -> dict[str, float] | None:
         self._done.set()
         if self.before is None or not self.peak:
             return None
-        return {"before_gib": round(self.before / 2**30, 2), "peak_gib": round(self.peak / 2**30, 2)}
-
-
-def memory_room_gib() -> tuple[float, str] | None:
-    """Memory this process tree may still take, and where the number came from. None when it cannot be read."""
-
-    with contextlib.suppress(OSError, ValueError):
-        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
-        used = _memory_in_use()  # file cache is given back under pressure; anonymous and shared memory are not
-        if limit != "max" and used is not None:
-            return (int(limit) - used) / 2**30, f"a limit of {int(limit) / 2**30:.1f} GiB with {used / 2**30:.1f} GiB in use"
-    with contextlib.suppress(OSError, ValueError, StopIteration):
-        line = next(row for row in Path("/proc/meminfo").read_text().splitlines() if row.startswith("MemAvailable:"))
-        available = int(line.split()[1]) / 2**20
-        return available, f"{available:.1f} GiB available on the machine"
-    return None
-
-
-def fit_jobs(
-    requested: int, room: tuple[float, str] | None, per_shard: float = SHARD_MEMORY_GIB, set_aside: float = RESERVED_MEMORY_GIB
-) -> tuple[int, str]:
-    """Shards to run at once: what was asked for, or fewer when memory holds fewer. Never fewer than one.
-
-    2026-11-13: eight shards at 2.3 GiB each ran on a shared server that was already short of memory, and the server
-    stalled. A run now takes only what its limit holds.
-    """
-
-    if room is None:
-        return max(1, requested), ""
-    gib, source = room
-    fits = max(1, int((gib - set_aside) / per_shard))
-    if fits >= requested:
-        return max(1, requested), ""
-    return fits, f"{fits} at a time, not {requested}: {source}, and a shard is budgeted {per_shard} GiB"
+        record = {"before_gib": round(self.before / 2**30, 2), "peak_gib": round(self.peak / 2**30, 2)}
+        if self.measured:
+            record["per_shard_gib"] = round(self.per_shard / 2**30, 2)
+        if self.limit is not None:
+            record["limit_gib"] = round(self.limit / 2**30, 2)
+        return record
 
 
 def _kill_group(child: subprocess.Popen[bytes]) -> None:
@@ -782,10 +861,6 @@ def run_all(args: argparse.Namespace) -> int:
         mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
     )  # fmt: skip
     args.jobs_asked = args.jobs
-    per_shard = POOLED_SHARD_MEMORY_GIB if args.shards_per_host else SHARD_MEMORY_GIB
-    args.jobs, why = fit_jobs(args.jobs, memory_room_gib(), per_shard, RESERVED_MEMORY_GIB)
-    if why:
-        log(why)
     scratch_root, alias = short_scratch(SCRATCH_ROOT)
     if alias is not None:
         log(f"scratch is {alias}, a link to {SCRATCH_ROOT}: provider socket paths have to fit in {SOCKET_PATH_MAX} bytes")
@@ -793,21 +868,25 @@ def run_all(args: argparse.Namespace) -> int:
     if args.shards_per_host:
         runner.hosts = HostPool(scratch_root / "hosts", args.shards_per_host, log)
     args.hosts = []
-    watch = MemoryWatch()
-    watch.start()
+    gate = MemoryGate(memory_limit(), runner.stopped, log)
+    gate.start()
     by_name = {m.name: m for m in plan.selected}
 
     def run_shard(shard: Shard, attempt: str = "") -> ShardRun:
         """Run it, and keep its scratch (recordings, host and engine logs) only if a row did not come out as wanted."""
 
-        run = runner.run(shard, attempt)
+        gate.enter()
+        try:
+            run = runner.run(shard, attempt)
+        finally:
+            gate.leave()
         fine = all(as_wanted(u, by_name.get(u.mutation or ""), verdict_of(u, run.rows[u.id])) for u in shard.units)
         run.keep = (not fine or run.exit is None) and run.scratch.exists()
         if not run.keep:
             shutil.rmtree(run.scratch, ignore_errors=True)
         return run
 
-    log(f"{sum(len(s.units) for s in shards)} cell runs in {len(shards)} shards, {args.jobs} at a time")
+    log(f"{sum(len(s.units) for s in shards)} cell runs in {len(shards)} shards, up to {args.jobs} at a time")
     runs: list[ShardRun] = []
     rows: dict[str, dict[str, Any]] = {}
     reruns: list[dict[str, Any]] = []
@@ -847,7 +926,10 @@ def run_all(args: argparse.Namespace) -> int:
         elif judged.wrong and args.rerun:
             log(f"{len(judged.wrong)} rows came out wrong, more than {MAX_RERUNS}: none is run again")
     finally:
-        args.memory = watch.finish()
+        args.memory = gate.finish()
+        if gate.waited and gate.widest < args.jobs:  # memory held fewer than were asked for
+            args.jobs = gate.widest
+            log(f"{gate.widest} shards at a time, not {args.jobs_asked}: {gate.source}, and {gate.waited} starts waited for memory")
         runner.kill_all()
         if runner.hosts is not None:
             args.hosts = runner.hosts.stop()
@@ -999,7 +1081,8 @@ def _write(
         # The hosts the shards shared: how long each took to start, how many shards used it, its exit status if it died.
         "hosts": hosts,
         "shards_per_host": getattr(args, "shards_per_host", 0),
-        # Memory in use (anonymous and shared, as fit_jobs counts it) before the shards started and at its highest.
+        # Memory in use (anonymous and shared, as MemoryGate counts it) before the shards started and at its highest,
+        # the limit, and what a shard was measured to hold.
         "memory": getattr(args, "memory", None),
         "wall_s": round(wall_s, 1),
         "parallel_phase_s": round(parallel_s, 1),
