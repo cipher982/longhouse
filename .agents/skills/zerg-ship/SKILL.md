@@ -5,9 +5,9 @@ description: Land and ship a Longhouse change (the `cowbell` flow) - push an exa
 
 # Ship a change
 
-The workspace `AGENTS.md` owns the ring table, the landing flow (worktree,
-`make validate`, `check-push-readiness`) and the agent-authority table. This
-skill owns which command moves which surface and how to read the result.
+The workspace `AGENTS.md` owns the ring table and the landing flow (worktree,
+`make validate`, `check-push-readiness`). This skill owns which command moves
+which surface and how to read the result.
 
 ## Which lane a change needs
 
