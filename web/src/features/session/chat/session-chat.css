@@ -568,6 +568,7 @@
     min-height: 44px;
   }
   .session-chat-composer-row .session-chat-action-label { display: none; }
+  .session-chat-composer-row .session-chat-key-hint { display: none; }
   .session-chat-composer-row .session-chat-action-icon { display: block; }
   :is(.session-chat-composer-row, .session-chat-composer-toolbar) > .ui-button { width: 44px; padding-inline: 0; }
   .session-chat-composer-row textarea { min-width: 0; }
@@ -653,4 +654,15 @@
     opacity: 0.75;
     box-shadow: 0 0 8px rgba(240, 138, 36, 0.45);
   }
+}
+
+.session-chat-key-hint {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 14px;
+  opacity: 0.65;
 }

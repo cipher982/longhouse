@@ -97,7 +97,7 @@ export async function postSessionInputMultipart(
     client_request_id: string;
     model?: string | null;
     /** `queue` only behind a running Console turn; the server refuses it elsewhere. */
-    intent?: "auto" | "queue";
+    intent?: SessionInputIntent;
   },
 ): Promise<SessionInputResponse> {
   const form = new FormData();

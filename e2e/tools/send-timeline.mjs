@@ -123,7 +123,7 @@ async function serverLoop() {
   }
 }
 
-async function send(text, label = /^(Send|Queue next|Send now)$/) {
+async function send(text, label = /^(Send|Queue|Send now)$/) {
   const box = page.locator(".session-chat-composer textarea");
   await box.fill(text);
   record("user", "click send", { text: text.slice(0, 60), button: String(label) });
@@ -156,7 +156,7 @@ if (SCENARIO === "single") {
   await send("Run the shell command `sleep 20 && echo first-done`, then reply with exactly: FIRST DONE");
   await waitFor(() => /using|running|shell|exec/i.test(last.head ?? ""), 60000, "agent running a tool");
   await new Promise((r) => setTimeout(r, 1500));
-  await send("Change of plan: when the command finishes, reply with exactly STEERED OK instead.", /^Send update$/);
+  await send("Change of plan: when the command finishes, reply with exactly STEERED OK instead.", /^Send$/);
   await waitFor(() => /idle/i.test(last.head ?? "") && !last.outbox, 180000, "settled after steer");
   const steered = /STEERED OK/.test(last.lastAssistant ?? "");
   record("driver", steered ? "steer answered in-turn" : "steer NOT reflected in the answer", { lastAssistant: last.lastAssistant });

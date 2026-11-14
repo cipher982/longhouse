@@ -184,8 +184,8 @@ interface SessionChatProps {
   canQueueNextInput?: boolean;
   /**
    * When true, the managed transport supports mid-turn steer. Shows a
-   * primary "Send update" action while the session is working; queue-next
-   * becomes a secondary action. Turn-ended races surface as an inline
+   * primary "Send" action while the session is working (Enter); queueing
+   * becomes a secondary action (Tab). Turn-ended races surface as an inline
    * error with a "Queue instead" affordance.
    */
   canSteerActiveTurn?: boolean;
@@ -1547,7 +1547,7 @@ export function SessionChat({
           ? await postSessionInputMultipart(session.id, {
               text: message,
               attachments,
-              intent: intent === "auto" ? "auto" : "queue",
+              intent,
               client_request_id: clientRequestId,
               ...(model ? { model } : {}),
             })
@@ -1953,13 +1953,7 @@ export function SessionChat({
     session.session_state.delegation?.state === "pending" &&
     (session.session_state.delegation.count ?? 0) > 0;
   const interruptActionLabel = parkedBackgroundWork ? "Stop background work" : "Stop";
-  // Images ride a new turn. Console queues it behind a running turn (a steer
-  // cannot carry images); elsewhere a send with images waits for the turn.
-  // The server queues images only for Console-origin sessions; the projected
-  // mode also says "console" for one-shot and web/iOS/API launches.
-  const isConsoleSession = session.origin_kind === "console";
-  // Staging images never waits on the turn (preparing a message should not
-  // block on the agent); only sending them does (`attachmentSendBlocked`).
+  // Images ride whichever intent the action uses (send, steer or queue).
   const attachmentInputEnabled = attachImagesEnabled;
   // A parked Console invocation has no active turn, but its provider-owned
   // work is still live and the served interrupt action closes that invocation.
@@ -1976,11 +1970,7 @@ export function SessionChat({
         : "auto";
   // Primary send is blocked when there's no available action.
   const isSendBlocked = isSendLocked && !canSteerNow && !canQueueNow;
-  const attachmentIntent: "auto" | "queue" | null =
-    primaryIntent === "auto" ? "auto" : isConsoleSession ? "queue" : null;
-  const attachmentSendBlocked =
-    composerAttachments.attachments.length > 0 && attachmentIntent === null;
-  // Attachment-only sends are valid when the route accepts them.
+  // Attachment-only sends and queues are valid.
   const hasComposerContent =
     Boolean(draft.trim()) || composerAttachments.attachments.length > 0;
 
@@ -1993,12 +1983,6 @@ export function SessionChat({
       const hasAttachments = pendingAttachments.length > 0;
       if (!message && !hasAttachments) return;
       if (isSubmitting || isComposerDisabled || isSendBlocked) return;
-      if (hasAttachments && attachmentIntent === null) {
-        setError(
-          "Image attachments can only be sent when the session is ready for a new turn.",
-        );
-        return;
-      }
       if (composerAttachments.isCompressing) return;
 
       setDraft("");
@@ -2011,7 +1995,7 @@ export function SessionChat({
       const replacementClientRequestId = editingPendingId;
       const result = await handleManagedLocalSend(
         message,
-        hasAttachments && attachmentIntent ? attachmentIntent : primaryIntent,
+        primaryIntent,
         attachmentArgs,
         {
           replacementClientRequestId: replacementClientRequestId ?? undefined,
@@ -2026,7 +2010,6 @@ export function SessionChat({
       }
     },
     [
-      attachmentIntent,
       composerAttachments,
       draft,
       editingPendingId,
@@ -2083,15 +2066,16 @@ export function SessionChat({
   const handleSecondaryQueue = useCallback(async () => {
     if (isSubmitting || isComposerDisabled || !canQueueNow) return;
     if (composerAttachments.isCompressing) return;
-    if (composerAttachments.attachments.length > 0) {
-      setError("Image attachments can only be sent when the session is ready for a new turn.");
-      return;
-    }
     const message = draft.trim();
-    if (!message) return;
+    const pendingAttachments = composerAttachments.attachments;
+    if (!message && pendingAttachments.length === 0) return;
     setDraft("");
     setError(null);
-    const result = await handleManagedLocalSend(message, "queue", [], {
+    const attachmentArgs = pendingAttachments.map((attachment) => ({
+      blob: attachment.blob,
+      filename: attachment.filename,
+    }));
+    const result = await handleManagedLocalSend(message, "queue", attachmentArgs, {
       replacementClientRequestId: editingPendingId ?? undefined,
       onPersisted: () => {
         composerAttachments.clear();
@@ -2479,33 +2463,42 @@ export function SessionChat({
       pending.detail === HOST_LINK_COPY.sendQueued,
   );
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      // Don't silently queue via Enter while working — require an explicit
-      // click when the outcome would be "queued" so the user sees it.
-      if (isSendLocked) {
-        return;
-      }
       if (requireClickForFirstSend && draft.trim() && !blockedKeyboardSubmit) {
         setBlockedKeyboardSubmit(true);
         return;
       }
       handleSend(e as unknown as FormEvent);
+      return;
+    }
+    if (
+      e.key === "Tab" &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.nativeEvent.isComposing &&
+      canQueueNow &&
+      (draft.trim() || composerAttachments.attachments.length > 0)
+    ) {
+      e.preventDefault();
+      void handleSecondaryQueue();
     }
   };
 
   const submitButtonLabel = !isSendLocked
     ? submitLabel
     : canSteerNow
-      ? "Send update"
+      ? "Send"
       : canQueueNow
-        ? "Queue next"
+        ? "Queue"
         : queueFull
           ? "Queue full"
           : "Waiting";
   const turnNoticeText = canSteerNow
-    ? "Send update reaches the active turn. Queue next waits for its boundary. Enter does not send while a turn is active."
-    : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
+    ? "Enter sends this into the running turn. Tab queues it for after this turn."
+    : "Enter queues this for after the running turn.";
 
   // Composer status line: ember + the server's working label + a mono timer
   // while a turn is active, ember + the server's attention copy when a
@@ -2722,14 +2715,17 @@ export function SessionChat({
           className="session-chat-btn session-chat-btn--queue"
           onClick={() => void handleSecondaryQueue()}
           disabled={
-            isComposerDisabled || !draft.trim() || isSubmitting
+            isComposerDisabled ||
+            (!draft.trim() && composerAttachments.attachments.length === 0) ||
+            isSubmitting
           }
-          aria-label="Queue next"
-          title="Queue for the next turn boundary"
+          aria-label="Queue"
+          title="Queue for after this turn (Tab)"
         >
-          <span className="session-chat-action-label">
-            Queue next
-          </span>
+          <span className="session-chat-action-label">Queue</span>
+          <kbd className="session-chat-key-hint" aria-hidden="true">
+            Tab
+          </kbd>
           <svg
             className="session-chat-action-icon"
             width="18"
@@ -2756,7 +2752,6 @@ export function SessionChat({
           !hasComposerContent ||
           isSubmitting ||
           isSendBlocked ||
-          attachmentSendBlocked ||
           composerAttachments.isCompressing
         }
         title={

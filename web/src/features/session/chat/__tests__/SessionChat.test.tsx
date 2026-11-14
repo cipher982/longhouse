@@ -456,7 +456,7 @@ describe("SessionChat", () => {
     expect(multipartBody?.get("model")).toBe("gpt-5.6-luna");
     expect(multipartBody?.get("text")).toBe("use the chosen model");
   });
-  it("lets a user stage images while a turn runs and holds the send until the turn ends", async () => {
+  it("lets a user stage images while a turn runs and send them into it", async () => {
     const user = userEvent.setup();
     const view = renderSessionChat({
       chatMode: "managed_local",
@@ -488,13 +488,13 @@ describe("SessionChat", () => {
       screen.getByRole("textbox", { name: "Next instruction" }),
       "look at this",
     );
-    // The image is staged and the draft kept; sending waits for the turn.
+    // The image is staged and sendable mid-turn (steer).
     expect(
       await screen.findByRole("button", { name: "Remove reference.png" }),
     ).toBeInTheDocument();
     expect(
       view.container.querySelector('button[type="submit"]'),
-    ).toBeDisabled();
+    ).toBeEnabled();
   });
   it("expires turn-specific actions without another update while retaining the draft", async () => {
     vi.useFakeTimers();
@@ -516,14 +516,12 @@ describe("SessionChat", () => {
       const draft = screen.getByRole("textbox");
       fireEvent.change(draft, { target: { value: "Keep this instruction" } });
       draft.focus();
-      expect(
-        screen.getByRole("button", { name: /send update/i }),
-      ).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Queue" })).toBeEnabled();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3_000);
       });
       expect(
-        screen.queryByRole("button", { name: /send update/i }),
+        screen.queryByRole("button", { name: "Queue" }),
       ).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
       expect(screen.getByRole("textbox")).toBe(draft);
@@ -556,8 +554,8 @@ describe("SessionChat", () => {
     expect(screen.getByRole("textbox")).toBe(draft);
     expect(draft).toHaveFocus();
     expect(draft).toHaveValue("Preserve this instruction");
-    expect(screen.getByRole("button", { name: "Send update" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Queue next" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Queue" })).toBeDisabled();
     view.rerenderSessionChat({ composerDisabledReason: null });
     expect(screen.getByRole("textbox")).toBe(draft);
     expect(draft).toHaveValue("Preserve this instruction");
@@ -1943,10 +1941,10 @@ describe("SessionChat", () => {
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
 
     await user.type(screen.getByRole("textbox"), "wait for it");
-    // Button says "Queue next" while working with queue capability, and is
+    // Button says "Queue" while working with queue capability, and is
     // enabled once a draft exists.
     const queueButton = await screen.findByRole("button", {
-      name: /queue next/i,
+      name: /^queue/i,
     });
     expect(queueButton).toBeEnabled();
     await user.click(queueButton);
@@ -2225,7 +2223,7 @@ describe("SessionChat", () => {
     );
   });
 
-  it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
+  it("shows Send primary + Queue secondary when steer capability is on", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -2285,10 +2283,10 @@ describe("SessionChat", () => {
     );
 
     await user.type(screen.getByRole("textbox"), "redirect the test");
-    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /queue next/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^queue/i })).toBeEnabled();
 
-    await user.click(screen.getByRole("button", { name: /send update/i }));
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
     await waitFor(() => expect(steerCalls).toBe(1));
     expect(queueCalls).toBe(0);
   });
@@ -2347,8 +2345,8 @@ describe("SessionChat", () => {
     );
 
     await user.type(screen.getByRole("textbox"), "still working");
-    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: /send update/i }));
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
 
     await waitFor(() => expect(submittedIntent).toBe("steer"));
   });
@@ -2406,7 +2404,7 @@ describe("SessionChat", () => {
     );
 
     await user.type(screen.getByRole("textbox"), "redirect now");
-    await user.click(screen.getByRole("button", { name: /send update/i }));
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
 
     await waitFor(() => {
       expect(screen.queryByText("redirect now")).not.toBeInTheDocument();
@@ -2528,7 +2526,7 @@ describe("SessionChat", () => {
     );
 
     await user.type(screen.getByRole("textbox"), "too late");
-    await user.click(screen.getByRole("button", { name: /send update/i }));
+    await user.click(screen.getByRole("button", { name: /^send$/i }));
 
     const prompt = await screen.findByTestId("session-chat-turn-ended");
     expect(prompt).toHaveTextContent("too late");
@@ -2555,54 +2553,144 @@ describe("SessionChat", () => {
   });
 
 
-  it("does not silently queue when Enter is pressed while working", async () => {
-    const user = userEvent.setup();
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+  describe("keyboard actions while a turn is running", () => {
+    type Sent = { path: string; intent: string; text: string };
+    function setup(locked: boolean) {
+      const sent: Sent[] = [];
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      queryClient.setQueryData<SessionLockInfo | null>(
+        ["session-lock", "sess-1"],
+        {
+          locked,
+          holder: null,
+          time_remaining_seconds: null,
+          fork_available: true,
+        },
+      );
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        const p = String(path);
+        if (p.endsWith("/lock")) {
+          return Promise.resolve({ locked, fork_available: true });
+        }
+        if (p.endsWith("/inputs") && !init) return Promise.resolve([]);
+        if (init?.method === "POST" && p.endsWith("/input")) {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          sent.push({ path: "input", intent: payload.intent, text: payload.text });
+          return Promise.resolve({
+            outcome: payload.intent === "queue" ? "queued" : "sent",
+            input_id: sent.length,
+            intent: payload.intent,
+            client_request_id: payload.client_request_id,
+            queued: [],
+          });
+        }
+        if (init?.method === "POST" && p.endsWith("/inputs-multipart")) {
+          const form = init.body as FormData;
+          const intent = String(form.get("intent"));
+          sent.push({
+            path: "multipart",
+            intent,
+            text: String(form.get("text") ?? ""),
+          });
+          return Promise.resolve({
+            outcome: intent === "queue" ? "queued" : "sent",
+            input_id: sent.length,
+            intent,
+            client_request_id: String(form.get("client_request_id")),
+            queued: [],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      const view = renderSessionChat(
+        {
+          chatMode: "managed_local",
+          canQueueNextInput: true,
+          canSteerActiveTurn: true,
+          session: makeSession({ capabilities: { attach_images: true } }),
+        },
+        { queryClient },
+      );
+      return { sent, view };
+    }
+    async function attachImage(view: ReturnType<typeof setup>["view"]) {
+      const user = userEvent.setup();
+      const input = view.container.querySelector(
+        'input[type="file"]',
+      ) as HTMLInputElement;
+      await user.upload(
+        input,
+        new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" }),
+      );
+      await screen.findByAltText("shot.png");
+    }
+
+    it("Enter steers the running turn", async () => {
+      const user = userEvent.setup();
+      const { sent } = setup(true);
+      await user.type(screen.getByRole("textbox"), "go left{Enter}");
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ path: "input", intent: "steer", text: "go left" });
+      await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
     });
-    queryClient.setQueryData<SessionLockInfo | null>(
-      ["session-lock", "sess-1"],
-      {
-        locked: true,
-        holder: null,
-        time_remaining_seconds: null,
-        fork_available: true,
-      },
-    );
 
-    let postCalls = 0;
-    requestMock.mockImplementation((path: string, init?: RequestInit) => {
-      if (String(path).endsWith("/lock")) {
-        return Promise.resolve({ locked: true, fork_available: true });
-      }
-      if (String(path).endsWith("/inputs") && !init) {
-        return Promise.resolve([]);
-      }
-      if (String(path).endsWith("/input") && init?.method === "POST") {
-        postCalls += 1;
-        const payload = JSON.parse(String(init.body ?? "{}"));
-        return Promise.resolve({
-          outcome: "queued",
-          input_id: postCalls,
-          intent: "auto",
-          client_request_id: payload.client_request_id,
-          queued: [],
-        });
-      }
-      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    it("Enter steers with an image attached", async () => {
+      const user = userEvent.setup();
+      const { sent, view } = setup(true);
+      await attachImage(view);
+      await user.type(screen.getByRole("textbox"), "see this{Enter}");
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ path: "multipart", intent: "steer", text: "see this" });
+      await waitFor(() =>
+        expect(screen.queryByAltText("shot.png")).not.toBeInTheDocument(),
+      );
     });
 
-    renderSessionChat(
-      { chatMode: "managed_local", canQueueNextInput: true },
-      { queryClient },
-    );
+    it("Tab queues the draft and keeps focus handling local", async () => {
+      const user = userEvent.setup();
+      const { sent } = setup(true);
+      await user.type(screen.getByRole("textbox"), "after this");
+      await user.tab();
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ path: "input", intent: "queue", text: "after this" });
+    });
 
-    await user.type(
-      screen.getByRole("textbox"),
-      "do not silently queue{enter}",
-    );
-    expect(postCalls).toBe(0);
-    expect(screen.getByRole("textbox")).toHaveValue("do not silently queue");
+    it("Tab queues with an image attached", async () => {
+      const user = userEvent.setup();
+      const { sent, view } = setup(true);
+      await attachImage(view);
+      await user.type(screen.getByRole("textbox"), "later");
+      await user.tab();
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ path: "multipart", intent: "queue", text: "later" });
+    });
+
+    it("Tab with an empty draft moves focus and queues nothing", async () => {
+      const user = userEvent.setup();
+      const { sent } = setup(true);
+      const box = screen.getByRole("textbox");
+      box.focus();
+      await user.tab();
+      expect(sent).toHaveLength(0);
+      expect(box).not.toHaveFocus();
+    });
+
+    it("shows a Tab hint on the Queue button only while steer and queue are both available", async () => {
+      setup(true);
+      const queue = screen.getByRole("button", { name: "Queue" });
+      expect(queue).toHaveTextContent("Tab");
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    });
+
+    it("Enter at a turn boundary sends as a new turn", async () => {
+      const user = userEvent.setup();
+      const { sent } = setup(false);
+      await user.type(screen.getByRole("textbox"), "next thing{Enter}");
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({ intent: "auto", text: "next thing" });
+    });
   });
 
   describe("with the outbox in the transcript", () => {
@@ -3017,7 +3105,7 @@ describe("SessionChat", () => {
       expect(lastOutbox(onOutboxChange)).toHaveLength(1);
     });
 
-    it("replaces the failed operation being edited when Queue next sends", async () => {
+    it("replaces the failed operation being edited when Queue sends", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();
       const clientRequestId = "failed-queue-next";
@@ -3121,7 +3209,7 @@ describe("SessionChat", () => {
           ?.onClick();
       });
       expect(screen.getByRole("textbox")).toHaveValue(text);
-      await user.click(screen.getByRole("button", { name: /queue next/i }));
+      await user.click(screen.getByRole("button", { name: /^queue/i }));
 
       await waitFor(() => expect(requestIds).toHaveLength(1));
       const replacementId = requestIds[0];
@@ -3140,7 +3228,7 @@ describe("SessionChat", () => {
       expect(lastOutbox(onOutboxChange)).toHaveLength(1);
     });
 
-    it("keeps an edited image intact when Queue next cannot carry it", async () => {
+    it("sends an edited image with Queue", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();
       const text = "include this image";
@@ -3157,6 +3245,7 @@ describe("SessionChat", () => {
           }
         | null = null;
       let multipartPosts = 0;
+      let lastMultipartIntent = "";
       let textPosts = 0;
       let clientRequestId = "";
       let locked = false;
@@ -3189,6 +3278,7 @@ describe("SessionChat", () => {
         ) {
           multipartPosts += 1;
           const form = init.body as FormData;
+          lastMultipartIntent = String(form.get("intent"));
           clientRequestId = String(form.get("client_request_id"));
           failedReceipt = {
             id: 44,
@@ -3281,23 +3371,12 @@ describe("SessionChat", () => {
           },
         );
       });
-      await screen.findByRole("button", { name: /queue next/i });
-      await user.click(screen.getByRole("button", { name: /queue next/i }));
+      await screen.findByRole("button", { name: /^queue/i });
+      await user.click(screen.getByRole("button", { name: /^queue/i }));
 
-      expect(
-        await screen.findByText(
-          "Image attachments can only be sent when the session is ready for a new turn.",
-        ),
-      ).toBeInTheDocument();
-      expect(screen.getByRole("textbox")).toHaveValue(text);
-      expect(screen.getByAltText("support.png")).toBeInTheDocument();
-      expect(multipartPosts).toBe(1);
+      await waitFor(() => expect(multipartPosts).toBe(2));
+      expect(lastMultipartIntent).toBe("queue");
       expect(textPosts).toBe(0);
-      expect(
-        window.localStorage.getItem(
-          `longhouse:session-input:sess-1:${clientRequestId}`,
-        ),
-      ).not.toBeNull();
     });
 
     it("reports a queued send with a cancel action", async () => {
