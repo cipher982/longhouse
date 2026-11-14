@@ -21,7 +21,7 @@ class FakeS3:
         self.objects: dict[str, bytes] = {}
         self.signed_requests = 0
         self.reads: list[str] = []
-        self.refuse: list[int] = []  # statuses the next requests are answered with, before any is served
+        self.refuse: list[int | tuple[int, bytes]] = []  # what the next requests are answered with: a status, or (status, body)
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -40,9 +40,12 @@ class FakeS3:
                 if not outer.refuse:
                     return False
                 self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                self.send_response(outer.refuse.pop(0))
-                self.send_header("Content-Length", "0")
+                answer = outer.refuse.pop(0)
+                status, body = answer if isinstance(answer, tuple) else (answer, b"")
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
+                self.wfile.write(body)
                 return True
 
             def do_PUT(self) -> None:  # noqa: N802

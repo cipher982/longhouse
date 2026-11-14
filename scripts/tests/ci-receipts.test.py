@@ -83,7 +83,7 @@ class CiReceiptsTest(unittest.TestCase):
         pauses: list[float] = []
         self.addCleanup(setattr, ci_receipts.time, "sleep", ci_receipts.time.sleep)
         ci_receipts.time.sleep = pauses.append
-        self.fake.refuse = [503, 500, 503]
+        self.fake.refuse = [503, (400, b"<Error><Code>IncompleteBody</Code></Error>"), 500]
         self.store.put("k", "s", {"f": b"1"}, identity=identity(1))
         self.assertEqual(pauses, [1.0, 2.0, 4.0])
         self.assertEqual(self.store.instances("k", "s")[0].read("f"), b"1")

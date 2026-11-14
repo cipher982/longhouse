@@ -59,10 +59,15 @@ _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _INSTANCE = re.compile(r"^([1-9][0-9]*)-([1-9][0-9]*)$")
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 _ENV = "CI_RECEIPTS_S3_"
-# How long one request keeps trying a store that answers 5xx or cannot be reached. The store is a
+# How long one request keeps trying a store that is at fault or cannot be reached. The store is a
 # single MinIO drive that goes offline when its disk stalls; over 14 hours of a disk rebalance
 # (2026-11-14) the longest of 12 such episodes was 114 seconds, after a 30 second stall.
 RETRY_SECONDS = 300.0
+
+
+def _store_fault(status: int, body: bytes) -> bool:
+    """A 5xx, or MinIO's answer when its own disk write stalls: 400 IncompleteBody for a body sent whole."""
+    return status >= 500 or (status == 400 and b"<Code>IncompleteBody</Code>" in body)
 
 
 class ReceiptError(Exception):
@@ -133,7 +138,7 @@ class S3:
             except urllib.error.HTTPError as exc:
                 with exc:
                     refused = (exc.code, exc.read())
-                if refused[0] < 500:
+                if not _store_fault(*refused):
                     return refused
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 unreachable = exc
