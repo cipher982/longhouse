@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run heavy builds and tests on the crunch VM instead of this laptop's heavy-build lock. The crunch
-# VM is a 14-vCPU / 48 GiB KVM guest on the hosted Runtime Host machine (it also runs the private
-# control-plane CI). The working tree (uncommitted edits included, .gitignore'd output excluded) is
+# Run heavy builds and tests on grind instead of this laptop's heavy-build lock. grind is the 64-vCPU / 80 GiB
+# CI KVM guest on cube (k3s + ARC); these runs use its host Docker, which CI does not, capped below the CI pods.
+# Until 2026-11-13 the target was the separate crunch VM, now retired into grind (the script keeps its name). The working tree (uncommitted edits included, .gitignore'd output excluded) is
 # mirrored to a per-run directory in the guest, the command runs there, output streams back live, and
 # named outputs are copied back to /tmp/agents/crunch/<run>/. Same shape as bench.sh.
 #
@@ -41,26 +41,23 @@
 #        --manifest-path engine/Cargo.toml --cargo-profile ci-test --bins -E \"test(pi_print)\"'"
 #
 # Up to CRUNCH_SLOTS runs (default 3) execute at once; a fourth waits for a free slot. Each run has its own
-# directory in the guest's tmpfs; the container image, Cargo dependencies and uv cache live in the image and
-# are shared, so runs are warm. The guest is reached through its hypervisor's ssh alias (cube), then AF_VSOCK
-# (no network listener; the VM has no route from the tailnet): see control-plane
-# docs/specs/build-compute-pipeline.md 6.2.8.
+# directory under /work/agents; the container image, Cargo dependencies and uv cache live in the image and
+# are shared, so runs are warm. grind is reached over Tailscale ssh as user `crunch`. Host setup, caps and
+# cleanup: ~/git/me/domains/mytech/infrastructure/kube/agent-builds/provision.sh.
 #
 # Environment:
-#   CRUNCH_VIA       ssh alias of the machine hosting the VM (default: cube)
-#   CRUNCH_KEY       private key the guest's `crunch` user trusts (default: ~/.ssh/crunch_vm_ed25519)
+#   CRUNCH_HOST      ssh host name of the build machine (default: grind.coin-castor.ts.net)
+#   CRUNCH_KEY       private key the build host's `crunch` user trusts (default: ~/.ssh/crunch_vm_ed25519)
 #   CRUNCH_SLOTS     concurrent runs (default: 3)
 #   CRUNCH_TIMEOUT   per-run limit in seconds (default: 3600)
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NAME="$(basename "$ROOT_DIR" | tr -c 'A-Za-z0-9._\n-' '_')"
-VIA="${CRUNCH_VIA:-cube}"
+HOST="${CRUNCH_HOST:-grind.coin-castor.ts.net}"
 KEY="${CRUNCH_KEY:-$HOME/.ssh/crunch_vm_ed25519}"
 SLOTS="${CRUNCH_SLOTS:-3}"
 TIMEOUT="${CRUNCH_TIMEOUT:-3600}"
-CID=3
-CONNECT=/usr/local/lib/crunch/vsock-connect.py
 OUT_ROOT=/tmp/agents/crunch
 SSH_CONFIG="$OUT_ROOT/ssh_config"
 
@@ -70,22 +67,20 @@ die() { echo "crunch: $*" >&2; exit 1; }
 [[ "$SLOTS" =~ ^[1-9][0-9]*$ ]] || die "CRUNCH_SLOTS must be a positive integer (got: $SLOTS)"
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die "CRUNCH_TIMEOUT must be seconds, digits only (got: $TIMEOUT)"
 
-[[ -f "$KEY" ]] || die "no key at $KEY (the guest trusts ~/.ssh/crunch_vm_ed25519; see control-plane scripts/ops/crunch/)"
+[[ -f "$KEY" ]] || die "no key at $KEY (the build host trusts ~/.ssh/crunch_vm_ed25519; see me kube/agent-builds/provision.sh)"
 
 write_ssh_config() {
   mkdir -p "$OUT_ROOT" && chmod 700 "$OUT_ROOT"
-  # One config per invocation: the ProxyCommand goes through the hypervisor (an ordinary `ssh cube`,
-  # so it uses this laptop's alias, key and multiplexing) and then AF_VSOCK to the guest's sshd.
-  # The guest's host key is pinned on first use in its own file, never mixed into known_hosts.
+  # One config per invocation, under the alias `crunch` so the rsync/ssh lines below stay host-agnostic.
+  # The build host's key is pinned on first use in its own file, never mixed into known_hosts.
   cat > "$SSH_CONFIG.$$" <<EOF
 Host crunch
-  HostName crunch
+  HostName $HOST
   User crunch
   IdentityFile $KEY
   IdentitiesOnly yes
   BatchMode yes
-  ProxyCommand ssh -o BatchMode=yes $VIA python3 $CONNECT $CID 22
-  HostKeyAlias crunch-guest
+  HostKeyAlias crunch-$HOST
   UserKnownHostsFile $HOME/.ssh/known_hosts_crunch
   StrictHostKeyChecking accept-new
   ServerAliveInterval 20
@@ -101,9 +96,9 @@ g() { ssh -F "$SSH_CONFIG" crunch "$@"; }
 
 guest_probe() {
   if ! g true 2>/dev/null; then
-    echo "crunch: cannot reach the guest. Check 'ssh $VIA true', then 'ssh $VIA sudo virsh -c qemu:///system domstate crunch' (must say" >&2
-    echo "        running; after a crash the host's breaker restarts it within seconds). The guest agent path works without the network:" >&2
-    echo "        ssh $VIA sudo python3 /usr/local/lib/crunch/gexec.py 'uptime'" >&2
+    echo "crunch: cannot reach $HOST as user crunch. Check 'tailscale ping ${HOST%%.*}', then 'ssh drose@$HOST true'" >&2
+    echo "        (grind is a VM on cube: 'ssh cube sudo virsh -c qemu:///system domstate grind' must say running)." >&2
+    echo "        Setup: ~/git/me/domains/mytech/infrastructure/kube/agent-builds/provision.sh" >&2
     g true || true
     exit 1
   fi
