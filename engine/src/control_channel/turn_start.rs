@@ -158,47 +158,9 @@ pub(super) async fn execute_turn_start(
     // Stage before claiming the run. A fetch timeout must not leave a durable
     // claim in "failed"; the server can keep the Console turn queued and retry
     // it after the control link recovers.
-    let staging_dir = if attachments.is_empty() {
-        None
-    } else {
-        Some(
-            crate::input_attachments::console_staging_dir(&cwd, &staging_scope_id)
-                .map_err(|error| attachment_stage_command_error(error.to_string()))?,
-        )
-    };
-    let staged = if attachments.is_empty() {
-        Vec::new()
-    } else {
-        let api_token = config.api_token.as_deref().ok_or_else(|| {
-            attachment_stage_command_error(
-                "cannot fetch attachments without the Machine Agent token".to_string(),
-            )
-        })?;
-        let dir = staging_dir
-            .as_ref()
-            .expect("non-empty attachments have a staging directory");
-        let http = attachment_http_client()
-            .map_err(|error| attachment_stage_command_error(error.message))?;
-        tokio::time::timeout(
-            Duration::from_secs(REPORT_STAGE_DEADLINE_SECS),
-            crate::input_attachments::stage(
-                &http,
-                &config.api_url,
-                api_token,
-                session_id,
-                &attachments,
-                dir,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            crate::input_attachments::cleanup_dir(dir);
-            attachment_stage_command_error(format!(
-                "attachment staging exceeded {REPORT_STAGE_DEADLINE_SECS}s"
-            ))
-        })?
-        .map_err(|error| attachment_stage_command_error(error.to_string()))?
-    };
+    let (staging_dir, staged) =
+        stage_console_attachments(config, session_id, &cwd, &staging_scope_id, &attachments)
+            .await?;
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
     let claim_started = std::time::Instant::now();
     match registry
@@ -735,4 +697,55 @@ mod tests {
         assert_eq!(result["terminal_reason"], "provider_auth_missing");
         assert_eq!(result["stderr_tail"], "No API key found for openai");
     }
+}
+
+/// Fetch Console attachment refs into the run-scoped staging directory
+/// (`$TMPDIR/lh-attach/console/<scope_id>/`). Shared by Console turn start and
+/// Console turn steer so both stage the same way. Returns the directory (None
+/// without attachments) and the staged files; a failure removes the directory.
+pub(super) async fn stage_console_attachments(
+    config: &ShipperConfig,
+    session_id: &str,
+    cwd: &Path,
+    scope_id: &str,
+    attachments: &[crate::codex_attachments::AttachmentRef],
+) -> std::result::Result<
+    (
+        Option<PathBuf>,
+        Vec<crate::input_attachments::StagedAttachment>,
+    ),
+    CommandError,
+> {
+    if attachments.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let dir = crate::input_attachments::console_staging_dir(cwd, scope_id)
+        .map_err(|error| attachment_stage_command_error(error.to_string()))?;
+    let api_token = config.api_token.as_deref().ok_or_else(|| {
+        attachment_stage_command_error(
+            "cannot fetch attachments without the Machine Agent token".to_string(),
+        )
+    })?;
+    let http =
+        attachment_http_client().map_err(|error| attachment_stage_command_error(error.message))?;
+    let staged = tokio::time::timeout(
+        Duration::from_secs(REPORT_STAGE_DEADLINE_SECS),
+        crate::input_attachments::stage(
+            &http,
+            &config.api_url,
+            api_token,
+            session_id,
+            attachments,
+            &dir,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        crate::input_attachments::cleanup_dir(&dir);
+        attachment_stage_command_error(format!(
+            "attachment staging exceeded {REPORT_STAGE_DEADLINE_SECS}s"
+        ))
+    })?
+    .map_err(|error| attachment_stage_command_error(error.to_string()))?;
+    Ok((Some(dir), staged))
 }

@@ -379,15 +379,18 @@ fn mime_for_image(path: &Path) -> &'static str {
     }
 }
 
-fn prompt_body(config: &OpenCodeRunConfig) -> Result<Value> {
-    let images: Vec<crate::input_attachments::StagedAttachment> = config
-        .image_paths
+fn staged_images(image_paths: &[PathBuf]) -> Vec<crate::input_attachments::StagedAttachment> {
+    image_paths
         .iter()
         .map(|path| crate::input_attachments::StagedAttachment {
             path: path.clone(),
             mime_type: mime_for_image(path).to_string(),
         })
-        .collect();
+        .collect()
+}
+
+fn prompt_body(config: &OpenCodeRunConfig) -> Result<Value> {
+    let images = staged_images(&config.image_paths);
     // Attachment-only turns send no blank text part.
     let text = config.prompt.trim();
     let parts = crate::opencode_control::prompt_parts(text, &images)?;
@@ -2011,9 +2014,10 @@ async fn submit_steer(
     session_id: &str,
     steer_id: &str,
     text: &str,
+    image_paths: &[PathBuf],
     model: Option<&str>,
 ) -> Submission {
-    let parts = match crate::opencode_control::prompt_parts(text, &[]) {
+    let parts = match crate::opencode_control::prompt_parts(text, &staged_images(image_paths)) {
         Ok(parts) => parts,
         Err(error) => return Submission::Refused(format!("{error:#}")),
     };
@@ -2055,6 +2059,7 @@ pub async fn steer_opencode_console_turn(
     run_id: &str,
     session_id: &str,
     text: &str,
+    image_paths: &[PathBuf],
 ) -> std::result::Result<ConsoleSteerOutcome, String> {
     let not_steerable = || "turn_not_steerable".to_string();
     let registry = crate::turn_claims::default_registry().map_err(|error| error.to_string())?;
@@ -2105,6 +2110,7 @@ pub async fn steer_opencode_console_turn(
         &native_session,
         &steer_id,
         text,
+        image_paths,
         state.model.as_deref(),
     )
     .await
@@ -2341,6 +2347,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/session/%s/prompt_async" % SES:
             body = json.loads(raw or b"{}")
             record("MESSAGE_ID " + str(body.get("messageID")))
+            record("PARTS " + ",".join(
+                part.get("type", "?") + ":" + str(part.get("mime", ""))
+                + (":data" if str(part.get("url", "")).startswith("data:") else "")
+                for part in body.get("parts", [])))
             model = body.get("model") or {}
             record("MODEL %s/%s" % (model.get("providerID"), model.get("modelID")))
             prompt(body)
@@ -3613,9 +3623,18 @@ mod tests {
             run_id: &str,
             text: &str,
         ) -> std::result::Result<ConsoleSteerOutcome, String> {
+            self.steer_with_images(run_id, text, &[]).await
+        }
+
+        async fn steer_with_images(
+            &self,
+            run_id: &str,
+            text: &str,
+            images: &[PathBuf],
+        ) -> std::result::Result<ConsoleSteerOutcome, String> {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
             loop {
-                match steer_opencode_console_turn(run_id, &self.session_id, text).await {
+                match steer_opencode_console_turn(run_id, &self.session_id, text, images).await {
                     Err(code) if code == "turn_not_steerable" => {
                         assert!(
                             tokio::time::Instant::now() < deadline,
@@ -4009,6 +4028,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_steer_with_images_posts_native_file_parts() {
+        let fake = FakeOpenCode::new("steer");
+        let (run_id, _turn, summary) = fake.start(None).await;
+        fake.wait_for_prompts(1).await;
+        let temp = tempfile::tempdir().unwrap();
+        let image = temp.path().join("shot.png");
+        std::fs::write(&image, [1u8, 2, 3]).unwrap();
+        assert_eq!(
+            fake.steer_with_images(&run_id, "look at this", &[image])
+                .await,
+            Ok(ConsoleSteerOutcome::Steered)
+        );
+        assert_eq!(
+            terminal_state(&fake.terminal(&run_id).await),
+            "run_completed"
+        );
+        let requests = fake.requests();
+        let parts: Vec<&String> = requests
+            .iter()
+            .filter(|line| line.starts_with("PARTS "))
+            .collect();
+        assert_eq!(parts.len(), 2, "{requests:?}");
+        assert_eq!(parts[1], "PARTS text:,file:image/png:data", "{requests:?}");
+        assert_eq!(served_state(&summary).message_ids.len(), 2);
+    }
+
+    #[tokio::test]
     async fn a_steer_that_arrives_after_the_turn_ended_starts_a_new_turn_and_says_so() {
         let fake = FakeOpenCode::new("flip");
         let (run_id, _turn, summary) = fake.start(None).await;
@@ -4049,7 +4095,7 @@ mod tests {
         // What the monitor does when it settles the turn.
         assert_eq!(close_turn(&run_dir, &run_id, None).await, None);
         assert_eq!(
-            steer_opencode_console_turn(&run_id, &fake.session_id, "too late").await,
+            steer_opencode_console_turn(&run_id, &fake.session_id, "too late", &[]).await,
             Err("turn_not_steerable".to_string())
         );
         assert_eq!(
@@ -4077,7 +4123,7 @@ mod tests {
             "run_completed"
         );
         assert_eq!(
-            steer_opencode_console_turn(&run_id, &fake.session_id, "late").await,
+            steer_opencode_console_turn(&run_id, &fake.session_id, "late", &[]).await,
             Err("turn_not_steerable".to_string())
         );
         assert_eq!(
@@ -4172,6 +4218,7 @@ mod tests {
             &run_id,
             &session_id,
             &format!("Change of plan: when the command finishes, reply with exactly {steer_marker} and nothing else."),
+            &[],
         )
         .await;
         assert_eq!(outcome, Ok(ConsoleSteerOutcome::Steered));
@@ -4231,6 +4278,7 @@ mod tests {
                 &native_session,
                 &first_id,
                 "Reply with exactly LH_FIRST and nothing else.",
+                &[],
                 None,
             )
             .await,
@@ -4255,6 +4303,7 @@ mod tests {
                 &native_session,
                 &second_id,
                 &format!("Reply with exactly {second_marker} and nothing else."),
+                &[],
                 None,
             )
             .await,

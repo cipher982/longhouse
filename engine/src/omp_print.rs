@@ -1278,6 +1278,7 @@ pub async fn steer_omp_print_turn(
     run_id: &str,
     session_id: &str,
     text: &str,
+    image_paths: &[PathBuf],
 ) -> std::result::Result<(), String> {
     let not_steerable = || "turn_not_steerable".to_string();
     let registry = crate::turn_claims::default_registry().map_err(|err| err.to_string())?;
@@ -1293,7 +1294,7 @@ pub async fn steer_omp_print_turn(
     }
     let stdout_path = PathBuf::from(claim.stdout_path.clone().ok_or_else(not_steerable)?);
     let fifo = stdout_path.with_file_name(crate::console_rpc::RPC_STDIN);
-    crate::console_rpc::steer(&fifo, &stdout_path, text).await
+    crate::console_rpc::steer(&fifo, &stdout_path, text, image_paths).await
 }
 
 pub async fn close_parked_omp_invocation(
@@ -5826,7 +5827,7 @@ for line in sys.stdin:
             1
         );
         assert!(crate::process_group::group_is_alive(process_group_id));
-        steer_omp_print_turn(&run_id, &session_id, "steer after recovery")
+        steer_omp_print_turn(&run_id, &session_id, "steer after recovery", &[])
             .await
             .unwrap();
         let completed = wait_for_terminal(&run_id).await;

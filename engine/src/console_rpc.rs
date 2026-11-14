@@ -235,7 +235,8 @@ pub fn age_since_rfc3339(instant: &str) -> Option<Duration> {
         .or(Some(Duration::ZERO))
 }
 
-pub fn prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
+/// Inline `image` entries for an RPC `prompt` or `steer` command.
+fn image_entries(image_paths: &[PathBuf]) -> Result<Vec<Value>> {
     use base64::Engine as _;
     let mut images = Vec::new();
     for path in image_paths {
@@ -258,6 +259,11 @@ pub fn prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
             "mimeType": mime,
         }));
     }
+    Ok(images)
+}
+
+pub fn prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
+    let images = image_entries(image_paths)?;
     let mut command = json!({"id": RPC_PROMPT_ID, "type": "prompt", "message": prompt});
     if !images.is_empty() {
         command["images"] = Value::Array(images);
@@ -268,7 +274,12 @@ pub fn prompt_command(prompt: &str, image_paths: &[PathBuf]) -> Result<Value> {
 /// Send an RPC `steer` to the provider holding `fifo` and wait for its own
 /// `response` in `stdout_path`. `Err("turn_not_steerable")` when the provider
 /// is gone or refuses; `Err("steer_outcome_unknown")` when no response came.
-pub async fn steer(fifo: &Path, stdout_path: &Path, text: &str) -> std::result::Result<(), String> {
+pub async fn steer(
+    fifo: &Path,
+    stdout_path: &Path,
+    text: &str,
+    image_paths: &[PathBuf],
+) -> std::result::Result<(), String> {
     let not_steerable = || "turn_not_steerable".to_string();
     if !fifo.exists() {
         return Err(not_steerable());
@@ -277,7 +288,15 @@ pub async fn steer(fifo: &Path, stdout_path: &Path, text: &str) -> std::result::
     let start = std::fs::metadata(stdout_path)
         .map(|meta| meta.len())
         .unwrap_or(0);
-    write_command(fifo, &json!({"id": id, "type": "steer", "message": text}))
+    let mut command = json!({"id": id, "type": "steer", "message": text});
+    let images = image_entries(image_paths).map_err(|error| {
+        eprintln!("[console-rpc] steer not sent, an image could not be read: {error:#}");
+        "steer_failed".to_string()
+    })?;
+    if !images.is_empty() {
+        command["images"] = Value::Array(images);
+    }
+    write_command(fifo, &command)
         .await
         .map_err(|_| not_steerable())?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -497,6 +516,46 @@ mod tests {
             .open(&fifo)
             .unwrap();
         (fifo, reader)
+    }
+
+    #[tokio::test]
+    async fn a_steer_carries_inline_images_and_waits_for_the_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let (fifo, mut reader) = fifo_with_reader(temp.path());
+        let stdout = temp.path().join("stdout.log");
+        std::fs::write(&stdout, "").unwrap();
+        let image = temp.path().join("shot.png");
+        std::fs::write(&image, [1u8, 2, 3]).unwrap();
+        let provider = {
+            let stdout = stdout.clone();
+            std::thread::spawn(move || {
+                let mut seen = Vec::new();
+                let mut chunk = [0u8; 4096];
+                for _ in 0..200 {
+                    if let Ok(read) = reader.read(&mut chunk) {
+                        seen.extend_from_slice(&chunk[..read]);
+                    }
+                    if seen.ends_with(b"\n") {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let command: Value = serde_json::from_slice(&seen).unwrap();
+                let response = json!({
+                    "id": command["id"], "type": "response", "command": "steer", "success": true
+                });
+                std::fs::write(&stdout, format!("{response}\n")).unwrap();
+                command
+            })
+        };
+
+        steer(&fifo, &stdout, "look", &[image]).await.unwrap();
+
+        let command = provider.join().unwrap();
+        assert_eq!(command["type"], "steer");
+        assert_eq!(command["message"], "look");
+        assert_eq!(command["images"][0]["mimeType"], "image/png");
+        assert_eq!(command["images"][0]["data"], "AQID");
     }
 
     #[tokio::test]

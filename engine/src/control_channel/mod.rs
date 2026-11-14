@@ -2539,6 +2539,148 @@ mod tests {
             .contains("attachments[0] is not a valid AttachmentRef"));
     }
 
+    /// Serve `body` for any GET on a loopback port; returns the base URL.
+    async fn serve_blob(body: Vec<u8>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let served = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 2048];
+                    let _ = socket.read(&mut buffer).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                });
+            }
+        });
+        (url, hits)
+    }
+
+    /// The ref shape `attachment_ref_for_engine` builds on the server.
+    fn console_steer_ref(session_id: &str, bytes: &[u8]) -> Value {
+        use sha2::{Digest, Sha256};
+        let id = uuid::Uuid::new_v4().to_string();
+        json!({
+            "id": id,
+            "mime_type": "image/png",
+            "sha256": format!("{:x}", Sha256::digest(bytes)),
+            "blob_url": format!("/api/agents/sessions/{session_id}/inputs/1/attachments/{id}/blob"),
+        })
+    }
+
+    #[tokio::test]
+    async fn console_steer_refuses_attachments_for_a_provider_without_image_delivery() {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-steer-unsupported",
+                "session_id": session_id,
+                "command_type": COMMAND_TURN_STEER,
+                "payload": {
+                    "provider": "gemini",
+                    "run_id": uuid::Uuid::new_v4().to_string(),
+                    "turn_id": uuid::Uuid::new_v4().to_string(),
+                    "text": "look",
+                    "attachments": [console_steer_ref(&session_id, b"png")],
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "attachments_unsupported");
+    }
+
+    #[tokio::test]
+    async fn console_steer_stages_attachments_before_the_provider_refuses_the_turn() {
+        // Claude with no live claim refuses the steer, but only after the images
+        // were fetched through the shared Console staging path.
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe { std::env::set_var("LONGHOUSE_HOME", temp.path().join("longhouse")) };
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let bytes = b"\x89PNG fake image".to_vec();
+        let mut config = test_config();
+        let (api_url, hits) = serve_blob(bytes.clone()).await;
+        config.api_url = api_url;
+        let reference = console_steer_ref(&session_id, &bytes);
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-steer-claude-images",
+                "session_id": session_id,
+                "command_type": COMMAND_TURN_STEER,
+                "payload": {
+                    "provider": "claude",
+                    "run_id": uuid::Uuid::new_v4().to_string(),
+                    "turn_id": uuid::Uuid::new_v4().to_string(),
+                    "text": "look",
+                    "attachments": [reference],
+                },
+            }),
+            &mut cache,
+            &config,
+        )
+        .await;
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+        assert_eq!(result["ok"], false, "{result}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "image was not fetched"
+        );
+        assert_eq!(result["error"]["code"], "turn_not_steerable", "{result}");
+    }
+
+    #[tokio::test]
+    async fn console_steer_fails_loudly_when_an_attachment_cannot_be_fetched() {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut config = test_config();
+        // Nothing listens here: the fetch fails and the steer must not proceed text-only.
+        config.api_url = "http://127.0.0.1:1".to_string();
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-steer-fetch-fails",
+                "session_id": session_id,
+                "command_type": COMMAND_TURN_STEER,
+                "payload": {
+                    "provider": "codex",
+                    "run_id": uuid::Uuid::new_v4().to_string(),
+                    "turn_id": uuid::Uuid::new_v4().to_string(),
+                    "text": "look",
+                    "attachments": [console_steer_ref(&session_id, b"png")],
+                },
+            }),
+            &mut cache,
+            &config,
+        )
+        .await;
+        assert_eq!(result["ok"], false, "{result}");
+        assert_ne!(result["error"]["code"], "turn_not_steerable", "{result}");
+    }
+
     #[tokio::test]
     async fn handle_command_frame_returns_cached_result_for_duplicate_command_id() {
         let mut cache = command_cache();

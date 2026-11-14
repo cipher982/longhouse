@@ -140,7 +140,23 @@ pub(super) async fn execute_command(
         COMMAND_TURN_STEER => {
             let run_id = payload_required_string(&payload, "run_id")?;
             let provider = payload_required_string(&payload, "provider")?;
-            let text = payload_required_string(&payload, "text")?;
+            let attachments = crate::codex_attachments::parse_attachments(&payload)
+                .map_err(CommandError::command_failed)?;
+            let text =
+                crate::input_attachments::text_or_attachments(&payload, "text", &attachments)
+                    .map_err(|error| CommandError {
+                        code: "invalid_command".to_string(),
+                        message: error.to_string(),
+                    })?;
+            let delivery = crate::input_attachments::attachment_delivery(&provider, "console");
+            if !attachments.is_empty() && delivery.is_none() {
+                return Err(CommandError {
+                    code: "attachments_unsupported".to_string(),
+                    message: format!(
+                        "provider={provider} does not accept Console steer image attachments"
+                    ),
+                });
+            }
             if crate::qa_fault::console_steer_noop() {
                 crate::qa_fault::record_fired_named(
                     "console_steer_noop",
@@ -154,21 +170,34 @@ pub(super) async fn execute_command(
                     "steered": true,
                 }));
             }
-            let (transport, outcome) = match provider.as_str() {
-                "codex" => {
-                    crate::codex_exec::steer_codex_console_turn(&run_id, &text)
-                        .await
-                        .map_err(|reason| CommandError {
-                            code: reason.clone(),
-                            message: format!(
-                                "Codex Console turn {run_id} did not take the steer: {reason}"
-                            ),
-                        })?;
-                    (CODEX_EXEC_ADAPTER, ConsoleSteerOutcome::Steered)
-                }
-                "claude" => {
-                    crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text)
-                        .map_err(|reason| CommandError {
+            // Stage before steering, the way Console turn start does. The files
+            // live until the run settles, because the provider may read them
+            // after the steer is accepted.
+            let (staging_dir, staged) = turn_start::stage_console_attachments(
+                config,
+                &session_id,
+                Path::new(""),
+                &uuid::Uuid::new_v4().to_string(),
+                &attachments,
+            )
+            .await?;
+            let (text, image_paths) = console_steer_input(text, delivery, &staged);
+            let steered = async {
+                let (transport, outcome) = match provider.as_str() {
+                    "codex" => {
+                        crate::codex_exec::steer_codex_console_turn(&run_id, &text, &image_paths)
+                            .await
+                            .map_err(|reason| CommandError {
+                                code: reason.clone(),
+                                message: format!(
+                                    "Codex Console turn {run_id} did not take the steer: {reason}"
+                                ),
+                            })?;
+                        (CODEX_EXEC_ADAPTER, ConsoleSteerOutcome::Steered)
+                    }
+                    "claude" => {
+                        crate::claude_print::steer_claude_print_turn(&run_id, &session_id, &text)
+                            .map_err(|reason| CommandError {
                             code: if reason == "turn_not_steerable" {
                                 reason.clone()
                             } else {
@@ -178,10 +207,15 @@ pub(super) async fn execute_command(
                                 "Claude Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    (CLAUDE_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
-                }
-                "pi" => {
-                    crate::pi_print::steer_pi_print_turn(&run_id, &session_id, &text)
+                        (CLAUDE_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
+                    }
+                    "pi" => {
+                        crate::pi_print::steer_pi_print_turn(
+                            &run_id,
+                            &session_id,
+                            &text,
+                            &image_paths,
+                        )
                         .await
                         .map_err(|reason| CommandError {
                             code: reason.clone(),
@@ -189,10 +223,15 @@ pub(super) async fn execute_command(
                                 "Pi Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    (PI_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
-                }
-                "omp" => {
-                    crate::omp_print::steer_omp_print_turn(&run_id, &session_id, &text)
+                        (PI_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
+                    }
+                    "omp" => {
+                        crate::omp_print::steer_omp_print_turn(
+                            &run_id,
+                            &session_id,
+                            &text,
+                            &image_paths,
+                        )
                         .await
                         .map_err(|reason| CommandError {
                             code: reason.clone(),
@@ -200,30 +239,40 @@ pub(super) async fn execute_command(
                                 "OMP Console turn {run_id} did not take the steer: {reason}"
                             ),
                         })?;
-                    (OMP_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
-                }
-                "opencode" => {
-                    let outcome = crate::opencode_run::steer_opencode_console_turn(
-                        &run_id,
-                        &session_id,
-                        &text,
-                    )
-                    .await
-                    .map_err(|reason| CommandError {
-                        code: reason.clone(),
-                        message: format!(
-                            "OpenCode Console turn {run_id} did not take the steer: {reason}"
-                        ),
-                    })?;
-                    (OPENCODE_RUN_ADAPTER, outcome)
-                }
-                _ => {
-                    return Err(CommandError {
-                        code: "provider_unsupported".to_string(),
-                        message: format!("provider={provider} has no Console steer adapter"),
-                    });
-                }
-            };
+                        (OMP_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
+                    }
+                    "opencode" => {
+                        let outcome = crate::opencode_run::steer_opencode_console_turn(
+                            &run_id,
+                            &session_id,
+                            &text,
+                            &image_paths,
+                        )
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!(
+                                "OpenCode Console turn {run_id} did not take the steer: {reason}"
+                            ),
+                        })?;
+                        (OPENCODE_RUN_ADAPTER, outcome)
+                    }
+                    _ => {
+                        return Err(CommandError {
+                            code: "provider_unsupported".to_string(),
+                            message: format!("provider={provider} has no Console steer adapter"),
+                        });
+                    }
+                };
+                Ok::<_, CommandError>((transport, outcome))
+            }
+            .await;
+            // Cleanup waits for the run to settle in every case: an unknown
+            // outcome may still have delivered the images.
+            if let Some(dir) = staging_dir {
+                crate::input_attachments::schedule_console_cleanup(dir, run_id.clone());
+            }
+            let (transport, outcome) = steered?;
             // `steered` is false when the text started a new turn instead of
             // entering the running one; `outcome` says which.
             Ok(json!({
@@ -1413,5 +1462,57 @@ pub(super) async fn run_provider_sign_in_command(
             let attempt_id = required_string(payload, "attempt_id")?;
             Ok(crate::sign_in::cancel(&attempt_id))
         }
+    }
+}
+
+/// What a Console steer hands the provider. Path-delivery providers (Claude)
+/// get the staged files named in the text; native providers (Codex, OpenCode,
+/// Pi, OMP) get the image paths beside the text, never both.
+fn console_steer_input(
+    text: String,
+    delivery: Option<&str>,
+    staged: &[crate::input_attachments::StagedAttachment],
+) -> (String, Vec<PathBuf>) {
+    if delivery == Some("path") {
+        (
+            crate::input_attachments::prompt_with_attachments(&text, staged),
+            Vec::new(),
+        )
+    } else {
+        (text, staged.iter().map(|item| item.path.clone()).collect())
+    }
+}
+
+#[cfg(test)]
+mod steer_input_tests {
+    use super::*;
+    use crate::input_attachments::StagedAttachment;
+
+    fn staged() -> Vec<StagedAttachment> {
+        vec![StagedAttachment {
+            path: PathBuf::from("/tmp/lh-attach/console/x/a.png"),
+            mime_type: "image/png".to_string(),
+        }]
+    }
+
+    #[test]
+    fn claude_steer_names_the_staged_files_in_the_text() {
+        let (text, images) = console_steer_input("look".to_string(), Some("path"), &staged());
+        assert!(
+            text.starts_with("look\n\n[Longhouse attachments]"),
+            "{text}"
+        );
+        assert!(text.contains("/tmp/lh-attach/console/x/a.png"), "{text}");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn native_providers_get_image_paths_beside_untouched_text() {
+        let (text, images) = console_steer_input("look".to_string(), Some("native"), &staged());
+        assert_eq!(text, "look");
+        assert_eq!(
+            images,
+            vec![PathBuf::from("/tmp/lh-attach/console/x/a.png")]
+        );
     }
 }

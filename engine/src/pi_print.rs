@@ -333,6 +333,7 @@ pub async fn steer_pi_print_turn(
     run_id: &str,
     session_id: &str,
     text: &str,
+    image_paths: &[PathBuf],
 ) -> std::result::Result<(), String> {
     let not_steerable = || "turn_not_steerable".to_string();
     let registry = crate::turn_claims::default_registry().map_err(|err| err.to_string())?;
@@ -347,7 +348,7 @@ pub async fn steer_pi_print_turn(
     }
     let stdout_path = PathBuf::from(claim.stdout_path.clone().ok_or_else(not_steerable)?);
     let fifo = stdout_path.with_file_name(crate::console_rpc::RPC_STDIN);
-    crate::console_rpc::steer(&fifo, &stdout_path, text).await
+    crate::console_rpc::steer(&fifo, &stdout_path, text, image_paths).await
 }
 
 pub async fn recover_pi_print_turns(
@@ -1938,6 +1939,8 @@ if args[:2] == ["--mode", "rpc"]:
         elif kind == "steer":
             with open(os.path.join(session_dir, "steer.log"), "a") as f:
                 f.write(command["message"])
+            with open(os.path.join(session_dir, "steer-images.log"), "a") as f:
+                f.write(",".join(image["mimeType"] for image in command.get("images", [])))
             out({{"id": command.get("id"), "type": "response", "command": "steer", "success": True}})
             if prompt == "restart-contract":
                 text = "steered after recovery"
@@ -2229,7 +2232,7 @@ if args[:2] == ["--mode", "rpc"]:
             1
         );
         assert!(crate::process_group::group_is_alive(first.process_group_id));
-        steer_pi_print_turn(&run_id, &session_id, "steer after recovery")
+        steer_pi_print_turn(&run_id, &session_id, "steer after recovery", &[])
             .await
             .unwrap();
         let completed = wait_for_terminal(&run_id).await;
@@ -2502,16 +2505,24 @@ if args[:2] == ["--mode", "rpc"]:
         );
         start_pi_print_turn(config).await.unwrap();
 
-        steer_pi_print_turn(&run_id, &session_id, "change of plan")
+        let image = temp.path().join("shot.png");
+        std::fs::write(&image, [1u8, 2, 3]).unwrap();
+        steer_pi_print_turn(&run_id, &session_id, "change of plan", &[image])
             .await
             .unwrap();
+        // The staged image goes over the RPC `steer` as inline image content.
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("pi-sessions").join("steer-images.log"))
+                .unwrap(),
+            "image/png"
+        );
         let steer_log = temp.path().join("pi-sessions").join("steer.log");
         assert_eq!(
             std::fs::read_to_string(&steer_log).unwrap(),
             "change of plan"
         );
         assert_eq!(
-            steer_pi_print_turn(&run_id, &Uuid::new_v4().to_string(), "wrong session").await,
+            steer_pi_print_turn(&run_id, &Uuid::new_v4().to_string(), "wrong session", &[]).await,
             Err("turn_not_steerable".to_string())
         );
 
@@ -2537,7 +2548,7 @@ if args[:2] == ["--mode", "rpc"]:
         }
         // Settled RPC turns are ended by Longhouse, so nothing lingers.
         assert_eq!(
-            steer_pi_print_turn(&run_id, &session_id, "late").await,
+            steer_pi_print_turn(&run_id, &session_id, "late", &[]).await,
             Err("turn_not_steerable".to_string())
         );
 

@@ -61,7 +61,11 @@ type ConsoleReply = tokio::sync::oneshot::Sender<std::result::Result<(), String>
 /// Live control of a running Codex Console turn, answered on `reply`.
 enum ConsoleControl {
     /// Enter the turn at its next boundary (`turn/steer`).
-    Steer { text: String, reply: ConsoleReply },
+    Steer {
+        text: String,
+        image_paths: Vec<PathBuf>,
+        reply: ConsoleReply,
+    },
     /// Stop the turn now (`turn/interrupt`); it completes as `interrupted`.
     Interrupt { reply: ConsoleReply },
 }
@@ -252,9 +256,14 @@ const CONSOLE_START_GRACE: Duration = Duration::from_secs(8);
 /// Enter the running Codex Console turn for `run_id` with `text`, through the
 /// same app-server connection that started it (`turn/steer`, the Helm path).
 /// `Err("turn_not_steerable")` means no turn of that run is running here.
-pub async fn steer_codex_console_turn(run_id: &str, text: &str) -> std::result::Result<(), String> {
+pub async fn steer_codex_console_turn(
+    run_id: &str,
+    text: &str,
+    image_paths: &[PathBuf],
+) -> std::result::Result<(), String> {
     console_control(run_id, |reply| ConsoleControl::Steer {
         text: text.to_string(),
+        image_paths: image_paths.to_vec(),
         reply,
     })
     .await
@@ -3044,14 +3053,18 @@ async fn run_app_server_turn(
                 Some(control) = steer_rx.recv() => {
                     let id = rpc.ids.allocate();
                     let (request, reply) = match control {
-                        ConsoleControl::Steer { text, reply } => (
+                        ConsoleControl::Steer {
+                            text,
+                            image_paths,
+                            reply,
+                        } => (
                             jsonrpc::request(
                                 id,
                                 "turn/steer",
                                 json!({
                                     "threadId": provider_thread_id,
                                     "expectedTurnId": expected_turn_id,
-                                    "input": crate::codex_attachments::build_user_input_items_from_paths(&text, &[]),
+                                    "input": crate::codex_attachments::build_user_input_items_from_paths(&text, &image_paths),
                                 }),
                             ),
                             reply,
@@ -6054,8 +6067,12 @@ for line in sys.stdin:
             item.get("text", "") for item in msg.get("params", {}).get("input", [])
             if item.get("type") == "text"
         )
+        images = ",".join(
+            item.get("path", "") for item in msg.get("params", {}).get("input", [])
+            if item.get("type") == "localImage"
+        )
         with open(steer_log, "a", encoding="utf-8") as stream:
-            stream.write(text + "\n")
+            stream.write(text + "|" + images + "\n")
         emit({"id": msg["id"], "result": {}})
         emit({"method": "item/agentMessage/delta", "params": {
             "itemId": "after-restart", "delta": "after-recovery-steer"
@@ -6134,7 +6151,12 @@ for line in sys.stdin:
             1
         );
         assert_eq!(
-            steer_codex_console_turn(&started.run_id, "append after recovery").await,
+            steer_codex_console_turn(
+                &started.run_id,
+                "append after recovery",
+                &[PathBuf::from("/staged/shot.png")]
+            )
+            .await,
             Ok(())
         );
         wait_for_captured_event(&mut received, &mut events, |event| {
@@ -6157,9 +6179,10 @@ for line in sys.stdin:
             "run_cancelled"
         );
         assert_eq!(claim.invocation_state.as_deref(), Some("closed"));
+        // The staged image reaches `turn/steer` as a native `localImage` item.
         assert!(fs::read_to_string(steer_log)
             .unwrap()
-            .contains("append after recovery"));
+            .contains("append after recovery|/staged/shot.png"));
         let output = fs::read_to_string(&stdout_path).unwrap();
         assert!(output.contains("before-restart"));
         assert!(output.contains("after-recovery-steer"));
@@ -7409,7 +7432,7 @@ elif method == "golden/bye":
             let starting = ConsoleStartingGuard::new(&run_id);
             let controller = tokio::spawn(async move {
                 if control == "steer" {
-                    steer_codex_console_turn(&run_id, "steer text").await
+                    steer_codex_console_turn(&run_id, "steer text", &[]).await
                 } else {
                     interrupt_codex_console_turn(&run_id).await
                 }
