@@ -133,7 +133,7 @@ elif name == 'gh':
             log.write(args[1] + '\n')
         if os.environ['FIXTURE_STATUS_UNREADABLE'] == '1':
             sys.exit(1)
-        print(json.dumps({'statuses': json.loads(os.environ['FIXTURE_STATUSES'])}))
+        print(json.dumps(json.loads(os.environ['FIXTURE_STATUSES'])))
     else:
         raise AssertionError(args)
 elif name == 'curl' and args[-1].endswith('/api/health'):
@@ -325,7 +325,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
         self.assertEqual(self.live_preview_calls, [f"{'d' * 40} {SHA}"])
-        self.assertEqual(self.status_lookups, [f"repos/cipher982/longhouse/commits/{self.LP}/status?per_page=100"])
+        self.assertEqual(self.status_lookups, [f"repos/cipher982/longhouse/commits/{self.LP}/statuses?per_page=100"])
         self.assertIn("passed", result.stdout)
 
     def test_a_live_preview_change_with_no_status_waits_and_promotes_nothing(self):
@@ -358,6 +358,13 @@ else:
         self.assertEqual((result.returncode, promotions), (5, []))
         self.assertIn("not GitHub Actions", result.stderr)
 
+    def test_the_newest_status_decides_when_there_are_several(self):
+        # GitHub lists statuses newest first: a success above an older pending promotes, a failure above an older success refuses
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.PASSED, self.status(state="pending")])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="failure"), self.PASSED])
+        self.assertEqual((result.returncode, promotions), (5, []))
+
     def test_an_unreadable_status_waits(self):
         result, promotions = self.run_promotion(live_preview=self.LP, status_unreadable=True)
         self.assertEqual((result.returncode, promotions), (4, []))
@@ -379,10 +386,19 @@ else:
         self.assertEqual(len(promotions), 1)
         self.assertIn("terminal-truth status was NOT checked", result.stderr)
 
-    def test_the_fast_lane_never_asks_for_a_status_because_live_preview_ranges_are_sensitive(self):
+    def test_a_sensitive_range_is_handed_to_the_qualified_path_before_any_status_is_asked_for(self):
         result, promotions = self.run_promotion(fast_lane=True, sensitive_rc=1, live_preview=self.LP, statuses=[])
         self.assertEqual((result.returncode, promotions), (3, []))
         self.assertEqual(self.status_lookups, [])
+
+    def test_the_fast_lane_also_needs_the_status_and_waits_for_it(self):
+        result, promotions = self.run_promotion(fast_lane=True, live_preview=self.LP, statuses=[])
+        self.assertEqual((result.returncode, promotions), (4, []))
+        result, promotions = self.run_promotion(fast_lane=True, live_preview=self.LP, statuses=[self.status(state="failure")])
+        self.assertEqual((result.returncode, promotions), (5, []))
+        result, promotions = self.run_promotion(fast_lane=True, live_preview=self.LP, statuses=[self.PASSED])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(promotions, [f"ghcr.io/cipher982/longhouse-runtime@{DIGEST}"])
 
 
 if __name__ == "__main__":

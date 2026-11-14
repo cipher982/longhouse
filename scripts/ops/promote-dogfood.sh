@@ -89,11 +89,11 @@ require_terminal_truth() {
     echo "terminal-truth: ${base:0:12}..${SHA:0:12} touches no live-preview path; no terminal-truth status needed."
     return 0
   fi
-  status_json="$(gh api "repos/$REPO/commits/$commit/status?per_page=100" 2>/dev/null)" || {
+  status_json="$(gh api "repos/$REPO/commits/$commit/statuses?per_page=100" 2>/dev/null)" || {
     echo "Refusing $SHA: could not read the commit statuses of ${commit:0:12} (the terminal-truth status is required)." >&2
     exit 4
   }
-  row="$(jq -c '[.statuses[] | select(.context == "longhouse/terminal-truth")] | first // empty' <<<"$status_json")"
+  row="$(jq -c '[.[] | select(.context == "longhouse/terminal-truth")] | first // empty' <<<"$status_json")"
   if [[ -z "$row" ]]; then
     echo "Refusing $SHA: ${commit:0:12} touches live-preview paths and has no terminal-truth status yet (its Terminal Truth run has not reported; dispatch it on main with publish_status if it was superseded)." >&2
     exit 4
