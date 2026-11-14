@@ -86,6 +86,8 @@ pub(crate) struct RebuiltRender {
     pub records: Vec<StorageV2RenderRecord>,
     pub session: StorageV2SessionFacts,
     pub media: Vec<StorageV2MediaRef>,
+    /// Provider facts in range, without the capture witness itself.
+    pub facts: Vec<StorageV2ProviderFact>,
 }
 
 /// Rebuild one byte-offset envelope's render and session facts from stored
@@ -117,7 +119,25 @@ pub(crate) fn rebuild_envelope(
         range_end: envelope.range_end,
         records,
     };
-    let render_records = render_records_for_batch(&parse_result, &batch)?;
+    let mut render_records = render_records_for_batch(&parse_result, &batch)?;
+    if let Some(previous) = witness.previous_provider_session_id.as_deref() {
+        let current = parse_result
+            .metadata
+            .provider_session_id
+            .as_deref()
+            .unwrap_or(&parse_result.metadata.session_id)
+            .trim()
+            .to_string();
+        super::render::insert_conversation_reset_boundary(
+            &mut render_records,
+            Uuid::parse_str(&envelope.source_epoch).context("source epoch is not a UUID")?,
+            envelope.range_start,
+            &envelope.epoch_opened_at,
+            &envelope.session_id,
+            previous,
+            &current,
+        )?;
+    }
     let session = session_facts(
         &envelope.provider,
         &parse_result.metadata,
@@ -132,10 +152,109 @@ pub(crate) fn rebuild_envelope(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let facts = parse_result
+        .provider_facts
+        .iter()
+        .filter(|fact| {
+            fact.source_offset >= envelope.range_start && fact.source_offset < envelope.range_end
+        })
+        .map(|fact| StorageV2ProviderFact {
+            kind: fact.kind.clone(),
+            at: fact.at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            source_position: fact.source_offset,
+            payload: fact.payload.clone(),
+        })
+        .collect();
     Ok(RebuiltRender {
         records: render_records,
         session,
         media: storage_v2_media_refs(&media_objects),
+        facts,
+    })
+}
+
+/// Rebuild one OpenCode envelope from the epoch's stored records through it
+/// and the envelope's capture witness.
+pub(crate) fn rebuild_opencode_envelope(
+    stored: &[&StorageV2Envelope],
+    envelope: &StorageV2Envelope,
+) -> Result<RebuiltRender> {
+    use super::opencode_source::{
+        opencode_media_objects_for_range, opencode_provider_facts_for_range,
+    };
+    let fact = envelope
+        .facts
+        .iter()
+        .find(|fact| fact.kind == CAPTURE_WITNESS_FACT_KIND)
+        .context("OpenCode envelope carries no capture witness")?;
+    let witness: crate::opencode_db::OpenCodeWitness = serde_json::from_value(
+        fact.payload
+            .get("opencode")
+            .cloned()
+            .context("capture witness is not an OpenCode witness")?,
+    )
+    .context("decoding the OpenCode capture witness")?;
+    let mut records = Vec::new();
+    for stored_envelope in stored {
+        for record in &stored_envelope.records {
+            records.push((record.source_position, record.bytes()?));
+        }
+    }
+    let previous_provider_session_id = witness.previous_provider_session_id.clone();
+    let provider_session_id = witness.provider_session_id.clone();
+    let parse = crate::opencode_db::parse_opencode_records(
+        &records,
+        envelope.range_start,
+        envelope.range_end,
+        witness,
+    )?;
+    let source_ordinals: Vec<(u64, u64)> = parse
+        .result
+        .source_lines
+        .iter()
+        .zip(&parse.line_ordinals)
+        .map(|(line, ordinal)| (line.source_offset, *ordinal))
+        .collect();
+    let mut render_records = super::render::opencode_render_records_for_range(
+        &parse.result,
+        &source_ordinals,
+        envelope.range_start,
+        envelope.range_end,
+    )?;
+    if let Some(previous) = previous_provider_session_id.as_deref() {
+        super::render::insert_conversation_reset_boundary(
+            &mut render_records,
+            Uuid::parse_str(&envelope.source_epoch).context("source epoch is not a UUID")?,
+            envelope.range_start,
+            &envelope.epoch_opened_at,
+            &envelope.session_id,
+            previous,
+            &provider_session_id,
+        )?;
+    }
+    let session = session_facts(
+        "opencode",
+        &parse.result.metadata,
+        &render_records,
+        &envelope.epoch_opened_at,
+    )?;
+    let media_objects = opencode_media_objects_for_range(
+        &parse.result,
+        &source_ordinals,
+        envelope.range_start,
+        envelope.range_end,
+    )?;
+    let facts = opencode_provider_facts_for_range(
+        &parse.result,
+        &source_ordinals,
+        envelope.range_start,
+        envelope.range_end,
+    )?;
+    Ok(RebuiltRender {
+        records: render_records,
+        session,
+        media: storage_v2_media_refs(&media_objects),
+        facts,
     })
 }
 
@@ -278,37 +397,247 @@ mod tests {
                         continue;
                     }
                 };
-                let shipped_records = envelope
-                    .render
-                    .as_ref()
-                    .map(|render| serde_json::to_value(&render.records).unwrap())
-                    .unwrap_or(serde_json::json!([]));
-                let rebuilt_records = serde_json::to_value(&rebuilt.records).unwrap();
-                if shipped_records != rebuilt_records {
-                    problems.push(format!(
-                        "range {}..{} render differs:\n  shipped {}\n  rebuilt {}",
-                        envelope.range_start, envelope.range_end, shipped_records, rebuilt_records
-                    ));
-                }
-                let shipped_media = serde_json::to_value(&envelope.media).unwrap();
-                let rebuilt_media = serde_json::to_value(&rebuilt.media).unwrap();
-                if shipped_media != rebuilt_media {
-                    problems.push(format!(
-                        "range {}..{} media differs:\n  shipped {}\n  rebuilt {}",
-                        envelope.range_start, envelope.range_end, shipped_media, rebuilt_media
-                    ));
-                }
-                let shipped_session = serde_json::to_value(&envelope.session).unwrap();
-                let rebuilt_session = serde_json::to_value(&rebuilt.session).unwrap();
-                if shipped_session != rebuilt_session {
-                    problems.push(format!(
-                        "range {}..{} session differs:\n  shipped {}\n  rebuilt {}",
-                        envelope.range_start, envelope.range_end, shipped_session, rebuilt_session
-                    ));
-                }
+                problems.extend(compare_rebuilt(envelope, &rebuilt));
             }
         }
         problems
+    }
+
+    /// Every difference between what the laptop shipped and what the host
+    /// rebuilt: render records, session facts, media refs and provider facts.
+    fn compare_rebuilt(envelope: &StorageV2Envelope, rebuilt: &RebuiltRender) -> Vec<String> {
+        let mut problems = Vec::new();
+        let shipped_facts: Vec<&StorageV2ProviderFact> = envelope
+            .facts
+            .iter()
+            .filter(|fact| fact.kind != CAPTURE_WITNESS_FACT_KIND)
+            .collect();
+        let pairs = [
+            (
+                "render",
+                envelope
+                    .render
+                    .as_ref()
+                    .map(|render| serde_json::to_value(&render.records).unwrap())
+                    .unwrap_or(serde_json::json!([])),
+                serde_json::to_value(&rebuilt.records).unwrap(),
+            ),
+            (
+                "session",
+                serde_json::to_value(&envelope.session).unwrap(),
+                serde_json::to_value(&rebuilt.session).unwrap(),
+            ),
+            (
+                "media",
+                serde_json::to_value(&envelope.media).unwrap(),
+                serde_json::to_value(&rebuilt.media).unwrap(),
+            ),
+            (
+                "facts",
+                serde_json::to_value(&shipped_facts).unwrap(),
+                serde_json::to_value(&rebuilt.facts).unwrap(),
+            ),
+        ];
+        for (what, shipped, rebuilt) in pairs {
+            if shipped != rebuilt {
+                problems.push(format!(
+                    "range {}..{} {what} differs:\n  shipped {shipped}\n  rebuilt {rebuilt}",
+                    envelope.range_start, envelope.range_end
+                ));
+            }
+        }
+        problems
+    }
+
+    fn opencode_envelopes(
+        state: &mut rusqlite::Connection,
+        db_path: &Path,
+    ) -> Vec<StorageV2Envelope> {
+        let mut out = Vec::new();
+        while let Some(prepared) = opencode_source::prepare_next_opencode_envelope(
+            state,
+            &crate::storage_v2_shipper::tests::capabilities(),
+            db_path,
+        )
+        .unwrap()
+        {
+            pending_source_envelope::acknowledge_and_delete(
+                state,
+                prepared.source_epoch,
+                &prepared.envelope.expected_envelope_id,
+                prepared.range_start,
+                prepared.range_end,
+            )
+            .unwrap();
+            out.push(prepared.envelope);
+        }
+        out
+    }
+
+    fn opencode_mismatches(envelopes: &[StorageV2Envelope]) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (index, envelope) in envelopes.iter().enumerate() {
+            let stored: Vec<&StorageV2Envelope> = envelopes[..=index]
+                .iter()
+                .filter(|earlier| earlier.source_epoch == envelope.source_epoch)
+                .collect();
+            match rebuild_opencode_envelope(&stored, envelope) {
+                Ok(rebuilt) => problems.extend(compare_rebuilt(envelope, &rebuilt)),
+                Err(error) => problems.push(format!(
+                    "range {}..{}: {error:#}",
+                    envelope.range_start, envelope.range_end
+                )),
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn host_rebuild_of_opencode_equals_laptop_render() {
+        // Rows settle out of order: an assistant message is still being written
+        // when its parts ship, so the witness carries it; parts created in the
+        // same millisecond sort by load index, which only the laptop knows.
+        use crate::storage_v2_shipper::tests::{oc_fixture, oc_now_ms, oc_turn};
+        let _guard = crate::console_adapter::agent_state_guard();
+        let mut fixture = oc_fixture("ses_rebuild");
+        let base = oc_now_ms() - 60_000;
+        let mut envelopes = Vec::new();
+        for turn in 0..6 {
+            let t = base + (turn as i64) * 100;
+            let (provider, state, db_path) =
+                (&fixture.provider, &mut fixture.state, &fixture.db_path);
+            let mut mid = Vec::new();
+            oc_turn(provider, "ses_rebuild", turn, t, 200, &mut || {
+                mid.extend(opencode_envelopes(state, db_path));
+            });
+            envelopes.extend(mid);
+            envelopes.extend(opencode_envelopes(state, db_path));
+        }
+        assert!(envelopes.len() >= 6, "{} envelopes", envelopes.len());
+        let problems = opencode_mismatches(&envelopes);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+        let witness_bytes: usize = envelopes
+            .iter()
+            .flat_map(|envelope| &envelope.facts)
+            .filter(|fact| fact.kind == CAPTURE_WITNESS_FACT_KIND)
+            .map(|fact| fact.payload.to_string().len())
+            .max()
+            .unwrap();
+        assert!(
+            witness_bytes < 16 * 1024,
+            "witness is {witness_bytes} bytes"
+        );
+        assert!(
+            envelopes
+                .iter()
+                .flat_map(|envelope| &envelope.facts)
+                .filter(|fact| fact.kind == CAPTURE_WITNESS_FACT_KIND)
+                .any(|fact| fact.payload["opencode"]["messages"]
+                    .as_array()
+                    .is_some_and(|messages| !messages.is_empty())),
+            "no envelope shipped a part ahead of its message; the case is not exercised"
+        );
+
+        // The witness is an input: without the part indexes or the unsettled
+        // messages the host cannot reproduce the laptop.
+        let mut stripped = envelopes.clone();
+        for envelope in &mut stripped {
+            for fact in &mut envelope.facts {
+                if fact.kind == CAPTURE_WITNESS_FACT_KIND {
+                    fact.payload["opencode"]["part_indexes"] = serde_json::json!([]);
+                }
+            }
+        }
+        assert!(!opencode_mismatches(&stripped).is_empty());
+    }
+
+    #[test]
+    fn host_rebuild_reproduces_a_conversation_reset_boundary() {
+        // A managed session that moves to a new provider session opens the new
+        // source with a reset boundary. Which provider session came before is
+        // laptop knowledge, so it rides the witness.
+        let dir = tempfile::tempdir().unwrap();
+        let old_provider_id = "018f0c3a-7b2d-7f10-8a11-000000000001";
+        let new_provider_id = "018f0c3a-7b2d-7f10-8a11-000000000002";
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-000000000042";
+        let path_for = |id: &str| dir.path().join(format!("{id}.jsonl"));
+        for (id, uuid, text, minute) in [
+            (old_provider_id, "old-user", "before", "00"),
+            (new_provider_id, "new-user", "after", "01"),
+        ] {
+            fs::write(
+                path_for(id),
+                format!(
+                    "{{\"type\":\"user\",\"sessionId\":\"{id}\",\"uuid\":\"{uuid}\",\"timestamp\":\"2026-07-12T12:{minute}:00Z\",\"message\":{{\"content\":\"{text}\"}}}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        for id in [old_provider_id, new_provider_id] {
+            binding
+                .bind(
+                    &fs::canonicalize(path_for(id)).unwrap().to_string_lossy(),
+                    managed_session_id,
+                    "claude",
+                )
+                .unwrap();
+        }
+        let mut shipped = Shipped {
+            envelopes: Vec::new(),
+            media: HashMap::new(),
+        };
+        for id in [old_provider_id, new_provider_id] {
+            let prepared = prepare::prepare_next_envelope_with_limit(
+                &mut conn,
+                &crate::storage_v2_shipper::tests::capabilities(),
+                &path_for(id),
+                "claude",
+                None,
+                usize::MAX / 2,
+            )
+            .unwrap()
+            .unwrap();
+            pending_source_envelope::acknowledge_and_delete(
+                &mut conn,
+                prepared.source_epoch,
+                &prepared.envelope.expected_envelope_id,
+                prepared.range_start,
+                prepared.range_end,
+            )
+            .unwrap();
+            shipped.envelopes.push(prepared.envelope);
+        }
+        let boundary_count = |envelope: &StorageV2Envelope| {
+            envelope
+                .render
+                .as_ref()
+                .map(|render| {
+                    render
+                        .records
+                        .iter()
+                        .filter(|record| {
+                            record.branch_kind.as_deref() == Some("conversation_reset")
+                        })
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        assert_eq!(boundary_count(&shipped.envelopes[1]), 1);
+        let problems = rebuild_mismatches(&shipped);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+        let mut without = shipped.clone();
+        for fact in &mut without.envelopes[1].facts {
+            if fact.kind == CAPTURE_WITNESS_FACT_KIND {
+                fact.payload
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("previous_provider_session_id");
+            }
+        }
+        assert!(!rebuild_mismatches(&without).is_empty());
     }
 
     #[test]

@@ -575,7 +575,7 @@ fn prepare_file_envelope(
         Some(raw_batch.range_end),
         Some(provider),
     )?;
-    let captured_witness =
+    let mut captured_witness =
         capturing.finish(crate::pipeline::source::SourceBytes::identity(&file_source).clone());
     if is_cursor_agent_transcript_path(provider, path)
         && parse_result.metadata.started_at.is_none()
@@ -721,6 +721,7 @@ fn prepare_file_envelope(
         .is_some_and(|previous| previous != provider_session_id.as_str());
     let mut render_records = render_records_for_batch(&parse_result, &raw_batch)?;
     if conversation_reset {
+        captured_witness.previous_provider_session_id = previous_provider_session_id.clone();
         insert_conversation_reset_boundary(
             &mut render_records,
             resolution.source_epoch,

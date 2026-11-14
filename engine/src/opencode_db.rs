@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, OpenFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -60,8 +60,8 @@ impl OpenCodeSessionCandidate {
     }
 }
 
-#[derive(Debug, Clone)]
-struct OpenCodeSessionRow {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeSessionRow {
     project_id: Option<String>,
     parent_id: Option<String>,
     agent: Option<String>,
@@ -75,8 +75,8 @@ struct OpenCodeSessionRow {
     time_updated: i64,
 }
 
-#[derive(Debug)]
-struct OpenCodeMessageRow {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeMessageRow {
     id: String,
     time_created: i64,
     time_updated: i64,
@@ -90,10 +90,14 @@ struct OpenCodePartRow {
     time_created: i64,
     time_updated: i64,
     data: String,
+    /// Position among every part of the session as loaded (time created, then
+    /// id), settled or not. It breaks ties between parts created in the same
+    /// millisecond, so it is part of each part's source offset.
+    index: usize,
 }
 
-#[derive(Debug, Deserialize)]
-struct OpenCodeSessionClassificationSidecar {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeSessionClassificationSidecar {
     provider: Option<String>,
     provider_session_id: Option<String>,
     environment: Option<String>,
@@ -106,8 +110,8 @@ struct OpenCodeSessionClassificationSidecar {
     parent_provider_session_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct OpenCodeTaskChildEvidence {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OpenCodeTaskChildEvidence {
     agent: Option<String>,
     tool_call_id: Option<String>,
     metadata: Value,
@@ -541,14 +545,50 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     Ok(parse_rows(&conn, provider_session_id, &rows, None)?.result)
 }
 
-/// Project rows into events. With `shipped_parts`, only those parts are
-/// projected and each source line is paired with its part's record ordinal;
-/// without, every part is.
+/// What a parse reads from the database beyond the session's own rows: the
+/// newest write anywhere in the session, the parent's spawn evidence for a
+/// task child, and Longhouse's classification sidecar. A host has none of
+/// these, so the shipper sends them beside the records.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OpenCodeContext {
+    pub session_version: Option<u64>,
+    pub task_child: Option<OpenCodeTaskChildEvidence>,
+    pub classification: Option<OpenCodeSessionClassificationSidecar>,
+}
+
+fn opencode_context(
+    conn: &Connection,
+    provider_session_id: &str,
+    session: &OpenCodeSessionRow,
+) -> Result<OpenCodeContext> {
+    Ok(OpenCodeContext {
+        session_version: opencode_session_version(conn, provider_session_id)?,
+        task_child: match session.parent_id.as_deref() {
+            Some(parent_id) => opencode_task_child_evidence(conn, parent_id, provider_session_id)?,
+            None => None,
+        },
+        classification: opencode_session_classification_sidecar(provider_session_id),
+    })
+}
+
 fn parse_rows(
     conn: &Connection,
     provider_session_id: &str,
     rows: &OpenCodeSessionRows,
     shipped_parts: Option<&HashMap<String, u64>>,
+) -> Result<OpenCodeParse> {
+    let context = opencode_context(conn, provider_session_id, &rows.session)?;
+    parse_rows_with_context(provider_session_id, rows, shipped_parts, context)
+}
+
+/// Project rows into events. With `shipped_parts`, only those parts are
+/// projected and each source line is paired with its part's record ordinal;
+/// without, every part is. A pure function of the rows and the context.
+fn parse_rows_with_context(
+    provider_session_id: &str,
+    rows: &OpenCodeSessionRows,
+    shipped_parts: Option<&HashMap<String, u64>>,
+    context: OpenCodeContext,
 ) -> Result<OpenCodeParse> {
     let OpenCodeSessionRows {
         session,
@@ -569,7 +609,7 @@ fn parse_rows(
     let mut last_source_offset = 0u64;
     let mut line_ordinals = Vec::new();
 
-    for (part_index, part) in parts.iter().enumerate() {
+    for part in parts.iter() {
         let ordinal = match shipped_parts {
             Some(shipped) => match shipped.get(&part.id) {
                 Some(ordinal) => Some(*ordinal),
@@ -586,7 +626,7 @@ fn parse_rows(
         let part_data: Value = serde_json::from_str(&part.data)
             .with_context(|| format!("parsing OpenCode part {}", part.id))?;
         let (source_part_data, mut part_media) = source_line_part_data(&part_data);
-        let source_offset = source_offset_for_part(part, part_index);
+        let source_offset = source_offset_for_part(part, part.index);
         last_source_offset = last_source_offset.max(source_offset);
         let original_source_raw = serde_json::to_string(&json!({
             "provider": "opencode",
@@ -701,20 +741,18 @@ fn parse_rows(
             .then(left.uuid.cmp(&right.uuid))
     });
 
-    let session_version = opencode_session_version(conn, provider_session_id)?
+    let session_version = context
+        .session_version
         .unwrap_or_else(|| last_source_offset.saturating_add(1));
 
-    let task_child = match session.parent_id.as_deref() {
-        Some(parent_id) => opencode_task_child_evidence(conn, parent_id, provider_session_id)?,
-        None => None,
-    };
+    let task_child = context.task_child.clone();
     let task_child_agent = task_child
         .as_ref()
         .and_then(|evidence| evidence.agent.as_deref())
         .or(session.agent.as_deref())
         .map(str::to_string);
     let lineage_kind = opencode_lineage_kind(session, task_child.is_some());
-    let classification = opencode_session_classification_sidecar(provider_session_id);
+    let classification = context.classification.clone();
     if let (Some(parent_provider_session_id), Some(evidence)) =
         (session.parent_id.as_deref(), task_child.as_ref())
     {
@@ -793,6 +831,7 @@ fn parse_rows(
     Ok(OpenCodeParse {
         result,
         line_ordinals,
+        context,
     })
 }
 
@@ -874,6 +913,8 @@ pub struct OpenCodeStream {
     digests: Vec<[u8; 32]>,
     /// Record ordinal of each shipped part, by part id.
     part_ordinals: HashMap<String, u64>,
+    /// Record ordinal of each shipped message, by message id.
+    message_ordinals: HashMap<String, u64>,
     /// When the earliest row still in flight will be treated as finished.
     next_wake_ms: Option<i64>,
     rows: OpenCodeSessionRows,
@@ -885,6 +926,8 @@ pub struct OpenCodeParse {
     pub result: ParseResult,
     /// The record ordinal of each entry of `result.source_lines`.
     pub line_ordinals: Vec<u64>,
+    /// The database context the parse read, for the capture witness.
+    pub context: OpenCodeContext,
 }
 
 enum Settling {
@@ -1052,11 +1095,13 @@ fn build_stream(
     let mut records = Vec::with_capacity(settled.len() + 1);
     let mut digests = Vec::with_capacity(settled.len() + 1);
     let mut part_ordinals = HashMap::new();
+    let mut message_ordinals = HashMap::new();
     records.push(session_record(&rows.session, provider_session_id)?);
     digests.push(session_chain_digest(&rows.session));
     for (_, kind, _, index) in settled {
         if kind == 0 {
             let message = &rows.messages[index];
+            message_ordinals.insert(message.id.clone(), records.len() as u64);
             records.push(serde_json::to_vec(&json!({
                 "kind": "message",
                 "provider": "opencode",
@@ -1089,12 +1134,105 @@ fn build_stream(
         records,
         digests,
         part_ordinals,
+        message_ordinals,
         next_wake_ms,
         rows,
     })
 }
 
+/// What a host needs beside the stored records to parse one OpenCode envelope
+/// exactly as the laptop did.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeWitness {
+    pub provider_session_id: String,
+    /// The session row as of this capture; the stream's own session record is
+    /// frozen at the first envelope.
+    pub session: OpenCodeSessionRow,
+    pub context: OpenCodeContext,
+    /// Load index of each part in range, as `[first ordinal, first index,
+    /// count]` runs over consecutive ordinals with consecutive indexes.
+    pub part_indexes: Vec<[u64; 3]>,
+    /// Messages of parts in range that no record up to the range end carries
+    /// (an assistant message still being written when its parts settled).
+    pub messages: Vec<OpenCodeMessageRow>,
+    /// The provider session the managed session ran before this one, when this
+    /// envelope opens with a reset boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_provider_session_id: Option<String>,
+}
+
 impl OpenCodeStream {
+    pub fn capture_witness(
+        &self,
+        context: &OpenCodeContext,
+        range_start: u64,
+        range_end: u64,
+    ) -> OpenCodeWitness {
+        let index_by_id: HashMap<&str, usize> = self
+            .rows
+            .parts
+            .iter()
+            .map(|part| (part.id.as_str(), part.index))
+            .collect();
+        let mut in_range: Vec<(u64, u64, &str)> = self
+            .part_ordinals
+            .iter()
+            .filter(|(_, ordinal)| (range_start..range_end).contains(*ordinal))
+            .filter_map(|(id, ordinal)| {
+                index_by_id
+                    .get(id.as_str())
+                    .map(|index| (*ordinal, *index as u64, id.as_str()))
+            })
+            .collect();
+        in_range.sort_unstable();
+        let mut part_indexes: Vec<[u64; 3]> = Vec::new();
+        for (ordinal, index, _) in &in_range {
+            match part_indexes.last_mut() {
+                Some([first_ordinal, first_index, count])
+                    if *first_ordinal + *count == *ordinal && *first_index + *count == *index =>
+                {
+                    *count += 1;
+                }
+                _ => part_indexes.push([*ordinal, *index, 1]),
+            }
+        }
+        let parts_by_id: HashMap<&str, &OpenCodePartRow> = self
+            .rows
+            .parts
+            .iter()
+            .map(|part| (part.id.as_str(), part))
+            .collect();
+        let mut messages: Vec<OpenCodeMessageRow> = Vec::new();
+        for (_, _, part_id) in &in_range {
+            let Some(part) = parts_by_id.get(part_id) else {
+                continue;
+            };
+            let shipped = self
+                .message_ordinals
+                .get(&part.message_id)
+                .is_some_and(|ordinal| *ordinal < range_end);
+            if shipped || messages.iter().any(|message| message.id == part.message_id) {
+                continue;
+            }
+            if let Some(message) = self
+                .rows
+                .messages
+                .iter()
+                .find(|message| message.id == part.message_id)
+            {
+                messages.push(message.clone());
+            }
+        }
+        OpenCodeWitness {
+            provider_session_id: self.session_id.clone(),
+            session: self.rows.session.clone(),
+            context: context.clone(),
+            part_indexes,
+            messages,
+            previous_provider_session_id: None,
+        }
+    }
+
     /// When rows still in flight will be treated as finished, if any are.
     pub fn next_wake_ms(&self) -> Option<i64> {
         self.next_wake_ms
@@ -1144,6 +1282,87 @@ impl OpenCodeStream {
             _ => self.revision(),
         }
     }
+}
+
+/// Parse one OpenCode envelope on a host: `records` are the stored records of
+/// the epoch through `range_end`, by ordinal; `witness` is what the shipper
+/// captured beside them. Equal to the laptop's parse for the parts in range.
+pub fn parse_opencode_records(
+    records: &[(u64, Vec<u8>)],
+    range_start: u64,
+    range_end: u64,
+    witness: OpenCodeWitness,
+) -> Result<OpenCodeParse> {
+    let mut index_by_ordinal: HashMap<u64, usize> = HashMap::new();
+    for [first_ordinal, first_index, count] in &witness.part_indexes {
+        for step in 0..*count {
+            index_by_ordinal.insert(first_ordinal + step, (first_index + step) as usize);
+        }
+    }
+    let mut messages: Vec<OpenCodeMessageRow> = Vec::new();
+    let mut parts: Vec<OpenCodePartRow> = Vec::new();
+    let mut shipped_parts: HashMap<String, u64> = HashMap::new();
+    let text = |record: &Value, field: &str| -> Result<String> {
+        record
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .with_context(|| format!("OpenCode record has no {field}"))
+    };
+    let millis = |record: &Value, field: &str| -> Result<i64> {
+        record
+            .get(field)
+            .and_then(Value::as_i64)
+            .with_context(|| format!("OpenCode record has no {field}"))
+    };
+    for (ordinal, bytes) in records {
+        if *ordinal >= range_end {
+            continue;
+        }
+        let record: Value = serde_json::from_slice(bytes).context("OpenCode record is not JSON")?;
+        match record.get("kind").and_then(Value::as_str) {
+            Some("message") => messages.push(OpenCodeMessageRow {
+                id: text(&record, "message_id")?,
+                time_created: millis(&record, "message_time_created")?,
+                time_updated: millis(&record, "message_time_updated")?,
+                data: text(&record, "message_data")?,
+            }),
+            Some("part") if *ordinal >= range_start => {
+                let id = text(&record, "part_id")?;
+                let index = *index_by_ordinal
+                    .get(ordinal)
+                    .with_context(|| format!("OpenCode witness has no index for part {id}"))?;
+                shipped_parts.insert(id.clone(), *ordinal);
+                parts.push(OpenCodePartRow {
+                    id,
+                    message_id: text(&record, "message_id")?,
+                    time_created: millis(&record, "part_time_created")?,
+                    time_updated: millis(&record, "part_time_updated")?,
+                    data: text(&record, "part_data")?,
+                    index,
+                });
+            }
+            _ => {}
+        }
+    }
+    // The laptop read the current row; for a settled message that is the
+    // record, and an unsettled one rides the witness.
+    for message in witness.messages {
+        messages.retain(|existing| existing.id != message.id);
+        messages.push(message);
+    }
+    parts.sort_by_key(|part| part.index);
+    let rows = OpenCodeSessionRows {
+        session: witness.session,
+        messages,
+        parts,
+    };
+    parse_rows_with_context(
+        &witness.provider_session_id,
+        &rows,
+        Some(&shipped_parts),
+        witness.context,
+    )
 }
 
 pub fn parse_opencode_stream(db_path: &Path, stream: &OpenCodeStream) -> Result<OpenCodeParse> {
@@ -1340,11 +1559,14 @@ fn load_parts(conn: &Connection, provider_session_id: &str) -> Result<Vec<OpenCo
             time_created: row.get(2)?,
             time_updated: row.get(3)?,
             data: row.get(4)?,
+            index: 0,
         })
     })?;
     let mut parts = Vec::new();
-    for row in rows {
-        parts.push(row?);
+    for (index, row) in rows.enumerate() {
+        let mut part = row?;
+        part.index = index;
+        parts.push(part);
     }
     Ok(parts)
 }
@@ -3616,6 +3838,7 @@ mod tests {
             time_created: 1_779_000_000_110_i64,
             time_updated: 1_779_000_000_190_i64,
             data: "{}".to_string(),
+            index: 0,
         };
         let second = OpenCodePartRow {
             id: "prt_2".to_string(),
@@ -3623,6 +3846,7 @@ mod tests {
             time_created: 1_779_000_000_110_i64,
             time_updated: 1_779_000_000_191_i64,
             data: "{}".to_string(),
+            index: 1,
         };
 
         let first_offset = source_offset_for_part(&first, 0);

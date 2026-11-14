@@ -22,7 +22,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -417,6 +417,11 @@ pub struct CapturedWitness {
     pub workspace: Option<WorkspaceWitness>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git: Vec<GitWitness>,
+    /// The provider session this managed session ran before this source, when
+    /// the source starts a new one (a `/clear` or a fresh launch under the
+    /// same Longhouse session). The render opens with a reset boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_provider_session_id: Option<String>,
     /// Blob bytes by sha256, from the shipped content-addressed media. Not
     /// serialized: media travels as media objects, not inside the fact.
     #[serde(skip)]
@@ -483,6 +488,7 @@ impl<'a> CapturingWitness<'a> {
             cursor_transcript_timestamps: self.cursor_transcript_timestamps.into_inner(),
             workspace: self.workspace.into_inner(),
             git: self.git.into_inner(),
+            previous_provider_session_id: None,
             media: std::collections::HashMap::new(),
         }
     }
@@ -539,6 +545,8 @@ mod equivalence {
     use crate::pipeline::parser::{parse_source, ParseResult};
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
+
+    use std::path::PathBuf;
 
     fn fixtures_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")

@@ -958,39 +958,55 @@ pub fn parse_source(
     Ok(result)
 }
 
-/// Read `toolUseId` from the `agent-<id>.meta.json` sidecar Claude writes beside
-/// a Task/Agent subagent transcript.
-///
-/// Fail-closed: a missing, unreadable, oversized, or malformed sidecar yields
-/// no binding, and the child renders as an unattached subagent rather than
-/// being attached to a guess.
 thread_local! {
     static FALLBACK_TIME: std::cell::Cell<Option<DateTime<Utc>>> = const { std::cell::Cell::new(None) };
+    static LAST_CLOCK: std::cell::Cell<Option<DateTime<Utc>>> = const { std::cell::Cell::new(None) };
 }
 
-/// The time given to a record that carries no clock of its own. It comes from
-/// the witness for the duration of one parse, so the same bytes and witness
-/// always produce the same events; it used to be the wall clock at parse time.
-fn fallback_time() -> DateTime<Utc> {
-    FALLBACK_TIME
+/// The time given to a record that carries no clock of its own: the last
+/// clock an earlier record in this parse carried, else the witness's
+/// fallback (the source epoch's opening time). Both are fixed by the bytes
+/// and the witness, so a rebuild reproduces them; the wall clock at parse
+/// time, used before, did not, and sorted such a record away from its
+/// neighbours.
+fn carried_clock() -> DateTime<Utc> {
+    LAST_CLOCK
         .with(|cell| cell.get())
+        .or_else(|| FALLBACK_TIME.with(|cell| cell.get()))
         .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
 }
 
-struct FallbackClock(Option<DateTime<Utc>>);
+/// A record's own clock, remembered for the clockless records after it.
+fn observed_clock(time: DateTime<Utc>) -> DateTime<Utc> {
+    LAST_CLOCK.with(|cell| cell.set(Some(time)));
+    time
+}
+
+/// Scopes the fallback and the carried clock to one parse.
+struct FallbackClock(Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 impl FallbackClock {
     fn set(time: DateTime<Utc>) -> Self {
-        Self(FALLBACK_TIME.with(|cell| cell.replace(Some(time))))
+        Self(
+            FALLBACK_TIME.with(|cell| cell.replace(Some(time))),
+            LAST_CLOCK.with(|cell| cell.replace(None)),
+        )
     }
 }
 
 impl Drop for FallbackClock {
     fn drop(&mut self) {
         FALLBACK_TIME.with(|cell| cell.set(self.0));
+        LAST_CLOCK.with(|cell| cell.set(self.1));
     }
 }
 
+/// Read `toolUseId` from the `agent-<id>.meta.json` sidecar Claude writes beside
+/// a Task/Agent subagent transcript.
+///
+/// Fail-closed: a missing, unreadable, oversized, or malformed sidecar yields
+/// no binding, and the child renders as an unattached subagent rather than
+/// being attached to a guess.
 fn subagent_tool_use_id_from_meta(raw: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(raw).ok()?;
     let tool_use_id = parsed.get("toolUseId")?.as_str()?.trim();
@@ -1447,7 +1463,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
             .timestamp
             .as_deref()
             .and_then(parse_timestamp)
-            .unwrap_or_else(fallback_time);
+            .map_or_else(carried_clock, observed_clock);
 
         // Track session end time
         match metadata.ended_at {
@@ -2785,7 +2801,7 @@ fn pi_timestamp(obj: &RawLine) -> DateTime<Utc> {
                 .and_then(|message| message.timestamp.as_ref().and_then(Value::as_i64))
                 .and_then(DateTime::<Utc>::from_timestamp_millis)
         })
-        .unwrap_or_else(fallback_time)
+        .map_or_else(carried_clock, observed_clock)
 }
 
 fn pi_blocks(raw: &RawValue) -> Vec<Value> {
@@ -3537,7 +3553,7 @@ fn push_omp_malformed_event(
         uuid: format!("omp-offset-{line_offset}"),
         parent_uuid: None,
         session_id: session_id.to_string(),
-        timestamp: fallback_time(),
+        timestamp: carried_clock(),
         role: Role::System,
         content_text: None,
         tool_name: None,
@@ -3774,7 +3790,7 @@ fn extract_events(
         };
         timestamp
     } else {
-        source_timestamp.unwrap_or_else(fallback_time)
+        source_timestamp.map_or_else(carried_clock, observed_clock)
     };
 
     let msg_uuid = obj.uuid.as_deref().unwrap_or("").to_string();
@@ -4260,7 +4276,7 @@ fn antigravity_timestamp(obj: &RawLine) -> DateTime<Utc> {
         .as_deref()
         .or(obj.timestamp.as_deref())
         .and_then(parse_timestamp)
-        .unwrap_or_else(fallback_time)
+        .map_or_else(carried_clock, observed_clock)
 }
 
 fn antigravity_uuid(obj: &RawLine, line_offset: u64, suffix: &str) -> String {
@@ -4797,7 +4813,7 @@ fn metadata_timestamp(obj: &RawLine) -> DateTime<Utc> {
                 .and_then(|s| s.timestamp.as_deref())
                 .and_then(parse_timestamp)
         })
-        .unwrap_or_else(fallback_time)
+        .map_or_else(carried_clock, observed_clock)
 }
 
 fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {

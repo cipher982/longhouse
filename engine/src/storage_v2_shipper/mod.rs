@@ -8869,7 +8869,7 @@ mod tests {
         out
     }
 
-    fn oc_now_ms() -> i64 {
+    pub(super) fn oc_now_ms() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -8910,7 +8910,7 @@ mod tests {
     /// One agent turn, the way OpenCode writes it: rows appear in flight and
     /// are rewritten as they complete. `midpoint` runs while the tool call is
     /// still running (a live ship point); the caller ships again at the end.
-    fn oc_turn(
+    pub(super) fn oc_turn(
         conn: &Connection,
         session: &str,
         turn: usize,
@@ -9078,14 +9078,14 @@ mod tests {
         shipped
     }
 
-    struct OcFixture {
+    pub(super) struct OcFixture {
         _dir: tempfile::TempDir,
-        db_path: PathBuf,
-        provider: Connection,
-        state: Connection,
+        pub(super) db_path: PathBuf,
+        pub(super) provider: Connection,
+        pub(super) state: Connection,
     }
 
-    fn oc_fixture(session: &str) -> OcFixture {
+    pub(super) fn oc_fixture(session: &str) -> OcFixture {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("opencode.db");
         let provider = Connection::open(&db_path).unwrap();

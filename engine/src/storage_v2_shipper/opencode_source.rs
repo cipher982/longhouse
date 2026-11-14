@@ -298,7 +298,9 @@ pub(super) fn walk_opencode_database(
             let opencode_db::OpenCodeParse {
                 result: parse_result,
                 line_ordinals,
+                context,
             } = opencode_db::parse_opencode_stream(db_path, &stream)?;
+            let mut capture_witness = stream.capture_witness(&context, range_start, range_end);
             let source_ordinals: Vec<(u64, u64)> = parse_result
                 .source_lines
                 .iter()
@@ -398,6 +400,7 @@ pub(super) fn walk_opencode_database(
                 .as_deref()
                 .is_some_and(|previous| previous != candidate.provider_session_id.as_str())
             {
+                capture_witness.previous_provider_session_id = previous_provider_session_id.clone();
                 insert_conversation_reset_boundary(
                     &mut render_records,
                     resolution.source_epoch,
@@ -421,6 +424,11 @@ pub(super) fn walk_opencode_database(
                 &source_ordinals,
                 range_start,
                 range_end,
+            )?;
+            let witness_fact = opencode_capture_witness_fact(
+                &capture_witness,
+                &resolution.opened_at,
+                range_start,
             )?;
             let prepared = PreparedStorageV2Envelope {
                 envelope: StorageV2Envelope {
@@ -453,12 +461,14 @@ pub(super) fn walk_opencode_database(
                             StorageV2Record::from_bytes(range_start + offset as u64, bytes.to_vec())
                         })
                         .collect(),
-                    facts: opencode_provider_facts_for_range(
-                        &parse_result,
-                        &source_ordinals,
-                        range_start,
-                        range_end,
-                    )?,
+                    facts: std::iter::once(witness_fact)
+                        .chain(opencode_provider_facts_for_range(
+                            &parse_result,
+                            &source_ordinals,
+                            range_start,
+                            range_end,
+                        )?)
+                        .collect(),
                     expected_envelope_id,
                 },
                 source_epoch: resolution.source_epoch,
@@ -477,6 +487,23 @@ pub(super) fn walk_opencode_database(
         }
     }
     Ok(None)
+}
+
+/// The capture witness for one OpenCode envelope, first among its facts.
+pub(super) fn opencode_capture_witness_fact(
+    witness: &opencode_db::OpenCodeWitness,
+    epoch_opened_at: &str,
+    range_start: u64,
+) -> Result<StorageV2ProviderFact> {
+    Ok(StorageV2ProviderFact {
+        kind: crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND.to_string(),
+        at: DateTime::parse_from_rfc3339(epoch_opened_at)
+            .context("source epoch opened_at is not RFC 3339")?
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        source_position: range_start,
+        payload: serde_json::json!({ "opencode": witness }),
+    })
 }
 
 /// `source_ordinals` pairs each part's source offset with the ordinal of its
