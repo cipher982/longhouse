@@ -315,7 +315,7 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
     from tests_lite.test_cursor_transcript import _write_store
     from zerg.services.cursor_transcript import decode_store_db
 
-    engine_arms = _arms("storage_v2_shipper/cursor_store_source.rs", "cursor_render_records")
+    engine_arms = _arms("storage_v2_shipper/cursor_store_source.rs", "render_cursor_records")
     assert engine_arms == set(CURSOR_STORE_BLOCKS)
     # The server's reader has one arm more; the engine renders that block as an empty row.
     assert _store_reader_arms() == engine_arms | {"redacted-reasoning"}
