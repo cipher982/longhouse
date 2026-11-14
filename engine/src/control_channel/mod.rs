@@ -89,6 +89,9 @@ const COMMAND_PROVIDER_SIGN_IN_CANCEL: &str = "provider.sign_in.cancel";
 const DEFAULT_COMMAND_PROVIDER: &str = "codex";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
+/// Advertised so the server sends `attachments` on `session.turn.steer` only to
+/// engines that stage and deliver them; an older engine would drop the images.
+const CAPABILITY_CONSOLE_TURN_STEER_ATTACHMENTS: &str = "console.turn_steer_attachments";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
 const DEFAULT_OPENCODE_BIN: &str = "opencode";
@@ -2306,6 +2309,7 @@ mod tests {
             vec![
                 "archive.backlog_control".to_string(),
                 "archive.backlog_control.v2".to_string(),
+                "console.turn_steer_attachments".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.steer".to_string(),
@@ -2324,6 +2328,7 @@ mod tests {
             vec![
                 "archive.backlog_control".to_string(),
                 "archive.backlog_control.v2".to_string(),
+                "console.turn_steer_attachments".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.steer".to_string(),
@@ -2377,6 +2382,7 @@ mod tests {
         let mut expected = vec![
             "archive.backlog_control".to_string(),
             "archive.backlog_control.v2".to_string(),
+            "console.turn_steer_attachments".to_string(),
         ];
         for contract in managed_provider_contract_items() {
             expected.extend(
@@ -2578,6 +2584,19 @@ mod tests {
             "sha256": format!("{:x}", Sha256::digest(bytes)),
             "blob_url": format!("/api/agents/sessions/{session_id}/inputs/1/attachments/{id}/blob"),
         })
+    }
+
+    #[test]
+    fn engine_advertises_console_turn_steer_attachments_without_any_provider() {
+        // The server gates `attachments` on a Console steer behind this string, so
+        // it is an engine-level capability, present even with no provider installed.
+        let dir = tempfile::tempdir().unwrap();
+        let supports =
+            control_supports_for_path_with_env(Some(dir.path().as_os_str()), &|_| None, true);
+        assert!(
+            supports.contains(&"console.turn_steer_attachments".to_string()),
+            "{supports:?}"
+        );
     }
 
     #[tokio::test]

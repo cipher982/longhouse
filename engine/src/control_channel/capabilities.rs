@@ -259,6 +259,7 @@ pub(super) fn control_supports_for_path_with_env(
     let mut supports = Vec::new();
     supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL.to_string());
     supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL_V2.to_string());
+    supports.push(CAPABILITY_CONSOLE_TURN_STEER_ATTACHMENTS.to_string());
     let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
     for contract in managed_provider_contract_items() {
         let requires_longhouse = contract
