@@ -2067,7 +2067,9 @@ async def _storage_v2_stack(monkeypatch, *, render_pool_factory, prefix: str):
     reset_pubsub_for_test()
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            yield SimpleNamespace(client=client, catalog=catalog, render_workers=render_workers, object_root=root / "objects")
+            yield SimpleNamespace(
+                client=client, catalog=catalog, raw_workers=workers, render_workers=render_workers, object_root=root / "objects"
+            )
     finally:
         reset_pubsub_for_test()
         await workers.close()

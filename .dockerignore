@@ -40,8 +40,7 @@ schemas/*
 !schemas/managed_providers.yml
 
 # The provider-factory image uses a named Longhouse context to verify the
-# exact native control-path sources. Keep that context narrow; never send the
-# Rust build tree or the rest of the engine into a container build.
+# exact native control-path sources. Never send the Rust target directory.
 !engine/
 engine/*
 !engine/src/
@@ -59,6 +58,19 @@ engine/src/*
 !engine/src/managed_resume_scan.rs
 !engine/src/opencode_bridge.rs
 !engine/src/opencode_control.rs
+# The runtime image builds the engine's normalizer (`longhouse-engine
+# normalize-worker`) at the image's own commit, so it needs the crate's
+# sources and manifests, never its target directory.
+!engine/Cargo.toml
+!engine/Cargo.lock
+!engine/build.rs
+!engine/assets/
+!engine/assets/**
+!engine/src/**
+!.cargo/
+.cargo/*
+!.cargo/config.toml
+!config/native_device_entrypoints.json
 
 !docker/
 docker/*

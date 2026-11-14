@@ -726,3 +726,32 @@ __all__ = [
     "SourceEpoch",
     "StorageSession",
 ]
+
+
+class RenderShadowEnvelope(CatalogBase):
+    """One envelope's host rebuild compared with the render its laptop shipped.
+
+    The host-normalized-transcripts shadow phase: the Runtime Host rebuilds
+    each envelope from stored raw and its capture witness with the engine's
+    normalizer, and records whether the result equals the stored laptop render
+    (`match`), differs (`mismatch`, with the first difference), cannot be
+    rebuilt because the envelope predates capture witnesses (`no_witness`) or
+    shipped raw only (`raw_only`), or failed (`error`). Derived and disposable.
+    """
+
+    __tablename__ = "render_shadow_envelopes"
+    __table_args__ = (
+        Index("ix_render_shadow_envelopes_provider_outcome", "provider", "outcome"),
+        Index("ix_render_shadow_envelopes_checked_at", "checked_at"),
+    )
+
+    envelope_id = Column(String(64), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    source_epoch = Column(String(36), nullable=False)
+    range_start = Column(BigInteger, nullable=False)
+    outcome = Column(String(32), nullable=False)
+    detail = Column(Text, nullable=True)
+    normalizer_revision = Column(String(128), nullable=False)
+    elapsed_us = Column(BigInteger, nullable=True)
+    checked_at = Column(DateTime(timezone=True), nullable=False)

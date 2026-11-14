@@ -1302,6 +1302,67 @@
    "retryable": false
   }
  },
+ "render.shadow.candidates.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "limit must be between 1 and 100",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.candidates.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.candidates.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "render.shadow.record.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.record.v2 results are invalid",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.record.v2 requires results",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.record.v2 requires results",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "render.shadow.summary.v2": {
+  "declared_nulls": {
+   "ok": true
+  },
+  "empty": {
+   "ok": true
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "render.shadow.summary.v2 accepts no parameters",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "runner.operation.v2": {
   "declared_nulls": {
    "code": "invalid_request",
@@ -2511,6 +2572,29 @@
    "code": "invalid_request",
    "details": {},
    "message": "storage.session.read.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
+ "storage.session.rebuild_inputs.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session_id must be a canonical UUID",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.rebuild_inputs.v2 requires session_id",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "storage.session.rebuild_inputs.v2 requires session_id",
    "retry_after_ms": null,
    "retryable": false
   }

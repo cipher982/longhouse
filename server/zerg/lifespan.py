@@ -122,6 +122,13 @@ async def _start_non_gating_runtime_services(app: FastAPI) -> None:
         logger.exception("Failed to start search-v2 projector (non-fatal)")
     _start_local_embedding_projector(app)
     try:
+        from zerg.services.render_shadow import start_render_shadow
+
+        app.state.render_shadow_started = start_render_shadow()
+    except Exception:
+        app.state.render_shadow_started = False
+        logger.exception("Failed to start render shadow (non-fatal)")
+    try:
         from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
 
         app.state.storage_telemetry_task = asyncio.create_task(run_storage_telemetry_refresh_loop())
@@ -540,6 +547,12 @@ async def _start_runtime_services(
                 telemetry_task.cancel()
                 await asyncio.gather(telemetry_task, return_exceptions=True)
             try:
+                from zerg.services.render_shadow import stop_render_shadow
+
+                await stop_render_shadow()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop render shadow")
+            try:
                 from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
 
                 await stop_semantic_v2_projector()
@@ -626,6 +639,11 @@ async def _stop_runtime_services(app: FastAPI, shutdown_started: float, *, owns_
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
+        async def stop_render_shadow_sweep() -> None:
+            from zerg.services.render_shadow import stop_render_shadow
+
+            await stop_render_shadow()
+
         async def stop_semantic_projector() -> None:
             from zerg.services.semantic_v2_projector import stop_semantic_v2_projector
 
@@ -688,6 +706,7 @@ async def _stop_runtime_services(app: FastAPI, shutdown_started: float, *, owns_
         if not _settings.testing or owns_test_catalog:
             await _timed_shutdown_step("storage_title_services", stop_storage_title)
             await _timed_shutdown_step("storage_telemetry", stop_storage_telemetry)
+            await _timed_shutdown_step("render_shadow", stop_render_shadow_sweep)
             await _timed_shutdown_step("semantic_v2_projector", stop_semantic_projector)
             await _timed_shutdown_step("search_v2_projector", stop_search_projector)
             await _timed_shutdown_step("embeddings_v2_projector", stop_embedding_projector)

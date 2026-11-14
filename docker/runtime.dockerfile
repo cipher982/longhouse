@@ -177,6 +177,39 @@ RUN MODELS_CONFIG_PATH=/config/models.json \
     && find /out -exec touch -h -d @0 {} +
 
 # =============================================================================
+# Normalizer: the engine binary, built at this image's commit. The Runtime Host
+# runs `longhouse-engine normalize-worker` to turn stored raw provider records
+# into render rows with the same code laptops run (host-normalized-transcripts
+# spec). Dependencies build in a layer keyed only by the manifests; cache
+# mounts keep the registry and target between builds on the same builder.
+# =============================================================================
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS engine-builder
+WORKDIR /src
+COPY engine/Cargo.toml engine/Cargo.lock engine/
+COPY .cargo/config.toml .cargo/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    mkdir -p engine/src \
+    && printf 'fn main() {}\n' > engine/src/main.rs \
+    && cp engine/src/main.rs engine/src/longhouse.rs \
+    && CARGO_TARGET_DIR=/src/target cargo build --manifest-path engine/Cargo.toml \
+        --locked --profile ci --bin longhouse-engine \
+    && rm -r engine/src
+COPY engine/ engine/
+COPY config/native_device_entrypoints.json config/
+# build.rs reads the repo-level identity; generate_build_identity.py stages
+# the same file into server/zerg/ before the context is sent.
+COPY server/zerg/build_identity.json .build/build-identity.json
+# The stub crate's outputs must never look fresh against the real sources.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    find target/ci -maxdepth 3 -name 'longhouse*' -prune -exec rm -r {} + \
+    && CARGO_TARGET_DIR=/src/target cargo build --manifest-path engine/Cargo.toml \
+        --locked --profile ci --bin longhouse-engine \
+    && install -D -m 0755 target/ci/longhouse-engine /out/longhouse-engine \
+    && /out/longhouse-engine build-identity --json
+
+# =============================================================================
 # Stage 4: Production Runtime
 # =============================================================================
 FROM python-base AS production
@@ -225,6 +258,7 @@ COPY --link --chown=1000:1000 schemas/managed_providers.yml /schemas/managed_pro
 COPY --link --chown=1000:1000 server/ /app/
 # 5. The frontend dist, where the backend expects it.
 COPY --link --chown=1000:1000 --from=frontend-builder /app/web/dist /app/web/dist
+COPY --link --from=engine-builder /out/longhouse-engine /usr/local/bin/longhouse-engine
 
 # Create the durable Runtime Host data root. User uploads live below this
 # volume; application source remains immutable and replaceable.

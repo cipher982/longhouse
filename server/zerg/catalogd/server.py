@@ -843,6 +843,14 @@ class CatalogDaemon:
         "session.input.receipts.list.v2": _Route("_list_session_input_receipts"),
         "session.provider_facts.list.v2": _Route("_list_session_provider_facts"),
         "session.provider_facts.insert.v2": _Route("_insert_session_provider_facts"),
+        "storage.session.rebuild_inputs.v2": _Route(
+            "_read_render_rebuild_inputs", frozenset({"session_id"}), "storage.session.rebuild_inputs.v2 requires session_id"
+        ),
+        "render.shadow.candidates.v2": _Route(
+            "_list_render_shadow_candidates", frozenset({"limit"}), "render.shadow.candidates.v2 requires limit"
+        ),
+        "render.shadow.record.v2": _Route("_record_render_shadow", frozenset({"results"}), "render.shadow.record.v2 requires results"),
+        "render.shadow.summary.v2": _Route("_render_shadow_summary", frozenset(), "render.shadow.summary.v2 accepts no parameters"),
         "session.input.link_events.v2": _Route("_link_input_receipts_to_events"),
         "session.input.cancel.v2": _Route(
             "_cancel_input_receipt", frozenset({"receipt_id", "session_id"}), "session.input.cancel.v2 has invalid parameters"
@@ -2527,6 +2535,41 @@ class CatalogDaemon:
             self._store.list_session_provider_facts,
             session_id=request.params["session_id"],
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_render_rebuild_inputs(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if not _is_canonical_uuid(request.params["session_id"]):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.read_render_rebuild_inputs, session_id=request.params["session_id"])
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_render_shadow_candidates(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 100:
+            return self._error(request, "invalid_request", "limit must be between 1 and 100")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.list_render_shadow_candidates, limit=limit)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _record_render_shadow(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        from zerg.catalogd.store_mixins.render_shadow import SHADOW_OUTCOMES
+
+        results = request.params["results"]
+        required = {"envelope_id", "session_id", "provider", "source_epoch", "range_start", "outcome", "normalizer_revision"}
+        if (
+            not isinstance(results, list)
+            or len(results) > 5_000
+            or not all(isinstance(item, dict) and required <= set(item) and item["outcome"] in SHADOW_OUTCOMES for item in results)
+        ):
+            return self._error(request, "invalid_request", "render.shadow.record.v2 results are invalid")
+        assert self._store is not None
+        result = await self._run_store(self._store.record_render_shadow, results=tuple(results))
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _render_shadow_summary(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        assert self._store is not None
+        result = await self._run_read_store(self._store.render_shadow_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _insert_session_provider_facts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

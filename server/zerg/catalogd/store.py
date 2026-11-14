@@ -6056,6 +6056,7 @@ from zerg.catalogd.store_mixins.launch import LaunchMixin  # noqa: E402
 from zerg.catalogd.store_mixins.legacy import LegacyMigrationMixin  # noqa: E402
 from zerg.catalogd.store_mixins.machines import MachinesMixin  # noqa: E402
 from zerg.catalogd.store_mixins.projectors import ProjectorsMixin  # noqa: E402
+from zerg.catalogd.store_mixins.render_shadow import RenderShadowMixin  # noqa: E402
 from zerg.catalogd.store_mixins.sessions import SessionsMixin  # noqa: E402
 from zerg.catalogd.store_mixins.storage import StorageMixin  # noqa: E402
 
@@ -6070,6 +6071,7 @@ class CatalogStore(
     IngestMixin,
     StorageMixin,
     ProjectorsMixin,
+    RenderShadowMixin,
     LegacyMigrationMixin,
 ):
     """Small product operations over the bounded catalog.
