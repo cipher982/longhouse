@@ -1635,16 +1635,10 @@ export interface paths {
         put?: never;
         /**
          * Create Session Input With Attachments
-         * @description Send a user input with one or more image attachments.
+         * @description Send, queue or steer a user input that carries one or more images.
          *
-         *     ``auto`` everywhere; ``queue`` only on Console sessions, where it is the
-         *     same FIFO enqueue as ``auto`` and the turn record carries the image refs,
-         *     so a user can attach while a turn runs. ``steer`` would need the live
-         *     steer chain to accept attachments and would race the dispatch lock
-         *     that this route already acquires for the regular send path. A Helm
-         *     ``auto`` send parks durably, images included, when the target is mid-turn;
-         *     the queue drain replays the images. An explicit Helm ``queue`` intent is
-         *     still rejected here: ``auto`` already waits for the turn boundary.
+         *     Any intent the JSON route accepts (``auto``, ``queue``, ``steer``) on any
+         *     session that accepts images; text may be empty.
          */
         post: operations["create_session_input_with_attachments_sessions__session_id__inputs_multipart_post"];
         delete?: never;
