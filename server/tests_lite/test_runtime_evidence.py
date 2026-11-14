@@ -661,6 +661,7 @@ async def test_refused_steer_retry_cannot_drain_another_writer(monkeypatch):
         intent="steer",
         status="delivering",
         error_json=json.dumps({"code": "runtime_draining"}),
+        payload_digest=None,
     )
     monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
     monkeypatch.setattr(session_chat, "load_live_input_receipt_by_client_request", AsyncMock(return_value=receipt))
@@ -708,6 +709,7 @@ async def test_runtime_restarting_replay_refusal_remains_retryable(monkeypatch):
         intent=body.intent,
         status="delivering",
         error_json=json.dumps({"code": "runtime_restarting"}),
+        payload_digest=None,
     )
     update_receipt = AsyncMock(return_value=True)
     lock_manager = SimpleNamespace(acquire=AsyncMock(return_value=True), release=AsyncMock())

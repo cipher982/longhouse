@@ -8,6 +8,7 @@ GET /agents/sessions/.../attachments/{aid}/blob path.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import io
 import json
@@ -55,13 +56,17 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
+from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_input_attachments import StoredAttachment
 from zerg.services.session_input_attachments import cleanup_stale_blobs
 from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import store_attachment_blob
+from zerg.services.session_input_uploads import InputUpload
+from zerg.services.session_input_uploads import InputUploads
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import requeue_stuck_delivering
@@ -74,14 +79,31 @@ from zerg.services.session_runtime import runtime_key_for_session
 
 @pytest.fixture(autouse=True)
 def _target_at_turn_boundary(monkeypatch):
-    """These tests dispatch immediately; the mid-turn park has its own tests."""
+    """These tests dispatch immediately; the mid-turn park has its own tests.
 
-    import zerg.routers.session_inputs_attachments as route
+    The shared input core reads the target's activity state and the queue
+    depth; without a live catalog both are faked to "boundary, nothing queued".
+    """
+    import zerg.routers.session_chat as core
+    import zerg.services.live_control_catalog as live_control_catalog
 
-    async def can_dispatch(*_args, **_kwargs):
-        return True
+    async def at_boundary(*_args, **_kwargs):
+        return "quiescent"
 
-    monkeypatch.setattr(route, "_helm_send_can_dispatch_now", can_dispatch)
+    async def nothing_queued(*_args, **_kwargs):
+        return ([], 0)
+
+    monkeypatch.setattr(live_control_catalog, "live_control_session_activity_state", at_boundary)
+    monkeypatch.setattr(core, "_catalog_recent_input_summaries", nothing_queued)
+
+
+def _set_activity(monkeypatch, state: str) -> None:
+    import zerg.services.live_control_catalog as live_control_catalog
+
+    async def activity(*_args, **_kwargs):
+        return state
+
+    monkeypatch.setattr(live_control_catalog, "live_control_session_activity_state", activity)
 
 
 @pytest.fixture(autouse=True)
@@ -147,7 +169,7 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
         return source_session
 
     monkeypatch.setattr(route, "_load_session_for_continuation", load_scoped)
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
 
     async def record_receipt(**kwargs):
         calls["receipt"] = kwargs
@@ -180,13 +202,13 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     async def load_receipt(**kwargs):
         return None
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
 
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
-    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", dispatch)
+    monkeypatch.setattr("zerg.routers.session_chat._finish_catalog_input_receipt", finish)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
 
     upload = UploadFile(
         file=io.BytesIO(_PNG_BYTES),
@@ -233,7 +255,7 @@ async def test_catalog_multipart_keeps_group_when_dispatch_outcome_is_unknown(mo
     )
     calls: dict[str, object] = {}
     monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
 
     async def load_receipt(**kwargs):
         return None
@@ -271,14 +293,14 @@ async def test_catalog_multipart_keeps_group_when_dispatch_outcome_is_unknown(mo
     async def release(*args, **kwargs):
         calls["release"] = kwargs
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "_build_managed_local_chat_response", unknown_dispatch)
-    monkeypatch.setattr(route, "_set_catalog_live_receipt_error", mark_unknown)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
-    monkeypatch.setattr(route.session_lock_manager, "release", release)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", unknown_dispatch)
+    monkeypatch.setattr("zerg.routers.session_chat._set_catalog_live_receipt_error", mark_unknown)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(session_lock_manager, "release", release)
 
     with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
@@ -320,12 +342,17 @@ async def test_catalog_multipart_replays_delivery_unknown_without_redispatch(mon
         payload_hasher.update(component.encode("utf-8"))
         payload_hasher.update(b"\0")
     payload_hasher.update(_PNG_BYTES)
-    receipt = SimpleNamespace(
+    receipt = LiveInputReceiptSnapshot(
         id=receipt_id,
+        owner_id=7,
+        session_id=str(session_id),
+        provider="codex",
+        client_request_id=client_request_id,
         payload_digest=payload_hasher.hexdigest(),
         status=INPUT_STATUS_FAILED,
         error_json=json.dumps({"code": "delivery_unknown", "message": "provider outcome unknown"}),
         intent="auto",
+        text="look",
     )
     source_session = SimpleNamespace(
         id=session_id,
@@ -337,7 +364,7 @@ async def test_catalog_multipart_replays_delivery_unknown_without_redispatch(mon
     )
     calls: dict[str, object] = {}
     monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
 
     async def load_existing(**kwargs):
         calls["lookup"] = kwargs
@@ -346,11 +373,11 @@ async def test_catalog_multipart_replays_delivery_unknown_without_redispatch(mon
     async def forbidden(**_kwargs):
         raise AssertionError("an unknown replay must not create or dispatch another input")
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_existing)
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", forbidden)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", forbidden)
-    monkeypatch.setattr(route, "_build_managed_local_chat_response", forbidden)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", forbidden)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_existing)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", forbidden)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", forbidden)
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", forbidden)
+    monkeypatch.setattr(session_lock_manager, "acquire", forbidden)
 
     response = await route.create_session_input_with_attachments(
         session_id=str(session_id),
@@ -393,7 +420,7 @@ async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkey
         catalog_facts={},
     )
     calls: dict[str, object] = {}
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
     monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
 
     async def load_receipt(**kwargs):
@@ -434,13 +461,13 @@ async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkey
     async def release(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_group)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
-    monkeypatch.setattr(route.session_lock_manager, "release", release)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat._finish_catalog_input_receipt", finish)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_group)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(session_lock_manager, "release", release)
 
     with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
@@ -467,7 +494,6 @@ async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkey
 async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monkeypatch, tmp_path):
     """Console attachments use the Console receipt/turn path without a Helm lock."""
     import zerg.routers.session_inputs_attachments as route
-    import zerg.services.console_turns as console_turns
 
     _set_blob_root(monkeypatch, tmp_path)
     session_id = uuid4()
@@ -518,10 +544,10 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
     async def never_lock(**kwargs):
         raise AssertionError("Console attachments must not take the Helm dispatch lock")
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", never_lock)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", enqueue)
+    monkeypatch.setattr(session_lock_manager, "acquire", never_lock)
 
     upload = UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))
     response = await route.create_session_input_with_attachments(
@@ -558,12 +584,12 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
     async def load_existing(**kwargs):
         return SimpleNamespace(id=str(uuid4()))
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_existing)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_existing)
 
     async def store_blob_forbidden(**kwargs):
         raise AssertionError("replay must not store blobs again")
 
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob_forbidden)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob_forbidden)
     replay = await route.create_session_input_with_attachments(
         session_id=str(session_id),
         request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
@@ -618,10 +644,10 @@ async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monke
             error_code=None,
         )
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_racing)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_racing)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_racing)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue_existing)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_racing)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_racing)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_racing)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", enqueue_existing)
     await route.create_session_input_with_attachments(
         session_id=str(session_id),
         request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
@@ -645,7 +671,6 @@ async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch
     the running turn to finish before an image can be added.
     """
     import zerg.routers.session_inputs_attachments as route
-    import zerg.services.console_turns as console_turns
 
     _set_blob_root(monkeypatch, tmp_path)
     session_id = uuid4()
@@ -688,9 +713,9 @@ async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch
             error_code=None,
         )
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", enqueue)
 
     response = await route.create_session_input_with_attachments(
         session_id=str(session_id),
@@ -706,7 +731,9 @@ async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch
     )
 
     assert response.turn is not None
-    assert response.intent == "queue"
+    # Console SEND and QUEUE are the same FIFO enqueue; the JSON route has
+    # always answered "auto" for both, and images now take that same path.
+    assert response.intent == "auto"
     assert calls["enqueue"]["message"] == "look at this"
     assert len(calls["enqueue"]["attachments"]) == 1
 
@@ -714,7 +741,6 @@ async def test_console_multipart_queues_images_behind_a_running_turn(monkeypatch
 @pytest.mark.asyncio
 async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
-    import zerg.services.console_turns as console_turns
 
     _set_blob_root(monkeypatch, tmp_path)
     session_id = uuid4()
@@ -752,10 +778,10 @@ async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(mon
     async def delete_forbidden(**kwargs):
         raise AssertionError("ambiguous catalog outcome must not delete committed refs")
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue_ambiguous)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", enqueue_ambiguous)
     with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
             session_id=str(session_id),
@@ -782,7 +808,6 @@ async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(mon
 @pytest.mark.asyncio
 async def test_console_multipart_cleans_group_after_definite_dispatch_rejection(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
-    import zerg.services.console_turns as console_turns
 
     _set_blob_root(monkeypatch, tmp_path)
     session_id = uuid4()
@@ -800,7 +825,7 @@ async def test_console_multipart_cleans_group_after_definite_dispatch_rejection(
     async def no_receipt(**kwargs):
         return None
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", no_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", no_receipt)
 
     async def store_blob(**kwargs):
         calls["group_id"] = kwargs["input_receipt_id"]
@@ -830,9 +855,9 @@ async def test_console_multipart_cleans_group_after_definite_dispatch_rejection(
             error="provider refused to start",
         )
 
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_group)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", reject)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_group)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", reject)
 
     with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
@@ -875,7 +900,7 @@ async def test_console_multipart_rejects_unsupported_provider(monkeypatch, tmp_p
     async def store_blob_forbidden(**kwargs):
         raise AssertionError("unsupported provider must be refused before storing")
 
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob_forbidden)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob_forbidden)
     with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
             session_id=str(source_session.id),
@@ -898,8 +923,7 @@ async def test_console_multipart_rejects_unsupported_provider(monkeypatch, tmp_p
 
 @pytest.mark.asyncio
 async def test_console_multipart_catalog_unavailable_keeps_unbound_group(monkeypatch, tmp_path):
-    import zerg.routers.session_inputs_attachments as route
-    import zerg.services.console_turns as console_turns
+    import zerg.routers.session_chat as session_chat
     from zerg.services.console_turns import ConsoleTurnUnavailable
 
     session_id = uuid4()
@@ -930,29 +954,21 @@ async def test_console_multipart_catalog_unavailable_keeps_unbound_group(monkeyp
     async def unavailable(**_kwargs):
         raise ConsoleTurnUnavailable("catalog_unavailable", "catalogd is unavailable")
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", no_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
-    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", unavailable)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", no_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", unavailable)
 
     with pytest.raises(HTTPException) as excinfo:
-        await route._enqueue_console_input_with_attachments(
+        await session_chat._enqueue_console_turn_input(
             source_session=source_session,
             owner_id=7,
-            text="retain this",
-            client_request_id="console-catalog-unavailable",
-            model=None,
-            upload_payloads=[
-                (
-                    UploadFile(
-                        file=io.BytesIO(_PNG_BYTES),
-                        filename="a.png",
-                        headers=Headers({"content-type": "image/png"}),
-                    ),
-                    _PNG_BYTES,
-                )
-            ],
-            record_outcome=lambda _outcome: None,
+            body=session_chat.SessionInputRequest(text="retain this", client_request_id="console-catalog-unavailable"),
+            uploads=InputUploads.build(
+                text="retain this",
+                intent="auto",
+                files=[InputUpload(filename="a.png", mime_type="image/png", data=_PNG_BYTES)],
+            ),
         )
 
     assert excinfo.value.status_code == 503
@@ -994,11 +1010,15 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
         return state["receipt"]
 
     async def record_receipt(**kwargs):
-        state["receipt"] = SimpleNamespace(
+        state["receipt"] = LiveInputReceiptSnapshot(
             id=receipt_id,
+            owner_id=7,
+            session_id=str(session_id),
+            provider="codex",
             status=kwargs["status"],
             payload_digest=kwargs["payload_digest"],
             intent=kwargs["intent"],
+            text=kwargs["text"],
             client_request_id=kwargs["client_request_id"],
             error_json=None,
             delivery_request_id=kwargs["delivery_request_id"],
@@ -1006,20 +1026,23 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
         return receipt_id
 
     async def mark_error(**kwargs):
-        state["receipt"].status = "delivering"
         error = kwargs["error"]
-        state["receipt"].error_json = json.dumps(
-            {
-                "code": error.get("code") or error.get("error_code") or "runtime_draining",
-                "message": error.get("message") or error.get("error") or "Runtime is restarting",
-            }
+        state["receipt"] = dataclasses.replace(
+            state["receipt"],
+            status="delivering",
+            error_json=json.dumps(
+                {
+                    "code": error.get("code") or error.get("error_code") or "runtime_draining",
+                    "message": error.get("message") or error.get("error") or "Runtime is restarting",
+                }
+            ),
         )
         return True
 
     async def store_blob(**kwargs):
         state["stores"] += 1
         attachment_id = uuid4()
-        return StoredAttachment(
+        stored = StoredAttachment(
             id=attachment_id,
             session_input_id=receipt_id,
             session_id=session_id,
@@ -1030,6 +1053,12 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
             original_filename="a.png",
             original_byte_size=len(_PNG_BYTES),
         )
+        state.setdefault("stored", []).append(stored)
+        return stored
+
+    async def list_stored(**kwargs):
+        assert kwargs["input_receipt_id"] == receipt_id
+        return list(state.get("stored", []))
 
     async def dispatch(**kwargs):
         state.setdefault("attempts", []).append(kwargs)
@@ -1046,20 +1075,21 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
         return JSONResponse({"accepted": True})
 
     async def finish(**kwargs):
-        state["receipt"].status = "delivered" if kwargs.get("error") is None else "failed"
+        state["receipt"] = dataclasses.replace(state["receipt"], status="delivered" if kwargs.get("error") is None else "failed")
 
     async def acquire(**kwargs):
         return SimpleNamespace()
 
     monkeypatch.setattr(route, "_load_session_for_continuation", load_scoped)
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
-    monkeypatch.setattr(route, "_set_catalog_live_receipt_error", mark_error)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
-    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat._set_catalog_live_receipt_error", mark_error)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.services.session_input_uploads.list_catalog_attachments", list_stored)
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", dispatch)
+    monkeypatch.setattr("zerg.routers.session_chat._finish_catalog_input_receipt", finish)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
 
     def upload():
         return UploadFile(
@@ -1091,6 +1121,10 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
     assert len(state["attempts"]) == 2
     assert len(state["dispatches"]) == 1
     assert state["dispatches"][0]["request_id"] == original_delivery_request_id
+    # The replay stores nothing new and delivers the images the first attempt stored.
+    assert state["stores"] == 1
+    assert len(state["dispatches"][0]["attachments"]) == 1
+    assert receipt_id in state["dispatches"][0]["attachments"][0]["blob_url"]
 
     duplicate = await route.create_session_input_with_attachments(attachments=[upload()], **kwargs)
     assert duplicate.outcome == "sent"
@@ -1696,34 +1730,258 @@ def test_multipart_rejects_unsupported_helm_provider(live_catalog, live_catalog_
         asyncio.run(_clear_machine_control_registry())
 
 
-@pytest.mark.asyncio
-async def test_multipart_rejects_queue_intent_outside_console(monkeypatch, tmp_path):
-    """Helm's queued-input drain does not load attachments, so queue stays refused there."""
+def _png_upload() -> UploadFile:
+    return UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))
+
+
+def _fake_request():
+    return SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver"))
+
+
+def _patch_image_input(monkeypatch, tmp_path, source_session, *, existing=None):
+    """Fake the catalog around one image input; returns an ordered event log."""
     import zerg.routers.session_inputs_attachments as route
 
     _set_blob_root(monkeypatch, tmp_path)
-    helm_session = SimpleNamespace(id=uuid4(), provider="codex", command_family="managed_local", catalog_facts={})
-    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: helm_session)
+    receipt_id = str(uuid4())
+    log: dict[str, object] = {"events": [], "receipt_id": receipt_id, "released": []}
+
+    async def load_receipt(**_kwargs):
+        return existing
+
+    async def record_receipt(**kwargs):
+        log["events"].append(("record", kwargs["status"]))
+        log["receipt"] = kwargs
+        return receipt_id
+
+    async def store_blob(**kwargs):
+        log["events"].append(("store", kwargs["input_receipt_id"]))
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=source_session.id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def delete_blobs(**kwargs):
+        log["events"].append(("delete", kwargs["input_receipt_id"]))
+        return 1
+
+    async def finish(**kwargs):
+        log["events"].append(("finish", kwargs.get("status_value") or ("failed" if kwargs.get("error") else "delivered")))
+
+    async def queued_response(**kwargs):
+        return SimpleNamespace(outcome="queued", live_input_id=kwargs["receipt_id"])
+
+    async def acquire(**_kwargs):
+        return SimpleNamespace()
+
+    async def release(_scope, holder):
+        log["released"].append(holder)
+
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.services.session_input_uploads.delete_catalog_attachment_blobs", delete_blobs)
+    monkeypatch.setattr("zerg.routers.session_chat._finish_catalog_input_receipt", finish)
+    monkeypatch.setattr("zerg.routers.session_chat._queued_input_response", queued_response)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(session_lock_manager, "release", release)
+    return log
+
+
+async def _send_image(intent: str, session_id, client_request_id: str, text: str = "see this"):
+    import zerg.routers.session_inputs_attachments as route
+
+    return await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=_fake_request(),
+        text=text,
+        intent=intent,
+        model=None,
+        client_request_id=client_request_id,
+        attachments=[_png_upload()],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+
+
+def _helm_codex_session():
+    return SimpleNamespace(
+        id=uuid4(),
+        provider="codex",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="managed_local",
+        catalog_facts={"connections": [{"control_plane": "codex_bridge", "state": "attached", "released_at": None}]},
+    )
+
+
+def _admit_runtime(monkeypatch):
+    import zerg.services.runtime_admission as runtime_admission_module
+
+    class _Admission:
+        async def try_admit(self, **_kwargs):
+            return True, {}
+
+        async def release(self):
+            return None
+
+    admission = _Admission()
+    monkeypatch.setattr(runtime_admission_module, "runtime_admission", lambda: admission)
+
+
+@pytest.mark.asyncio
+async def test_helm_queue_with_an_image_parks_after_its_images_are_stored(monkeypatch, tmp_path):
+    """QUEUE with images waits durably; the drain can never see it before its images."""
+    session = _helm_codex_session()
+    log = _patch_image_input(monkeypatch, tmp_path, session)
+    _set_activity(monkeypatch, "executing")
+
+    async def no_dispatch(**_kwargs):
+        raise AssertionError("a queued input must not be dispatched")
+
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", no_dispatch)
+
+    response = await _send_image("queue", session.id, "helm-queue-image")
+
+    assert response.outcome == "queued"
+    receipt_id = log["receipt_id"]
+    # Recorded as delivering (invisible to the drain), images stored, then queued.
+    assert log["events"] == [("record", INPUT_STATUS_DELIVERING), ("store", receipt_id), ("finish", "queued")]
+    assert log["receipt"]["payload_digest"]
+    assert log["receipt"]["intent"] == "queue"
+    assert log["released"], "the SEND ordering lock is released once the receipt is durable"
+
+
+@pytest.mark.asyncio
+async def test_helm_steer_with_an_image_enters_the_running_turn_with_its_refs(monkeypatch, tmp_path):
+    session = _helm_codex_session()
+    log = _patch_image_input(monkeypatch, tmp_path, session)
+    _set_activity(monkeypatch, "thinking")
+    _admit_runtime(monkeypatch)
+    import zerg.services.managed_local_control as managed_local_control
+    from zerg.services.managed_local_control import ManagedLocalSendResult
+
+    seen: dict[str, object] = {}
+
+    async def steer(**kwargs):
+        seen.update(kwargs)
+        return ManagedLocalSendResult(ok=True, exit_code=0)
+
+    monkeypatch.setattr(managed_local_control, "steer_text_to_managed_local_session", steer)
+
+    response = await _send_image("steer", session.id, "helm-steer-image", text="also this")
+
+    receipt_id = log["receipt_id"]
+    assert response.outcome == "sent"
+    assert response.intent == "steer"
+    assert seen["text"] == "also this"
+    refs = seen["attachments"]
+    assert len(refs) == 1
+    assert f"/inputs/{receipt_id}/attachments/" in refs[0]["blob_url"]
+    assert log["receipt"]["payload_digest"]
+    assert log["receipt"]["intent"] == "steer"
+    assert log["events"] == [("record", INPUT_STATUS_DELIVERING), ("store", receipt_id), ("finish", "delivered")]
+
+
+@pytest.mark.asyncio
+async def test_helm_steer_with_an_image_and_no_running_turn_is_refused_and_stores_nothing(monkeypatch, tmp_path):
+    session = _helm_codex_session()
+    log = _patch_image_input(monkeypatch, tmp_path, session)
+    _set_activity(monkeypatch, "quiescent")
 
     with pytest.raises(HTTPException) as caught:
-        await route.create_session_input_with_attachments(
-            session_id=str(helm_session.id),
-            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
-            text="queue?",
-            intent="queue",
-            model=None,
-            client_request_id="attach-queue-reject",
-            attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
-            user_agent="Longhouse-iOS",
+        await _send_image("steer", session.id, "helm-steer-image-idle")
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["error_code"] == "steer_requires_active_turn"
+    assert caught.value.detail["retry_with_intent"] == "queue"
+    assert log["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_console_steer_with_an_image_passes_refs_and_a_refused_steer_deletes_them(monkeypatch, tmp_path):
+    import zerg.services.console_turns as console_turns
+
+    session = SimpleNamespace(
+        id=uuid4(),
+        provider="codex",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    log = _patch_image_input(monkeypatch, tmp_path, session)
+    target = console_turns.ConsoleSteerTarget(turn_id="turn-1", run_id="run-1", provider="codex", device_id="cinder")
+    seen: dict[str, object] = {}
+
+    async def steer_target(**_kwargs):
+        return target
+
+    async def steer(target_arg, **kwargs):
+        seen["target"] = target_arg
+        seen.update(kwargs)
+        return console_turns.ConsoleSteerResult(failure=("turn_ended", "the turn ended"))
+
+    monkeypatch.setattr(console_turns, "console_steer_target", steer_target)
+    monkeypatch.setattr(console_turns, "steer_console_turn", steer)
+
+    with pytest.raises(HTTPException) as caught:
+        await _send_image("steer", session.id, "console-steer-image")
+
+    receipt_id = log["receipt_id"]
+    assert seen["target"] is target
+    assert len(seen["attachments"]) == 1
+    assert f"/inputs/{receipt_id}/attachments/" in seen["attachments"][0]["blob_url"]
+    assert caught.value.status_code == 409
+    assert caught.value.detail["error_code"] == "turn_ended"
+    assert caught.value.detail["retry_with_intent"] == "queue"
+    # A definite refusal: the receipt fails and its images are deleted.
+    assert log["events"] == [
+        ("record", INPUT_STATUS_DELIVERING),
+        ("store", receipt_id),
+        ("finish", "failed"),
+        ("delete", receipt_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_text_replay_of_an_image_input_is_a_conflict(monkeypatch, tmp_path):
+    """Same client_request_id, text-only JSON body vs a stored image operation."""
+    import zerg.routers.session_chat as session_chat
+
+    session = _helm_codex_session()
+    existing = SimpleNamespace(
+        id=str(uuid4()),
+        text="see this",
+        intent="auto",
+        status="queued",
+        payload_digest="a" * 64,
+        error_json=None,
+    )
+    log = _patch_image_input(monkeypatch, tmp_path, session, existing=existing)
+
+    with pytest.raises(HTTPException) as caught:
+        await session_chat._create_catalog_session_input_response(
+            source_session=session,
+            owner_id=7,
+            body=session_chat.SessionInputRequest(text="see this", client_request_id="image-then-text"),
             db=None,
-            current_user=SimpleNamespace(id=7),
         )
-    assert caught.value.status_code == 400
-    detail = caught.value.detail
-    assert detail["error_code"] == "invalid_intent"
-    assert detail["disposition"] == "rejected"
-    assert "intent" in detail["message"].lower()
-    assert list((tmp_path / "blobs").rglob("*.bin")) == []
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["error_code"] == "input_conflict"
+    assert caught.value.detail["reason"] == "different_payload"
+    assert log["events"] == []
 
 
 def test_multipart_rejects_unsupported_mime(monkeypatch, tmp_path):
@@ -1978,15 +2236,15 @@ async def _multipart_mid_turn(monkeypatch, tmp_path, *, dispatch_payload=None):
     receipt_id = str(uuid4())
     source_session = SimpleNamespace(
         id=session_id,
-        provider="omp",
+        provider="codex",
         device_id="cinder",
         primary_thread_id=uuid4(),
-        catalog_facts={"connections": [{"control_plane": "omp_helm", "state": "attached", "released_at": None}]},
+        catalog_facts={"connections": [{"control_plane": "codex_bridge", "state": "attached", "released_at": None}]},
     )
     calls: dict[str, object] = {"finishes": [], "released": []}
 
     monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
-    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr("zerg.routers.session_chat._assert_live_session_send_available", lambda *args, **kwargs: None)
 
     async def record_receipt(**kwargs):
         return receipt_id
@@ -2027,15 +2285,15 @@ async def _multipart_mid_turn(monkeypatch, tmp_path, *, dispatch_payload=None):
     async def cleanup(**kwargs):
         calls["cleaned"] = True
 
-    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
-    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
-    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
-    monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
-    monkeypatch.setattr(route, "_cleanup_catalog_attachment_group", cleanup)
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr("zerg.services.session_input_uploads.store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", dispatch)
+    monkeypatch.setattr("zerg.routers.session_chat.delete_input_uploads", cleanup)
     monkeypatch.setattr("zerg.routers.session_chat._finish_catalog_input_receipt", finish_input)
     monkeypatch.setattr("zerg.routers.session_chat._queued_input_response", queued_response)
-    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
-    monkeypatch.setattr(route.session_lock_manager, "release", release)
+    monkeypatch.setattr(session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(session_lock_manager, "release", release)
 
     upload = UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))
     response = await route.create_session_input_with_attachments(
@@ -2056,12 +2314,7 @@ async def _multipart_mid_turn(monkeypatch, tmp_path, *, dispatch_payload=None):
 async def test_a_mid_turn_image_send_waits_durably_with_its_images(monkeypatch, tmp_path):
     """Mid-turn, the receipt and its stored images are parked for the drain, not dispatched."""
 
-    import zerg.routers.session_inputs_attachments as route
-
-    async def busy(*_args, **_kwargs):
-        return False
-
-    monkeypatch.setattr(route, "_helm_send_can_dispatch_now", busy)
+    _set_activity(monkeypatch, "executing")
     response, calls, receipt_id = await _multipart_mid_turn(monkeypatch, tmp_path)
 
     assert response.outcome == "queued"

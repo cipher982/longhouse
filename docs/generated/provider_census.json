@@ -1991,8 +1991,7 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex",
-        "omp"
+        "codex"
       ]
     },
     {

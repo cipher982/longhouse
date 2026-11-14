@@ -48,6 +48,7 @@ from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import create_branch_with_first_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
+from zerg.services.input_attachments_support import attachments_supported
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_control_catalog import RETRYABLE_SEND_PRECONDITIONS
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
@@ -75,6 +76,10 @@ from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response_from_plan
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
+from zerg.services.session_input_uploads import InputUploads
+from zerg.services.session_input_uploads import delete_input_uploads
+from zerg.services.session_input_uploads import store_input_uploads
+from zerg.services.session_input_uploads import stored_input_refs
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_INTENT_STEER
@@ -1651,6 +1656,7 @@ async def _record_live_input_receipt_for_body(
     delivery_request_id: str | None = None,
     enqueue_archive_projection: bool = False,
     error: dict[str, object] | None = None,
+    payload_digest: str | None = None,
 ) -> str | None:
     return await record_live_input_receipt_best_effort(
         owner_id=owner_id,
@@ -1665,7 +1671,108 @@ async def _record_live_input_receipt_for_body(
         delivery_request_id=delivery_request_id,
         enqueue_archive_projection=enqueue_archive_projection,
         error=error,
+        payload_digest=payload_digest,
     )
+
+
+def _receipt_unpersisted(client_request_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=_input_error_detail(
+            "input_receipt_unknown",
+            "The server could not persist this operation; retry with the same client_request_id.",
+            disposition="unknown",
+            client_request_id=client_request_id,
+        ),
+    )
+
+
+async def _record_input_receipt(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    intent: InputIntent,
+    status_value: str,
+    delivery_request_id: str | None,
+    uploads: InputUploads | None,
+    send_lock: tuple[str, str] | None = None,
+) -> tuple[str, list[dict]]:
+    """Record a new input's durable receipt, with its images stored against it.
+
+    Returns the receipt id and the engine refs of its images. Images are stored
+    while the receipt is still ``delivering``, so the queue drain can never see
+    a ``queued`` receipt whose images are missing. On failure ``send_lock`` is
+    released and an HTTPException says what the client should do.
+    """
+
+    client_request_id = body.client_request_id
+
+    async def release_lock() -> None:
+        if send_lock is not None:
+            await session_lock_manager.release(send_lock[0], send_lock[1])
+
+    if uploads is None:
+        receipt_id = await _record_live_input_receipt_for_body(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            intent=intent,
+            status_value=status_value,
+            delivery_request_id=delivery_request_id,
+        )
+        if receipt_id is None:
+            await release_lock()
+            raise _receipt_unpersisted(client_request_id)
+        return receipt_id, []
+
+    store_request_id = delivery_request_id or uuid.uuid4().hex
+    receipt_id = await _record_live_input_receipt_for_body(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        client_request_id=client_request_id,
+        intent=intent,
+        status_value=INPUT_STATUS_DELIVERING,
+        delivery_request_id=store_request_id,
+        payload_digest=uploads.payload_digest,
+    )
+    if receipt_id is None:
+        await release_lock()
+        raise _receipt_unpersisted(client_request_id)
+    try:
+        refs = await store_input_uploads(uploads, owner_id=owner_id, session_id=source_session.id, receipt_id=receipt_id)
+    except Exception as exc:
+        await release_lock()
+        logger.exception("attachment store failed for session %s", source_session.id)
+        rejected = isinstance(exc, ValueError)
+        try:
+            await _finish_catalog_input_receipt(
+                receipt_id=receipt_id,
+                delivery_request_id=store_request_id,
+                error="attachment store rejected" if rejected else f"attachment store failed: {exc}",
+            )
+        except HTTPException:
+            logger.warning("could not fail receipt %s after attachment store failure", receipt_id)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST if rejected else status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_input_error_detail(
+                "attachment_rejected" if rejected else "attachment_store_failed",
+                str(exc) if rejected else "failed to store attachments",
+                disposition="accepted",
+                delivery_status="failed",
+                client_request_id=client_request_id,
+                live_input_id=receipt_id,
+            ),
+        ) from exc
+    if status_value == INPUT_STATUS_QUEUED:
+        await _finish_catalog_input_receipt(
+            receipt_id=receipt_id,
+            delivery_request_id=store_request_id,
+            status_value=INPUT_STATUS_QUEUED,
+        )
+    return receipt_id, refs
 
 
 def _live_receipt_response(
@@ -1697,8 +1804,14 @@ async def _retry_runtime_draining_catalog_input(
     body: SessionInputRequest,
     db: Session,
     existing: LiveInputReceiptSnapshot,
+    uploads: InputUploads | None = None,
 ) -> SessionInputResponse:
-    """Replay a known pre-dispatch refusal without changing its operation id."""
+    """Replay a known pre-dispatch refusal without changing its operation id.
+
+    Images were stored with the first attempt; the replay reads their refs back
+    from the catalog, exactly as the queue drain does.
+    """
+    payload_digest = uploads.payload_digest if uploads is not None else None
     delivery_request_id = str(existing.delivery_request_id or "").strip()
     if not delivery_request_id:
         raise HTTPException(
@@ -1757,7 +1870,7 @@ async def _retry_runtime_draining_catalog_input(
                 client_request_id=body.client_request_id,
             ),
         )
-    if current.text != body.text or current.intent != body.intent:
+    if current.payload_digest != payload_digest or current.text != body.text or current.intent != body.intent:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1818,6 +1931,7 @@ async def _retry_runtime_draining_catalog_input(
             "code": "delivery_unknown",
             "message": "Provider dispatch is in flight; do not replay until its outcome is known.",
         },
+        payload_digest=payload_digest,
     )
     if not claimed:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
@@ -1845,6 +1959,7 @@ async def _retry_runtime_draining_catalog_input(
             client_request_id=body.client_request_id,
             delivery_request_id=delivery_request_id,
             error=payload,
+            payload_digest=payload_digest,
         )
         if not marked:
             await session_lock_manager.release(lock_scope_id, delivery_request_id)
@@ -1863,6 +1978,26 @@ async def _retry_runtime_draining_catalog_input(
             )
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+
+    attachments: list[dict] = []
+    if payload_digest is not None:
+        try:
+            attachments = await stored_input_refs(owner_id=owner_id, session_id=source_session.id, receipt_id=existing.id)
+        except Exception as exc:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_augment_receipt_error(
+                    {
+                        "error_code": "input_receipt_unknown",
+                        "message": "The input's images could not be read; retry with the same client_request_id.",
+                    },
+                    client_request_id=body.client_request_id,
+                    live_input_id=existing.id,
+                    disposition="accepted",
+                    delivery_status="delivering",
+                ),
+            ) from exc
 
     if body.intent == INPUT_INTENT_STEER:
         from zerg.services.managed_local_control import steer_text_to_managed_local_session
@@ -1885,6 +2020,7 @@ async def _retry_runtime_draining_catalog_input(
                 session=source_session,
                 text=body.text,
                 request_id=delivery_request_id,
+                attachments=attachments or None,
             )
         finally:
             await runtime_admission().release()
@@ -1930,6 +2066,7 @@ async def _retry_runtime_draining_catalog_input(
             request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             db=db,
+            attachments=attachments or None,
         )
         if int(dispatch_response.status_code) >= 400:
             try:
@@ -2048,6 +2185,7 @@ async def _dispatch_provider_native_send(
     lock_scope_id: str,
     failure_code: str,
     requeue_preconditions: frozenset[str],
+    uploads: InputUploads | None = None,
 ) -> SessionInputResponse:
     """Hand a SEND to a provider that owns the turn it starts.
 
@@ -2062,26 +2200,16 @@ async def _dispatch_provider_native_send(
     from zerg.services.session_chat_impl import _schedule_catalog_lock_release
 
     dispatched_at = datetime.now(timezone.utc)
-    receipt_id = await _record_live_input_receipt_for_body(
+    receipt_id, attachments = await _record_input_receipt(
         source_session=source_session,
         owner_id=owner_id,
         body=body,
-        client_request_id=client_request_id,
         intent=body.intent,
         status_value=INPUT_STATUS_DELIVERING,
         delivery_request_id=delivery_request_id,
+        uploads=uploads,
+        send_lock=(lock_scope_id, delivery_request_id),
     )
-    if receipt_id is None:
-        await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        raise HTTPException(
-            status_code=503,
-            detail=_input_error_detail(
-                "input_receipt_unknown",
-                "The server could not persist this operation; retry with the same client_request_id.",
-                disposition="unknown",
-                client_request_id=client_request_id,
-            ),
-        )
 
     try:
         result = await dispatch_managed_control_command(
@@ -2090,7 +2218,7 @@ async def _dispatch_provider_native_send(
             session=source_session,
             timeout_secs=15,
             command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-            payload={"text": body.text},
+            payload={"text": body.text, **({"attachments": attachments} if attachments else {})},
             request_id=delivery_request_id,
             run_id=None,
         )
@@ -2139,6 +2267,8 @@ async def _dispatch_provider_native_send(
             error=error,
         )
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        if attachments:
+            await delete_input_uploads(owner_id=owner_id, session_id=source_session.id, receipt_id=receipt_id)
         raise HTTPException(
             status_code=502,
             detail=_input_error_detail(
@@ -2178,6 +2308,7 @@ async def _park_catalog_session_input(
     body: SessionInputRequest,
     client_request_id: str,
     send_lock: tuple[str, str] | None = None,
+    uploads: InputUploads | None = None,
 ) -> SessionInputResponse:
     """Record a durable `queued` receipt and let delivery happen at the boundary.
 
@@ -2192,26 +2323,16 @@ async def _park_catalog_session_input(
     not depend on this request staying alive.
     """
 
-    receipt_id = await _record_live_input_receipt_for_body(
+    receipt_id, _attachments = await _record_input_receipt(
         source_session=source_session,
         owner_id=owner_id,
         body=body,
-        client_request_id=client_request_id,
         intent=body.intent,
         status_value=INPUT_STATUS_QUEUED,
+        delivery_request_id=None,
+        uploads=uploads,
+        send_lock=send_lock,
     )
-    if receipt_id is None:
-        if send_lock is not None:
-            await session_lock_manager.release(send_lock[0], send_lock[1])
-        raise HTTPException(
-            status_code=503,
-            detail=_input_error_detail(
-                "input_receipt_unknown",
-                "The server could not persist this operation; retry with the same client_request_id.",
-                disposition="unknown",
-                client_request_id=client_request_id,
-            ),
-        )
     # The receipt is durable before the ordering lock is given up: a newer SEND
     # that acquires it next must be able to see this message already waiting.
     if send_lock is not None:
@@ -2279,6 +2400,7 @@ async def _steer_console_session_input(
     owner_id: int,
     body: SessionInputRequest,
     db: Session,
+    uploads: InputUploads | None = None,
 ) -> SessionInputResponse:
     """Enter a running Console turn, with a durable receipt like a Helm steer."""
     from zerg.services.console_turns import STEER_OUTCOME_STARTED_NEW_TURN
@@ -2303,7 +2425,11 @@ async def _steer_console_session_input(
             ),
         ) from exc
     if existing is not None:
-        if existing.text != body.text or existing.intent != body.intent:
+        if (
+            existing.payload_digest != (uploads.payload_digest if uploads is not None else None)
+            or existing.text != body.text
+            or existing.intent != body.intent
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=_augment_receipt_error(
@@ -2319,7 +2445,7 @@ async def _steer_console_session_input(
 
     session_uuid = uuid.UUID(str(source_session.id))
     try:
-        target = await console_steer_target(owner_id=owner_id, session_id=session_uuid)
+        target = await console_steer_target(owner_id=owner_id, session_id=session_uuid, with_attachments=uploads is not None)
     except ConsoleTurnUnavailable as exc:
         unknown = exc.code == "catalog_unavailable"
         raise HTTPException(
@@ -2334,31 +2460,22 @@ async def _steer_console_session_input(
         ) from exc
 
     delivery_request_id = uuid.uuid4().hex
-    receipt_id = await _record_live_input_receipt_for_body(
+    receipt_id, attachments = await _record_input_receipt(
         source_session=source_session,
         owner_id=owner_id,
         body=body,
-        client_request_id=client_request_id,
         intent=INPUT_INTENT_STEER,
         status_value=INPUT_STATUS_DELIVERING,
         delivery_request_id=delivery_request_id,
+        uploads=uploads,
     )
-    if receipt_id is None:
-        raise HTTPException(
-            status_code=503,
-            detail=_input_error_detail(
-                "input_receipt_unknown",
-                "The server could not persist this operation; retry with the same client_request_id.",
-                disposition="unknown",
-                client_request_id=client_request_id,
-            ),
-        )
     steer = await steer_console_turn(
         target,
         owner_id=owner_id,
         session_id=session_uuid,
         text=body.text,
         client_request_id=client_request_id,
+        attachments=attachments or None,
     )
     if steer.failure is None:
         await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id)
@@ -2390,6 +2507,7 @@ async def _steer_console_session_input(
             client_request_id=client_request_id,
             delivery_request_id=delivery_request_id,
             error={"code": "delivery_unknown", "message": message},
+            payload_digest=uploads.payload_digest if uploads is not None else None,
         )
         raise HTTPException(
             status_code=502,
@@ -2403,6 +2521,8 @@ async def _steer_console_session_input(
             ),
         )
     await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id, error=message)
+    if attachments:
+        await delete_input_uploads(owner_id=owner_id, session_id=source_session.id, receipt_id=receipt_id)
     # The turn finished between the check and the adapter: the client offers
     # "Queue instead" for exactly this code.
     ended = code in {"turn_ended", "turn_not_steerable"}
@@ -2420,14 +2540,194 @@ async def _steer_console_session_input(
     )
 
 
+def _attachments_unsupported(client_request_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_input_error_detail(
+            "attachments_unsupported",
+            "This session's provider does not accept image attachments",
+            disposition="rejected",
+            client_request_id=client_request_id,
+        ),
+    )
+
+
+async def _enqueue_console_turn_input(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    uploads: InputUploads | None,
+) -> SessionInputResponse:
+    """SEND or QUEUE on a Console session: enqueue a turn, images included.
+
+    The turn record carries the image refs, so a FIFO or reconnect dispatch
+    after a restart still delivers them. A replay with the same
+    ``client_request_id`` stores nothing and passes only the digest; catalogd
+    compares it against the stored turn and answers with the existing receipt
+    or a conflict.
+    """
+    client_request_id = body.client_request_id
+    group_id: str | None = None
+    stored_refs: list[dict] = []
+
+    async def discard_group() -> None:
+        nonlocal group_id
+        if group_id is not None:
+            await delete_input_uploads(owner_id=owner_id, session_id=source_session.id, receipt_id=group_id)
+            group_id = None
+
+    existing_receipt = None
+    if uploads is not None:
+        try:
+            existing_receipt = await load_live_input_receipt_by_client_request(
+                owner_id=owner_id,
+                session_id=source_session.id,
+                client_request_id=client_request_id,
+            )
+        except LiveInputReceiptUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_input_error_detail(
+                    "input_receipt_unknown",
+                    "The server could not confirm this operation; retry with the same client_request_id.",
+                    disposition="unknown",
+                    client_request_id=client_request_id,
+                ),
+            ) from exc
+        if existing_receipt is None:
+            group_id = str(uuid.uuid4())
+            try:
+                stored_refs = await store_input_uploads(
+                    uploads, owner_id=owner_id, session_id=source_session.id, receipt_id=group_id, allow_unbound=True
+                )
+            except Exception as exc:
+                group_id = None
+                logger.exception("console attachment upload failed for session %s", source_session.id)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=_input_error_detail(
+                        "attachment_store_failed",
+                        "failed to store attachments",
+                        disposition="rejected",
+                        client_request_id=client_request_id,
+                    ),
+                ) from exc
+    enqueue_kwargs: dict[str, Any] = {
+        "owner_id": owner_id,
+        "session_id": uuid.UUID(str(source_session.id)),
+        "message": body.text,
+        "client_request_id": client_request_id,
+        "report_id": body.report_id,
+    }
+    if uploads is not None:
+        enqueue_kwargs.update(attachments=stored_refs, attachments_digest=uploads.console_digest, receipt_id=group_id)
+    if body.model is not None:
+        enqueue_kwargs["model"] = body.model
+    try:
+        turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
+    except ConsoleTurnConflict as exc:
+        await discard_group()
+        conflict_receipt = existing_receipt
+        if conflict_receipt is None:
+            try:
+                conflict_receipt = await load_live_input_receipt_by_client_request(
+                    owner_id=owner_id,
+                    session_id=source_session.id,
+                    client_request_id=client_request_id,
+                )
+            except LiveInputReceiptUnavailable:
+                conflict_receipt = None
+        if conflict_receipt is not None:
+            detail = _input_error_detail(
+                "idempotency_conflict",
+                str(exc),
+                disposition="accepted",
+                delivery_status=conflict_receipt.status,
+                client_request_id=client_request_id,
+                live_input_id=conflict_receipt.id,
+                turn=_live_queued_summary(conflict_receipt).turn,
+            )
+        else:
+            detail = _input_error_detail("idempotency_conflict", str(exc), disposition="unknown", client_request_id=client_request_id)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+    except ConsoleTurnUnavailable as exc:
+        if exc.code == "catalog_unavailable":
+            # catalogd may have committed the turn; keep the unbound image group
+            # for the reaper and let an idempotent retry recover the operation.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_input_error_detail(exc.code, str(exc), disposition="unknown", client_request_id=client_request_id),
+            ) from exc
+        await discard_group()
+        error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
+        raise HTTPException(
+            status_code=error_status,
+            detail=_input_error_detail(exc.code, str(exc), disposition="rejected", client_request_id=client_request_id),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("console input outcome unknown for session %s", source_session.id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_input_error_detail(
+                "input_receipt_unknown",
+                "The server could not confirm this operation; retry with the same client_request_id.",
+                disposition="unknown",
+                client_request_id=client_request_id,
+            ),
+        ) from exc
+    if not getattr(turn, "created", True):
+        # Another request won the idempotency race; its turn owns the images.
+        await discard_group()
+    if turn.state == "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_input_error_detail(
+                "input_cancelled",
+                "This Console input was cancelled.",
+                disposition="accepted",
+                delivery_status="cancelled",
+                client_request_id=client_request_id,
+                live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+                turn=_console_turn_response(turn),
+            ),
+        )
+    if turn.error and turn.error_code not in {
+        "turn_start_ambiguous",
+        "turn_start_outcome_unknown",
+        "attachment_stage_outcome_unknown",
+    }:
+        if getattr(turn, "created", True):
+            await discard_group()
+        raise _console_turn_failure(turn, client_request_id=client_request_id, code_key="code")
+    return SessionInputResponse(
+        outcome=_console_turn_outcome(turn.state),
+        disposition="accepted",
+        input_id=None,
+        live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
+        client_request_id=client_request_id,
+        turn=_console_turn_response(turn),
+        intent=INPUT_INTENT_AUTO,
+        queued=[],
+    )
+
+
 async def _create_catalog_session_input_response(
     *,
     source_session,
     owner_id: int,
     body: SessionInputRequest,
     db: Session,
+    uploads: InputUploads | None = None,
 ) -> SessionInputResponse:
-    """Live-receipt authoritative input path used when the cold DB is absent."""
+    """The one input path: SEND, QUEUE or STEER, with or without images.
+
+    ``uploads`` are images the multipart route has read and validated. They are
+    stored against the input's receipt and delivered with it on every branch:
+    a direct send, a parked send the drain replays, a steer, a Console turn.
+    """
     if body.report_id is not None and getattr(source_session, "command_family", None) != "console_turn":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2440,87 +2740,13 @@ async def _create_catalog_session_input_response(
         )
 
     if getattr(source_session, "command_family", None) == "console_turn":
+        if uploads is not None and not attachments_supported(getattr(source_session, "provider", None), "console"):
+            raise _attachments_unsupported(body.client_request_id)
         if body.intent == INPUT_INTENT_STEER:
             # STEER enters the running Console turn through its adapter. It is
             # never turned into a new turn: that is what SEND is for.
-            return await _steer_console_session_input(source_session=source_session, owner_id=owner_id, body=body, db=db)
-        client_request_id = body.client_request_id
-        try:
-            enqueue_kwargs = {
-                "owner_id": owner_id,
-                "session_id": uuid.UUID(str(source_session.id)),
-                "message": body.text,
-                "client_request_id": client_request_id,
-                "report_id": body.report_id,
-            }
-            if body.model is not None:
-                enqueue_kwargs["model"] = body.model
-            turn = await enqueue_catalog_console_turn(**enqueue_kwargs)
-        except ConsoleTurnConflict as exc:
-            existing_conflict = None
-            try:
-                existing_conflict = await load_live_input_receipt_by_client_request(
-                    owner_id=owner_id,
-                    session_id=source_session.id,
-                    client_request_id=client_request_id,
-                )
-            except LiveInputReceiptUnavailable:
-                existing_conflict = None
-            if existing_conflict is not None:
-                summary = _live_queued_summary(existing_conflict)
-                detail = _input_error_detail(
-                    "idempotency_conflict",
-                    str(exc),
-                    disposition="accepted",
-                    delivery_status=existing_conflict.status,
-                    client_request_id=client_request_id,
-                    live_input_id=existing_conflict.id,
-                    turn=summary.turn,
-                )
-            else:
-                detail = _input_error_detail(
-                    "idempotency_conflict",
-                    str(exc),
-                    disposition="unknown",
-                    client_request_id=client_request_id,
-                )
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
-        except ConsoleTurnUnavailable as exc:
-            disposition: InputDisposition = "unknown" if exc.code == "catalog_unavailable" else "rejected"
-            error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
-            raise HTTPException(
-                status_code=error_status,
-                detail=_input_error_detail(exc.code, str(exc), disposition=disposition, client_request_id=client_request_id),
-            ) from exc
-        if turn.state == "cancelled":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=_input_error_detail(
-                    "input_cancelled",
-                    "This Console input was cancelled.",
-                    disposition="accepted",
-                    delivery_status="cancelled",
-                    client_request_id=client_request_id,
-                    live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
-                    turn=_console_turn_response(turn),
-                ),
-            )
-        if turn.error and turn.error_code not in {
-            "turn_start_ambiguous",
-            "turn_start_outcome_unknown",
-            "attachment_stage_outcome_unknown",
-        }:
-            raise _console_turn_failure(turn, client_request_id=client_request_id, code_key="code")
-        return SessionInputResponse(
-            outcome=_console_turn_outcome(turn.state),
-            disposition="accepted",
-            input_id=None,
-            live_input_id=str(turn.receipt_id) if getattr(turn, "receipt_id", None) is not None else None,
-            client_request_id=client_request_id,
-            turn=_console_turn_response(turn),
-            intent=INPUT_INTENT_AUTO,
-            queued=[],
-        )
+            return await _steer_console_session_input(source_session=source_session, owner_id=owner_id, body=body, db=db, uploads=uploads)
+        return await _enqueue_console_turn_input(source_session=source_session, owner_id=owner_id, body=body, uploads=uploads)
 
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(
@@ -2546,6 +2772,9 @@ async def _create_catalog_session_input_response(
                 client_request_id=client_request_id,
             ),
         ) from exc
+    if uploads is not None and not attachments_supported(getattr(source_session, "provider", None), "helm"):
+        raise _attachments_unsupported(client_request_id)
+    payload_digest = uploads.payload_digest if uploads is not None else None
     try:
         existing = await load_live_input_receipt_by_client_request(
             owner_id=owner_id,
@@ -2563,7 +2792,7 @@ async def _create_catalog_session_input_response(
             ),
         ) from exc
     if existing is not None:
-        if existing.payload_digest is not None or existing.text != body.text or existing.intent != body.intent:
+        if existing.payload_digest != payload_digest or existing.text != body.text or existing.intent != body.intent:
             raise HTTPException(
                 status_code=409,
                 detail=_augment_receipt_error(
@@ -2581,6 +2810,7 @@ async def _create_catalog_session_input_response(
                 body=body,
                 db=db,
                 existing=existing,
+                uploads=uploads,
             )
         if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) or (
             existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
@@ -2686,6 +2916,7 @@ async def _create_catalog_session_input_response(
             lock_scope_id=lock_scope_id,
             failure_code="pi_native_send_failed",
             requeue_preconditions=RETRYABLE_SEND_PRECONDITIONS,
+            uploads=uploads,
         )
 
     if (
@@ -2708,6 +2939,7 @@ async def _create_catalog_session_input_response(
             lock_scope_id=lock_scope_id,
             failure_code="omp_native_send_failed",
             requeue_preconditions=RETRYABLE_SEND_PRECONDITIONS,
+            uploads=uploads,
         )
 
     current = queued_state[1]
@@ -2731,29 +2963,23 @@ async def _create_catalog_session_input_response(
             body=body,
             client_request_id=client_request_id,
             send_lock=(lock_scope_id, delivery_request_id) if send_lock_held else None,
+            uploads=uploads,
         )
 
-    receipt_id = await _record_live_input_receipt_for_body(
+    receipt_id, attachments = await _record_input_receipt(
         source_session=source_session,
         owner_id=owner_id,
         body=body,
-        client_request_id=client_request_id,
         intent=body.intent,
         status_value=INPUT_STATUS_DELIVERING,
         delivery_request_id=delivery_request_id,
+        uploads=uploads,
+        send_lock=(lock_scope_id, delivery_request_id) if send_lock_held else None,
     )
-    if receipt_id is None:
-        if send_lock_held:
-            await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        raise HTTPException(
-            status_code=503,
-            detail=_input_error_detail(
-                "input_receipt_unknown",
-                "The server could not persist this operation; retry with the same client_request_id.",
-                disposition="unknown",
-                client_request_id=client_request_id,
-            ),
-        )
+
+    async def discard_images() -> None:
+        if attachments:
+            await delete_input_uploads(owner_id=owner_id, session_id=source_session.id, receipt_id=receipt_id)
 
     if body.intent == INPUT_INTENT_STEER:
         from zerg.services.managed_local_control import steer_text_to_managed_local_session
@@ -2776,6 +3002,7 @@ async def _create_catalog_session_input_response(
                 client_request_id=client_request_id,
                 delivery_request_id=delivery_request_id,
                 error=payload,
+                payload_digest=payload_digest,
             )
             if not marked:
                 payload = {
@@ -2790,6 +3017,7 @@ async def _create_catalog_session_input_response(
                 session=source_session,
                 text=body.text,
                 request_id=delivery_request_id,
+                attachments=attachments or None,
             )
         finally:
             await runtime_admission().release()
@@ -2803,6 +3031,7 @@ async def _create_catalog_session_input_response(
                 client_request_id=client_request_id,
                 delivery_request_id=delivery_request_id,
                 error={"code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
+                payload_digest=payload_digest,
             )
             raise HTTPException(
                 status_code=502,
@@ -2821,6 +3050,7 @@ async def _create_catalog_session_input_response(
                 delivery_request_id=delivery_request_id,
                 error=str(result.error or "steer failed"),
             )
+            await discard_images()
             raise HTTPException(
                 status_code=409,
                 detail=_input_error_detail(
@@ -2833,14 +3063,58 @@ async def _create_catalog_session_input_response(
                 ),
             )
     else:
-        dispatch_response = await _build_managed_local_chat_response(
-            source_session=source_session,
-            owner_id=owner_id,
-            message=body.text,
-            request_id=delivery_request_id,
-            lock_scope_id=lock_scope_id,
-            db=db,
-        )
+        try:
+            dispatch_response = await _build_managed_local_chat_response(
+                source_session=source_session,
+                owner_id=owner_id,
+                message=body.text,
+                request_id=delivery_request_id,
+                lock_scope_id=lock_scope_id,
+                db=db,
+                attachments=attachments or None,
+            )
+        except HTTPException as exc:
+            # Refused before the provider was reached: a definite failure.
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id, error="dispatch rejected")
+            await discard_images()
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=_augment_receipt_error(
+                    exc.detail,
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                    disposition="accepted",
+                    delivery_status="failed",
+                ),
+            ) from exc
+        except Exception as exc:
+            # The provider may have taken it: keep the receipt (and its images)
+            # in delivering with an unknown outcome, so a replay cannot redispatch.
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            unknown_error = f"Provider dispatch outcome is unknown: {exc}"[:500]
+            marked = await _set_catalog_live_receipt_error(
+                receipt_id=receipt_id,
+                source_session=source_session,
+                owner_id=owner_id,
+                text=body.text,
+                intent=body.intent,
+                client_request_id=client_request_id,
+                delivery_request_id=delivery_request_id,
+                error={"code": "delivery_unknown", "message": unknown_error},
+                payload_digest=payload_digest,
+            )
+            logger.exception("input dispatch outcome unknown for session %s", source_session.id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_augment_receipt_error(
+                    {"error_code": "delivery_unknown", "message": unknown_error},
+                    client_request_id=client_request_id,
+                    live_input_id=receipt_id,
+                    disposition="accepted" if marked else "unknown",
+                    delivery_status="unknown",
+                ),
+            ) from exc
         if int(dispatch_response.status_code) >= 400:
             try:
                 payload = json.loads(dispatch_response.body or b"{}")
@@ -2857,6 +3131,7 @@ async def _create_catalog_session_input_response(
                     client_request_id=client_request_id,
                     delivery_request_id=delivery_request_id,
                     error=payload,
+                    payload_digest=payload_digest,
                 )
                 if not marked:
                     payload = _input_error_detail(
@@ -2886,6 +3161,7 @@ async def _create_catalog_session_input_response(
                     client_request_id=client_request_id,
                     delivery_request_id=delivery_request_id,
                     error={"code": "delivery_unknown", "message": error},
+                    payload_digest=payload_digest,
                 )
                 raise HTTPException(
                     status_code=dispatch_response.status_code,
@@ -2899,7 +3175,7 @@ async def _create_catalog_session_input_response(
                 )
             from zerg.services.session_input_queue import managed_control_momentarily_unavailable
 
-            if managed_control_momentarily_unavailable(error):
+            if managed_control_momentarily_unavailable(error) or str(payload.get("error_code") or "") in RETRYABLE_SEND_PRECONDITIONS:
                 # The channel dropped between the capability check and the
                 # dispatch. Park the input for the drain, which retries queued
                 # receipts and delivers once the machine reconnects: late,
@@ -2922,6 +3198,7 @@ async def _create_catalog_session_input_response(
                 delivery_request_id=delivery_request_id,
                 error=error,
             )
+            await discard_images()
             raise HTTPException(
                 status_code=dispatch_response.status_code,
                 detail=_augment_receipt_error(

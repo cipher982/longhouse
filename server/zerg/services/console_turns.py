@@ -351,7 +351,13 @@ def console_provider_supports_steer(provider: str | None) -> bool:
     return bool(contract is not None and contract.machine_control_capability_for_operation("turn_steer"))
 
 
-async def console_steer_target(*, owner_id: int, session_id: UUID, registry=None) -> ConsoleSteerTarget:
+# Advertised by a Machine Agent whose Console turn steer delivers images. An
+# older agent ignores `attachments` on the steer command and would enter the
+# turn with the text alone, so images are only sent where this is advertised.
+CONSOLE_STEER_ATTACHMENTS_CAPABILITY = "console.turn_steer_attachments"
+
+
+async def console_steer_target(*, owner_id: int, session_id: UUID, registry=None, with_attachments: bool = False) -> ConsoleSteerTarget:
     """The running Console turn a steer would enter, or why there is none."""
 
     from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -377,6 +383,11 @@ async def console_steer_target(*, owner_id: int, session_id: UUID, registry=None
     capability = f"{provider}.turn_steer"
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
         raise ConsoleTurnUnavailable("adapter_unavailable", f"Machine Agent does not advertise {capability}")
+    if with_attachments and not control.supports(owner_id=owner_id, device_id=device_id, capability=CONSOLE_STEER_ATTACHMENTS_CAPABILITY):
+        raise ConsoleTurnUnavailable(
+            "steer_attachments_unsupported",
+            "This machine's Longhouse agent cannot add images to a running turn until it is updated; nothing was sent.",
+        )
     return ConsoleSteerTarget(
         turn_id=str(turn.get("turn_id") or ""),
         run_id=str(turn["run_id"]),
@@ -412,6 +423,7 @@ async def steer_console_turn(
     text: str,
     client_request_id: str,
     registry=None,
+    attachments: list[dict] | None = None,
 ) -> ConsoleSteerResult:
     """Enter the running Console turn, or say what happened instead.
 
@@ -427,7 +439,13 @@ async def steer_console_turn(
         device_id=target.device_id,
         session_id=str(session_id),
         command_type=CONSOLE_TURN_STEER_COMMAND,
-        payload={"provider": target.provider, "run_id": target.run_id, "turn_id": target.turn_id, "text": text},
+        payload={
+            "provider": target.provider,
+            "run_id": target.run_id,
+            "turn_id": target.turn_id,
+            "text": text,
+            **({"attachments": attachments} if attachments else {}),
+        },
         command_id=f"{target.run_id}:steer:{client_request_id}",
         timeout_secs=CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS + 10,
     )
