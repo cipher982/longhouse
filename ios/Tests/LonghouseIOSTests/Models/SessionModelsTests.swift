@@ -1680,16 +1680,17 @@ struct SessionModelsTests {
         let after = deadline.addingTimeInterval(1)
         #expect(SessionComposerControlState.primaryIntent(for: detail, asOf: before) == "steer")
         #expect(SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: before))
-        #expect(!SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: before))
+        // Images ride a steer or a queue like text, so the picker stays open mid-turn.
+        #expect(detail.attachImagesEnabled)
 
         #expect(detail.canSendLive)
         #expect(SessionComposerControlState.primaryIntent(for: detail, asOf: after) == "auto")
         #expect(!SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: after))
-        #expect(SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: after))
-        #expect(SessionComposerControlState.attachmentIntent(for: detail, requested: "steer") == nil)
+        #expect(detail.attachImagesEnabled)
+        #expect(SessionComposerControlState.sendAccessibilityLabel(for: detail, asOf: before) == "Send to this turn")
+        #expect(SessionComposerControlState.sendAccessibilityLabel(for: detail, asOf: after) == "Send")
 
-        // Console queues a turn with images behind the running one, so the
-        // picker stays open mid-turn and the send goes out as `queue`.
+        // Console takes images with steer and queue too.
         let consoleData = try addingSessionStateFacts(
             makeSessionStateFacts(
                 activity: "executing",
@@ -1700,13 +1701,10 @@ struct SessionModelsTests {
             to: json
         )
         var console = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: consoleData)
-        // Projected mode alone is not enough: the server queues images only
-        // for Console-origin sessions.
-        #expect(!SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
         console.originKind = "console"
-        #expect(SessionComposerControlState.attachmentInputEnabled(for: console, asOf: before))
-        #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "steer") == "queue")
-        #expect(SessionComposerControlState.attachmentIntent(for: console, requested: "auto") == "auto")
+        #expect(console.attachImagesEnabled)
+        #expect(SessionComposerControlState.primaryIntent(for: console, asOf: before) == "steer")
+        #expect(SessionComposerControlState.showsSecondaryQueueAction(for: console, asOf: before))
     }
 
     @Test

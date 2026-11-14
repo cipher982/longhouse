@@ -19,22 +19,6 @@ enum SessionComposerControlState {
         return "auto"
     }
 
-    /// Images ride a new turn. Console queues that turn behind a running one,
-    /// so attaching stays open mid-turn there; elsewhere only a steer or a
-    /// Helm queue is in reach, and neither carries attachments.
-    static func attachmentInputEnabled(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
-        detail.attachImagesEnabled
-            && (primaryIntent(for: detail, asOf: now) == "auto" || detail.originKind == "console")
-    }
-
-    /// The intent a send with images uses: `auto` between turns, `queue`
-    /// behind a running Console turn (a steer cannot carry images), or nil
-    /// when this session cannot take images right now.
-    static func attachmentIntent(for detail: SessionDetail, requested: String) -> String? {
-        if requested == "auto" { return "auto" }
-        return detail.originKind == "console" ? "queue" : nil
-    }
-
     static func showsSecondaryQueueAction(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
         detail.isSessionExecuting && detail.stateFacts.activityEvidenceIsLive(asOf: now)
             && detail.canSteerActiveTurn && detail.canQueueNextInput
@@ -47,9 +31,9 @@ enum SessionComposerControlState {
     static func sendAccessibilityLabel(for detail: SessionDetail, asOf now: Date = Date()) -> String {
         guard detail.canSendLive else { return detail.controlHealthMessage ?? "Send unavailable" }
         switch primaryIntent(for: detail, asOf: now) {
-        case "steer": return "Send update mid-turn"
-        case "queue": return "Queue for next turn"
-        default: return "Send reply"
+        case "steer": return "Send to this turn"
+        case "queue": return "Queue"
+        default: return "Send"
         }
     }
 
@@ -118,7 +102,6 @@ enum SessionComposerControlState {
 /// What the composer hands its action menu. The menu owns the attachment,
 /// model and Stop entry points, but the composer owns the gates behind them.
 struct SessionComposerMenuContext {
-    let attachmentInputEnabled: Bool
     let model: String?
     let onModelTap: (() -> Void)?
     let stopLabel: String?
@@ -132,7 +115,6 @@ struct SessionComposerMenuContext {
 struct SessionComposerActionMenu: View {
     let detail: SessionDetail
     let attachmentSlotsLeft: Int
-    let attachmentInputEnabled: Bool
     let isProcessing: Bool
     let isSending: Bool
     let onAttach: () -> Void
@@ -309,7 +291,6 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     }
 
     var body: some View {
-        let attachmentInputEnabled = SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: evidenceNow)
         let stopLabel = SessionComposerControlState.stopActionLabel(for: detail)
         let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachmentIsEmpty
         let inputRowVisible = detail.activePauseRequest == nil || focused || !text.isEmpty || !attachmentIsEmpty
@@ -350,12 +331,6 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
 
             if detail.attachImagesEnabled && (detail.activePauseRequest == nil || !attachmentIsEmpty) {
                 attachmentTray
-                if !attachmentIsEmpty && !attachmentInputEnabled {
-                    Text("Images can be sent when this turn ends.")
-                        .font(.caption)
-                        .foregroundStyle(Ember.textSecondary)
-                        .accessibilityIdentifier("session-chat-attach-held-hint")
-                }
             }
 
             if inputRowVisible {
@@ -365,9 +340,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     && !isSending
                     && !attachmentIsProcessing
                     && !isLoadingPickerItems
-                    && !(attachmentIsEmpty == false && !attachmentInputEnabled)
                 let menu = SessionComposerMenuContext(
-                    attachmentInputEnabled: attachmentInputEnabled,
                     model: model,
                     onModelTap: detail.stateFacts.mode == "console" ? onModelTap : nil,
                     stopLabel: stopLabel,
@@ -500,6 +473,19 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     .strokeBorder(Ember.hairline, lineWidth: 0.75)
             }
             .accessibilityIdentifier("session-chat-composer")
+            // Hardware keyboard only: Return sends (Shift-Return keeps the
+            // newline), Tab queues behind a running turn.
+            .onKeyPress(keys: [.return], phases: .down) { press in
+                guard !press.modifiers.contains(.shift), detail.canSendLive, detail.activePauseRequest == nil else { return .ignored }
+                Task { await onSend(nil) }
+                return .handled
+            }
+            .onKeyPress(keys: [.tab], phases: .down) { _ in
+                guard detail.activePauseRequest == nil,
+                      SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) else { return .ignored }
+                Task { await onSend("queue") }
+                return .handled
+            }
     }
 
     @ViewBuilder
@@ -637,16 +623,13 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             : "Answer the pending request before sending")
         .accessibilityIdentifier("session-chat-send")
         .contextMenu {
-            if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) && attachmentIsEmpty {
-                Button {
-                    Task { await onSend("steer") }
-                } label: {
-                    Label("Send update now", systemImage: "arrow.up.circle")
-                }
+            // Tap already steers; long-press offers the other choice.
+            if detail.activePauseRequest == nil
+                && SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) {
                 Button {
                     Task { await onSend("queue") }
                 } label: {
-                    Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
+                    Label("Queue after this turn", systemImage: "clock.arrow.circlepath")
                 }
             }
         }

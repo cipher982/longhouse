@@ -86,7 +86,7 @@ final class LiveConsoleControlUITests: XCTestCase {
             composer: composer,
             send: send,
             text: "Reply with exactly \(markers.idle) and nothing else.",
-            expectedLabel: "Send reply"
+            expectedLabel: "Send"
         )
         try await waitForEvents(
             configuration,
@@ -114,7 +114,7 @@ final class LiveConsoleControlUITests: XCTestCase {
             composer: composer,
             send: send,
             text: ensureMarker(thinkPrompt, markers.think),
-            expectedLabel: "Send reply"
+            expectedLabel: "Send"
         )
         let thinkingObservation = try await waitForActivityState(
             configuration,
@@ -122,7 +122,7 @@ final class LiveConsoleControlUITests: XCTestCase {
             timeout: Self.timeout,
             description: "served OMP Console thinking activity before queueing"
         )
-        try waitForSendLabel(send, equals: "Send update mid-turn", timeout: Self.uiTimeout)
+        try waitForSendLabel(send, equals: "Send to this turn", timeout: Self.uiTimeout)
 
         let queueRequestID = "ios-live-machine-\(UUID().uuidString)"
         let queuedResponse = try await postMachineInput(
@@ -146,7 +146,7 @@ final class LiveConsoleControlUITests: XCTestCase {
             composer: composer,
             send: send,
             text: "Stop waiting at the next safe boundary and reply with exactly \(markers.steer) and nothing else.",
-            expectedLabel: "Send update mid-turn"
+            expectedLabel: "Send to this turn"
         )
         try await waitForEvents(
             configuration,
@@ -176,7 +176,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         )
         attachScreenshot(app, name: "live-omp-steer-and-queued")
 
-        try waitForSendLabel(send, equals: "Send reply", timeout: Self.uiTimeout)
+        try waitForSendLabel(send, equals: "Send", timeout: Self.uiTimeout)
         let actions = app.buttons["session-chat-compose-actions"]
         XCTAssertTrue(actions.waitForExistence(timeout: 10), "composer action menu did not return after the turn")
         actions.tap()

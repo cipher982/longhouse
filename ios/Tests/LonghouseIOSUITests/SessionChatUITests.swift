@@ -267,6 +267,21 @@ final class SessionChatUITests: XCTestCase {
         add(frame)
     }
 
+    func testRunningTurnComposerShowsSendToThisTurn() {
+        let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
+        let composer = app.textFields["session-chat-composer"]
+        let sendButton = app.buttons["session-chat-send"]
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertEqual(sendButton.label, "Send to this turn")
+        focusComposer(composer, in: app)
+        composer.typeText("Also check the other hose.")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "running-turn-composer"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
         let composer = app.textFields["session-chat-composer"]
@@ -275,7 +290,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
-        XCTAssertEqual(sendButton.label, "Send update mid-turn")
+        XCTAssertEqual(sendButton.label, "Send to this turn")
         focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()

@@ -327,7 +327,6 @@ private struct SessionScreenPreview: View {
                                     SessionComposerActionMenu(
                                         detail: detail,
                                         attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
-                                        attachmentInputEnabled: menu.attachmentInputEnabled,
                                         isProcessing: false,
                                         isSending: isSending,
                                         onAttach: {},

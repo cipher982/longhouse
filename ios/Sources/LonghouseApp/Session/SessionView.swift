@@ -703,7 +703,6 @@ struct SessionView: View {
                 SessionComposerActionMenu(
                     detail: detail,
                     attachmentSlotsLeft: attachmentStore.slotsLeft,
-                    attachmentInputEnabled: menu.attachmentInputEnabled,
                     isProcessing: attachmentStore.isProcessing || isLoadingPickerItems,
                     isSending: viewModel.isSending,
                     onAttach: { isShowingPhotoPicker = true },
@@ -895,16 +894,7 @@ struct SessionView: View {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
-        var requestedIntent = intent ?? SessionComposerControlState.primaryIntent(for: detail)
-        if !pendingAttachments.isEmpty {
-            guard let attachmentIntent = SessionComposerControlState.attachmentIntent(
-                for: detail, requested: requestedIntent
-            ) else {
-                attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
-                return
-            }
-            requestedIntent = attachmentIntent
-        }
+        let requestedIntent = intent ?? SessionComposerControlState.primaryIntent(for: detail)
         composerText = ""
         composerFocused = false
         // Snapshot+clear before send so a slow request doesn't keep the
