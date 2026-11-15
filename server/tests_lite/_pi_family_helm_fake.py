@@ -940,7 +940,9 @@ class FakeRuntimeHost:
                 "run": {"id": owner["run_id"], "lifecycle": "stopped" if stopped else "running"},
                 "activity": {"state": "idle" if stopped else "unknown"},
             }
-            return 200, {"session_id": session_id, "served_path": "canonical_session_detail", "shadow": shadow}
+            # The label the host judges a steer by: a running fake provider is serving a turn (zerg.routers.session_chat).
+            explain = {"presentation_keys": {"primary": "idle" if stopped else "executing"}}
+            return 200, {"session_id": session_id, "served_path": "canonical_session_detail", "shadow": shadow, "explain": explain}
         if action == "timeline-visibility":
             session["hidden"] = body.get("hidden") is True and not self.never_hides
             return 200, {"hidden": session["hidden"]}

@@ -377,6 +377,42 @@ def _runtime_snapshot(api_url: str, token: str, session_id: str) -> dict[str, An
     }
 
 
+_SERVED_TURN_KEYS = frozenset({"thinking", "executing"})
+
+
+def _wait_served_turn(api_url: str, token: str, session_id: str, *, timeout: float = 20.0, interval: float = 0.1) -> dict[str, Any]:
+    """Wait until the Runtime Host serves the session as thinking or executing, the states a steer is accepted in.
+
+    The host refuses a steer until its own served state shows a running turn
+    (409 ``steer_requires_active_turn``), and that state trails the Machine
+    Agent's local phase by the time it takes the phase to be posted and
+    reduced (about half a second, measured on the bench). A scripted model
+    reaches its first tool call inside that gap, so a steer sent the moment the
+    tool call is in the session file lands before the host has seen the turn.
+    The wait is on the served state the host will judge the steer by, never a
+    delay. It records what it saw and returns at its deadline rather than
+    raising: a turn the host never serves as running is the steer's own 409.
+    """
+
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    key: str | None = None
+    while True:
+        try:
+            diagnostic = _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/state-diagnostics")
+            key = ((diagnostic.get("explain") or {}).get("presentation_keys") or {}).get("primary")
+        except RuntimeError as exc:
+            if not _is_transient_runtime_read_error(exc):
+                raise
+        if key in _SERVED_TURN_KEYS or time.monotonic() >= deadline:
+            return {
+                "served_primary_key": key,
+                "served_as_running": key in _SERVED_TURN_KEYS,
+                "waited_s": round(time.monotonic() - started, 3),
+            }
+        time.sleep(interval)
+
+
 def _nested_values(value: object, keys: set[str]) -> list[str]:
     values: list[str] = []
     if isinstance(value, dict):
@@ -2790,6 +2826,9 @@ class Lifecycle:
         boundary_wait = _wait_task_tool_call_boundary if self.scripted_model else _wait_task_tool_boundary
         self.observation[f"{name}_tool_boundary"] = boundary_wait(self.session_file, task)
         prompt = self.prompt("steer", marker)
+        if not local:
+            # A remote steer is judged by the host's served state, which trails the local phase: steer once it shows the turn.
+            self.observation[f"{name}_served_turn"] = _wait_served_turn(self.api_url, self.token, self.session_id)
         command = self.control("steer", prompt, local=local)
         row, evidence = self.reply(marker, offset, timeout=150)
         settled = self.settle()
