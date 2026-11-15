@@ -501,6 +501,11 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             cursor.execute("PRAGMA wal_autocheckpoint=0")
+            # wal_autocheckpoint is off (catalogd checkpoints on its own loop),
+            # so nothing else shrinks the file: after a checkpoint resets the
+            # log, SQLite truncates the WAL back to this size without taking a
+            # blocking TRUNCATE checkpoint under write load.
+            cursor.execute("PRAGMA journal_size_limit=134217728")
             if cache_size_kib.strip():
                 # Negative cache_size is KiB rather than pages.
                 cursor.execute(f"PRAGMA cache_size=-{int(cache_size_kib)}")

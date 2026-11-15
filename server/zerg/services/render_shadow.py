@@ -26,6 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.store_mixins.render_shadow import REVISION_BOUND_OUTCOMES
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
@@ -49,6 +50,38 @@ SWEEP_PACE_SECONDS = 2.0
 # it up again, so one bad session cannot hold the head of the queue.
 SESSION_BACKOFF_SECONDS = 30 * 60.0
 SWEEP_BATCH = 4
+# The sweep is derived work: it runs only while source and control writes
+# (ingest, heartbeats, presence, input receipts) have room in the catalog
+# writer queue. A primary queue deeper than this many writes means the writer
+# is busy with something that matters more, so the sweep waits.
+WRITER_HEADROOM_MAX_PRIMARY_DEPTH = 8
+HEADROOM_WAIT_SECONDS = 5.0
+HEADROOM_MAX_WAIT_SECONDS = 120.0
+
+
+async def wait_for_writer_headroom(catalog: CatalogClient, *, max_wait_seconds: float = HEADROOM_MAX_WAIT_SECONDS) -> bool:
+    """Wait, bounded, until the catalog writer's primary queue is nearly empty.
+
+    Returns False when it stayed busy for the whole bound, so the caller skips
+    its derived work this time instead of adding load to a saturated writer.
+    """
+    deadline = time.monotonic() + max_wait_seconds
+    delay = 1.0
+    while True:
+        try:
+            admission = (await catalog.call("ping.v2", {})).get("writer_admission") or {}
+            primary = int(admission.get("depth", 0)) - int(admission.get("derived_depth", 0))
+            if primary <= WRITER_HEADROOM_MAX_PRIMARY_DEPTH:
+                return True
+        except CatalogRemoteError:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(delay, remaining))
+        delay = min(delay * 2, HEADROOM_WAIT_SECONDS)
+
+
 RENDER_FIELDS = (
     "item",
     "event_id",
@@ -664,6 +697,9 @@ async def _sweep(
             candidates = [candidate for candidate in listed if str(candidate["session_id"]) not in backoff][:SWEEP_BATCH]
             for candidate in candidates:
                 session_id = str(candidate["session_id"])
+                if not await wait_for_writer_headroom(catalog):
+                    logger.info("render shadow paused: catalog writer queue is busy with source and control writes")
+                    break
                 try:
                     results = await shadow_session(
                         catalog=catalog,
@@ -684,6 +720,19 @@ async def _sweep(
                         await catalog.call("render.shadow.record.v2", {"results": results[chunk : chunk + RECORD_CHUNK]})
                 except (asyncio.CancelledError, NormalizerUnavailable):
                     raise
+                except CatalogRemoteError as exc:
+                    if exc.code in {"resource_exhausted", "admission_closed", "deadline_exceeded"}:
+                        # Derived work yields to a full or fenced writer; it is
+                        # not this session's fault, so no long backoff.
+                        wait = max(SWEEP_PACE_SECONDS, min((exc.retry_after_ms or 0) / 1000.0, 30.0))
+                        logger.info(
+                            "render shadow session=%s yielded to the catalog writer (%s); retrying in %.0fs", session_id, exc.code, wait
+                        )
+                        await asyncio.sleep(wait)
+                        break
+                    logger.exception("Render shadow session=%s failed; retrying after backoff", session_id)
+                    backoff[session_id] = time.monotonic() + SESSION_BACKOFF_SECONDS
+                    continue
                 except Exception:  # noqa: BLE001 - this session waits; the rest of the batch goes on
                     logger.exception("Render shadow session=%s failed; retrying after backoff", session_id)
                     backoff[session_id] = time.monotonic() + SESSION_BACKOFF_SECONDS

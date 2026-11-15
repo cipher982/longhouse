@@ -112,6 +112,12 @@ async def host_rebuild_session(
     from zerg.services.render_shadow import _first_difference
     from zerg.services.render_shadow import _render_row
     from zerg.services.render_shadow import _sort_key
+    from zerg.services.render_shadow import wait_for_writer_headroom
+
+    # Derived work never competes with source work: a committing rebuild waits,
+    # bounded, for the catalog writer to have room for heartbeats and ingest.
+    if commit and not await wait_for_writer_headroom(catalog):
+        raise HostRenderSkipped("catalog writer is busy with source and control writes")
 
     inputs = await catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
     if inputs.get("found") is not True:

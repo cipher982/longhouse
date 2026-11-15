@@ -39,6 +39,9 @@ from zerg.catalogd.schema import read_deployment_activation
 from zerg.catalogd.store import SOURCE_RESUME_MAX_SOURCES
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import adopt_orphan_subagents_once
+from zerg.catalogd.writer_lanes import DERIVED
+from zerg.catalogd.writer_lanes import PRIMARY
+from zerg.catalogd.writer_lanes import WriterLanes
 from zerg.storage_v2.fields import bounded_text
 from zerg.storage_v2.fields import canonical_text
 from zerg.storage_v2.fields import parse_session_facts
@@ -59,6 +62,9 @@ CATALOG_CONTROL_READ_MAX_DEPTH = 8
 # work.
 CATALOG_WRITER_SLOW_MS_DEFAULT = 250.0
 CATALOG_WRITER_MAX_DEPTH_DEFAULT = 128
+# Derived work (render shadow records, host render commits, projector
+# bookkeeping) is admitted against this cap, never against the primary one.
+CATALOG_WRITER_DERIVED_MAX_DEPTH_DEFAULT = 8
 TITLE_HEALTH_CACHE_SECONDS = 10.0
 
 # Rolling window per label. Bounded so a long-lived daemon cannot grow memory,
@@ -92,6 +98,8 @@ class CatalogWriterStats:
         self._exec_total_ms: dict[str, float] = {}
         self._recent_exec_ms: deque[float] = deque(maxlen=_WRITER_RECENT_EXEC_WINDOW)
         self._depth = 0
+        self._derived_depth = 0
+        self._derived_rejected = 0
         self._peak_depth = 0
         self._active_label: str | None = None
         self._active_since: float | None = None
@@ -100,12 +108,32 @@ class CatalogWriterStats:
         self._accepting = os.getenv("LONGHOUSE_DEPLOYMENT_PENDING", "").strip() != "1"
         self._lock = threading.Lock()
 
-    def admit(self, max_depth: int, *, allow_closed: bool = False) -> str:
-        """Atomically fence admission and account for an accepted writer."""
+    def admit(
+        self,
+        max_depth: int,
+        *,
+        allow_closed: bool = False,
+        lane: str = PRIMARY,
+        derived_max_depth: int = CATALOG_WRITER_DERIVED_MAX_DEPTH_DEFAULT,
+    ) -> str:
+        """Atomically fence admission and account for an accepted writer.
+
+        Primary work is bounded by `max_depth` counting primary work only, so
+        derived work can never fill the queue a heartbeat needs. Derived work
+        has its own small cap and is also refused while the primary queue is
+        half full: it backs off whenever source or control writes are waiting.
+        """
         with self._lock:
             if not self._accepting and not allow_closed:
                 return "closed"
-            if self._depth >= max_depth:
+            primary_depth = self._depth - self._derived_depth
+            if lane == DERIVED:
+                if self._derived_depth >= derived_max_depth or primary_depth * 2 >= max_depth:
+                    self._rejected_busy += 1
+                    self._derived_rejected += 1
+                    return "busy"
+                self._derived_depth += 1
+            elif primary_depth >= max_depth:
                 self._rejected_busy += 1
                 return "busy"
             self._depth += 1
@@ -147,6 +175,8 @@ class CatalogWriterStats:
         active_age_ms = round((time.perf_counter() - self._active_since) * 1000.0, 2) if self._active_since else 0.0
         return {
             "depth": self._depth,
+            "derived_depth": self._derived_depth,
+            "derived_rejected": self._derived_rejected,
             "peak_depth": self._peak_depth,
             "active_label": self._active_label,
             "active_age_ms": active_age_ms,
@@ -166,9 +196,16 @@ class CatalogWriterStats:
             self._depth += 1
             self._peak_depth = max(self._peak_depth, self._depth)
 
-    def record_dequeue(self) -> None:
+    def record_dequeue(self, lane: str = PRIMARY) -> None:
         with self._lock:
             self._depth = max(0, self._depth - 1)
+            if lane == DERIVED:
+                self._derived_depth = max(0, self._derived_depth - 1)
+
+    @property
+    def primary_depth(self) -> int:
+        with self._lock:
+            return self._depth - self._derived_depth
 
     def record_rejected_busy(self) -> None:
         with self._lock:
@@ -266,7 +303,7 @@ class CatalogDaemon:
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._runtime_boot_id = runtime_boot_id
         self._wait_for_handoff = wait_for_handoff
-        self._executor: ThreadPoolExecutor | None = None
+        self._executor: WriterLanes | None = None
         self._read_executor: ThreadPoolExecutor | None = None
         self._control_read_executor: ThreadPoolExecutor | None = None
         self._projector_read_executor: ThreadPoolExecutor | None = None
@@ -280,6 +317,10 @@ class CatalogDaemon:
         self._read_max_depth = CATALOG_INTERACTIVE_READ_WORKERS
         self._control_read_depth = 0
         self._writer_stats = CatalogWriterStats()
+        self._writer_derived_max_depth = max(
+            1,
+            int(os.getenv("CATALOGD_WRITER_DERIVED_MAX_DEPTH", str(CATALOG_WRITER_DERIVED_MAX_DEPTH_DEFAULT))),
+        )
         self._writer_slow_ms = float(os.getenv("CATALOGD_WRITER_SLOW_MS", str(CATALOG_WRITER_SLOW_MS_DEFAULT)))
         self._writer_max_depth = max(
             1,
@@ -324,7 +365,7 @@ class CatalogDaemon:
                 logger.info("catalogd adopted %d orphan subagent(s) whose parent now resolves", adopted)
 
             stage_started = time.perf_counter()
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
+            self._executor = WriterLanes()
             self._read_executor = ThreadPoolExecutor(
                 max_workers=CATALOG_INTERACTIVE_READ_WORKERS,
                 thread_name_prefix="catalogd-read",
@@ -1314,6 +1355,8 @@ class CatalogDaemon:
                 "ready": True,
                 "writer_admission": {
                     "depth": writer["depth"],
+                    "derived_depth": writer["derived_depth"],
+                    "derived_rejected": writer["derived_rejected"],
                     "peak_depth": writer["peak_depth"],
                     "max_depth": self._writer_max_depth,
                     "accepting": writer["accepting"],
@@ -2597,7 +2640,7 @@ class CatalogDaemon:
         ):
             return self._error(request, "invalid_request", "render.shadow.record.v2 results are invalid")
         assert self._store is not None
-        result = await self._run_store(self._store.record_render_shadow, results=tuple(results))
+        result = await self._run_store(self._store.record_render_shadow, lane=DERIVED, results=tuple(results))
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _commit_host_render_objects(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2630,6 +2673,7 @@ class CatalogDaemon:
         assert self._store is not None
         result = await self._run_store(
             self._store.commit_host_render_objects,
+            lane=DERIVED,
             session_id=session_id,
             generation_id=generation_id,
             parser_revision=parser_revision,
@@ -4129,7 +4173,7 @@ class CatalogDaemon:
         if type(params["limit"]) is not int or not 1 <= params["limit"] <= 100:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
         assert self._store is not None
-        result = await self._run_store(self._store.claim_projector_lag, **params)
+        result = await self._run_store(self._store.claim_projector_lag, lane=DERIVED, **params)
         if result.get("claim_conflict") is True:
             return self._error(request, "conflict", "projector claim token conflicts with catalog state")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -4143,7 +4187,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.complete_projector_claim, **params)
+        result = await self._run_store(self._store.complete_projector_claim, lane=DERIVED, **params)
         if result.get("claim_conflict") is True:
             return self._error(request, "conflict", "projector completion does not match the active claim")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -4162,7 +4206,7 @@ class CatalogDaemon:
         if params["retry_at"] < params["failed_at"]:
             return self._error(request, "invalid_request", "retry_at must not precede failed_at")
         assert self._store is not None
-        result = await self._run_store(self._store.fail_projector_claim, **params)
+        result = await self._run_store(self._store.fail_projector_claim, lane=DERIVED, **params)
         if result.get("claim_conflict") is True:
             return self._error(request, "conflict", "projector failure does not match the active claim")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -4296,15 +4340,19 @@ class CatalogDaemon:
             }
         }
 
-    async def _run_store(self, operation, *args, allow_closed: bool = False, **kwargs):
+    async def _run_store(self, operation, *args, allow_closed: bool = False, lane: str = PRIMARY, **kwargs):
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
-        admission = self._writer_stats.admit(self._writer_max_depth, allow_closed=allow_closed)
+        admission = self._writer_stats.admit(
+            self._writer_max_depth,
+            allow_closed=allow_closed,
+            lane=lane,
+            derived_max_depth=self._writer_derived_max_depth,
+        )
         if admission == "closed":
             raise CatalogWriterClosed("catalog writer admission is closed")
         if admission == "busy":
             raise CatalogWriterBusy("catalog writer queue is full")
-        loop = asyncio.get_running_loop()
         # Everything serialized here shares one thread, so a caller's latency is
         # mostly other callers' execution. Recording only total time would keep
         # the interesting half invisible: queue wait is what turns a healthy
@@ -4315,12 +4363,14 @@ class CatalogDaemon:
         enqueued_at = time.perf_counter()
         deadline_ns = _REQUEST_DEADLINE_NS.get()
         try:
-            result = await loop.run_in_executor(
-                self._executor,
-                lambda: self._run_store_timed(label, enqueued_at, deadline_ns, operation, args, kwargs),
+            result = await asyncio.wrap_future(
+                self._executor.submit(
+                    lane,
+                    lambda: self._run_store_timed(label, enqueued_at, deadline_ns, operation, args, kwargs),
+                )
             )
         finally:
-            self._writer_stats.record_dequeue()
+            self._writer_stats.record_dequeue(lane)
         return result
 
     def _run_store_timed(self, label, enqueued_at, deadline_ns, operation, args, kwargs):
@@ -4504,7 +4554,8 @@ class CatalogDaemon:
         an ordinary "not now", not a failure.
         """
 
-        if self._writer_stats.depth > 0:
+        # Derived work never holds this off: only source and control writes do.
+        if self._writer_stats.primary_depth > 0:
             return
         wal_path = self.database_path.with_name(self.database_path.name + "-wal")
         try:
@@ -4583,6 +4634,13 @@ class CatalogDaemon:
             except CatalogWriterBusy:
                 await asyncio.sleep(0.05)
 
+    async def _run_maintenance_write(self, operation, *args, **kwargs):
+        """A periodic write that yields to a busy queue instead of failing the tick."""
+        try:
+            return await self._run_store(operation, *args, **kwargs)
+        except (CatalogWriterBusy, CatalogWriterClosed):
+            return None
+
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None
         while True:
@@ -4634,17 +4692,20 @@ class CatalogDaemon:
                 # Deadline cleanup is catalog maintenance, not a side effect
                 # of interactive reads. This yields one canonical terminal
                 # fact without turning each timeline poll into a global write.
-                await self._run_store(self._store.expire_due_interactions, now=datetime.now(UTC))
+                # Each step is skipped, not fatal, when the writer is busy: a
+                # full queue is the reason these are worth skipping, and the
+                # next tick retries them.
+                await self._run_maintenance_write(self._store.expire_due_interactions, now=datetime.now(UTC))
                 # Same ownership rule as interactions: live control rows live in
-                # catalogd, so lease expiry must run here — not via the API's
+                # catalogd, so lease expiry must run here, not via the API's
                 # unconfigured live WriteSerializer.
-                await self._run_store(self._store.reap_stale_control_operations, now=datetime.now(UTC))
+                await self._run_maintenance_write(self._store.reap_stale_control_operations, now=datetime.now(UTC))
                 # Heartbeat retention lives here, not in the heartbeat transaction.
                 # A backlog (first run after the delete moved out) drains in bounded
                 # batches so no single hold exceeds one batch.
                 for _ in range(_HEARTBEAT_PRUNE_MAX_BATCHES):
-                    pruned = await self._run_store(self._store.prune_heartbeat_stamps)
-                    if not pruned["backlog"]:
+                    pruned = await self._run_maintenance_write(self._store.prune_heartbeat_stamps)
+                    if pruned is None or not pruned["backlog"]:
                         break
                     await asyncio.sleep(0)
             except asyncio.CancelledError:

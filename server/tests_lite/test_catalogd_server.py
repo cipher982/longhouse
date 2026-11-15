@@ -67,6 +67,8 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
             "ready": True,
             "writer_admission": {
                 "depth": 0,
+                "derived_depth": 0,
+                "derived_rejected": 0,
                 "max_depth": 128,
                 "accepting": True,
                 "peak_depth": 1,

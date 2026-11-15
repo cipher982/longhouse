@@ -302,6 +302,8 @@ async def test_a_session_whose_catalog_call_fails_waits_and_the_batch_goes_on(mo
 
     class _Catalog:
         async def call(self, method, params):
+            if method == "ping.v2":
+                return {"writer_admission": {"depth": 0, "derived_depth": 0}}
             calls.append((method, params))
             if method == "render.shadow.candidates.v2":
                 if sum(1 for name, _ in calls if name == method) > 2:
