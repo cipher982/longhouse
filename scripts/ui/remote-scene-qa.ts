@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import "../playwright-store-auto.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";

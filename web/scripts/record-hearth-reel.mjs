@@ -20,6 +20,7 @@
  * Needs ffmpeg on PATH.
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";

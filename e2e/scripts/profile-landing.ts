@@ -16,6 +16,7 @@
  *   --variants=<list>  Comma-separated variants to test (default: none,particles,hero,all)
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium, type CDPSession, type Browser, type Page } from "playwright";
 import * as fs from "fs";
 import * as path from "path";

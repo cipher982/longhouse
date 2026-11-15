@@ -5,6 +5,7 @@
  * Tests disabling specific CSS properties that are known GPU-heavy.
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium, type Page } from "playwright";
 import { execSync } from "child_process";
 

@@ -7,6 +7,7 @@
  * Usage:
  *   bunx tsx e2e/scripts/verify-installer-browser.ts --url http://127.0.0.1:PORT
  */
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "playwright";
 
 function parseArgs(): { url: string } {

@@ -364,14 +364,15 @@ def preflight(args: argparse.Namespace, token: str, home: Path) -> dict:
     with urllib.request.urlopen(args.browser_url + "/", timeout=20) as response:
         frontend_html = response.read()
     frontend_builds = re.findall(rb"/config\.js\?v=([^\"'\s<>]+)", frontend_html)
-    browser_probe = """const { chromium } = require('@playwright/test');
+    browser_probe = """await import(require('node:path').resolve(process.cwd(), '../scripts/playwright-store-auto.mjs'));
+const { chromium } = require('@playwright/test');
 const fs = require('node:fs');
 const path = chromium.executablePath();
-if (!fs.existsSync(path)) throw new Error('Playwright Chromium unavailable: run bunx playwright install chromium');
+if (!fs.existsSync(path)) throw new Error('Playwright Chromium unavailable: run make ensure-playwright-browser');
 const browser = await chromium.launch();
 console.log(JSON.stringify({path, version: browser.version()}));
 await browser.close();"""
-    chromium = json.loads(capture(["bun", "-e", browser_probe], cwd=ROOT / "e2e", timeout=45))
+    chromium = json.loads(capture(["bun", "-e", browser_probe], cwd=ROOT / "e2e", timeout=1000))
     provenance = release_provenance(server.get("build"))
     if args.require_released_build and not provenance["released"]:
         unreleased = ", ".join(

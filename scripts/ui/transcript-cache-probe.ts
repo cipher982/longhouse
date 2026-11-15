@@ -11,6 +11,7 @@
  *   bunx tsx scripts/ui/transcript-cache-probe.ts [--hold=3000] [--output=/tmp/agents/transcript-cache-probe]
  *   FRONTEND_URL=http://localhost:47231 (default) picks the Vite port.
  */
+import "../playwright-store-auto.mjs";
 import { chromium, type BrowserContext } from "playwright";
 import { mkdirSync } from "fs";
 import path from "path";

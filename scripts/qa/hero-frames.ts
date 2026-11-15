@@ -22,6 +22,7 @@
  * Starts Vite on :47210 when nothing serves FRONTEND_URL and stops it after.
  */
 
+import "../playwright-store-auto.mjs";
 import { chromium } from "playwright";
 import { spawn, execFileSync } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";

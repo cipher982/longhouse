@@ -1,3 +1,4 @@
+import "../scripts/playwright-store-auto.mjs";
 import path from "path";
 import { devices } from "@playwright/test";
 import { ensureTestRuntime, stripAmbientSecrets } from "./test-runtime.js";

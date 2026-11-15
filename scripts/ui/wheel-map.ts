@@ -12,6 +12,7 @@
  *
  * Used via `make ui-capture PAGE=<page> SCENE=<scene> WHEEL_MAP=1`.
  */
+import "../playwright-store-auto.mjs";
 import type { Page } from "playwright";
 import { writeFileSync } from "fs";
 import path from "path";

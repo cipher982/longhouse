@@ -4,6 +4,7 @@
  * make capture-live-status-frames CAPTURE=/private/session.json
  * Output is private (real transcript screenshots/video); never commit it.
  */
+import "../playwright-store-auto.mjs";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";

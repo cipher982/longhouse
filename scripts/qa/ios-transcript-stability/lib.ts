@@ -2,6 +2,7 @@
 // ios/Resources/Transcript/transcript.html in Playwright WebKit at phone size
 // (the engine WKWebView uses), plays renderer calls the way the app makes
 // them, and samples where the reader's anchor row sits on every frame.
+import "../../playwright-store-auto-webkit.mjs";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { webkit, type Browser, type BrowserContext, type Page } from "playwright";

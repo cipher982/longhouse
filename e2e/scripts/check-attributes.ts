@@ -3,6 +3,7 @@
  * Check data attributes on the page
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "playwright";
 
 async function main() {

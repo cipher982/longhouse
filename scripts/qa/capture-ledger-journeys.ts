@@ -4,6 +4,7 @@
  * This journey proves runtime invalidation/recovery, not transcript replay.
  * No API request can reach the linked Runtime Host. Keep output private.
  */
+import "../playwright-store-auto.mjs";
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";

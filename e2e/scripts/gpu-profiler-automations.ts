@@ -16,6 +16,7 @@
  *   --warmup=<sec>     Warmup time before measuring (default: 3)
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium, type Browser } from "playwright";
 import { execSync } from "child_process";
 import * as fs from "fs";

@@ -1,3 +1,4 @@
+import "../scripts/playwright-store-auto.mjs";
 import { devices } from "@playwright/test";
 
 const frontendBaseUrl =

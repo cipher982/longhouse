@@ -1,3 +1,6 @@
+// First, so the browser store path is fixed before ensureTestRuntime() below
+// replaces HOME and XDG_CACHE_HOME with scratch directories.
+import "../scripts/playwright-store-auto.mjs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import crypto from "crypto";

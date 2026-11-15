@@ -8,6 +8,7 @@
  *   bun run scripts/gpu-diagnose.ts [--url=http://localhost:30080]
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium, type Browser, type Page } from "playwright";
 import { execSync } from "child_process";
 

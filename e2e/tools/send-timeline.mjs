@@ -7,6 +7,7 @@
 //
 //   node e2e/tools/send-timeline.mjs --web http://127.0.0.1:47201 \
 //     --api http://127.0.0.1:47311 --session <id> --scenario single|midturn
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "@playwright/test";
 
 const args = Object.fromEntries(

@@ -97,6 +97,27 @@ Truth workflow.
   issue. Core E2E does not gate a runtime deploy, but a red run still owes that
   decision.
 
+## Playwright browsers
+
+Longhouse keeps its own browser store (`~/Library/Caches/longhouse/playwright`,
+shared by every worktree), not Playwright's global `ms-playwright` cache that other
+repos on the machine also write to. `scripts/playwright-store.mjs` owns it: a ready
+store is two `stat` calls, and a missing browser installs once under a heartbeat
+lock with a progress watchdog and a private temp dir. Never run `bunx playwright
+install` here: it takes the shared global lock, installs under whatever Node is
+first on PATH, and has hung on this Mac for days. Playwright 1.57 never finishes
+extracting under Node 26 (the download hits 100%, then nothing), so the store runs
+installs under Bun.
+
+- Any script or config that imports Playwright starts with
+  `import "<rel>/scripts/playwright-store-auto.mjs"` (`-webkit` for WebKit). It
+  pins the store path before `HOME` can be scratched and self-heals a missing
+  browser. `scripts/tests/playwright-store.test.mjs` fails the build if one is missing.
+- `make ensure-playwright-browser` is the manual form; `node scripts/playwright-store.mjs
+  status` reports without installing. A stalled install is killed after 180s without
+  progress and says why. Inside the test container the image's `/opt/playwright`
+  wins and nothing is downloaded.
+
 ## iOS lanes
 
 Agents own iOS build, test and evaluation; Xcode.app is never in the loop. Local

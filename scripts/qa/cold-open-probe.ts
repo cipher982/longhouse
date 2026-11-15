@@ -16,6 +16,7 @@
  *     [--workspace-ms=900] [--rtt-ms=120] [--down-mbps=20] [--settle-ms=1200]
  *     [--no-build] [--out=/tmp/agents/cold-open/<label>.json]
  */
+import "../playwright-store-auto.mjs";
 import { chromium, type BrowserContext, type Page, type Route } from "playwright";
 import { execSync, spawn } from "child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";

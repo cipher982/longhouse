@@ -9,6 +9,7 @@
  *
  * Requires playwright chromium (already used by the marketing capture flow).
  */
+import "../playwright-store-auto.mjs";
 import { chromium } from "playwright";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

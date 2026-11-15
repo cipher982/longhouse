@@ -1,3 +1,4 @@
+import "../../playwright-store-auto.mjs";
 import { chromium } from "playwright";
 import { promises as fs } from "fs";
 

@@ -15,6 +15,7 @@
  * Run by hand: a throttled profile of a real payload is a measurement to read,
  * not a pass/fail gate, and CI has no real timeline to feed it.
  */
+import "../playwright-store-auto.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { join, extname } from "node:path";

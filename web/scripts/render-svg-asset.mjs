@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

@@ -28,6 +28,7 @@
  * Used by `ui-capture --sweep`, which `make ui-sweep` runs for every fixture
  * scene at desktop, wide and phone sizes.
  */
+import "../playwright-store-auto.mjs";
 import type { Page } from "playwright";
 
 export type PopoverFailure = {

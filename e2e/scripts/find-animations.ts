@@ -3,6 +3,7 @@
  * Find which DOM elements have running CSS animations
  */
 
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "playwright";
 
 async function main() {

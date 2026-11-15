@@ -8,6 +8,7 @@
  *
  *   bunx tsx scripts/qa/web-transcript-stability.ts [--only=name,name] [--out=dir]
  */
+import "../playwright-store-auto.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";

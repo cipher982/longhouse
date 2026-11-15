@@ -851,8 +851,9 @@ validate-ios-transcript: ## @internal ios/Resources/Transcript/transcript.html m
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@cd web && bun scripts/build-ios-transcript.mjs --check
 
-validate-playwright-install: ## @internal Playwright installer wrapper regression tests
+validate-playwright-install: ## @internal Playwright installer wrapper and private browser store (lock, watchdog, coverage) regression tests
 	@python3 scripts/tests/playwright-install.test.py
+	@node --test --test-force-exit scripts/tests/playwright-store.test.mjs
 
 validate-public-surface: ## @internal Guard public docs against private/local leakage
 	@python3 scripts/tests/public-surface-scan.test.py
@@ -1392,7 +1393,7 @@ ui-capture: ## Render a web page to PNG (PAGE=, SCENE=, ACTION="click:<sel>;pres
 ios-transcript-stability: ## @internal Replay content changes against the iOS transcript document in WebKit; fail when the row being read moves (ONLY=a,b DARK=1 OUT=dir)
 	@$(MAKE) --no-print-directory ensure-js-deps
 	@$(MAKE) --no-print-directory generate-ios-transcript
-	@bunx playwright install webkit >/dev/null
+	@node scripts/playwright-store.mjs ensure webkit
 	@bun scripts/qa/ios-transcript-stability.ts $(if $(ONLY),--only=$(ONLY),) $(if $(DARK),--dark,) $(if $(FILM),--film,) $(if $(OUT),--out=$(OUT),)
 
 ui-gallery: ## @internal Render every fixture page/scene at desktop, wide and phone sizes into one HTML contact sheet (ONLY=substring, JOBS=n)
@@ -1497,8 +1498,8 @@ vibetest: ## @internal LLM-powered browser QA (advisory, needs GOOGLE_API_KEY)
 ensure-js-deps: ## @internal Install JS deps if missing
 	@if [ ! -f node_modules/@playwright/test/package.json ]; then bun install --frozen-lockfile; fi
 
-ensure-playwright-browser: ## @internal Install Playwright Chromium if missing
+ensure-playwright-browser: ## @internal Make Longhouse's private Playwright Chromium available (instant when installed; see scripts/playwright-store.mjs)
 	@$(MAKE) ensure-js-deps
-	@cd e2e && bunx playwright install chromium >/dev/null
+	@node scripts/playwright-store.mjs ensure chromium
 
 endif # LONGHOUSE_TEST_DISPATCH

@@ -63,6 +63,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts --all
  */
 
+import "../playwright-store-auto.mjs";
 import { chromium, type BrowserContext, type Page, type Route } from "playwright";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";

@@ -12,6 +12,7 @@
  * `--run` executes one instruction in a real sandbox. It spends money and
  * consumes the per-visitor rate limit, so it is off by default.
  */
+import "../../scripts/playwright-store-auto.mjs";
 import { chromium } from "@playwright/test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";

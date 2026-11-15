@@ -25,6 +25,7 @@
  * Output: results.json, frames-<scenario>.json, and a PNG strip of each
  * distinct frame state under --out (default /tmp/agents/web-send-handoff/<stamp>).
  */
+import "../playwright-store-auto.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
