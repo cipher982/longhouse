@@ -571,6 +571,10 @@ export interface SessionEventBodiesResponse {
   missing: string[];
 }
 
+/** One user turn from the server's turn index (every turn, not just the loaded ones). */
+export type SessionTurn = components["schemas"]["SessionTurn"];
+export type SessionTurnIndexResponse = components["schemas"]["SessionTurnIndexResponse"];
+
 export interface AgentSessionFilters {
   project?: string;
   provider?: string;
@@ -1164,6 +1168,20 @@ export async function fetchSessionEventBodies(
   return request<SessionEventBodiesResponse>(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/event-bodies?${params.toString()}`,
     { method: "GET" },
+  );
+}
+
+/** Every user turn of a session, oldest first, without loading its transcript. */
+export async function fetchSessionTurnIndex(
+  sessionId: string,
+  options: { branch_mode?: "head" | "all" } = {},
+): Promise<SessionTurnIndexResponse> {
+  const params = new URLSearchParams();
+  if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+  const queryString = params.toString();
+  return request<SessionTurnIndexResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/turn-index${queryString ? `?${queryString}` : ""}`,
+    { method: "GET", cache: "no-store" },
   );
 }
 

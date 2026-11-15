@@ -2130,6 +2130,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/turn-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline Session Turn Index
+         * @description Every user turn of the session, oldest first, from the catalog's turn index.
+         */
+        get: operations["get_timeline_session_turn_index_timeline_sessions__session_id__turn_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/event-bodies": {
         parameters: {
             query?: never;
@@ -2908,6 +2928,26 @@ export interface paths {
          * @description Get the focused session, its thread, and the first projection page in one round trip.
          */
         get: operations["get_session_workspace_agents_sessions__session_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/turn-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agents Session Turn Index
+         * @description Every user turn of the session, oldest first, from the catalog's turn index.
+         */
+        get: operations["get_agents_session_turn_index_agents_sessions__session_id__turn_index_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9399,6 +9439,51 @@ export interface components {
             stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable") | null;
         };
         /**
+         * SessionTurn
+         * @description One user turn: a user message as the transcript shows it.
+         */
+        SessionTurn: {
+            /**
+             * Event Id
+             * @description Event id of the user message row
+             */
+            event_id: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /**
+             * Preview
+             * @description Start of the message text (up to 500 characters, raw)
+             */
+            preview?: string | null;
+        };
+        /**
+         * SessionTurnIndexResponse
+         * @description Every user turn of a session, oldest first, read without loading the transcript.
+         */
+        SessionTurnIndexResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Generation Id */
+            generation_id?: string | null;
+            /** Branch Mode */
+            branch_mode: string;
+            /** Turns */
+            turns?: components["schemas"]["SessionTurn"][];
+            /**
+             * Objects Indexed
+             * @description Render objects whose turns came from the catalog
+             */
+            objects_indexed: number;
+            /**
+             * Objects Decoded
+             * @description Render objects decoded because they are pending repair or predate the index
+             */
+            objects_decoded: number;
+        };
+        /**
          * SessionWorkspaceResponse
          * @description Response for the primary session workspace bootstrap payload.
          */
@@ -14124,6 +14209,40 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_turn_index_timeline_sessions__session_id__turn_index_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnIndexResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_event_bodies_timeline_sessions__session_id__event_bodies_get: {
         parameters: {
             query: {
@@ -15562,6 +15681,40 @@ export interface operations {
                     "application/json": components["schemas"]["SessionWorkspaceResponse"] | {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agents_session_turn_index_agents_sessions__session_id__turn_index_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnIndexResponse"];
                 };
             };
             /** @description Validation Error */

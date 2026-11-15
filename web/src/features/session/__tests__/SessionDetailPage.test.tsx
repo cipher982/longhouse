@@ -80,6 +80,14 @@ vi.mock("@/shared/api/agents", async (importOriginal) => {
     ...actual,
     createSessionResumeIntent: agentApiMocks.createSessionResumeIntent,
     respondToPauseRequest: agentApiMocks.respondToPauseRequest,
+    fetchSessionTurnIndex: vi.fn(async (sessionId: string) => ({
+      session_id: sessionId,
+      generation_id: null,
+      branch_mode: "head",
+      turns: [],
+      objects_indexed: 0,
+      objects_decoded: 0,
+    })),
   };
 });
 
@@ -317,6 +325,7 @@ function mockWorkspaceState({
       eventsLoading: false,
       eventsError: null,
       fetchPreviousPage: vi.fn(),
+      events: [],
       hasPreviousPage: false,
       isFetchingPreviousPage: false,
       abandonedEvents: 0,
@@ -1040,6 +1049,7 @@ describe("SessionDetailPage", () => {
         eventsLoading: false,
         eventsError: null,
         fetchPreviousPage: vi.fn(),
+        events: [],
         hasPreviousPage: false,
         isFetchingPreviousPage: false,
         abandonedEvents: 0,
@@ -1536,6 +1546,7 @@ describe("SessionDetailPage", () => {
         eventsLoading: false,
         eventsError: null,
         fetchPreviousPage: vi.fn(),
+        events: [],
         hasPreviousPage: false,
         isFetchingPreviousPage: false,
         abandonedEvents: 0,
@@ -1647,6 +1658,7 @@ describe("SessionDetailPage", () => {
         eventsLoading: false,
         eventsError: null,
         fetchPreviousPage: vi.fn(),
+        events: [],
         hasPreviousPage: false,
         isFetchingPreviousPage: false,
         abandonedEvents: 0,

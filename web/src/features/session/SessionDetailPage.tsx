@@ -20,6 +20,7 @@ import {
   useSearchParams,
 } from "react-router";
 import { toast } from "react-hot-toast";
+import { parseUTC } from "@/shared/lib/dateUtils";
 import { Button, EmptyState, Spinner } from "@/shared/ui";
 import { SessionChat, type SessionChatTarget } from "./chat/SessionChat";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
@@ -34,7 +35,8 @@ import {
   ResumeSessionModal,
 } from "./ResumeSessionModal";
 import { BranchSessionCard, branchUnavailableNote } from "./BranchSessionCard";
-import { deriveTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
+import { deriveTurnOutline, mergeTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
+import { useSessionTurnIndex } from "./useSessionTurnIndex";
 import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
 import { SessionOpening } from "./SessionOpening";
@@ -133,6 +135,7 @@ function SessionDetailWorkspaceRoute({
     setShowAbandonedBranches,
     totalEntries,
     loadedEntryCount,
+    events,
     items,
     eventsLoading,
     eventsError,
@@ -173,9 +176,22 @@ function SessionDetailWorkspaceRoute({
   // readout below — see getRunningTurnStartMs for why this replaces
   // activity.observed_at.
   const turnStartMs = useMemo(() => getRunningTurnStartMs(items), [items]);
-  // Item 7: the turn outline column. Turns derive from the same loaded
-  // thread as everything else on this page — no new fetch.
-  const turns = useMemo(() => deriveTurnOutline(items), [items]);
+  // Item 7: the turn outline column. The server's turn index covers the whole
+  // session; the loaded thread covers its own window and anything newer.
+  const loadedTurns = useMemo(() => deriveTurnOutline(items), [items]);
+  const indexedTurns = useSessionTurnIndex(sessionId, showAbandonedBranches ? "all" : "head", loadedTurns);
+  const loadedFromMs = useMemo(() => {
+    if (events.length === 0) return Number.POSITIVE_INFINITY;
+    if (!hasPreviousPage && !eventsLoading) return Number.NEGATIVE_INFINITY;
+    return events.reduce(
+      (oldest, event) => Math.min(oldest, parseUTC(event.timestamp).getTime()),
+      Number.POSITIVE_INFINITY,
+    );
+  }, [events, hasPreviousPage, eventsLoading]);
+  const turns = useMemo(
+    () => mergeTurnOutline(indexedTurns, loadedTurns, loadedFromMs),
+    [indexedTurns, loadedTurns, loadedFromMs],
+  );
   // The outline follows the reader: the turn in view (scroll-spy over the
   // transcript list), or the one they just clicked until they scroll again.
   const [timelineList, setTimelineList] = useState<HTMLDivElement | null>(null);
@@ -187,13 +203,27 @@ function SessionDetailWorkspaceRoute({
     [registerTimelineList],
   );
   const { activeKey: activeTurnKey, pin: pinTurn } = useActiveTurn(timelineList);
+  const [, setSearchParams] = useSearchParams();
+  const routeLocation = useLocation();
   const handleSelectTurn = useCallback((turn: TurnOutlineTurn) => {
     selectKey(`message:${turn.eventId}`);
-    const row = document.getElementById(turnRowId(turn.eventId));
-    if (!row) return;
     pinTurn(turn.eventId);
+    const row = document.getElementById(turnRowId(turn.eventId));
+    if (!row) {
+      // Not loaded yet: the event_id deep link pages back until the row is
+      // loaded, then scrolls to it.
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("event_id", String(turn.eventId));
+          return next;
+        },
+        { replace: true, state: routeLocation.state },
+      );
+      return;
+    }
     row.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [selectKey, pinTurn]);
+  }, [selectKey, pinTurn, setSearchParams, routeLocation.state]);
 
   // Read-on-open acknowledgement for Console results
   // (console-unread-acknowledgement spec).

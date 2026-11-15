@@ -1514,6 +1514,7 @@ class IngestMixin:
                         abandoned_events=render_manifest.get("abandoned_events"),
                         first_user_message_preview=render_manifest["first_user_message_preview"],
                         last_visible_text_preview=render_manifest["last_visible_text_preview"],
+                        user_turns=render_manifest.get("user_turns"),
                         semantic_projection_version=render_manifest.get("semantic_projection_version", 0),
                         first_order_key=render_manifest["first_order_key"],
                         last_order_key=render_manifest["last_order_key"],

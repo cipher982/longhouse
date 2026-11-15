@@ -831,26 +831,17 @@ async def repair_storage_session_semantic_projection(
                 or decoded.object_hash != item.get("object_hash")
             ):
                 raise StorageV2SemanticRecoveryError(f"render object {object_id} does not match its catalog manifest")
-            recovered = await recover_render_interaction_kinds(
+            recovered_spec = await recover_render_spec(
                 catalog=catalog,
                 raw_workers=raw_workers,
                 session_id=session_id,
                 owner_id=owner_id,
-                provider=spec.provider,
-                records=spec.records,
-                source_envelope_id=spec.source_envelope_id,
+                spec=spec,
                 manifest_cache=raw_manifest_cache,
                 sequence_context_cache=sequence_context_cache,
-                reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
                 projector_read=True,
             )
-            updated_records = tuple(
-                replace(
-                    record, interaction_kind=_repaired_interaction_kind(getattr(record, "interaction_kind", None), recovered.get(index))
-                )
-                for index, record in enumerate(spec.records)
-            )
-            aggregate = aggregate_render_object(replace(spec, records=updated_records))
+            aggregate = aggregate_render_object(recovered_spec)
             corrections.append(
                 {
                     "object_id": object_id,
@@ -861,6 +852,7 @@ async def repair_storage_session_semantic_projection(
                     "abandoned_events": int(aggregate["abandoned_events"]),
                     "first_user_message_preview": aggregate["first_user_message_preview"],
                     "last_visible_text_preview": aggregate["last_visible_text_preview"],
+                    "user_turns": list(aggregate["user_turns"]),
                 }
             )
         processed_object_count += len(objects)
@@ -950,6 +942,47 @@ def _semantic_repair_replay_set(
     return {str(item.get("object_id") or "") for item in objects if str(item.get("source_envelope_id")) in affected}
 
 
+async def recover_render_spec(
+    *,
+    catalog: CatalogClient,
+    raw_workers: RawObjectWorkerPool | None,
+    session_id: str,
+    owner_id: str,
+    spec: RenderObjectSpec,
+    manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
+    sequence_context_cache: MutableMapping[tuple[str, ...], dict[str, object]] | None = None,
+    projector_read: bool = False,
+    stats: SemanticRecoveryStats | None = None,
+) -> RenderObjectSpec:
+    """The render spec with each record's interaction kind replayed from raw history.
+
+    Semantic repair and the turn index use this so a decoded object yields the
+    same aggregates the repaired catalog row would hold.
+    """
+
+    recovered = await recover_render_interaction_kinds(
+        catalog=catalog,
+        raw_workers=raw_workers,
+        session_id=session_id,
+        owner_id=owner_id,
+        provider=spec.provider,
+        records=spec.records,
+        source_envelope_id=spec.source_envelope_id,
+        manifest_cache=manifest_cache,
+        sequence_context_cache=sequence_context_cache,
+        reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+        projector_read=projector_read,
+        stats=stats,
+    )
+    return replace(
+        spec,
+        records=tuple(
+            replace(record, interaction_kind=_repaired_interaction_kind(getattr(record, "interaction_kind", None), recovered.get(index)))
+            for index, record in enumerate(spec.records)
+        ),
+    )
+
+
 def _repaired_interaction_kind(existing: str | None, recovered: str | None) -> str | None:
     """Prefer a recovered raw fact; preserve stored data only when recovery is pending."""
 
@@ -963,4 +996,5 @@ __all__ = [
     "enrich_render_interaction_kinds",
     "repair_storage_session_semantic_projection",
     "recover_render_interaction_kinds",
+    "recover_render_spec",
 ]

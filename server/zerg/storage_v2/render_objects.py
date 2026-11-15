@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -104,6 +105,7 @@ class SealedRenderObject:
     abandoned_events: int
     first_user_message_preview: str | None
     last_visible_text_preview: str | None
+    user_turns: tuple[dict[str, object], ...]
     reused: bool
 
 
@@ -339,7 +341,9 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
         )
     )
     conversation_records = tuple(record for record in semantic_records if record.interaction_kind != INTERACTION_PROVIDER_NOTIFICATION)
-    first_user = next((record.content_text for record in conversation_records if record.role == "user" and record.content_text), None)
+    user_records = tuple(record for record in conversation_records if record.role == "user")
+    shown_ids = {id(record) for record in user_records}
+    first_user = next((record.content_text for record in user_records if record.content_text), None)
     last_visible = next(
         (
             record.content_text or record.tool_output_text
@@ -351,7 +355,7 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
     return {
         "first_order_key": _order_key(spec, records[0]) if records else None,
         "last_order_key": _order_key(spec, records[-1]) if records else None,
-        "user_messages": sum(record.role == "user" for record in conversation_records),
+        "user_messages": len(user_records),
         "assistant_messages": sum(
             record.role == "assistant" and record.tool_name is None and record.branch_kind not in {"abandoned", "reasoning"}
             for record in records
@@ -360,7 +364,46 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
         "abandoned_events": sum(record.branch_kind == "abandoned" for record in semantic_records),
         "first_user_message_preview": _preview(first_user),
         "last_visible_text_preview": _preview(last_visible),
+        "user_turns": tuple(_user_turn(spec, record, turn=id(record) in shown_ids) for record in records if record.role == "user"),
     }
+
+
+def _user_turn(spec: RenderObjectSpec, record: RenderRecord, *, turn: bool) -> dict[str, object]:
+    """One user-role record for the session turn index.
+
+    ``turn`` marks the records the transcript shows as user messages (the ones
+    ``user_messages`` counts). The others are kept, without a preview, because
+    the transcript's branch rule compares every user record that shares a
+    parent. Only normalized record fields, so every provider adapter feeds it
+    the same way.
+    """
+
+    return {
+        "event_id": record.event_id,
+        "order_key": list(_order_key_tuple(spec, record)),
+        "parent_uuid": record.parent_uuid,
+        "branch_kind": record.branch_kind,
+        "turn": turn,
+        "preview": _turn_preview(record.content_text) if turn else None,
+    }
+
+
+# Pasted text and attachments ride inside wrapper tags that the web preview
+# collapses to a marker (web/src/shared/session/promptPreview.ts). Keeping only
+# the start of each block's body lets the words typed after a long paste fit in
+# the preview instead of being cut off by it.
+_WRAPPED_BLOCK = re.compile(r"(<(pasted_content|attachment)\b[^>]*>)([\s\S]*?)(</\2\s*>|$)", re.IGNORECASE)
+_WRAPPED_BODY_CHARS = 120
+
+
+def _turn_preview(value: str | None) -> str | None:
+    if value is None:
+        return None
+    shortened = _WRAPPED_BLOCK.sub(
+        lambda match: match.group(1) + match.group(3)[:_WRAPPED_BODY_CHARS] + match.group(4),
+        value,
+    )
+    return _preview(shortened)
 
 
 def aggregate_render_object(spec: RenderObjectSpec) -> dict[str, object]:

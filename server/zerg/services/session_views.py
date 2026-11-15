@@ -1542,6 +1542,25 @@ class SessionEventBodiesResponse(BaseModel):
     )
 
 
+class SessionTurn(BaseModel):
+    """One user turn: a user message as the transcript shows it."""
+
+    event_id: str = Field(..., description="Event id of the user message row")
+    timestamp: datetime
+    preview: Optional[str] = Field(None, description="Start of the message text (up to 500 characters, raw)")
+
+
+class SessionTurnIndexResponse(BaseModel):
+    """Every user turn of a session, oldest first, read without loading the transcript."""
+
+    session_id: str
+    generation_id: Optional[str] = None
+    branch_mode: str
+    turns: list[SessionTurn] = Field(default_factory=list)
+    objects_indexed: int = Field(..., description="Render objects whose turns came from the catalog")
+    objects_decoded: int = Field(..., description="Render objects decoded because they are pending repair or predate the index")
+
+
 class IngestResponse(BaseModel):
     """Response for ingest endpoint."""
 

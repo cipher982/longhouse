@@ -88,8 +88,10 @@ from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTimelineVisibilityRequest
 from zerg.services.session_views import SessionTimelineVisibilityResponse
+from zerg.services.session_views import SessionTurnIndexResponse
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
+from zerg.services.storage_v2_turn_index import read_session_turn_index
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.storage_v2_workspace import read_storage_v2_event_bodies
 from zerg.services.timeline_session_listing import TimelineHistoryImportResponse
@@ -1052,6 +1054,16 @@ async def get_timeline_session_workspace(
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     timing.apply(response)
     return storage_workspace
+
+
+@router.get("/sessions/{session_id}/turn-index", response_model=SessionTurnIndexResponse)
+async def get_timeline_session_turn_index(
+    session_id: UUID,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    current_user=Depends(get_current_browser_caller),
+):
+    """Every user turn of the session, oldest first, from the catalog's turn index."""
+    return await read_session_turn_index(session_id=session_id, owner_id=int(current_user.owner_id), branch_mode=branch_mode)
 
 
 @router.get("/sessions/{session_id}/event-bodies", response_model=SessionEventBodiesResponse)

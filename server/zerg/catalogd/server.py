@@ -1070,6 +1070,11 @@ class CatalogDaemon:
             (("projector", True),),
         ),
         "storage.session.render_manifest.v2": _Route("_read_storage_session_render_manifest"),
+        "storage.session.turn_index.v2": _Route(
+            "_read_storage_session_turn_index",
+            frozenset({"owner_id", "session_id"}),
+            "storage.session.turn_index.v2 has invalid parameters",
+        ),
         "storage.session.render_objects.list.v2": _Route(
             "_list_storage_session_render_objects",
             frozenset({"after_object_id", "generation_id", "limit", "session_id", "snapshot_revision"}),
@@ -3726,6 +3731,23 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _read_storage_session_turn_index(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        assert self._store is not None
+        result = await self._coalesced_session_detail_read(
+            "storage.session.turn_index.v2",
+            self._store.read_storage_session_turn_index,
+            session_id=session_id,
+            owner_id=owner_id,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         required = {"session_id", "owner_id", "generation_id", "anchor", "after_order_key", "before_order_key", "limit"}
         if not required <= set(request.params) <= required | {"object_cursor"}:
@@ -3890,7 +3912,7 @@ class CatalogDaemon:
                     "last_visible_text_preview",
                 }
                 count_fields = {"object_id", "event_count", "abandoned_events"}
-                if set(item) not in (object_expected, count_fields):
+                if set(item) not in (object_expected, object_expected | {"user_turns"}, count_fields):
                     raise ValueError("semantic repair object has invalid fields")
                 if not _is_hash(item["object_id"]):
                     raise ValueError("semantic repair object_id must be lowercase SHA-256 hex")
@@ -3904,6 +3926,8 @@ class CatalogDaemon:
                     value = item[field]
                     if value is not None:
                         item[field] = bounded_text(value, f"semantic repair {field}", 2_000)
+                if "user_turns" in item:
+                    item["user_turns"] = _user_turns_json(item["user_turns"], item["user_messages"], "semantic repair")
                 objects.append(dict(item))
             if len({str(item["object_id"]) for item in objects}) != len(objects):
                 raise ValueError("semantic repair objects must be unique")
@@ -4952,9 +4976,10 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         "abandoned_events",
         "first_user_message_preview",
         "last_visible_text_preview",
+        "user_turns",
         "semantic_projection_version",
     }
-    optional = {"semantic_projection_version", "abandoned_events"}
+    optional = {"semantic_projection_version", "abandoned_events", "user_turns"}
     if not expected - optional <= set(value) <= expected:
         raise ValueError("render_manifest has invalid fields")
     result = dict(value)
@@ -4995,11 +5020,58 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         raw = result[field]
         if raw is not None:
             result[field] = bounded_text(raw, f"render_manifest.{field}", 2_000)
+    result["user_turns"] = _user_turns_json(result.get("user_turns"), result["user_messages"], "render_manifest")
     if result["event_count"] == 0 and (result["first_order_key"] is not None or result["last_order_key"] is not None):
         raise ValueError("empty render object cannot have order keys")
     if result["event_count"] > 0 and (result["first_order_key"] is None or result["last_order_key"] is None):
         raise ValueError("non-empty render object requires order keys")
     return result
+
+
+_USER_TURN_FIELDS = frozenset({"event_id", "order_key", "parent_uuid", "branch_kind", "turn", "preview"})
+
+
+def _user_turns_json(value: object, user_messages: int, label: str) -> str | None:
+    """Validate a render object's turn list and return it as canonical JSON text.
+
+    One entry per user-role record; exactly ``user_messages`` of them are
+    marked ``turn``, so the turn index cannot disagree with the counts.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > 10_000:
+        raise ValueError(f"{label}.user_turns must be a bounded list")
+    if sum(1 for turn in value if isinstance(turn, dict) and turn.get("turn") is True) != user_messages:
+        raise ValueError(f"{label}.user_turns must mark exactly user_messages turns")
+    turns: list[dict[str, object]] = []
+    for turn in value:
+        if not isinstance(turn, dict) or set(turn) != _USER_TURN_FIELDS:
+            raise ValueError(f"{label}.user_turns entry has invalid fields")
+        if type(turn["turn"]) is not bool:
+            raise ValueError(f"{label}.user_turns.turn must be a boolean")
+        if not isinstance(turn["order_key"], list):
+            raise ValueError(f"{label}.user_turns.order_key must be a list")
+        _validate_render_order_key(json.dumps(turn["order_key"]), f"{label}.user_turns.order_key")
+        turns.append(
+            {
+                "event_id": canonical_text(turn["event_id"], field=f"{label}.user_turns.event_id", maximum_bytes=512),
+                "order_key": turn["order_key"],
+                "parent_uuid": (
+                    canonical_text(turn["parent_uuid"], field=f"{label}.user_turns.parent_uuid", maximum_bytes=512)
+                    if turn["parent_uuid"] is not None
+                    else None
+                ),
+                "branch_kind": (
+                    canonical_text(turn["branch_kind"], field=f"{label}.user_turns.branch_kind", maximum_bytes=64)
+                    if turn["branch_kind"] is not None
+                    else None
+                ),
+                "turn": turn["turn"],
+                "preview": bounded_text(turn["preview"], f"{label}.user_turns.preview", 2_000) if turn["preview"] is not None else None,
+            }
+        )
+    return json.dumps(turns, ensure_ascii=False, separators=(",", ":"))
 
 
 def _validate_render_order_key(value: str, field: str) -> None:

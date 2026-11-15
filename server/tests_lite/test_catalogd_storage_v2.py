@@ -5225,3 +5225,118 @@ async def test_primary_thread_worker_evidence_wakes_parent_without_a_storage_wor
     finally:
         await client.close()
         await daemon.close()
+
+
+def _turn(event_id: str, position: int, *, turn: bool = True) -> dict:
+    return {
+        "event_id": event_id,
+        "order_key": [
+            1_700_000_000_000_000 + position,
+            "cinder",
+            "claude",
+            "history.jsonl",
+            "018f0c3a-7b2d-7f10-8a11-123456789abc",
+            position,
+            0,
+        ],
+        "parent_uuid": None,
+        "branch_kind": None,
+        "turn": turn,
+        "preview": event_id if turn else None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_turn_index_reads_settled_turn_lists_and_marks_what_needs_decoding(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id, generation_id = uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    # One stream, oldest first: a pre-index object with a user message, an
+    # assistant-only object, a settled turn, two more objects, and a fresh
+    # object still waiting for semantic repair.
+    layout = [
+        ("legacy", 1, None, 1),
+        ("assistant", 0, [], 1),
+        ("settled", 1, [_turn("u2", 2)], 1),
+        ("quiet", 0, [], 1),
+        ("near", 1, [_turn("u4", 4)], 1),
+        ("pending", 1, [_turn("u5", 5)], 0),
+    ]
+    object_ids = []
+    try:
+        for position, (seed, user_messages, user_turns, version) in enumerate(layout):
+            raw = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=position * 6,
+                end=position * 6 + 6,
+                records=(f"line{position}\n".encode(),),
+                sealed_at=now,
+                provider="claude",
+            )
+            manifest = _render_manifest(generation_id, seed=seed.encode(), position=position, source_epoch=epoch, provider="claude")
+            manifest.update(user_messages=user_messages, semantic_projection_version=version)
+            if user_turns is not None:
+                manifest["user_turns"] = user_turns
+            raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+            if position:
+                raw["predecessor_source_epoch"] = None
+            await client.call("storage.raw_object.commit.v2", raw)
+            object_ids.append(manifest["object_id"])
+
+        index = await client.call("storage.session.turn_index.v2", {"session_id": str(session_id), "owner_id": "42"})
+
+        assert index["found"] is True
+        assert index["generation_id"] == str(generation_id)
+        returned = {item["object_id"]: item["user_turns"] for item in index["objects"]}
+        legacy, _assistant, settled, quiet, near, pending = object_ids
+        # The assistant-only object is never read; the pending object's two
+        # stream neighbors are decoded with it even though they are settled.
+        assert list(returned) == [legacy, settled, quiet, near, pending]
+        assert returned[settled] == [_turn("u2", 2)]
+        assert returned[legacy] is None and returned[quiet] is None and returned[near] is None and returned[pending] is None
+
+        await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": pending,
+                        "event_count": 1,
+                        "user_messages": 1,
+                        "assistant_messages": 0,
+                        "tool_calls": 0,
+                        "abandoned_events": 0,
+                        "first_user_message_preview": "u5",
+                        "last_visible_text_preview": "u5",
+                        "user_turns": [_turn("u5", 5)],
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        repaired = await client.call("storage.session.turn_index.v2", {"session_id": str(session_id), "owner_id": "42"})
+        returned = {item["object_id"]: item["user_turns"] for item in repaired["objects"]}
+        assert list(returned) == [legacy, settled, near, pending]
+        assert returned[pending] == [_turn("u5", 5)] and returned[near] == [_turn("u4", 4)]
+        assert returned[legacy] is None
+
+        with pytest.raises(CatalogRemoteError, match="user_turns"):
+            bad = _raw_params(epoch=epoch, session_id=session_id, start=36, end=42, records=(b"line6\n",), sealed_at=now, provider="claude")
+            manifest = _render_manifest(generation_id, seed=b"bad", position=10, source_epoch=epoch, provider="claude")
+            manifest["user_turns"] = []  # disagrees with user_messages=1
+            bad.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+            await client.call("storage.raw_object.commit.v2", bad)
+
+        missing = await client.call("storage.session.turn_index.v2", {"session_id": str(uuid4()), "owner_id": "42"})
+        assert missing["found"] is False and missing["objects"] == []
+    finally:
+        await client.close()
+        await daemon.close()

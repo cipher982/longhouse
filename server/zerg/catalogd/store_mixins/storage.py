@@ -1954,6 +1954,106 @@ class StorageMixin:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_storage_session_turn_index(self, *, session_id: UUID, owner_id: str) -> dict[str, Any]:
+        """Return every render object of the current generation that can hold a user record.
+
+        Settled objects (``semantic_projection_version`` 1) carry their user
+        records in ``user_turns``; an empty list means none and is skipped.
+        Objects still waiting for semantic repair, and objects sealed before
+        ``user_turns`` existed that count a user message, are returned without
+        it so the caller decodes them with the same recovery as the transcript.
+        """
+
+        session_table = StorageSession.__table__
+        object_table = RenderObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            session_row = (
+                connection.execute(
+                    select(session_table.c.current_render_generation).where(
+                        session_table.c.session_id == session_key,
+                        session_table.c.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            generation_id = (
+                str(session_row["current_render_generation"])
+                if session_row is not None and session_row["current_render_generation"] is not None
+                else None
+            )
+            rows: list[Any] = []
+            decode: set[str] = set()
+            if deleted is None and generation_id is not None:
+                # One narrow pass over the generation decides which rows are
+                # needed; only those are read in full.
+                outline = connection.execute(
+                    select(
+                        object_table.c.object_id,
+                        object_table.c.first_machine_id,
+                        object_table.c.first_provider,
+                        object_table.c.first_opaque_source_id,
+                        object_table.c.first_source_epoch,
+                        object_table.c.event_count,
+                        object_table.c.user_messages,
+                        object_table.c.semantic_projection_version,
+                        object_table.c.user_turns.is_(None).label("turns_missing"),
+                        (object_table.c.user_turns == "[]").label("turns_empty"),
+                    )
+                    .where(object_table.c.generation_id == generation_id, object_table.c.retired_at.is_(None))
+                    .order_by(
+                        object_table.c.first_order_time_us,
+                        object_table.c.first_source_position,
+                        object_table.c.first_event_subordinal,
+                        object_table.c.object_id,
+                    )
+                ).all()
+                wanted, decode = _turn_index_selection(outline)
+                for start in range(0, len(wanted), 500):
+                    chunk = wanted[start : start + 500]
+                    rows.extend(
+                        connection.execute(
+                            select(
+                                object_table.c.object_id,
+                                object_table.c.object_hash,
+                                object_table.c.object_path,
+                                object_table.c.source_envelope_id,
+                                object_table.c.first_provider,
+                                object_table.c.semantic_projection_version,
+                                object_table.c.user_turns,
+                            ).where(object_table.c.object_id.in_(chunk))
+                        )
+                        .mappings()
+                        .all()
+                    )
+                order = {object_id: index for index, object_id in enumerate(wanted)}
+                rows.sort(key=lambda row: order[str(row["object_id"])])
+            return {
+                "found": session_row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "generation_id": generation_id,
+                "objects": [
+                    {
+                        "object_id": str(row["object_id"]),
+                        "object_hash": str(row["object_hash"]),
+                        "object_path": str(row["object_path"]),
+                        "source_envelope_id": str(row["source_envelope_id"]),
+                        "provider": row["first_provider"],
+                        # None tells the caller to decode the object with raw recovery.
+                        "user_turns": (
+                            json.loads(row["user_turns"]) if str(row["object_id"]) not in decode and row["user_turns"] is not None else None
+                        ),
+                    }
+                    for row in rows
+                ],
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def read_storage_session_render_manifest(
         self,
         *,
@@ -2501,6 +2601,9 @@ class StorageMixin:
                         tool_calls=int(item["tool_calls"]),
                         first_user_message_preview=item.get("first_user_message_preview"),
                         last_visible_text_preview=item.get("last_visible_text_preview"),
+                        # A correction without a turn list clears the stale one;
+                        # the turn index read then decodes this object instead.
+                        user_turns=item.get("user_turns"),
                         semantic_projection_version=1,
                     )
                 if any(row[field] != value for field, value in values.items()):
@@ -2665,3 +2768,39 @@ def _retire_session_render(connection, session_key: str, observed_at: datetime) 
                 .values(**values)
             )
     return commit_seq, int(retired_render or 0), int(retired_generations or 0)
+
+
+# Raw replay of one object reads its companions within this many objects on
+# each side of it in the same source stream (storage_v2_semantics'
+# _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS), so a pending object can still change
+# the semantic kinds of settled neighbors inside that window.
+_TURN_INDEX_PENDING_NEIGHBORS = 2
+
+
+def _turn_index_selection(outline) -> tuple[list[str], set[str]]:
+    """Objects the turn index needs, in order, and the subset that must be decoded.
+
+    Settled objects with a non-empty turn list are read from the catalog.
+    Decoded: objects pending semantic repair and their stream neighbors, and
+    objects sealed before turn lists existed that count a user message.
+    """
+
+    streams: dict[tuple[object, ...], list[Any]] = {}
+    for row in outline:
+        streams.setdefault((row.first_machine_id, row.first_provider, row.first_opaque_source_id, row.first_source_epoch), []).append(row)
+    decode: set[str] = set()
+    for stream in streams.values():
+        for index, row in enumerate(stream):
+            if int(row.semantic_projection_version or 0) < 1:
+                window = stream[max(0, index - _TURN_INDEX_PENDING_NEIGHBORS) : index + _TURN_INDEX_PENDING_NEIGHBORS + 1]
+                decode.update(str(item.object_id) for item in window if int(item.event_count or 0) > 0)
+    wanted: list[str] = []
+    for row in outline:
+        object_id = str(row.object_id)
+        if int(row.event_count or 0) == 0:
+            continue
+        if row.turns_missing and int(row.user_messages or 0) > 0:
+            decode.add(object_id)
+        if object_id in decode or (not row.turns_missing and not row.turns_empty):
+            wanted.append(object_id)
+    return wanted, decode

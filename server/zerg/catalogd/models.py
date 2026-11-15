@@ -400,6 +400,10 @@ class RenderObject(CatalogBase):
     abandoned_events = Column(Integer, nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
+    # JSON list, one entry per user turn in this object (see
+    # storage_v2.render_objects._user_turn). NULL on objects sealed before the
+    # turn index existed; the turn index read decodes those objects instead.
+    user_turns = Column(Text, nullable=True)
     semantic_projection_version = Column(Integer, nullable=False, server_default=text("0"))
     first_order_key = Column(Text, nullable=True)
     last_order_key = Column(Text, nullable=True)

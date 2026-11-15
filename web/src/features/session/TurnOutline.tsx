@@ -2,14 +2,14 @@
  * Item 7 (web-restyle-signal.md polish pass): a left-hand column listing the
  * session's turns, shown only on wide viewports (see the
  * `.session-turn-outline*` CSS block in session-workspace.css, deletable together
- * with this file in one commit). Turns derive from the loaded thread that's
- * already fetched — no new requests.
+ * with this file in one commit). Turns come from the server's turn index merged
+ * with the loaded thread (`mergeTurnOutline`).
  */
 import { useEffect, useRef } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
 import { parseUTC } from "@/shared/lib/dateUtils";
-import type { AgentEventId } from "@/shared/api/agents";
+import type { AgentEventId, SessionTurn } from "@/shared/api/agents";
 import { cleanPromptPreview } from "@/shared/session/promptPreview";
 
 /** DOM id prefix of a transcript row: `event-<eventId>`. */
@@ -67,6 +67,39 @@ export function deriveTurnOutline(items: TimelineItem[]): TurnOutlineTurn[] {
     });
   }
   return turns;
+}
+
+/** An outline row for a turn the server's turn index returned. */
+export function turnFromIndex(turn: SessionTurn): TurnOutlineTurn {
+  return {
+    key: turnKeyForEventId(turn.event_id),
+    eventId: turn.event_id,
+    timestamp: turn.timestamp,
+    askPreview: cleanPromptPreview(turn.preview).slice(0, ASK_PREVIEW_LENGTH),
+  };
+}
+
+/**
+ * The whole session's turns: the server's turn index for history that is not
+ * loaded, and the loaded thread for the window it covers.
+ *
+ * `loadedFromMs` is the time of the oldest loaded event: index turns older
+ * than it are kept, and inside the loaded window the thread wins, so a turn a
+ * rewind just removed or a new one the index has not seen yet is shown as the
+ * transcript shows it. Pass `-Infinity` when the whole session is loaded and
+ * `Infinity` while nothing is.
+ */
+export function mergeTurnOutline(
+  indexed: readonly SessionTurn[] | null | undefined,
+  loaded: TurnOutlineTurn[],
+  loadedFromMs: number,
+): TurnOutlineTurn[] {
+  if (!indexed || indexed.length === 0) return loaded;
+  const loadedIds = new Set(loaded.map((turn) => String(turn.eventId)));
+  const older = indexed
+    .filter((turn) => !loadedIds.has(turn.event_id) && parseUTC(turn.timestamp).getTime() < loadedFromMs)
+    .map(turnFromIndex);
+  return older.length > 0 ? [...older, ...loaded] : loaded;
 }
 
 export interface TurnOutlineProps {

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { TimelineItem } from "@/shared/session/model";
-import { deriveTurnOutline, formatTurnTime, TurnOutline, type TurnOutlineTurn } from "../TurnOutline";
+import { deriveTurnOutline, formatTurnTime, mergeTurnOutline, TurnOutline, type TurnOutlineTurn } from "../TurnOutline";
 
 function userMessageItem(id: number, timestamp: string, text: string): TimelineItem {
   return {
@@ -69,6 +69,49 @@ describe("deriveTurnOutline", () => {
 
   it("returns an empty list when no user message has loaded", () => {
     expect(deriveTurnOutline([assistantMessageItem(1, "2026-04-15T15:22:00Z", "hi")])).toEqual([]);
+  });
+});
+
+describe("mergeTurnOutline", () => {
+  const indexed = [
+    { event_id: "u1", timestamp: "2026-11-14T10:00:00Z", preview: "first ask" },
+    { event_id: "u2", timestamp: "2026-11-14T11:00:00Z", preview: '<pasted_content id="p">log</pasted_content> second ask' },
+    { event_id: "u3", timestamp: "2026-11-14T12:00:00Z", preview: "rewound away" },
+  ];
+  const loaded = (id: string, timestamp: string): TurnOutlineTurn => ({
+    key: `turn-${id}`,
+    eventId: id,
+    timestamp,
+    askPreview: id,
+  });
+
+  it("puts indexed turns older than the loaded window before the loaded turns", () => {
+    const turns = mergeTurnOutline(indexed, [loaded("u4", "2026-11-14T13:00:00Z")], Date.parse("2026-11-14T11:30:00Z"));
+    expect(turns.map((turn) => turn.eventId)).toEqual(["u1", "u2", "u4"]);
+    expect(turns[1].askPreview).toBe("[pasted text] second ask");
+  });
+
+  it("lets the loaded window decide inside it, so a rewound turn disappears at once", () => {
+    const turns = mergeTurnOutline(indexed, [loaded("u4", "2026-11-14T13:00:00Z")], Date.parse("2026-11-14T11:30:00Z"));
+    expect(turns.some((turn) => turn.eventId === "u3")).toBe(false);
+  });
+
+  it("uses only the loaded thread when the whole session is loaded, and only the index before anything is", () => {
+    const all = [loaded("u1", "2026-11-14T10:00:00Z")];
+    expect(mergeTurnOutline(indexed, all, Number.NEGATIVE_INFINITY)).toBe(all);
+    expect(mergeTurnOutline(indexed, [], Number.POSITIVE_INFINITY).map((turn) => turn.eventId)).toEqual(["u1", "u2", "u3"]);
+  });
+
+  it("keeps a turn that is both indexed and loaded once, as loaded", () => {
+    const window = [loaded("u2", "2026-11-14T11:00:00Z")];
+    const turns = mergeTurnOutline(indexed, window, Date.parse("2026-11-14T11:00:00Z"));
+    expect(turns.map((turn) => turn.eventId)).toEqual(["u1", "u2"]);
+    expect(turns[1]).toBe(window[0]);
+  });
+
+  it("falls back to the loaded thread without an index", () => {
+    const only = [loaded("u9", "2026-11-14T13:00:00Z")];
+    expect(mergeTurnOutline(null, only, 0)).toBe(only);
   });
 });
 

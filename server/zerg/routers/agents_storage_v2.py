@@ -58,6 +58,8 @@ from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
+from zerg.storage_v2.branching import infers_branches_from_parent_links
+from zerg.storage_v2.branching import superseded_user_event_ids
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import RawExportCursor
 from zerg.storage_v2.contracts import RenderDetailCursor
@@ -1207,6 +1209,7 @@ async def _commit_admitted_envelope(
                 "abandoned_events": sealed_render.abandoned_events,
                 "first_user_message_preview": sealed_render.first_user_message_preview,
                 "last_visible_text_preview": sealed_render.last_visible_text_preview,
+                "user_turns": list(sealed_render.user_turns),
                 # Claude local-command evidence can arrive in a later raw
                 # envelope. Keep its catalog projection explicitly pending so
                 # timeline/search/embedding projectors replay the complete raw
@@ -1452,16 +1455,7 @@ def _render_record_order_key(decoded, record: RenderRecord) -> tuple[int, str, s
 def _claude_abandoned_event_ids(
     records: list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]],
 ) -> set[str]:
-    siblings: dict[str, list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]]] = {}
-    for key, record in records:
-        if record.role == "user" and record.parent_uuid:
-            siblings.setdefault(record.parent_uuid, []).append((key, record))
-
-    abandoned: set[str] = set()
-    for group in siblings.values():
-        group.sort(key=lambda item: (item[1].source_position, item[1].event_subordinal, item[0]))
-        abandoned.update(record.event_id for _, record in group[:-1])
-    return abandoned
+    return superseded_user_event_ids((key, record.event_id, record.parent_uuid) for key, record in records if record.role == "user")
 
 
 def _manifest_first_key(manifest: dict[str, object]) -> tuple[int, str, str, str, str, int, int]:
@@ -2011,7 +2005,7 @@ async def _read_storage_v2_session_events_page_admitted(
                 object_read_duration_ms += (monotonic() - object_read_started) * 1000.0
             for item, decoded in zip(batch_manifests, decoded_batch, strict=True):
                 spec = decoded.spec
-                claude_generation = claude_generation or spec.provider.strip().lower() == "claude"
+                claude_generation = claude_generation or infers_branches_from_parent_links(spec.provider)
                 if (
                     spec.session_id != session_id
                     or spec.render_generation != generation_id
