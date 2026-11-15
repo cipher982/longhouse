@@ -75,15 +75,16 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     let session_id = managed_session_id
         .clone()
         .or_else(|| provider_session_id.clone());
-    let monitor_descriptions = if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
-        longhouse_home()
-            .ok()
-            .zip(session_id.as_deref())
-            .map(|(home, sid)| load_monitor_descriptions(&home, sid))
-            .unwrap_or_default()
-    } else {
-        HashSet::new()
-    };
+    let monitor_descriptions =
+        if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
+            longhouse_home()
+                .ok()
+                .zip(session_id.as_deref())
+                .map(|(home, sid)| load_monitor_descriptions(&home, sid))
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
     // Stop, SubagentStop, and ClaudeModState carry a complete registry scoped
     // to the parent session. Other lifecycle events carry only one source-bound
     // change. Keeping these lanes distinct is important: a child callback must
@@ -108,8 +109,10 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
             None
         }
     });
-    if !matches!(event.as_str(), "SessionEnd" | "CwdChanged" | "ClaudeModState")
-        && observation.status.is_none()
+    if !matches!(
+        event.as_str(),
+        "SessionEnd" | "CwdChanged" | "ClaudeModState"
+    ) && observation.status.is_none()
         && observation.edge.is_none()
         && registry.is_none()
         && lifecycle_update.is_none()
@@ -255,7 +258,10 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // the producer payload: the daemon preserves the complete snapshot while
     // reducing the exact child edge independently.
     let home = longhouse_home()?;
-    if !child_origin && event == "PreToolUse" && string(input, "tool_name").as_deref() == Some("Monitor") {
+    if !child_origin
+        && event == "PreToolUse"
+        && string(input, "tool_name").as_deref() == Some("Monitor")
+    {
         record_monitor_invocation(&home, &session_id, input);
     } else if event == "SessionEnd" {
         clear_monitor_ledger(&home, &session_id);
@@ -497,16 +503,16 @@ fn read_agent_meta(input: &Value, task_id: &str) -> Option<AgentMeta> {
             sidecar.get("agentType"),
             DELEGATION_STATUS_MAX_CHARS,
         ),
-        description: bounded_task_text(sidecar.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS),
+        description: bounded_task_text(
+            sidecar.get("description"),
+            DELEGATION_DESCRIPTION_MAX_CHARS,
+        ),
         model: bounded_required_task_text(
             sidecar.get("pickedEffortModel"),
             DELEGATION_PROGRESS_TOOL_MAX_CHARS,
         )
         .or_else(|| {
-            bounded_required_task_text(
-                sidecar.get("model"),
-                DELEGATION_PROGRESS_TOOL_MAX_CHARS,
-            )
+            bounded_required_task_text(sidecar.get("model"), DELEGATION_PROGRESS_TOOL_MAX_CHARS)
         }),
         is_fork: sidecar.get("isFork").and_then(Value::as_bool),
         parent_agent_id: crate::claude_lifecycle_hook::task_id(sidecar.get("parentAgentId")),
@@ -647,10 +653,7 @@ fn warp_marker_for_event(
 }
 
 fn safe_single_line_intent(raw: &str) -> Option<String> {
-    let trimmed = raw
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())?;
+    let trimmed = raw.lines().map(str::trim).find(|line| !line.is_empty())?;
     let cleaned: String = trimmed
         .chars()
         .filter(|ch| !ch.is_control())
@@ -703,16 +706,15 @@ fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> 
         } else {
             "other"
         };
-        let description = bounded_task_text(
-            input.get("task_subject"),
-            DELEGATION_DESCRIPTION_MAX_CHARS,
-        )
-        .or_else(|| {
-            bounded_task_text(
-                input.get("task_description"),
-                DELEGATION_DESCRIPTION_MAX_CHARS,
-            )
-        });
+        let description =
+            bounded_task_text(input.get("task_subject"), DELEGATION_DESCRIPTION_MAX_CHARS).or_else(
+                || {
+                    bounded_task_text(
+                        input.get("task_description"),
+                        DELEGATION_DESCRIPTION_MAX_CHARS,
+                    )
+                },
+            );
         let item = json!({
             "id": id,
             "kind": kind,
@@ -951,7 +953,9 @@ fn extract_agent_progress(agent: &Value, status: &str, observed_at: &str) -> Opt
     let current_tool = agent
         .get("currentTool")
         .or_else(|| agent.get("current_tool"))
-        .and_then(|value| bounded_required_task_text(Some(value), DELEGATION_PROGRESS_TOOL_MAX_CHARS));
+        .and_then(|value| {
+            bounded_required_task_text(Some(value), DELEGATION_PROGRESS_TOOL_MAX_CHARS)
+        });
     if tool_count.is_none()
         && context_tokens.is_none()
         && tokens.is_none()
@@ -1222,13 +1226,18 @@ fn extract_session_crons(input: &Value) -> Option<Value> {
         .filter_map(|cron| {
             let id = bounded_required_task_text(cron.get("id"), DELEGATION_ID_MAX_CHARS)?;
             let schedule = bounded_required_task_text(cron.get("schedule"), 64)?;
-            let recurring = cron.get("recurring").and_then(Value::as_bool).unwrap_or(false);
+            let recurring = cron
+                .get("recurring")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let mut item = json!({
                 "id": id,
                 "schedule": schedule,
                 "recurring": recurring,
             });
-            if let Some(prompt) = bounded_task_text(cron.get("prompt"), DELEGATION_DESCRIPTION_MAX_CHARS) {
+            if let Some(prompt) =
+                bounded_task_text(cron.get("prompt"), DELEGATION_DESCRIPTION_MAX_CHARS)
+            {
                 item["prompt"] = json!(prompt);
             }
             Some(item)
@@ -1262,7 +1271,10 @@ fn git_head_branch(cwd: Option<&str>) -> Option<String> {
         let line = head.trim();
         if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
             let branch = branch.trim();
-            if !branch.is_empty() && branch.chars().count() <= 128 && !branch.chars().any(char::is_control) {
+            if !branch.is_empty()
+                && branch.chars().count() <= 128
+                && !branch.chars().any(char::is_control)
+            {
                 return Some(branch.to_string());
             }
         }
@@ -3006,25 +3018,46 @@ mod tests {
 
             let waiting_stop = files
                 .iter()
-                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("SubagentStop")))
+                .find(|v| {
+                    v.get("delegation_update")
+                        .and_then(|u| u.get("source_event"))
+                        == Some(&json!("SubagentStop"))
+                })
                 .unwrap();
             assert_eq!(waiting_stop["delegation_update"]["operation"], "observe");
-            assert_eq!(waiting_stop["delegation_update"]["item"]["status"], "waiting");
+            assert_eq!(
+                waiting_stop["delegation_update"]["item"]["status"],
+                "waiting"
+            );
             assert_eq!(waiting_stop["delegation_update"]["item"]["spawn_depth"], 2);
             assert_eq!(waiting_stop["delegation_update"]["item"]["is_fork"], true);
 
             let child_pre = files
                 .iter()
-                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("PreToolUse")))
+                .find(|v| {
+                    v.get("delegation_update")
+                        .and_then(|u| u.get("source_event"))
+                        == Some(&json!("PreToolUse"))
+                })
                 .unwrap();
-            assert_eq!(child_pre["delegation_update"]["item"]["native_progress"]["last_intent"], "Read hooks.py");
+            assert_eq!(
+                child_pre["delegation_update"]["item"]["native_progress"]["last_intent"],
+                "Read hooks.py"
+            );
 
             let created = files
                 .iter()
-                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("TaskCreated")))
+                .find(|v| {
+                    v.get("delegation_update")
+                        .and_then(|u| u.get("source_event"))
+                        == Some(&json!("TaskCreated"))
+                })
                 .unwrap();
             assert_eq!(created["delegation_update"]["membership"], "upsert");
-            assert_eq!(created["delegation_update"]["item"]["description"], "Run verification");
+            assert_eq!(
+                created["delegation_update"]["item"]["description"],
+                "Run verification"
+            );
 
             let mod_state = files
                 .iter()
@@ -3035,8 +3068,14 @@ mod tests {
             assert_eq!(mod_state["delegation"]["kinds"]["subagent"], 1);
             assert_eq!(mod_state["delegation"]["items"][0]["kind"], "monitor");
             assert_eq!(mod_state["delegation"]["items"][1]["status"], "waiting");
-            assert_eq!(mod_state["delegation"]["items"][1]["model"], "claude-opus-5-5");
-            assert_eq!(mod_state["delegation"]["items"][1]["native_progress"]["tool_count"], 14);
+            assert_eq!(
+                mod_state["delegation"]["items"][1]["model"],
+                "claude-opus-5-5"
+            );
+            assert_eq!(
+                mod_state["delegation"]["items"][1]["native_progress"]["tool_count"],
+                14
+            );
             assert_eq!(mod_state["session_usage"]["cost_usd"], 14.5);
             assert_eq!(mod_state["session_usage"]["context"]["window"], 1000000);
             assert_eq!(mod_state["permission_mode"], "bypassPermissions");

@@ -486,7 +486,7 @@ def _workspace_envelope(
         (str(entry["task_id"]), str(entry.get("status") or ""))
         for item in items
         for entry in _task_notification_entries((item.get("event") or {}).get("task_notification"))
-        if entry.get("source") == "user" and entry.get("task_id")
+        if entry.get("source") in {"user", "user_message"} and entry.get("task_id")
     }
     if rich_user_keys:
         deduped_items: list[dict[str, object]] = []

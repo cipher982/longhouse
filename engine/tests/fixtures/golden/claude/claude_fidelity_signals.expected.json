@@ -80,7 +80,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "microcompact_boundary",
-      "content_text": "Context microcompacted [trigger=auto]"
+      "content_text": "Context microcompacted [trigger=auto tokens_saved=14200]"
     },
     {
       "kind": "event",

@@ -4755,9 +4755,14 @@ def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object
             parsed["occurred_at_ms"] = occurred_at_ms
         return parsed
     if kind == "delegation.waiting":
-        if not isinstance(payload, dict) or type(payload.get("count")) is not int or payload["count"] < 0:
+        if not isinstance(payload, dict):
             raise ValueError("delegation.waiting facts need a non-negative integer count")
-        return dict(payload)
+        resolved_count = payload.get("count")
+        if type(resolved_count) is not int:
+            resolved_count = payload.get("pending_background_agents")
+        if type(resolved_count) is not int or resolved_count < 0:
+            raise ValueError("delegation.waiting facts need a non-negative integer count")
+        return {**payload, "count": resolved_count}
     if kind in {"delegation.background", "delegation.scheduled", "delegation.task_notification"}:
         if not isinstance(payload, dict):
             raise ValueError(f"{kind} payload must be a JSON object")

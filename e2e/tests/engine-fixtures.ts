@@ -50,31 +50,29 @@ export function ensureEngineBinary(): string {
 
   const profile = resolveCargoProfile();
   const binaryPath = resolveArtifactPath(profile);
-  // Compile on demand when this E2E lane has not prebuilt the binary yet so
-  // both `make test-e2e-core` and `make test-e2e-single` exercise the real binary.
-  if (!fs.existsSync(binaryPath)) {
-    execFileSync(
-      "python3",
-      [path.join(REPO_ROOT, "scripts/build/generate_build_identity.py")],
-      { cwd: REPO_ROOT, stdio: "inherit" },
-    );
-    execFileSync(
-      "python3",
-      [
-        path.join(REPO_ROOT, "scripts/build/cargo.py"),
-        "exec",
-        "--",
-        "build",
-        "--manifest-path",
-        "engine/Cargo.toml",
-        "--profile",
-        profile,
-        "--bin",
-        "longhouse-engine",
-      ],
-      { cwd: REPO_ROOT, stdio: "inherit" },
-    );
-  }
+  // Always run an incremental Cargo build once per Playwright worker when
+  // LONGHOUSE_ENGINE_BIN is unset so local Rust engine edits are picked up.
+  execFileSync(
+    "python3",
+    [path.join(REPO_ROOT, "scripts/build/generate_build_identity.py")],
+    { cwd: REPO_ROOT, stdio: "inherit" },
+  );
+  execFileSync(
+    "python3",
+    [
+      path.join(REPO_ROOT, "scripts/build/cargo.py"),
+      "exec",
+      "--",
+      "build",
+      "--manifest-path",
+      "engine/Cargo.toml",
+      "--profile",
+      profile,
+      "--bin",
+      "longhouse-engine",
+    ],
+    { cwd: REPO_ROOT, stdio: "inherit" },
+  );
   if (!fs.existsSync(binaryPath)) {
     throw new Error(`Expected built longhouse-engine at ${binaryPath}`);
   }

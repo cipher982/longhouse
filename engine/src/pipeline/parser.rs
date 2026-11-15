@@ -942,7 +942,10 @@ fn build_claude_delegation_metadata_fact(
     }
 
     let mut payload = serde_json::Map::new();
-    payload.insert("provider_session_id".to_string(), Value::from(child_agent_id));
+    payload.insert(
+        "provider_session_id".to_string(),
+        Value::from(child_agent_id),
+    );
     if let Some(parent_provider_session_id) = metadata
         .parent_provider_session_id
         .as_deref()
@@ -2730,10 +2733,7 @@ fn parse_claude_task_notifications(content: &str) -> Vec<ParsedTaskNotification>
     }
     let mut out = Vec::new();
     let mut remaining = trimmed;
-    while let Some(after_open) = remaining
-        .trim_start()
-        .strip_prefix("<task-notification>")
-    {
+    while let Some(after_open) = remaining.trim_start().strip_prefix("<task-notification>") {
         let Some(close) = after_open.find("</task-notification>") else {
             break;
         };
@@ -3109,13 +3109,7 @@ fn extract_claude_assistant_facts(
             .filter_map(|key| payload.get(*key).and_then(|v| v.as_u64()))
             .sum();
             payload.insert("context_tokens".to_string(), Value::from(context_tokens));
-            push_claude_fact(
-                facts,
-                "turn.usage",
-                at,
-                line_offset,
-                Value::Object(payload),
-            );
+            push_claude_fact(facts, "turn.usage", at, line_offset, Value::Object(payload));
         }
     }
 
@@ -3140,7 +3134,8 @@ fn extract_claude_assistant_facts(
                 let text = item.thinking.as_deref().unwrap_or("");
                 if !text.trim().is_empty() {
                     visible_thinking_blocks += 1;
-                    visible_thinking_chars = visible_thinking_chars.saturating_add(text.chars().count());
+                    visible_thinking_chars =
+                        visible_thinking_chars.saturating_add(text.chars().count());
                 } else if item
                     .signature
                     .as_deref()
@@ -3316,9 +3311,11 @@ fn extract_claude_provider_facts(
                 | "microcompact_boundary",
             ),
         ) => true,
-        ("ai-title" | "agent-name" | "cost-state" | "permission-mode" | "worktree-state" | "queue-operation", _) => {
-            true
-        }
+        (
+            "ai-title" | "agent-name" | "cost-state" | "permission-mode" | "worktree-state"
+            | "queue-operation",
+            _,
+        ) => true,
         ("user", _) => {
             obj.tool_use_result.is_some()
                 || claude_task_notification_content(obj).is_some()
@@ -3365,7 +3362,13 @@ fn extract_claude_provider_facts(
                     payload.insert(ours.to_string(), Value::from(count));
                 }
             }
-            push_claude_fact(facts, "turn.duration", at, line_offset, Value::Object(payload));
+            push_claude_fact(
+                facts,
+                "turn.duration",
+                at,
+                line_offset,
+                Value::Object(payload),
+            );
             push_claude_fact(
                 facts,
                 "turn.end",
@@ -3531,9 +3534,14 @@ fn extract_claude_provider_facts(
             if sub == "microcompact_boundary" {
                 payload.insert("boundary_kind".to_string(), Value::from("microcompact"));
             }
-            let has_metric = ["pre_tokens", "post_tokens", "replacement_items", "tokens_saved"]
-                .iter()
-                .any(|key| payload.contains_key(*key));
+            let has_metric = [
+                "pre_tokens",
+                "post_tokens",
+                "replacement_items",
+                "tokens_saved",
+            ]
+            .iter()
+            .any(|key| payload.contains_key(*key));
             if has_metric {
                 push_claude_fact(
                     facts,
@@ -3592,7 +3600,10 @@ fn extract_claude_provider_facts(
             for (wire, ours) in [
                 ("totalDuration", "total_duration_ms"),
                 ("totalAPIDuration", "total_api_duration_ms"),
-                ("totalAPIDurationWithoutRetries", "total_api_duration_no_retries_ms"),
+                (
+                    "totalAPIDurationWithoutRetries",
+                    "total_api_duration_no_retries_ms",
+                ),
                 ("totalToolDuration", "total_tool_duration_ms"),
                 ("totalLinesAdded", "lines_added"),
                 ("totalLinesRemoved", "lines_removed"),
@@ -3674,8 +3685,8 @@ fn extract_claude_provider_facts(
         ("queue-operation", _) => {
             let op = obj.operation.as_deref().unwrap_or("");
             let content_str = value.get("content").and_then(Value::as_str);
-            let has_task_notif = content_str
-                .is_some_and(|text| !parse_claude_task_notifications(text).is_empty());
+            let has_task_notif =
+                content_str.is_some_and(|text| !parse_claude_task_notifications(text).is_empty());
             if op == "enqueue" || has_task_notif {
                 let mut payload = serde_json::Map::new();
                 if !op.is_empty() {
@@ -3771,10 +3782,8 @@ fn extract_claude_provider_facts(
                         if let Some(model) = non_empty_trimmed(meta.resolved_model.as_deref())
                             .or_else(|| non_empty_trimmed(meta.model.as_deref()))
                         {
-                            child_meta.insert(
-                                "model".to_string(),
-                                Value::from(bounded_text(model, 128)),
-                            );
+                            child_meta
+                                .insert("model".to_string(), Value::from(bounded_text(model, 128)));
                         }
                         if let Some(output_file) = non_empty_trimmed(meta.output_file.as_deref()) {
                             child_meta.insert(
@@ -3786,16 +3795,12 @@ fn extract_claude_provider_facts(
                             child_meta.insert("total_tokens".to_string(), Value::from(tokens));
                         }
                         if let Some(duration_ms) = meta.total_duration_ms {
-                            child_meta.insert(
-                                "total_duration_ms".to_string(),
-                                Value::from(duration_ms),
-                            );
+                            child_meta
+                                .insert("total_duration_ms".to_string(), Value::from(duration_ms));
                         }
                         if let Some(tool_uses) = meta.total_tool_use_count {
-                            child_meta.insert(
-                                "total_tool_use_count".to_string(),
-                                Value::from(tool_uses),
-                            );
+                            child_meta
+                                .insert("total_tool_use_count".to_string(), Value::from(tool_uses));
                         }
                         let mut child = serde_json::Map::new();
                         child.insert(
@@ -6012,6 +6017,10 @@ fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
 
     if let Some(pre_tokens) = value.get("preTokens").and_then(|v| v.as_i64()) {
         parts.push(format!("pre_tokens={}", pre_tokens));
+    }
+
+    if let Some(tokens_saved) = value.get("tokensSaved").and_then(|v| v.as_i64()) {
+        parts.push(format!("tokens_saved={}", tokens_saved));
     }
 
     if parts.is_empty() {
@@ -11466,7 +11475,10 @@ please research the steering shaft options"#;
             Some("agent-parent1")
         );
         assert_eq!(result.metadata.subagent_depth, Some(2));
-        assert_eq!(result.metadata.subagent_name.as_deref(), Some("Nested grandchild"));
+        assert_eq!(
+            result.metadata.subagent_name.as_deref(),
+            Some("Nested grandchild")
+        );
 
         let meta_fact = result
             .provider_facts

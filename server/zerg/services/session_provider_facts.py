@@ -399,6 +399,13 @@ def project_session_hud(
         model = (usage_d.get("model") if usage_d else None) or (base_usage.get("model") if base_usage else None) or fallback_model
         effort = (usage_d.get("effort") if usage_d else None) or (base_usage.get("effort") if base_usage else None)
 
+        base_window_raw = (
+            int(base_usage["context_window"]) if base_usage is not None and type(base_usage.get("context_window")) is int else None
+        )
+        base_window_source = base_usage.get("context_window_source") if base_usage is not None else None
+        base_native_window = base_window_raw if base_window_source != "derived" else None
+        base_derived_window = base_window_raw if base_window_source == "derived" else None
+
         if rt_usage is not None and rt_is_newer:
             context_tokens = int(
                 rt_ctx["tokens"] if type(rt_ctx.get("tokens")) is int else (usage_d["context_tokens"] if usage_d is not None else 0)
@@ -409,27 +416,21 @@ def project_session_hud(
             at_dt = rt_usage_at or durable_at or datetime.now(UTC)
         elif rt_usage is None and base_usage is not None and rt_is_newer:
             context_tokens = int(base_usage.get("context_tokens") or 0)
-            context_window = (
-                int(base_usage["context_window"])
-                if type(base_usage.get("context_window")) is int
-                else (usage_d.get("context_window") if usage_d else None)
-            )
+            context_window = base_native_window if base_native_window is not None else (usage_d.get("context_window") if usage_d else None)
             at_dt = base_at or durable_at or datetime.now(UTC)
         elif usage_d is not None:
             context_tokens = int(usage_d["context_tokens"])
             context_window = usage_d.get("context_window")
             if context_window is None and type(rt_ctx.get("window")) is int:
                 context_window = int(rt_ctx["window"])
-            elif context_window is None and base_usage is not None and type(base_usage.get("context_window")) is int:
-                context_window = int(base_usage["context_window"])
+            elif context_window is None and base_native_window is not None:
+                context_window = base_native_window
             at_dt = durable_at or rt_usage_at or datetime.now(UTC)
         else:
             context_tokens = (
                 int(base_usage["context_tokens"]) if base_usage is not None and type(base_usage.get("context_tokens")) is int else 0
             )
-            context_window = (
-                int(base_usage["context_window"]) if base_usage is not None and type(base_usage.get("context_window")) is int else None
-            )
+            context_window = base_native_window
             at_dt = base_at or datetime.now(UTC)
 
         output_tokens = (
@@ -453,6 +454,9 @@ def project_session_hud(
             )
             if derived_window is not None:
                 context_window = derived_window
+                context_window_source = "derived"
+            elif base_derived_window is not None:
+                context_window = base_derived_window
                 context_window_source = "derived"
         rt_pct = _as_float(rt_ctx.get("percent"))
         base_pct = _as_float(base_usage.get("used_percent")) if base_usage is not None else None
@@ -556,11 +560,19 @@ def project_session_hud(
     if wt_fact is not None:
         wt_payload = wt_fact["payload"]
         if wt_payload.get("active") is not False:
-            candidate_wt = {
-                key: str(wt_payload[key]).strip()
-                for key in ("name", "branch", "path", "original_cwd", "original_branch")
-                if isinstance(wt_payload.get(key), str) and wt_payload[key].strip()
-            }
+            candidate_wt: dict[str, Any] = {}
+            for canonical_key, aliases in (
+                ("name", ("name", "worktree_name")),
+                ("branch", ("branch", "worktree_branch")),
+                ("path", ("path", "worktree_path")),
+                ("original_cwd", ("original_cwd",)),
+                ("original_branch", ("original_branch",)),
+            ):
+                for alias in aliases:
+                    val = wt_payload.get(alias)
+                    if isinstance(val, str) and val.strip():
+                        candidate_wt[canonical_key] = val.strip()
+                        break
             if candidate_wt:
                 worktree = candidate_wt
     elif isinstance(base.get("worktree"), Mapping):
@@ -579,7 +591,7 @@ def project_session_hud(
         )
         for fact in scheduled_facts:
             payload = fact["payload"]
-            cron_id = str(payload.get("id") or "").strip()
+            cron_id = str(payload.get("id") or payload.get("task_id") or "").strip()
             if not cron_id:
                 continue
             action = str(payload.get("action") or "create").strip().lower()
@@ -589,10 +601,15 @@ def project_session_hud(
             schedule = str(payload.get("schedule") or payload.get("cron") or "").strip()
             if not schedule and cron_id in crons_by_id:
                 schedule = str(crons_by_id[cron_id].get("schedule") or "")
+            recurring = (
+                payload["recurring"]
+                if isinstance(payload.get("recurring"), bool)
+                else (str(payload.get("cron_kind") or "").strip().lower() == "recurring")
+            )
             entry: dict[str, Any] = {
                 "id": cron_id,
                 "schedule": schedule or "scheduled",
-                "recurring": bool(payload.get("recurring", False)),
+                "recurring": recurring,
             }
             prompt = payload.get("prompt")
             if isinstance(prompt, str) and prompt.strip():
@@ -612,9 +629,14 @@ def project_session_hud(
     elif delegation_state == "unknown":
         waiting_fact = _newest_fact(norm_facts, DELEGATION_WAITING)
         latest_duration = _newest_fact(norm_facts, TURN_DURATION)
-        if waiting_fact is not None and type(waiting_fact["payload"].get("count")) is int:
+        waiting_count = None
+        if waiting_fact is not None:
+            raw_count = waiting_fact["payload"].get("count")
+            raw_pending = waiting_fact["payload"].get("pending_background_agents")
+            waiting_count = raw_count if type(raw_count) is int else (raw_pending if type(raw_pending) is int else None)
+        if waiting_fact is not None and waiting_count is not None:
             if latest_duration is None or waiting_fact["at"] >= latest_duration["at"]:
-                pending_background_agent_count = max(0, int(waiting_fact["payload"]["count"]))
+                pending_background_agent_count = max(0, waiting_count)
         elif type(base.get("pending_background_agent_count")) is int:
             pending_background_agent_count = max(0, int(base["pending_background_agent_count"]))
 

@@ -483,7 +483,10 @@ fn claude_subagent_sidecar_revision(path: &Path) -> Result<Option<String>> {
     }
     let sidecar = path.with_file_name(format!("{stem}.meta.json"));
     if sidecar.is_file() {
-        Ok(Some(format!("claude-subagent-meta:{}", hash_file(&sidecar)?)))
+        Ok(Some(format!(
+            "claude-subagent-meta:{}",
+            hash_file(&sidecar)?
+        )))
     } else {
         Ok(Some("claude-subagent-meta:absent".to_string()))
     }

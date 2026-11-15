@@ -248,3 +248,25 @@ def test_progress_events_are_intentionally_dropped(tmp_path):
     events_full, _, _ = parse_session_file_full(path)
     assert "progress" not in [e.raw_type for e in events_full]
     assert len(events_full) == 2
+
+
+def test_parse_session_file_includes_microcompact_tokens_saved_hint(tmp_path):
+    path = _write_jsonl(
+        tmp_path,
+        "microcompact-tokens-saved.jsonl",
+        [
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "microcompact_boundary",
+                    "content": "Microcompacted tool outputs",
+                    "timestamp": "2026-10-01T10:00:10Z",
+                    "microcompactMetadata": {"trigger": "auto", "preTokens": 280000, "tokensSaved": 42000},
+                },
+                separators=(",", ":"),
+            )
+        ],
+    )
+    events = list(parse_session_file(path))
+    assert len(events) == 1
+    assert events[0].content_text == "Microcompacted tool outputs [trigger=auto pre_tokens=280000 tokens_saved=42000]"

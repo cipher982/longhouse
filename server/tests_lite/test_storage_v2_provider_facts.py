@@ -989,6 +989,20 @@ async def test_claude_fidelity_facts_are_accepted_and_projected_into_hud(monkeyp
         assert hud["worktree"]["branch"] == "feat/x"
         assert hud["session_crons"] == [{"id": "cron-1", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check health"}]
 
+        # Re-projecting (as storage_v2_workspace does over live_catalog_timeline's
+        # session JSON) must preserve derived vs native context_window_source.
+        reprojected = project_session_hud(listed["facts"], base_hud={"provider": "claude", **hud})
+        assert reprojected["usage_latest"]["context_window"] == 1_000_000
+        assert reprojected["usage_latest"]["context_window_source"] == "derived"
+
+        native_base = {
+            "provider": "claude",
+            "usage_latest": {**hud["usage_latest"], "context_window_source": "native"},
+        }
+        reprojected_native = project_session_hud(listed["facts"], base_hud=native_base)
+        assert reprojected_native["usage_latest"]["context_window"] == 1_000_000
+        assert reprojected_native["usage_latest"]["context_window_source"] == "native"
+
 
 def test_workspace_envelope_projects_claude_fidelity_fields_and_dedups_task_notifications():
     """Workspace projection populates tool_intent, phase, withheld thinking, turn_end, api_error, and task_notification dedup."""
@@ -1153,3 +1167,127 @@ def test_workspace_envelope_projects_claude_fidelity_fields_and_dedups_task_noti
     assert len(error_notices) == 1
     assert error_notices[0]["event"]["api_error"]["retry_attempt"] == 1
     assert "529 Overloaded" in error_notices[0]["event"]["api_error"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_engine_wire_fact_shapes_project_worktree_cron_waiting_and_dedup(monkeypatch):
+    """Engine parser.rs fact keys validate through catalogd and project onto HUD and workspace items."""
+    from zerg.services.session_provider_facts import project_session_hud
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-facts-wire-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        t0 = datetime(2026, 11, 14, 16, 0, tzinfo=UTC)
+        payload = _payload_for_source(tenant_id=tenant_id, epoch=uuid4(), opaque_source_id="wire-shapes.jsonl")
+        payload["session_id"] = str(session_id)
+        payload["facts"] = [
+            {
+                "kind": "session.worktree",
+                "at": (t0 + timedelta(seconds=1)).isoformat(),
+                "source_position": 1,
+                "payload": {
+                    "active": True,
+                    "worktree_name": "wt-rs",
+                    "worktree_branch": "feat/rs",
+                    "worktree_path": "/repo/.claude/worktrees/wt-rs",
+                    "original_cwd": "/repo",
+                },
+            },
+            {
+                "kind": "delegation.scheduled",
+                "at": (t0 + timedelta(seconds=2)).isoformat(),
+                "source_position": 2,
+                "payload": {
+                    "task_id": "cron-rs",
+                    "task_kind": "cron",
+                    "cron": "*/10 * * * *",
+                    "cron_kind": "recurring",
+                    "prompt": "Poll RS",
+                },
+            },
+            {
+                "kind": "delegation.waiting",
+                "at": (t0 + timedelta(seconds=3)).isoformat(),
+                "source_position": 3,
+                "payload": {"pending_background_agents": 3},
+            },
+        ]
+
+        res = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert res.status_code == 200, res.text
+
+        listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
+        facts = provider_facts_from_rows(listed["facts"])
+        hud = project_session_hud(
+            facts,
+            None,
+            delegation=SimpleNamespace(state="unknown", items=None, kinds=None),
+            base_hud={"provider": "claude"},
+        )
+        assert hud["worktree"] == {
+            "name": "wt-rs",
+            "branch": "feat/rs",
+            "path": "/repo/.claude/worktrees/wt-rs",
+            "original_cwd": "/repo",
+        }
+        assert hud["session_crons"] == [{"id": "cron-rs", "schedule": "*/10 * * * *", "recurring": True, "prompt": "Poll RS"}]
+        assert hud["pending_background_agent_count"] == 3
+
+    # Verify user_message source on rich task_notification dedups duplicate queue_operation rows.
+    t1 = t0 + timedelta(seconds=5)
+    t2 = t0 + timedelta(seconds=6)
+    session = SimpleNamespace(
+        provider="claude",
+        origin_kind=None,
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True, can_start_turn=True),
+        model_dump=lambda mode: {"id": str(session_id)},
+    )
+    events = [
+        {
+            "event_id": "ev-user-msg",
+            "cursor": 1,
+            "role": "system",
+            "interaction_kind": "provider_notification",
+            "content_text": 'Agent "Worker" completed',
+            "timestamp": t1.isoformat(),
+            "raw_locator": {"source_position": 1, "event_subordinal": 0},
+        },
+        {
+            "event_id": "ev-queue-dup",
+            "cursor": 2,
+            "role": "system",
+            "interaction_kind": "provider_notification",
+            "content_text": 'Agent "Worker" completed',
+            "timestamp": t2.isoformat(),
+            "raw_locator": {"source_position": 2, "event_subordinal": 0},
+        },
+    ]
+    envelope = _workspace_envelope(
+        owner_id=7,
+        session_id=session_id,
+        session=session,
+        session_commit_seq="2",
+        branch_mode="head",
+        anchor="tail",
+        cursor=None,
+        storage={"commit_seq": "2", "session": {"updated_at": t2.isoformat()}},
+        page={"events": events, "total": len(events), "generation_id": "g1", "next_cursor": None},
+        receipts=[],
+        facts=[
+            {
+                "kind": "delegation.task_notification",
+                "at": t1,
+                "source_position": 1,
+                "payload": {"task_id": "bg-rs", "status": "completed", "source": "user_message", "result": "OK"},
+            },
+            {
+                "kind": "delegation.task_notification",
+                "at": t2,
+                "source_position": 2,
+                "payload": {"task_id": "bg-rs", "status": "completed", "source": "queue_operation"},
+            },
+        ],
+    )
+    projected_ids = [item["event"]["id"] for item in envelope["projection"]["items"] if item.get("event")]
+    assert projected_ids == ["ev-user-msg"]
