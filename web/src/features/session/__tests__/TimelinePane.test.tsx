@@ -1945,7 +1945,7 @@ describe("TimelinePane outbox", () => {
     const timelineItems = buildTimelineModel(rawEvents, subagents).items;
     renderPane(timelineItems);
 
-    expect(screen.getByTestId("session-message-phase-commentary")).toBeInTheDocument();
+    expect(document.querySelector('[data-message-phase="commentary"]')).toBeInTheDocument();
     expect(screen.getByTestId("session-reasoning-withheld")).toHaveTextContent("Reasoning withheld");
     // Agent call with subagents is NOT swallowed into ActivityChip.
     const subagentWidget = screen.getByTestId("tool-subagents");

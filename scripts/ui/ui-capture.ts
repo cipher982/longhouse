@@ -45,6 +45,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-detail-stress
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-prose-idle --viewport=2000x1200 --css-variant=terminal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-research-turn --viewport=2000x1200   # thoughts leading their tool calls
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-claude-narration --viewport=2000x1200   # Claude commentary leading its tool calls
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-agy-image-result   # Antigravity tool-result screenshots, one present and one unavailable
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-running-call   # a long Bash call on a fresh work claim (…-uncertain: expired)
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
@@ -79,6 +80,7 @@ import {
   buildSessionProseIdleFixture,
   buildSessionConsoleFixture,
   buildSessionResearchTurnFixture,
+  buildSessionClaudeNarrationFixture,
   buildSessionAgyImageResultFixture,
   buildSessionRunningCallFixture,
   buildSessionUnrecordedInputsFixture,
@@ -160,6 +162,7 @@ const SCENES = [
   "session-detail-stress",
   "session-prose-idle",
   "session-research-turn",
+  "session-claude-narration",
   "session-agy-image-result",
   "session-running-call",
   "session-running-call-uncertain",
@@ -248,6 +251,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-detail-stress",
   "session-prose-idle",
   "session-research-turn",
+  "session-claude-narration",
   "session-agy-image-result",
   "session-running-call",
   "session-running-call-uncertain",
@@ -435,6 +439,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-detail-stress" ||
     scene === "session-prose-idle" ||
     scene === "session-research-turn" ||
+    scene === "session-claude-narration" ||
     scene === "session-agy-image-result" ||
     scene === "session-running-call" ||
     scene === "session-running-call-uncertain" ||
@@ -615,6 +620,8 @@ export async function installSceneMocks(
           ? buildSessionProseIdleFixture()
         : scene === "session-research-turn"
           ? buildSessionResearchTurnFixture()
+        : scene === "session-claude-narration"
+          ? buildSessionClaudeNarrationFixture()
         : scene === "session-agy-image-result"
           ? buildSessionAgyImageResultFixture()
         : scene === "session-running-call" || scene === "session-running-call-uncertain"
@@ -782,7 +789,7 @@ export async function installSceneMocks(
         return;
       }
 
-      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === DEMO_SHELL_SCENE || scene === "session-research-turn" || scene === "session-console")) {
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && (scene === "landing-session" || scene === "session-prose-idle" || scene === DEMO_SHELL_SCENE || scene === "session-research-turn" || scene === "session-claude-narration" || scene === "session-console")) {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
         return;
       }

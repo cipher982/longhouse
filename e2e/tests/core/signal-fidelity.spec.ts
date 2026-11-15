@@ -755,7 +755,7 @@ test.describe("0-to-1 engine-to-pixel signal fidelity", () => {
       await expect(page.getByTestId("session-away-recap")).toContainText("Landed Step 2 projections.");
 
       await expect(page.getByTestId("session-reasoning-withheld")).toContainText("Reasoning withheld");
-      await expect(page.getByTestId("session-message-phase-commentary")).toBeVisible();
+      await expect(page.locator('[data-message-phase="commentary"]').first()).toBeVisible();
 
       const subagentWidget = page.getByTestId("tool-subagents");
       await expect(subagentWidget).toBeVisible();

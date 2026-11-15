@@ -2328,6 +2328,56 @@ export function buildRailSessionsFixture(active: AgentSession): JsonObject {
  * layout was built against (control-plane timeline-reading-experience.md,
  * Change F; David's context-fabric session, 2026-10-07).
  */
+/**
+ * A Claude turn with commentary (host-normalized-transcripts Phase 7): text the
+ * normalizer marked commentary, because its message stopped to call tools,
+ * leads the tool rows after it; the answer stands at full weight.
+ */
+export function buildSessionClaudeNarrationFixture(): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const sessionId = fixture.session.id;
+  const now = "2026-11-15T14:20:30Z";
+  fixture.session.provider = "claude";
+  fixture.session.project = "longhouse";
+  fixture.session.summary_title = "Why the census fails on OMP";
+  fixture.session.timeline_title = "Why the census fails on OMP";
+  fixture.session.started_at = "2026-11-15T14:18:00Z";
+  fixture.session.last_activity_at = now;
+  fixture.session.timeline_anchor_at = now;
+  fixture.session.user_messages = 1;
+  fixture.session.assistant_messages = 3;
+  fixture.session.tool_calls = 6;
+
+  let nextId = 9100;
+  const events: AgentEvent[] = [];
+  const at = (hhmmss: string) => `2026-11-15T${hhmmss}Z`;
+  const commentary = { phase: "commentary", phase_source: "derived" } as const;
+  const say = (time: string, text: string, item: Record<string, string>) =>
+    events.push(makeEvent(nextId++, "assistant", at(time), { content_text: text, item } as Partial<AgentEvent>));
+  const call = (start: string, end: string, tool: string, input: Record<string, unknown>, output: string) => {
+    const callId = `narration-tool-${nextId}`;
+    events.push(makeEvent(nextId++, "assistant", at(start), { tool_name: tool, tool_input_json: input, tool_call_id: callId, tool_call_state: "completed" }));
+    events.push(makeEvent(nextId++, "tool", at(end), { tool_name: tool, tool_output_text: output, tool_call_id: callId }));
+  };
+
+  events.push(makeEvent(nextId++, "user", at("14:18:00"), { content_text: "The census fails on OMP with 244k unknown lines. Find out why." }));
+  say("14:18:05", "I'll check what the census reads under the OMP sessions directory and how the engine picks session files.", commentary);
+  call("14:18:06", "14:18:07", "Bash", { command: "ls ~/.omp/agent/sessions | head", description: "List OMP session directories" }, "--Users-example-git-longhouse--\nobservation-pack");
+  call("14:18:07", "14:18:08", "Read", { file_path: "scripts/qa/transcript_census.py" }, "1: #!/usr/bin/env python3");
+  call("14:18:08", "14:18:09", "Grep", { pattern: "fn is_omp_session_file", path: "engine/src" }, "engine/src/discovery.rs:412");
+  say("14:19:10", "The unknown lines come from observation-pack/ledger.jsonl, which is not a session. I'll make the census keep only files whose first record is the session header, as the engine does.", commentary);
+  call("14:19:11", "14:19:12", "Edit", { file_path: "scripts/qa/transcript_census.py", old_string: "def files(", new_string: "def session_files(" }, "Edited scripts/qa/transcript_census.py");
+  call("14:19:30", "14:20:20", "Bash", { command: "uv run python scripts/qa/transcript_census.py check --provider omp ~/.omp/agent/sessions", description: "Rerun the OMP census" }, "omp: 32 shapes, all classified");
+  say("14:20:30", "The census now passes for OMP: the 244k lines were observation-pack ledgers, which the census no longer reads.", { phase: "final", phase_source: "derived" });
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  fixture.projection = { ...fixture.projection, items, total: items.length };
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
+  fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
+  fixture.workspace.thread = fixture.thread;
+  return fixture;
+}
+
 export function buildSessionResearchTurnFixture(): SessionDetailFixture {
   const fixture = buildSessionProseIdleFixture();
   const sessionId = fixture.session.id;

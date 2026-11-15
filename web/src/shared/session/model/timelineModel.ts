@@ -1266,3 +1266,70 @@ export function timelineItemContainsSelection(item: TimelineItem, selectionKey: 
   if (selectionKey === `group:${item.group.key}`) return true;
   return item.group.interactions.some((interaction) => selectionKey === `tool:${interaction.key}`);
 }
+
+/**
+ * An assistant message's phase from the served facts: the provider's own
+ * label (`message_phase`) or the normalizer's item fact. Absent means unknown;
+ * nothing infers a phase from the text.
+ */
+export function messagePhase(event: AgentEvent): "commentary" | "final_answer" | null {
+  if (event.role !== "assistant") return null;
+  if (event.message_phase) return event.message_phase;
+  if (event.item?.phase === "commentary") return "commentary";
+  if (event.item?.phase === "final") return "final_answer";
+  return null;
+}
+
+/** A stable identity for one timeline item, shared by web and the iOS embed. */
+export function timelineItemIdentity(item: TimelineItem): string {
+  switch (item.kind) {
+    case "seam":
+      return `seam:${item.seam.key}`;
+    case "action":
+      return `action:${item.action.key}`;
+    case "compaction":
+      return `compaction:${item.event.id}`;
+    case "reasoning":
+      return `reasoning:${item.event.id}`;
+    case "provider_notification":
+      return `provider_notification:${item.event.id}`;
+    case "message":
+      return `message:${item.event.id}`;
+    case "tool":
+      return `tool:${item.interaction.key}`;
+    case "activity_group":
+      return `activity_group:${item.group.key}`;
+  }
+}
+
+/** A narration leader: a thought, or assistant text the provider marked commentary. */
+export function isNarrationLeader(item: TimelineItem): boolean {
+  if (item.kind === "reasoning") return true;
+  return item.kind === "message" && messagePhase(item.event) === "commentary";
+}
+
+/**
+ * Narrated steps: a leader (a thought, or commentary text that goes on to
+ * call tools) and the tool rows after it, up to the next message or thought,
+ * read as one step. Returns the identities of the rows that trail under a
+ * leader. Presentation only: rows keep their own keys and order. A question
+ * to the user never trails; it stays a full row.
+ */
+export function narrationTrail(items: readonly TimelineItem[]): Set<string> {
+  const trail = new Set<string>();
+  let led = false;
+  for (const item of items) {
+    if (isNarrationLeader(item)) {
+      led = true;
+      continue;
+    }
+    const trails =
+      item.kind === "activity_group" || (item.kind === "tool" && item.interaction.toolName !== "AskUserQuestion");
+    if (led && trails) {
+      trail.add(timelineItemIdentity(item));
+      continue;
+    }
+    led = false;
+  }
+  return trail;
+}

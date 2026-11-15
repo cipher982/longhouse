@@ -52,6 +52,9 @@ import {
   isToolInteractionDropped,
   isToolInteractionFailed,
   isToolInteractionRunning,
+  messagePhase,
+  narrationTrail,
+  timelineItemIdentity,
   parseLonghouseOutput,
   splitExplorationOverflow,
   summarizeApiError,
@@ -238,27 +241,6 @@ const CompactionRow = memo(function CompactionRow({ event }: { event: AgentEvent
     </div>
   );
 });
-
-function timelineItemIdentity(item: TimelineItem): string {
-  switch (item.kind) {
-    case "seam":
-      return `seam:${item.seam.key}`;
-    case "action":
-      return `action:${item.action.key}`;
-    case "compaction":
-      return `compaction:${item.event.id}`;
-    case "reasoning":
-      return `reasoning:${item.event.id}`;
-    case "provider_notification":
-      return `provider_notification:${item.event.id}`;
-    case "message":
-      return `message:${item.event.id}`;
-    case "tool":
-      return `tool:${item.interaction.key}`;
-    case "activity_group":
-      return `activity_group:${item.group.key}`;
-  }
-}
 
 function timelineItemRowId(item: TimelineItem): string | null {
   switch (item.kind) {
@@ -544,14 +526,8 @@ const MessageRow = memo(function MessageRow({
     ? truncateMarkdown(preview)
     : preview;
 
-  const resolvedPhase =
-    event.message_phase ??
-    (event.item?.phase === "commentary"
-      ? "commentary"
-      : event.item?.phase === "final"
-        ? "final_answer"
-        : undefined);
-  const isCommentary = isAssistant && resolvedPhase === "commentary";
+  const resolvedPhase = messagePhase(event) ?? undefined;
+  const isCommentary = resolvedPhase === "commentary";
   const inlineApiError = event.api_error ? summarizeApiError(event.api_error, null) : null;
 
   return (
@@ -591,11 +567,6 @@ const MessageRow = memo(function MessageRow({
             {formatTime(event.timestamp)}
           </span>
         )}
-        {isCommentary ? (
-          <span className="tl-chip tl-chip--commentary" data-testid="session-message-phase-commentary">
-            commentary
-          </span>
-        ) : null}
         {outside ? (
           <span className="tl-chip tl-chip--warning">outside active context</span>
         ) : null}
@@ -1643,28 +1614,17 @@ export const TimelinePane = memo(function TimelinePane({
   // and DOM position, so scroll anchoring and open state are untouched. A
   // thought shows the clock only when the minute changed.
   const narration = useMemo(() => {
-    const trail = new Set<string>();
+    // The grouping is the shared model's (narrationTrail); the clock is this pane's.
+    const trail = narrationTrail(filteredItems);
     const thoughtTimes = new Map<string, string>();
-    let afterThought = false;
     let lastMinute: string | null = null;
     for (const item of filteredItems) {
-      if (item.kind === "reasoning") {
-        afterThought = true;
-        const minute = formatTime(item.event.timestamp);
-        if (minute !== lastMinute) {
-          thoughtTimes.set(timelineItemIdentity(item), minute);
-          lastMinute = minute;
-        }
-        continue;
+      if (item.kind !== "reasoning") continue;
+      const minute = formatTime(item.event.timestamp);
+      if (minute !== lastMinute) {
+        thoughtTimes.set(timelineItemIdentity(item), minute);
+        lastMinute = minute;
       }
-      const trails =
-        item.kind === "activity_group" ||
-        (item.kind === "tool" && !isAskUserQuestion(item.interaction));
-      if (afterThought && trails) {
-        trail.add(timelineItemIdentity(item));
-        continue;
-      }
-      afterThought = false;
     }
     // A running call is current until the model speaks again after it; one
     // it has moved past is not what the work claim is about.
