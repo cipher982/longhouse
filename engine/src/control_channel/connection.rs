@@ -87,7 +87,7 @@ pub fn spawn_control_channel(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile OMP Console turn claims"),
         }
-        match crate::antigravity_print::recover_antigravity_print_turns(
+        match crate::antigravity_acp::recover_antigravity_acp_turns(
             &config.machine_name,
             config.db_path.clone(),
         )

@@ -3832,7 +3832,7 @@ mod tests {
         fs::create_dir_all(&bad_dir).unwrap();
         fs::write(
             bad_dir.join("stdout.log"),
-            b"{\"conversation_id\":\"not-a-uuid\",\"status\":\"ERROR\"}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"not-a-uuid\"}}\n",
         )
         .unwrap();
         fs::write(
@@ -3874,7 +3874,11 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            fs::write(&stdout, b"{\"event\":\"init\",\"conversation_id\":\"").unwrap();
+            fs::write(
+                &stdout,
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"",
+            )
+            .unwrap();
             assert!(
                 prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
                     .unwrap()
@@ -3902,7 +3906,7 @@ mod tests {
             );
             fs::write(
                 &stdout,
-                format!("{{\"event\":\"init\",\"conversation_id\":\"{native_id}\"}}\n"),
+                format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"{native_id}\"}}}}\n"),
             )
             .unwrap();
             conn.execute_batch("CREATE TRIGGER reject_binding BEFORE INSERT ON session_binding BEGIN SELECT RAISE(FAIL, 'binding unavailable'); END;").unwrap();
@@ -3935,20 +3939,6 @@ mod tests {
                     .unwrap();
             assert_eq!(prepared.envelope.session_id, session_id);
             drop(recovered);
-
-            // Retained single-JSON stdout from deployed versions also recovers
-            // exact ownership without init, logs, or a confirmed binding.
-            fs::write(
-                &stdout,
-                format!("{{\"conversation_id\":\"{native_id}\",\"status\":\"SUCCESS\"}}\n"),
-            )
-            .unwrap();
-            let mut legacy = open_db(Some(&dir.path().join("legacy.db"))).unwrap();
-            let prepared =
-                prepare_next_envelope(&mut legacy, &capabilities(), &path, "antigravity", None)
-                    .unwrap()
-                    .unwrap();
-            assert_eq!(prepared.envelope.session_id, session_id);
         });
     }
 

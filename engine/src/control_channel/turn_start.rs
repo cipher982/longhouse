@@ -485,10 +485,10 @@ pub(super) async fn execute_turn_start(
             })
         })
     } else if provider == "antigravity" {
-        // The Console path does not go through hooks: a one-shot print turn
-        // needs no hook inbox and no readiness proof, so it works whether or
+        // The Console path does not go through hooks: one `agy acp` process per
+        // turn needs no hook inbox and no readiness proof, so it works whether or
         // not the hook is registered on this machine.
-        start_antigravity_print_turn(AntigravityPrintRunConfig {
+        start_antigravity_acp_turn(AntigravityAcpRunConfig {
             session_id: session_id.to_string(),
             thread_id: thread_id.clone(),
             turn_id: turn_id.clone(),
@@ -496,11 +496,11 @@ pub(super) async fn execute_turn_start(
             client_request_id: client_request_id.clone(),
             cwd,
             antigravity_bin: std::env::var("LONGHOUSE_ANTIGRAVITY_BIN")
-                .unwrap_or_else(|_| crate::antigravity_print::DEFAULT_ANTIGRAVITY_BIN.to_string()),
+                .unwrap_or_else(|_| crate::antigravity_acp::DEFAULT_ANTIGRAVITY_BIN.to_string()),
             prompt: message,
+            image_paths: image_paths.clone(),
             model: payload_optional_string(payload, "model"),
             conversation_id: resume_provider_thread_id,
-            print_timeout_secs: payload.get("print_timeout_secs").and_then(Value::as_u64),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -511,7 +511,7 @@ pub(super) async fn execute_turn_start(
                 "thread_id": thread_id,
                 "run_id": summary.run_id,
                 "provider": "antigravity",
-                "transport": ANTIGRAVITY_PRINT_ADAPTER,
+                "transport": ANTIGRAVITY_ACP_ADAPTER,
                 "provider_thread_id": summary.provider_thread_id,
                 "launch_id": summary.launch_id,
                 "pid": summary.pid,
@@ -588,7 +588,7 @@ pub(super) async fn execute_turn_start(
                         | CLAUDE_PRINT_ADAPTER
                         | PI_PRINT_ADAPTER
                         | OMP_PRINT_ADAPTER
-                        | ANTIGRAVITY_PRINT_ADAPTER,
+                        | ANTIGRAVITY_ACP_ADAPTER,
                 )
             ) {
                 return Ok(result);

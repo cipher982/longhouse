@@ -496,7 +496,7 @@ def test_opencode_contract_is_server_bridge_control_provider_with_active_turn_st
     }
 
 
-def test_antigravity_contract_serves_hook_send_and_print_console_turns():
+def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     """Antigravity routes send through the hook inbox, and nothing else.
 
     Until 2026-07-31 this declared send_input: true and advertised
@@ -515,7 +515,10 @@ def test_antigravity_contract_serves_hook_send_and_print_console_turns():
     assert contract is not None
     assert contract.launch_local is True
     assert contract.send_input is True
-    assert contract.interrupt is False
+    # `interrupt` is the Console interrupt (antigravity.turn_interrupt); the Helm
+    # live-control sibling `antigravity.interrupt` stays unadvertised, so
+    # can_interrupt below stays 0.
+    assert contract.interrupt is True
     assert contract.steer_active_turn is False
     assert contract.answer_pause is False
     assert contract.tail_output is True
@@ -525,23 +528,23 @@ def test_antigravity_contract_serves_hook_send_and_print_console_turns():
     assert send_evidence["disposition"] == "implemented"
     assert send_evidence["level"] == "live_token"
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
-    # Console is served through the one-shot print adapter, which is the point:
-    # hook delivery is unavailable under GEMINI_API_KEY auth, so `agy --print`
-    # is the control surface that works under either credential authority.
-    assert contract.console_adapter == "antigravity_print"
+    # Console is served through one `agy acp` process per turn: it needs no
+    # hook, so it works under either credential authority.
+    assert contract.console_adapter == "antigravity_acp"
     assert contract.support_tier == "launch"
     assert contract.turn_start is True
     turn_start_evidence = contract.operation_evidence_for("turn_start")
     assert turn_start_evidence["disposition"] == "implemented"
-    # Live, because the run-once canary now reads the adapter's argv from the
-    # engine instead of rebuilding it, so a change to the adapter's command
-    # line changes what the canary executes. owner_action still names what is
-    # uncovered: process supervision and engine-side transcript binding.
-    assert turn_start_evidence["level"] == "live_token"
+    # Hermetic until the live receipt: the engine adapter is driven against a
+    # scripted fake agy; the real-agy canary reads the adapter's argv from the
+    # engine and drives the same ACP exchange.
+    assert turn_start_evidence["level"] == "hermetic"
     assert turn_start_evidence["owner_action"]
     assert contract.machine_control_supports == (
         "antigravity.send",
         "antigravity.turn_start",
+        "antigravity.turn_steer",
+        "antigravity.turn_interrupt",
     )
     assert contract.connection_capabilities == {
         "can_send_input": 1,
@@ -620,7 +623,8 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("antigravity", "session.steer_text", None),
         ("antigravity", "session.answer_pause", None),
         ("antigravity", "session.terminate", None),
-        ("antigravity", "session.turn.interrupt", None),
+        ("antigravity", "session.turn.interrupt", "antigravity.turn_interrupt"),
+        ("antigravity", "session.turn.steer", "antigravity.turn_steer"),
     ],
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):

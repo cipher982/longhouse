@@ -241,6 +241,22 @@ pub(super) async fn execute_command(
                         })?;
                         (OMP_PRINT_ADAPTER, ConsoleSteerOutcome::Steered)
                     }
+                    "antigravity" => {
+                        crate::antigravity_acp::steer_antigravity_acp_turn(
+                            &run_id,
+                            &session_id,
+                            &text,
+                            &image_paths,
+                        )
+                        .await
+                        .map_err(|reason| CommandError {
+                            code: reason.clone(),
+                            message: format!(
+                                "Antigravity Console turn {run_id} did not take the steer: {reason}"
+                            ),
+                        })?;
+                        (ANTIGRAVITY_ACP_ADAPTER, ConsoleSteerOutcome::Steered)
+                    }
                     "opencode" => {
                         let outcome = crate::opencode_run::steer_opencode_console_turn(
                             &run_id,
@@ -354,14 +370,15 @@ pub(super) async fn execute_command(
                     OMP_PRINT_ADAPTER
                 }
                 "antigravity" => {
-                    crate::antigravity_print::interrupt_antigravity_print_turn(
+                    crate::antigravity_acp::interrupt_antigravity_acp_turn(
                         &run_id,
                         &session_id,
                         &thread_id,
                         &turn_id,
                     )
+                    .await
                     .map_err(CommandError::command_failed)?;
-                    ANTIGRAVITY_PRINT_ADAPTER
+                    ANTIGRAVITY_ACP_ADAPTER
                 }
                 _ => {
                     return Err(CommandError {

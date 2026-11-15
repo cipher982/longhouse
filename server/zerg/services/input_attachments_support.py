@@ -35,7 +35,7 @@ ATTACHMENT_DELIVERY: dict[tuple[str, str], str] = {
     ("claude", "console"): "path",
     ("cursor", "helm"): "path",
     ("cursor", "console"): "path",
-    ("antigravity", "console"): "path",
+    ("antigravity", "console"): "native",
 }
 
 

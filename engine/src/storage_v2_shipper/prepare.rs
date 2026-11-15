@@ -424,17 +424,17 @@ fn prepare_file_envelope(
         }
     }
     if provider.eq_ignore_ascii_case("antigravity") && durable_session_id.is_none() {
-        match crate::antigravity_print::bind_discovered_source(
+        match crate::antigravity_acp::bind_discovered_source(
             conn,
             &canonical_path,
             &crate::turn_claims::default_registry()?.list_all_shared()?,
             &crate::config::get_agent_dir()?,
         )? {
-            crate::antigravity_print::SourceOwnership::Managed(session_id) => {
+            crate::antigravity_acp::SourceOwnership::Managed(session_id) => {
                 durable_session_id = Some(session_id);
             }
-            crate::antigravity_print::SourceOwnership::Pending => return Ok(None),
-            crate::antigravity_print::SourceOwnership::Unclaimed => {}
+            crate::antigravity_acp::SourceOwnership::Pending => return Ok(None),
+            crate::antigravity_acp::SourceOwnership::Unclaimed => {}
         }
     }
     if provider.eq_ignore_ascii_case("antigravity")

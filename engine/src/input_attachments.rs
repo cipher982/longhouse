@@ -39,10 +39,9 @@ pub fn attachment_delivery(provider: &str, mode: &str) -> Option<&'static str> {
         ("codex", "helm" | "console")
         | ("opencode", "helm" | "console")
         | ("pi", "helm" | "console")
-        | ("omp", "helm" | "console") => Some("native"),
-        ("claude", "helm" | "console")
-        | ("cursor", "helm" | "console")
-        | ("antigravity", "console") => Some("path"),
+        | ("omp", "helm" | "console")
+        | ("antigravity", "console") => Some("native"),
+        ("claude", "helm" | "console") | ("cursor", "helm" | "console") => Some("path"),
         _ => None,
     }
 }

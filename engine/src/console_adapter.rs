@@ -1,6 +1,6 @@
 //! Helpers shared by the Console (headless, UI-driven) provider adapters.
 //!
-//! `claude_print`, `cursor_print`, `pi_print`, `antigravity_print` and
+//! `claude_print`, `cursor_print`, `pi_print`, `antigravity_acp` and
 //! `opencode_run` all drive a provider CLI that writes JSONL to a file, watch
 //! that file grow, and settle a turn claim when the process goes away. Each
 //! carried its own copy of the pieces below: five of the liveness check, five

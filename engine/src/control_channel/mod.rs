@@ -22,8 +22,8 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::antigravity_print::{
-    start_antigravity_print_turn, AntigravityPrintRunConfig, ANTIGRAVITY_PRINT_ADAPTER,
+use crate::antigravity_acp::{
+    start_antigravity_acp_turn, AntigravityAcpRunConfig, ANTIGRAVITY_ACP_ADAPTER,
 };
 use crate::build_identity;
 use crate::claude_channel_control::{
@@ -622,7 +622,7 @@ mod tests {
                     ("opencode", OPENCODE_RUN_ADAPTER),
                     ("pi", PI_PRINT_ADAPTER),
                     ("omp", OMP_PRINT_ADAPTER),
-                    ("antigravity", ANTIGRAVITY_PRINT_ADAPTER),
+                    ("antigravity", ANTIGRAVITY_ACP_ADAPTER),
                 ] {
                     let mut owner = tokio::process::Command::new("sleep")
                         .arg("30")
@@ -1815,15 +1815,7 @@ mod tests {
     /// them. Safe in one direction only: the Runtime Host sends a control
     /// command only when the machine advertises it, so an unadvertised path is
     /// never reached. Each entry is a deliberate decision, not drift.
-    const DISPATCHED_BUT_UNADVERTISED: &[(&str, &str, &str)] = &[(
-        "antigravity",
-        "turn_interrupt",
-        // b8b09e7da: the schema ties turn_interrupt to the session-level
-        // interrupt capability, which Antigravity does not have; the Console
-        // adapter can cancel its own one-shot turn and stays reachable for
-        // when interrupt lands.
-        "turn_interrupt rides on the unbuilt session interrupt",
-    )];
+    const DISPATCHED_BUT_UNADVERTISED: &[(&str, &str, &str)] = &[];
 
     /// One (command, payload) probe per manifest operation, shaped so the real
     /// dispatcher reaches its provider routing and then fails harmlessly: no
@@ -3476,19 +3468,29 @@ mod tests {
         write_test_executable(
             &fake,
             &format!(
-                r#"#!/bin/sh
-set -eu
-previous=""
-for value in "$@"; do
-  if [ "$previous" = "--output-format" ]; then format="$value"; fi
-  previous="$value"
-done
-test "$format" = "stream-json"
-printf '%s\n' '{{"event":"init","conversation_id":"{native_id}","init":{{"cwd":"/tmp"}}}}'
-printf '%s\n' '{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-06T22:07:35Z","content":"hello"}}' > '{}'
-printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","status":"SUCCESS","response":"done"}}}}'
+                r#"#!/usr/bin/env python3
+# A one-turn `agy acp`: answers the handshake and one prompt, then exits the
+# way a turn-scoped process does once its monitor has gone.
+import json, pathlib, sys
+assert sys.argv[1:] == ["acp", "--dangerously-skip-permissions"], sys.argv
+transcript = pathlib.Path("{transcript}")
+def out(value):
+    sys.stdout.write(json.dumps(value) + "\n")
+    sys.stdout.flush()
+for line in sys.stdin:
+    message = json.loads(line)
+    method, mid = message.get("method"), message.get("id")
+    if method == "initialize":
+        out({{"jsonrpc": "2.0", "id": mid, "result": {{"protocolVersion": 1}}}})
+    elif method == "session/new":
+        transcript.write_text(json.dumps({{"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE", "created_at": "2026-09-06T22:07:35Z", "content": "hello"}}) + "\n")
+        out({{"jsonrpc": "2.0", "id": mid, "result": {{"sessionId": "{native_id}"}}}})
+    elif method == "session/prompt":
+        out({{"jsonrpc": "2.0", "id": mid, "result": {{"stopReason": "end_turn", "usage": {{"inputTokens": 1}}}}}})
+        break
 "#,
-                transcript.display()
+                transcript = transcript.display(),
+                native_id = native_id,
             ),
         );
         let db_path = temp.path().join("state.db");
@@ -3531,7 +3533,7 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
                 assert_eq!(response["ok"], true, "{response}");
                 let registry = crate::turn_claims::default_registry().unwrap();
                 let claim = registry.read(&run_id).unwrap();
-                assert_eq!(claim.adapter.as_deref(), Some(ANTIGRAVITY_PRINT_ADAPTER));
+                assert_eq!(claim.adapter.as_deref(), Some(ANTIGRAVITY_ACP_ADAPTER));
                 let pid = claim.pid.unwrap() as i32;
                 let mut status = 0;
                 assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
@@ -3565,7 +3567,7 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
                     .unwrap();
                 assert_eq!(registry.read(&run_id).unwrap().state, "spawned");
                 recovered
-                    .block_on(crate::antigravity_print::recover_antigravity_print_turns(
+                    .block_on(crate::antigravity_acp::recover_antigravity_acp_turns(
                         "test-machine",
                         Some(db_path.clone()),
                     ))

@@ -2662,13 +2662,13 @@
       },
       "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
-      "console_adapter": "antigravity_print",
+      "console_adapter": "antigravity_acp",
       "control_plane": "antigravity_hook_inbox",
       "control_plane_aliases": [],
       "adapter_sources": [
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs",
-        "engine/src/antigravity_print.rs",
+        "engine/src/antigravity_acp.rs",
         "engine/src/console_sink.rs",
         "engine/src/antigravity_channel_control.rs",
         "server/zerg/services/antigravity_hook_inbox.py",
@@ -2758,7 +2758,7 @@
       "run_once": false,
       "reattach": false,
       "send_input": true,
-      "interrupt": false,
+      "interrupt": true,
       "steer_active_turn": false,
       "answer_pause": false,
       "terminate": false,
@@ -2916,7 +2916,7 @@
           "disposition": "not_implemented",
           "reason": "Upstream supports it: `agy --conversation <full id>`, `-c` and ACP `session/resume` resume an existing conversation with intact history, including after the previous process was killed. Verified on 1.5.9. A short id prefix silently starts a new conversation, so the engine must pass the full id. Longhouse has not built the reattach path (antigravity-parity.md steps 2 and 4).",
           "observed_provider_version": "1.5.9",
-          "owner_action": "antigravity reattach through --conversation / ACP session/resume with the full id, plus a canary"
+          "owner_action": "Helm reattach through --conversation with the full id, plus a canary (step 4). Console resume already passes the full id to ACP session/resume on every turn."
         },
         "send_input": {
           "level": "live_token",
@@ -2926,21 +2926,19 @@
           "observed_provider_version": "1.5.9"
         },
         "interrupt": {
-          "level": "none",
-          "source": "not implemented; ACP session/cancel exists upstream, process interrupt proven",
-          "disposition": "not_implemented",
-          "reason": "Upstream offers three routes, none built in Longhouse yet. Console (ACP): `session/cancel` is part of the protocol but was not proven on 1.5.9 (the probe never cancelled a running prompt). Print mode: SIGINT ends the process with finished_reason `interrupted` and exit code 1; stream-json stdin accepts only `user` events, so there is no cancel or image frame there. Helm: kill-and-resume, or a PreInvocation hook that returns `terminationBehavior: terminate`. The conversation survives and resumes by full id. Nothing upstream blocks shipping it.",
-          "observed_provider_version": "1.5.9",
-          "owner_action": "Console: ACP session/cancel (step 2). Helm: kill-and-resume or PreInvocation terminate, with process-group reap (step 4)",
-          "blocker": "none"
+          "level": "hermetic",
+          "source": "Console `session/cancel` with a bounded grace, against a scripted fake agy; Helm interrupt not built",
+          "disposition": "implemented",
+          "reason": "Console (antigravity.turn_interrupt): the engine marks the claim cancel-requested, writes the ACP `session/cancel` notification, and kills the process group if the running prompt has not resolved within 5 s (the process is turn-scoped, so a kill loses nothing the transcript has not already recorded). Whether agy 1.5.9 honours a cancel sent mid-turn is recorded in the live receipt of antigravity-parity.md; the grace kill makes the Stop reliable either way. Helm interrupt (`antigravity.interrupt`, kill-and-resume or a PreInvocation `terminationBehavior: terminate`) is not built and stays unadvertised (step 4); the engine refuses it. Print mode's SIGINT and stream-json stdin (user events only) are not used.",
+          "observed_provider_version": "1.5.9"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "not implemented; two upstream mechanisms proven live on 1.5.9",
+          "source": "Helm not implemented; Console steer is `antigravity.turn_steer`, riding on turn_start",
           "disposition": "not_implemented",
-          "reason": "Proven upstream, not yet routed by Longhouse. (1) ACP: a second `session/prompt` sent during a running turn lands between tool steps (quirk: the first prompt's RPC returns `end_turn` immediately while the turn continues). (2) Hooks: a PreInvocation hook returns `injectSteps` with a `userMessage`, claimed after the running tool call. Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate, and product copy must say so.",
+          "reason": "This flag is the Helm steer. Two upstream mechanisms are proven live on 1.5.9. (1) ACP: a second `session/prompt` sent during a running turn lands between tool steps (quirk: the first prompt's RPC returns `end_turn` immediately while the turn continues). The Console adapter uses it for `antigravity.turn_steer`, with text and native image parts, hermetically tested. (2) Hooks: a PreInvocation hook returns `injectSteps` with a `userMessage`, claimed after the running tool call; Helm does not route to it yet. Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate.",
           "observed_provider_version": "1.5.9",
-          "owner_action": "Console: second ACP session/prompt (step 2). Helm: route steer to the PreInvocation hook inbox (step 3)"
+          "owner_action": "Helm: route steer to the PreInvocation hook inbox (step 3)"
         },
         "answer_pause": {
           "level": "none",
@@ -2976,17 +2974,19 @@
           "owner_action": "real agy transcript assertion"
         },
         "turn_start": {
-          "level": "live_token",
-          "source": "real agy executed with the Console adapter's own argv, read from the engine, returning a structured result at the transcript path the adapter binds",
+          "level": "hermetic",
+          "source": "the ACP Console adapter driving a scripted fake agy over stdio (new turn, resume by full id, image part, steer, error-as-chunk, cancel, restart recovery, process-group reaping)",
           "disposition": "implemented",
-          "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The canary now reads the argv from `longhouse-engine antigravity-console-argv` instead of rebuilding it, so the adapter's command line, the result shape it parses, and the transcript path it binds are all proven against the installed release. It refuses to run rather than falling back to a copy when the engine is unavailable.",
-          "observed_provider_version": "1.1.18",
-          "owner_action": "superseded by the ACP Console adapter (antigravity-parity.md step 2); extend the canary to drive start_antigravity_print_turn so process supervision, turn-claim settlement, and engine-side transcript binding are covered too"
+          "reason": "One `agy acp --dangerously-skip-permissions` process per Console turn. Handshake (`initialize`, `session/new` or `session/resume`, `session/set_model`), `session/prompt`, and `session/close` are protocol calls driven by the engine; the process group is reaped on every exit. This path does not use hooks, so it works under either credential authority. A model or quota error that agy reports as an ordinary message chunk with a usage-less `end_turn` settles as a failed turn.",
+          "observed_provider_version": "1.5.9",
+          "owner_action": "live receipt against agy on the bench, then the factory Console lifecycle producer (step 6)"
         }
       },
       "machine_control_supports": [
         "antigravity.send",
-        "antigravity.turn_start"
+        "antigravity.turn_start",
+        "antigravity.turn_steer",
+        "antigravity.turn_interrupt"
       ],
       "transcript_signals": {
         "message.phase": {

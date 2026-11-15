@@ -1274,19 +1274,19 @@ def _antigravity_event(*, session_id, now: datetime, seq: int, item_id: str, pay
         run_id=None,
         provider="antigravity",
         device_id="cinder",
-        source="antigravity_print",
+        source="antigravity_acp",
         kind="progress_signal",
         occurred_at=now,
-        dedupe_key=f"antigravity-print:{session_id}:run-1:live:{seq}",
+        dedupe_key=f"antigravity-acp:{session_id}:run-1:live:{seq}",
         payload={"turn_id": "turn-1", "item_id": item_id, "seq": seq, **payload},
     )
 
 
-def test_antigravity_print_step_text_materializes_and_replaces_with_the_longer_text(tmp_path):
+def test_antigravity_acp_step_text_materializes_and_replaces_with_the_longer_text(tmp_path):
     from zerg.routers.runtime import _is_bridge_live_transcript_event
     from zerg.routers.runtime import _live_transcript_preview_payload
 
-    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_print_text.db")
+    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_acp_text.db")
     now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 
     with SessionLocal() as db:
@@ -1313,8 +1313,8 @@ def test_antigravity_print_step_text_materializes_and_replaces_with_the_longer_t
     assert preview.tool_name is None
 
 
-def test_antigravity_print_tool_step_materializes_command_then_output(tmp_path):
-    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_print_tool.db")
+def test_antigravity_acp_tool_step_materializes_command_then_output(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "antigravity_acp_tool.db")
     now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 
     with SessionLocal() as db:

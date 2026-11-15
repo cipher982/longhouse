@@ -17,6 +17,7 @@ import queue
 import re
 import shlex
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -1917,11 +1918,7 @@ def _resolve_engine_binary(args: argparse.Namespace) -> str | None:
     return shutil.which("longhouse-engine")
 
 
-def _antigravity_console_argv(
-    engine_bin: str,
-    prompt: str,
-    print_timeout_secs: int,
-) -> list[str] | None:
+def _antigravity_console_argv(engine_bin: str) -> list[str] | None:
     """Ask the engine for the argv its Console adapter builds.
 
     This is the whole point of the canary: running a hand-maintained copy of
@@ -1929,14 +1926,7 @@ def _antigravity_console_argv(
     """
 
     result = subprocess.run(
-        [
-            engine_bin,
-            "antigravity-console-argv",
-            "--prompt",
-            prompt,
-            "--print-timeout-secs",
-            str(print_timeout_secs),
-        ],
+        [engine_bin, "antigravity-console-argv"],
         text=True,
         capture_output=True,
         check=False,
@@ -2436,37 +2426,126 @@ def _antigravity_unwatched_worker(
     return {"HOME": str(home), "GEMINI_API_KEY": api_key, **_no_browser_env(root)}, home, "api_key"
 
 
-def _antigravity_stream_result(stdout: str) -> dict[str, Any] | None:
-    records = _parse_json_lines(stdout)
-    results = [row["result"] for row in records if row.get("event") == "result" and isinstance(row.get("result"), dict)]
-    if len(results) != 1:
-        return None
-    payload = results[0]
-    if payload.get("status") == "SUCCESS" and not isinstance(payload.get("response"), str):
-        return None
-    conversation_id = payload.get("conversation_id")
-    if not isinstance(conversation_id, str):
-        return None
+_ANTIGRAVITY_EXECUTOR_ERROR_MARKER = "\u26a0 agent executor error"
+
+
+def _antigravity_acp_turn(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    prompt: str,
+    timeout: float,
+) -> dict[str, Any]:
+    """Drive one ACP turn the way the engine's Console adapter does.
+
+    `initialize`, `session/new`, one `session/prompt`, then `session/close`;
+    the process group is killed afterwards because agy's tool children outlive a
+    plain kill. A model or quota error arrives as an agent message chunk with a
+    usage-less `end_turn`, so `error` is set from that, never from stopReason.
+    """
+
+    proc = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    frames: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            try:
+                frames.put(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        frames.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    deadline = time.monotonic() + timeout
+    outcome: dict[str, Any] = {
+        "session_id": "",
+        "response": "",
+        "stop_reason": "",
+        "has_usage": False,
+        "error": "",
+        "timed_out": False,
+    }
+
+    def send(payload: dict[str, Any]) -> None:
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", **payload}) + "\n")
+        proc.stdin.flush()
+
+    def call(request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        send({"id": request_id, "method": method, "params": params})
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                outcome["timed_out"] = True
+                return None
+            try:
+                frame = frames.get(timeout=remaining)
+            except queue.Empty:
+                outcome["timed_out"] = True
+                return None
+            if frame is None:
+                outcome["error"] = outcome["error"] or "agy acp exited before answering"
+                return None
+            update = (frame.get("params") or {}).get("update") or {}
+            if frame.get("method") == "session/update" and update.get("sessionUpdate") == "agent_message_chunk":
+                outcome["response"] += str((update.get("content") or {}).get("text") or "")
+            if frame.get("id") == request_id and "method" not in frame:
+                if "error" in frame:
+                    outcome["error"] = str((frame["error"] or {}).get("message") or frame["error"])
+                    return None
+                return frame.get("result") or {}
+
     try:
-        uuid.UUID(conversation_id)
-    except ValueError:
-        return None
-    initialized = [row.get("conversation_id") for row in records if row.get("event") == "init"]
-    if not initialized or any(value != conversation_id for value in initialized):
-        return None
-    return payload
+        if call(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}}) is None:
+            return outcome
+        session = call(2, "session/new", {"cwd": str(cwd), "mcpServers": []})
+        if session is None:
+            return outcome
+        outcome["session_id"] = str(session.get("sessionId") or "")
+        result = call(3, "session/prompt", {"sessionId": outcome["session_id"], "prompt": [{"type": "text", "text": prompt}]})
+        if result is not None:
+            outcome["stop_reason"] = str(result.get("stopReason") or "")
+            outcome["has_usage"] = "usage" in result
+            if _ANTIGRAVITY_EXECUTOR_ERROR_MARKER in outcome["response"] and not outcome["has_usage"]:
+                outcome["error"] = outcome["response"].strip()
+            call(4, "session/close", {"sessionId": outcome["session_id"]})
+    except (BrokenPipeError, OSError) as exc:
+        outcome["error"] = outcome["error"] or str(exc)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        outcome["returncode"] = proc.returncode
+        outcome["stderr"] = (proc.stderr.read() if proc.stderr else "")[-2000:]
+    return outcome
 
 
 def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove a real single-turn agy run using the Console adapter's own argv.
 
     The argv is read from the engine rather than rebuilt here, so this covers
-    the adapter's command line, the structured-result shape it parses, and the
-    transcript path it binds, against the installed release.
+    the adapter's command line, the ACP exchange it drives, and the transcript
+    path it binds, against the installed release.
 
     What it still does not cover: the adapter's process supervision, turn-claim
     settlement, and transcript binding through the engine. Those need a canary
-    that drives `start_antigravity_print_turn`, which is why the contract grades
+    that drives `start_antigravity_acp_turn`, which is why the contract grades
     `turn_start` below a full live proof.
     """
 
@@ -2513,9 +2592,7 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
                 "fall back to a hand-maintained copy of the command line."
             ),
         }
-    adapter_args = _antigravity_console_argv(
-        engine_bin, prompt, args.antigravity_print_timeout_secs
-    )
+    adapter_args = _antigravity_console_argv(engine_bin)
     if adapter_args is None:
         return _fail(
             "antigravity_adapter_argv_unavailable",
@@ -2525,32 +2602,16 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
     command = [binary, *adapter_args]
     env = _runtime_env(args, {"LONGHOUSE_HOOK_PYTHON": _hook_python(args), **worker_env})
     started = time.monotonic()
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(workspace),
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=max(args.antigravity_print_timeout_secs + 30, 45),
-        )
-        timed_out = False
-    except subprocess.TimeoutExpired as exc:
-        result = subprocess.CompletedProcess(
-            command,
-            returncode=124,
-            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
-            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
-        )
-        timed_out = True
+    turn = _antigravity_acp_turn(
+        command,
+        cwd=workspace,
+        env=env,
+        prompt=prompt,
+        timeout=max(args.antigravity_print_timeout_secs + 30, 45),
+    )
     elapsed = round(time.monotonic() - started, 3)
-
-    stdout = result.stdout or ""
-    payload = _antigravity_stream_result(stdout)
-    conversation_id = str((payload or {}).get("conversation_id") or "").strip()
-    status = str((payload or {}).get("status") or "").strip()
-    response = str((payload or {}).get("response") or "")
+    conversation_id = str(turn["session_id"]).strip()
+    response = str(turn["response"])
     transcript = (
         Path(worker_home)
         / ".gemini/antigravity-cli/brain"
@@ -2569,31 +2630,31 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
         "argv": command,
         "argv_source": "longhouse-engine antigravity-console-argv",
         "engine_bin": engine_bin,
-        "returncode": result.returncode,
+        "returncode": turn.get("returncode"),
         "elapsed_secs": elapsed,
-        "timed_out": timed_out,
-        "structured_result": payload is not None,
-        "result_status": status,
+        "timed_out": turn["timed_out"],
+        "stop_reason": turn["stop_reason"],
+        "has_usage": turn["has_usage"],
         "conversation_id": conversation_id,
         "marker_in_response": marker in response,
         "transcript_path": str(transcript) if transcript else None,
         "transcript_exists": bool(transcript and transcript.is_file()),
-        "stderr_tail": (result.stderr or "")[-2000:],
+        "stderr_tail": turn.get("stderr", ""),
     }
-    if result.returncode != 0 or timed_out:
-        return _fail("antigravity_run_once_failed", "agy --print did not complete", **evidence)
-    if payload is None:
+    if turn["timed_out"]:
+        return _fail("antigravity_run_once_failed", "agy acp did not complete the turn in time", **evidence)
+    if turn["error"]:
+        return _fail("antigravity_run_once_status", f"agy reported an error: {turn['error']}", **evidence)
+    if turn["stop_reason"] != "end_turn":
         return _fail(
             "antigravity_run_once_unstructured",
-            "agy --output-format stream-json did not emit one result bound to its init identity",
+            f"agy acp ended the prompt with stopReason {turn['stop_reason']!r}",
             **evidence,
         )
-    if status != "SUCCESS":
-        return _fail("antigravity_run_once_status", f"agy reported status {status}", **evidence)
     if not conversation_id:
         return _fail(
             "antigravity_run_once_no_conversation",
-            "agy result carried no conversation id, so no transcript can be bound",
+            "agy session/new carried no session id, so no transcript can be bound",
             **evidence,
         )
     if marker not in response:
@@ -2618,7 +2679,7 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
             "run_once": {
                 "status": "pass",
                 "level": "live_token",
-                "source": "real agy --print returned a structured single-turn result carrying the requested marker",
+                "source": "real agy acp answered one session/prompt with the requested marker",
                 "canary": "antigravity_real_run_once",
             },
             "turn_start": {

@@ -236,7 +236,7 @@ pub fn age_since_rfc3339(instant: &str) -> Option<Duration> {
 }
 
 /// Inline `image` entries for an RPC `prompt` or `steer` command.
-fn image_entries(image_paths: &[PathBuf]) -> Result<Vec<Value>> {
+pub(crate) fn image_entries(image_paths: &[PathBuf]) -> Result<Vec<Value>> {
     use base64::Engine as _;
     let mut images = Vec::new();
     for path in image_paths {

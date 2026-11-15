@@ -576,7 +576,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     )
     antigravity_live = (
         (event.provider or "").strip().lower() == "antigravity"
-        and (event.source or "").strip().lower() == "antigravity_print"
+        and (event.source or "").strip().lower() in {"antigravity_acp", "antigravity_print"}
         and event.kind == "progress_signal"
         and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
     )

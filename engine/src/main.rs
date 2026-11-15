@@ -1,6 +1,6 @@
 mod antigravity_channel_control;
 mod antigravity_helm_live;
-mod antigravity_print;
+mod antigravity_acp;
 mod antigravity_workspace;
 mod bench;
 mod build_identity;
@@ -570,23 +570,7 @@ enum Commands {
 
     /// Print the argv the Antigravity Console adapter builds, so a release
     /// canary can execute the adapter's own command line instead of a replica.
-    AntigravityConsoleArgv {
-        /// Prompt the Console turn would carry
-        #[arg(long)]
-        prompt: String,
-
-        /// Optional model override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Resume an existing conversation instead of starting one
-        #[arg(long)]
-        conversation: Option<String>,
-
-        /// Bounded per-turn timeout, in seconds
-        #[arg(long)]
-        print_timeout_secs: Option<u64>,
-    },
+    AntigravityConsoleArgv {},
 
     /// Dev canary: talk directly to `codex app-server` over stdio and capture the full stream
     CodexAppServerCanary {
@@ -1996,23 +1980,13 @@ fn main() -> anyhow::Result<()> {
                 ))?;
             }
         }
-        Commands::AntigravityConsoleArgv {
-            prompt,
-            model,
-            conversation,
-            print_timeout_secs,
-        } => {
-            let argv = antigravity_print::console_turn_argv(
-                &prompt,
-                model.as_deref(),
-                conversation.as_deref(),
-                print_timeout_secs.unwrap_or(antigravity_print::DEFAULT_PRINT_TIMEOUT_SECS),
-            );
+        Commands::AntigravityConsoleArgv {} => {
+            let argv = antigravity_acp::console_turn_argv();
             println!(
                 "{}",
                 serde_json::to_string(&serde_json::json!({
                     "binary_env": "LONGHOUSE_ANTIGRAVITY_BIN",
-                    "default_binary": antigravity_print::DEFAULT_ANTIGRAVITY_BIN,
+                    "default_binary": antigravity_acp::DEFAULT_ANTIGRAVITY_BIN,
                     "args": argv,
                 }))?
             );

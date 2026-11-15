@@ -1,7 +1,7 @@
 //! Envelope plumbing shared by the Console (headless, UI-driven) adapters.
 //!
 //! `claude_print`, `cursor_print`, `omp_print`, `pi_print`,
-//! `antigravity_print` and `opencode_run` each carried a sink with the same
+//! `antigravity_acp` and `opencode_run` each carried a sink with the same
 //! run identity and hand-built the same runtime-event envelope, status-slot
 //! phase, local phase record and terminal handoff, differing only in the
 //! provider id, adapter id, dedupe prefix and execution lifetime. Those four

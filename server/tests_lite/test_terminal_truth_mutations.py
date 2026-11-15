@@ -25,7 +25,7 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
         "claude-helm-text-forward",
         "opencode-host-publish",
         "omp-session-dir-rule",
-        "antigravity-step-update-arm",
+        "antigravity-message-chunk-arm",
         "antigravity-helm-reader",
         "host-live-item-drop",
         "host-thinking-drop",

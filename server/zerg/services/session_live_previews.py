@@ -22,6 +22,7 @@ from zerg.utils.time import normalize_utc
 LIVE_PREVIEW_SOURCES = {
     "codex_bridge_live",
     "codex_console_live",
+    "antigravity_acp",
     "antigravity_print",
     "claude_print",
     "cursor_print",
