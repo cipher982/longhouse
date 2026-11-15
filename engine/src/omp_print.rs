@@ -54,7 +54,6 @@ pub struct OmpPrintRunConfig {
     pub session_dir: Option<PathBuf>,
     pub resume_provider_thread_id: Option<String>,
     pub resume_session_file: Option<PathBuf>,
-    pub permission_mode: String,
     pub origin: String,
     pub wake_id: Option<String>,
     pub invocation_id: Option<String>,
@@ -115,9 +114,6 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = config.turn_id.as_deref() {
         validate_uuid(turn_id, "turn_id")?;
-    }
-    if config.permission_mode != "provider_local" {
-        anyhow::bail!("OMP Console currently supports provider_local permission mode only");
     }
     if config.origin == "wake" {
         let invocation_id = config.invocation_id.as_deref().unwrap_or_default();
@@ -2761,6 +2757,7 @@ pub fn build_omp_args(
     headless_extensions: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
+    args.extend(crate::console_permission::console_argv("omp"));
     if headless_extensions {
         // Extensions run headless: no extension_ui_request dialogs for a host.
         args.push("--no-ui".into());
@@ -4147,7 +4144,6 @@ mod tests {
                 session_dir: session_dir.map(Path::to_path_buf),
                 resume_provider_thread_id,
                 resume_session_file,
-                permission_mode: "provider_local".to_string(),
                 origin: "user".to_string(),
                 wake_id: None,
                 invocation_id: None,
@@ -4319,6 +4315,7 @@ mod tests {
             vec![
                 "--mode",
                 "rpc",
+                "--auto-approve",
                 "--no-ui",
                 "--session-dir",
                 "/sessions",
@@ -4348,6 +4345,7 @@ mod tests {
             vec![
                 "--mode",
                 "rpc",
+                "--auto-approve",
                 "--no-ui",
                 "--config",
                 "/run/omp-helm-config.yml"
@@ -5160,7 +5158,6 @@ for line in sys.stdin:
             session_dir: Some(temp.join("omp-sessions")),
             resume_provider_thread_id,
             resume_session_file,
-            permission_mode: "provider_local".into(),
             origin: origin.to_string(),
             wake_id,
             invocation_id,
@@ -6150,7 +6147,6 @@ for line in sys.stdin:
             session_dir: None,
             resume_provider_thread_id: None,
             resume_session_file: None,
-            permission_mode: "provider_local".into(),
             origin: "user".into(),
             wake_id: None,
             invocation_id: None,
@@ -6252,7 +6248,6 @@ for line in sys.stdin:
             session_dir: None,
             resume_provider_thread_id: Some(native_id.clone()),
             resume_session_file: Some(PathBuf::from(&first.session_file)),
-            permission_mode: "provider_local".into(),
             origin: "user".into(),
             wake_id: None,
             invocation_id: None,
@@ -6421,7 +6416,6 @@ for line in sys.stdin:
                 session_dir: Some(temp.join("omp-sessions")),
                 resume_provider_thread_id: None,
                 resume_session_file: None,
-                permission_mode: "provider_local".into(),
                 origin: "user".into(),
                 wake_id: None,
                 invocation_id: None,

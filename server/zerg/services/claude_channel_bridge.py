@@ -104,12 +104,16 @@ def wait_for_claude_channel_state(
 
 
 # Claude managed permission policy.
-#  - "bypass" (default): launch with --dangerously-skip-permissions; the session
-#    never asks and the Longhouse permission gate stays dormant. This is the
-#    historical behavior and must remain the default.
-#  - "remote_approve": launch WITHOUT --dangerously-skip-permissions and enable
-#    the PreToolUse permission gate, so the session's permission prompts can be
-#    answered remotely through Longhouse.
+# Helm is invisible: Longhouse adds no permission flag of its own.
+#  - "provider_local" (default): launch with exactly the user's own flags and
+#    settings; Claude asks as it normally would and the Longhouse permission
+#    gate stays dormant.
+#  - "bypass": only when a caller explicitly asks for it; launch with
+#    --dangerously-skip-permissions.
+#  - "remote_approve": launch without the flag and enable the PreToolUse
+#    permission gate, so the session's permission prompts can be answered
+#    remotely through Longhouse.
+CLAUDE_PERMISSION_MODE_PROVIDER_LOCAL = "provider_local"
 CLAUDE_PERMISSION_MODE_BYPASS = "bypass"
 CLAUDE_PERMISSION_MODE_REMOTE_APPROVE = "remote_approve"
 
@@ -123,7 +127,7 @@ def build_claude_channel_exec_command(
     resume: bool,
     hook_url: str | None = None,
     claude_command: str = "claude",
-    permission_mode: str = CLAUDE_PERMISSION_MODE_BYPASS,
+    permission_mode: str = CLAUDE_PERMISSION_MODE_PROVIDER_LOCAL,
     mcp_config_path: str | Path | None = None,
 ) -> str:
     """Build the native Claude launch/resume shell command for channel sessions."""
@@ -142,8 +146,8 @@ def build_claude_channel_exec_command(
 
     target_flag = "--resume" if resume else "--session-id"
     command_bits = [claude_command]
-    # Only bypass permissions when NOT routing approvals through Longhouse.
-    if not remote_approve:
+    # Only when a caller explicitly asked for bypass.
+    if str(permission_mode or "").strip() == CLAUDE_PERMISSION_MODE_BYPASS:
         command_bits.append("--dangerously-skip-permissions")
     command_bits += [
         target_flag,
@@ -165,9 +169,9 @@ def build_claude_channel_exec_command(
         inner.append(f"export LONGHOUSE_RUN_ID={_quote(str(UUID(longhouse_run_id)))}")
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")
-    # Engage the permission gate ONLY in remote-approve mode. In bypass mode we
+    # Engage the permission gate ONLY in remote-approve mode. Otherwise we
     # explicitly force it off so an inherited LONGHOUSE_PERMISSION_HOOK_ENABLED=1
-    # from the parent shell can never gate a bypass/autonomous session.
+    # from the parent shell can never gate a session that did not ask for it.
     if remote_approve:
         inner.append("export LONGHOUSE_PERMISSION_HOOK_ENABLED=1")
     else:

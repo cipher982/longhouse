@@ -101,48 +101,9 @@ pub(super) async fn execute_turn_start(
     // first: once the child owns a thread of its own, later turns resume it
     // like any other Console session, and re-sending this would fork again.
     let fork_provider_thread_id = payload_optional_string(payload, "fork_from_provider_thread_id");
-    // Pi retains its native project trust and tool policy; other Console
-    // adapters retain their existing headless permission contract.
-    let permission_mode =
-        payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
-            if provider == "pi" {
-                "provider_local"
-            } else {
-                CONSOLE_DEFAULT_PERMISSION_MODE
-            }
-            .to_string()
-        });
-    if provider == "opencode" && permission_mode != "bypass" {
-        return Err(CommandError {
-            code: "permission_mode_unsupported".to_string(),
-            message: "OpenCode Console currently supports bypass permission mode only".to_string(),
-        });
-    }
-    if provider == "claude" && permission_mode != "bypass" {
-        return Err(CommandError {
-            code: "permission_mode_unsupported".to_string(),
-            message: "Claude Console currently supports bypass permission mode only".to_string(),
-        });
-    }
-    if provider == "cursor" && !matches!(permission_mode.as_str(), "bypass" | "auto_approve") {
-        return Err(CommandError {
-            code: "permission_policy_unsupported".to_string(),
-            message: "Cursor Console currently supports auto_approve permission policy only"
-                .to_string(),
-        });
-    }
-    if provider == "pi" && permission_mode != "provider_local" {
-        return Err(CommandError {
-            code: "permission_mode_unsupported".to_string(),
-            message: "Pi Console supports provider_local permission mode only".to_string(),
-        });
-    }
-    if provider == "omp" && permission_mode != "provider_local" {
-        return Err(CommandError {
-            code: "permission_mode_unsupported".to_string(),
-            message: "OMP Console supports provider_local permission mode only".to_string(),
-        });
-    }
+    // Permissions are not a per-turn choice: every Console launcher takes its
+    // posture from `console_permission`. A `permission_mode` an older client
+    // still sends is ignored.
     if provider == "claude" {
         crate::claude_print::require_claude_lifecycle_hook().map_err(|error| CommandError {
             code: "claude_lifecycle_hook_missing".to_string(),
@@ -343,7 +304,6 @@ pub(super) async fn execute_turn_start(
             image_paths: image_paths.clone(),
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
-            permission_mode,
             origin: payload_optional_string(payload, "origin")
                 .unwrap_or_else(|| "user".to_string()),
             wake_id: payload_optional_string(payload, "wake_id"),
@@ -386,7 +346,6 @@ pub(super) async fn execute_turn_start(
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
-            permission_mode: permission_mode.clone(),
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -421,7 +380,6 @@ pub(super) async fn execute_turn_start(
             image_paths: image_paths.clone(),
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
-            permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -460,7 +418,6 @@ pub(super) async fn execute_turn_start(
             resume_thread_id: resume_provider_thread_id.clone(),
             resume_session_file: payload_optional_string(payload, "resume_session_file")
                 .map(PathBuf::from),
-            permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
         })
@@ -500,7 +457,6 @@ pub(super) async fn execute_turn_start(
             resume_provider_thread_id: resume_provider_thread_id.clone(),
             resume_session_file: payload_optional_string(payload, "resume_session_file")
                 .map(PathBuf::from),
-            permission_mode,
             origin: payload_optional_string(payload, "origin")
                 .unwrap_or_else(|| "user".to_string()),
             wake_id: payload_optional_string(payload, "wake_id"),
@@ -545,7 +501,6 @@ pub(super) async fn execute_turn_start(
             model: payload_optional_string(payload, "model"),
             conversation_id: resume_provider_thread_id,
             print_timeout_secs: payload.get("print_timeout_secs").and_then(Value::as_u64),
-            permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
         })

@@ -110,7 +110,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     source_runner_name: str
     managed_session_name: str
     attach_command: str
-    permission_mode: str = "bypass"
+    permission_mode: str = "provider_local"
     # Session-scoped hook token, only present for remote_approve launches. The CLI
     # exports it as LONGHOUSE_HOOK_TOKEN so the permission gate authenticates as
     # this session (the permission-gate endpoints reject durable device tokens).
@@ -272,7 +272,7 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     if capabilities.managed_transport is None:
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
     control_projection = kernel_projection.control
-    permission_mode = str(getattr(session, "permission_mode", "") or "bypass").strip() or "bypass"
+    permission_mode = str(getattr(session, "permission_mode", "") or "provider_local").strip() or "provider_local"
     # Mint a session-scoped hook token for EVERY managed launch. The engine
     # exports it to the provider in place of the durable device token, which
     # authorizes the whole owner account and is inherited by every grandchild

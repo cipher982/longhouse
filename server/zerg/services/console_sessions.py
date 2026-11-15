@@ -61,7 +61,7 @@ async def create_empty_console_session(
         "cwd": cwd,
         "project": str(project or "").strip() or cwd.rstrip("/").rsplit("/", 1)[-1] or "console",
         "display_name": str(display_name or "").strip() or None,
-        "provider_config": normalize_console_provider_config(provider, provider_config or {"permission_mode": "bypass"}),
+        "provider_config": normalize_console_provider_config(provider_config),
         "launch_actor": launch_actor,
         "launch_surface": launch_surface,
         "started_at": now.isoformat(),

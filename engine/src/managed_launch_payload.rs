@@ -43,19 +43,6 @@ impl PermissionMode {
             PermissionMode::RemoteApprove => "remote_approve",
         }
     }
-
-    /// The posture implied by whether the launcher actually passes its
-    /// provider's skip-permissions flag. Every launcher must derive its wire
-    /// value from the same boolean it uses to build argv, so the two cannot
-    /// disagree.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn from_bypass_flag(bypassing: bool) -> Self {
-        if bypassing {
-            PermissionMode::Bypass
-        } else {
-            PermissionMode::RemoteApprove
-        }
-    }
 }
 
 /// Normalized product provenance for one managed Helm registration.
@@ -293,14 +280,11 @@ mod tests {
     }
 
     #[test]
-    fn permission_mode_follows_the_flag_that_builds_argv() {
+    fn permission_mode_wire_values() {
         // Codex reported "bypass" unconditionally while passing
         // --dangerously-bypass-approvals-and-sandbox only on request.
-        assert_eq!(PermissionMode::from_bypass_flag(true).as_wire(), "bypass");
-        assert_eq!(
-            PermissionMode::from_bypass_flag(false).as_wire(),
-            "remote_approve"
-        );
+        assert_eq!(PermissionMode::Bypass.as_wire(), "bypass");
+        assert_eq!(PermissionMode::RemoteApprove.as_wire(), "remote_approve");
         assert_eq!(PermissionMode::ProviderLocal.as_wire(), "provider_local");
     }
 

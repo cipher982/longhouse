@@ -23,7 +23,6 @@ from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.live_catalog_launch import normalize_console_provider_config
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_provider_contracts import factory_provider_names
@@ -112,7 +111,7 @@ class ManagedLocalLaunchParams:
     native_claude_channels_available: bool | None = None
     claude_launch_env: dict[str, str] | None = None
     require_runner_ready: bool = False
-    permission_mode: str = "bypass"
+    permission_mode: str = "provider_local"
     launch_actor: str | None = None
     launch_surface: str | None = None
     # Optional client-minted identity for Degraded Helm: retries/convergence
@@ -289,14 +288,20 @@ def build_managed_local_launch_plan(
         )
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     requested_permission_mode = str(params.permission_mode).strip()
-    permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
+    # Helm adds no permission flag of its own: unless the caller explicitly
+    # asks for "bypass" or "remote_approve", the provider keeps the user's
+    # own settings ("provider_local").
+    permission_mode = (
+        requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "provider_local"
+    )
     provider_config = params.provider_config
     if provider in {"pi", "omp"}:
-        try:
-            provider_config = normalize_console_provider_config(provider, provider_config)
-        except ValueError as exc:
-            raise ManagedLocalLaunchError(str(exc), status_code=400) from exc
-        permission_mode = str(provider_config["permission_mode"])
+        if permission_mode == "remote_approve":
+            raise ManagedLocalLaunchError(
+                f"{provider.upper()} Helm does not support remote approval; use provider_local",
+                status_code=400,
+            )
+        permission_mode = "provider_local"
     origin_kind = "test_or_canary" if classify_provider_proof_environment(cwd=cwd, machine_id=params.machine_name) == "test" else None
     launch_actor, launch_surface = sanitize_launch_provenance(
         origin_kind=origin_kind,

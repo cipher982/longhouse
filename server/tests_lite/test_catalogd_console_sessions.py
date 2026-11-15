@@ -72,7 +72,7 @@ def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
     assert replay["exact_replay"] is True
 
 
-def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_path):
+def test_console_has_one_bypass_posture_and_drops_a_client_permission_mode(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-pi-console.db")
     initialize_catalog_schema(engine)
     with Session(engine) as db:
@@ -90,7 +90,7 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
             "device_id": "cinder",
             "cwd": "/tmp/pi-console",
             "project": "pi-console",
-            "provider_config": {"permission_mode": "bypass", "pi_provider": "openrouter"},
+            "provider_config": {"permission_mode": "provider_local", "pi_provider": "openrouter"},
             "started_at": datetime.now(UTC),
         }
     )
@@ -98,8 +98,8 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
     with Session(engine) as db:
         session = db.get(LiveSessionCatalog, str(session_id))
         thread = db.get(LiveSessionThread, str(thread_id))
-        assert session.permission_mode == "provider_local"
-        assert json.loads(thread.provider_config_json)["permission_mode"] == "provider_local"
+        assert session.permission_mode == "bypass"
+        assert json.loads(thread.provider_config_json) == {"pi_provider": "openrouter"}
 
     report_id = uuid4()
     turn = store.enqueue_console_turn(
@@ -112,7 +112,7 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
             "created_at": datetime.now(UTC),
         }
     )
-    assert turn["turn"]["provider_config"]["permission_mode"] == "provider_local"
+    assert "permission_mode" not in turn["turn"]["provider_config"]
     assert turn["turn"]["report_id"] == str(report_id)
 
 
@@ -472,7 +472,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
     assert current["turn"]["turn_id"] == first["turn"]["turn_id"]
     assert current["turn"]["message"] == "first"
     assert current["turn"]["client_request_id"] == "request-1"
-    assert current["turn"]["provider_config"] == {"permission_mode": "bypass"}
+    assert current["turn"]["provider_config"] == {}
     assert store.read_current_console_turn(session_id=str(session_id), owner_id=42) == {"found": False}
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"

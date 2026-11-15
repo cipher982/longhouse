@@ -47,13 +47,14 @@ const TURN_INITIALIZE_BUDGET: Duration = Duration::from_secs(5);
 /// cold; 60 s = 3x that measured 20 s tail.
 const PREWARM_INITIALIZE_BUDGET: Duration = Duration::from_secs(60);
 const DEFAULT_CODEX_BIN: &str = "codex";
-pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
+// Both come from the one Console permission table (`console_permission`).
+pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = crate::console_permission::CODEX_APPROVAL_POLICY;
 // Console runs unattended: there is no terminal and no human to answer a
 // prompt, so a confining sandbox cannot degrade into "ask first" -- it just
 // fails the turn with no way to recover. Every other Console provider already
 // runs unconfined (`permission_mode: "bypass"`); Codex was the lone exception,
 // which made the same prompt succeed on Claude and fail here. One policy.
-pub const DEFAULT_CONSOLE_SANDBOX: &str = "danger-full-access";
+pub const DEFAULT_CONSOLE_SANDBOX: &str = crate::console_permission::CODEX_SANDBOX;
 pub const CODEX_EXEC_ADAPTER: &str = "codex_exec";
 
 type ConsoleReply = tokio::sync::oneshot::Sender<std::result::Result<(), String>>;
@@ -3460,7 +3461,8 @@ impl AppServerRpc {
     async fn respond_to_server_request(&mut self, request: &Value) -> Result<()> {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-        let Some(result) = jsonrpc::console_decline_answer(method) else {
+        let params = request.get("params").cloned().unwrap_or(Value::Null);
+        let Some(result) = jsonrpc::console_bypass_answer(method, &params) else {
             anyhow::bail!("unsupported Codex app-server request: {method}");
         };
         self.write(&jsonrpc::response(id, result)).await

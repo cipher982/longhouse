@@ -1665,9 +1665,9 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         project: args.project.as_deref(),
         display_name: args.name.as_deref(),
         machine_name: &machine_name,
-        // The hook inbox has no remote-approval surface; agy settles its own
-        // permissions and Longhouse routes no approval to it.
-        permission_mode: PermissionMode::Bypass,
+        // The hook inbox has no remote-approval surface and Helm adds no
+        // permission flag: agy keeps the user's own settings.
+        permission_mode: PermissionMode::ProviderLocal,
         provenance: ManagedLaunchProvenance::interactive_helm(),
         extra: vec![],
     }
@@ -1723,7 +1723,6 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
 
     let mut command = Command::new(&binary);
     command
-        .arg("--dangerously-skip-permissions")
         .args(&args.antigravity_args)
         .current_dir(&cwd)
         .env("LONGHOUSE_HOME", longhouse_home()?);
@@ -2113,9 +2112,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             project: args.project.as_deref(),
             display_name: args.name.as_deref(),
             machine_name: &machine_name,
-            // Claude passes --dangerously-skip-permissions unless remote
-            // approval was requested, so the flag and the wire value agree.
-            permission_mode: PermissionMode::from_bypass_flag(!args.remote_approve),
+            // Helm adds no permission flag: Claude keeps the user's own
+            // settings unless remote approval was requested.
+            permission_mode: if args.remote_approve {
+                PermissionMode::RemoteApprove
+            } else {
+                PermissionMode::ProviderLocal
+            },
             provenance: ManagedLaunchProvenance::interactive_helm(),
             extra: vec![("native_claude_channels_available", json!(true))],
         }
@@ -2259,9 +2262,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .and_then(|response| response.permission_mode.as_deref())
         .unwrap_or(if args.remote_approve {
-            "provider_local"
+            "remote_approve"
         } else {
-            "bypass"
+            "provider_local"
         });
     // Only a session-scoped hook token may reach the provider. The device
     // token authorizes the whole owner account and is inherited by every
@@ -2276,9 +2279,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .map(str::to_owned);
     let mcp_config = write_claude_mcp_config(&session_id, coordination_token.as_deref())?;
     let mut command = Command::new(&binary);
-    if permission_mode == "bypass" {
-        command.arg("--dangerously-skip-permissions");
-    }
     let engine_path = paired_engine_path()?.display().to_string();
     if owner_input_route.uses_mod() {
         match install_claude_mod() {

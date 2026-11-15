@@ -38,11 +38,21 @@ def _fake_claude_session(permission_mode: str):
     )
 
 
-def test_bypass_session_attach_command_keeps_autonomous_flags():
+def test_explicit_bypass_session_attach_command_carries_the_flag():
     cmd = build_managed_local_attach_command(session=_fake_claude_session("bypass"))
     assert cmd is not None
     assert "--dangerously-skip-permissions" in cmd
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in cmd
+
+
+def test_helm_attach_command_adds_no_permission_flag_unless_asked():
+    """Helm is invisible: only an explicit bypass request adds the flag."""
+
+    for mode in ("provider_local", "remote_approve"):
+        cmd = build_managed_local_attach_command(session=_fake_claude_session(mode))
+        assert cmd is not None
+        assert "--dangerously-skip-permissions" not in cmd, mode
+        assert "--permission-mode" not in cmd, mode
 
 
 def test_remote_approve_session_attach_command_engages_gate():
@@ -52,12 +62,12 @@ def test_remote_approve_session_attach_command_engages_gate():
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=1" in cmd
 
 
-def test_missing_permission_mode_defaults_to_bypass():
+def test_missing_permission_mode_defaults_to_provider_local():
     session = _fake_claude_session("bypass")
     delattr(session, "permission_mode")
     cmd = build_managed_local_attach_command(session=session)
     assert cmd is not None
-    assert "--dangerously-skip-permissions" in cmd
+    assert "--dangerously-skip-permissions" not in cmd
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in cmd
 
 
@@ -150,7 +160,7 @@ def test_managed_launch_plan_preserves_provider_local_without_remote_authority()
     assert plan.permission_mode == "provider_local"
 
 
-def test_pi_managed_launch_plan_forces_provider_local_console_policy():
+def test_pi_managed_launch_plan_is_provider_local_helm():
     from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
     from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 
@@ -162,12 +172,10 @@ def test_pi_managed_launch_plan_forces_provider_local_console_policy():
             provider="pi",
             machine_name="cinder",
             permission_mode="bypass",
-            provider_config={"permission_mode": "bypass"},
         )
     )
 
     assert plan.permission_mode == "provider_local"
-    assert plan.provider_config == {"permission_mode": "provider_local"}
 
 
 def test_cursor_remote_approval_token_does_not_require_coordination_tools():

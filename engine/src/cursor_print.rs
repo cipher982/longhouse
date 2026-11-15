@@ -35,7 +35,6 @@ pub struct CursorPrintRunConfig {
     pub prompt: String,
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
-    pub permission_mode: String,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -95,9 +94,6 @@ pub async fn start_cursor_print_turn(
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
     }
-    if !matches!(config.permission_mode.as_str(), "bypass" | "auto_approve") {
-        anyhow::bail!("Cursor Console currently supports auto_approve permission policy only");
-    }
     let provider_thread_id = match normalized_optional(&config.resume_provider_thread_id) {
         Some(value) => {
             validate_uuid(&value, "resume_provider_thread_id")?;
@@ -146,7 +142,6 @@ pub async fn start_cursor_print_turn(
         "--print".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
-        "--trust".to_string(),
         "--workspace".to_string(),
         config.cwd.to_string_lossy().to_string(),
         "--resume".to_string(),
@@ -155,8 +150,7 @@ pub async fn start_cursor_print_turn(
     if let Some(model) = normalized_optional(&config.model) {
         args.extend(["--model".to_string(), model]);
     }
-    args.push("--force".to_string());
-    args.push("--approve-mcps".to_string());
+    args.extend(crate::console_permission::console_argv("cursor"));
     // End of options, so a message that opens with `--` reaches the agent as
     // text instead of being parsed as flags.
     args.push("--".to_string());
@@ -1298,7 +1292,6 @@ elif prompt == "restart-mismatch":
             prompt: prompt.to_string(),
             resume_provider_thread_id: None,
             model: None,
-            permission_mode: "bypass".to_string(),
             machine_name: "cursor-restart-test".to_string(),
             local_db_path: None,
         })
@@ -1773,7 +1766,6 @@ elif prompt == "restart-mismatch":
                 prompt,
                 resume_provider_thread_id: resume,
                 model: Some("gpt-5.3-codex-low".to_string()),
-                permission_mode: "bypass".to_string(),
                 machine_name: "cursor-console-canary".to_string(),
                 local_db_path: None,
             })
@@ -1875,7 +1867,6 @@ elif prompt == "restart-mismatch":
                 .to_string(),
             resume_provider_thread_id: Some(first.provider_thread_id.clone()),
             model: Some("gpt-5.3-codex-low".to_string()),
-            permission_mode: "bypass".to_string(),
             machine_name: "cursor-console-canary".to_string(),
             local_db_path: None,
         })

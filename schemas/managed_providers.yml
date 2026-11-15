@@ -1,4 +1,14 @@
 schema_version: 1
+# Permission posture. Wherever Longhouse itself chooses the provider's flags
+# (a Console turn the Machine Agent launches) the provider runs in its most
+# permissive mode: claude and agy --dangerously-skip-permissions, codex
+# approval_policy never + sandbox danger-full-access, cursor --trust --force
+# --approve-mcps, omp --auto-approve, opencode permission requests approved over
+# its API, pi nothing to bypass (no permission system). There is no per-session
+# Console choice and no remote approval for Console. The single table is
+# engine/src/console_permission.rs and a test requires an entry for every
+# provider here with a console_adapter. Helm adds no permission flag: it passes
+# through the user's own flags and settings. Shadow observes only.
 # Product-surface parity status for every shared transcript signal.
 # Separating surface from provider ingest prevents a signal from reading green
 # when the parser extracts it but catalogd/API/UI never render it.
@@ -2682,6 +2692,8 @@ providers:
   permission_prompt_surface: false
   external_event_channel: pi_helm_channel
   # Pi owns project trust locally; there is no remote permission reply channel.
+  # Pi has no tool permission prompts at all, so Console runs unconfined by
+  # construction (engine/src/console_permission.rs); Helm is the user's own Pi.
   pause_tool_name: "pi_pause_request"
   harness_safe_no_token_prompt: false
   harness_safe_managed_session_scenarios: []
@@ -3227,7 +3239,7 @@ providers:
         required_evidence_classes: [live_token, scripted_model]
         max_age_seconds: 604800
         max_age_seconds_by_evidence_class: {live_token: 604800, scripted_model: 1800}
-    answer_pause: {level: none, source: "OMP provider-local Console approval surface", disposition: not_implemented, reason: "OMP does not expose a proven remote approval transport", owner_action: "Add an OMP remote approval canary before exposing answer_pause", blocker: none}
+    answer_pause: {level: none, source: "Console runs omp --auto-approve, so no approval request exists to answer; Helm approvals are the provider-local TUI", disposition: not_implemented, reason: "OMP does not expose a proven remote approval transport; Console never needs one because it runs with --auto-approve", owner_action: "Add an OMP remote approval canary before exposing answer_pause", blocker: none}
     terminate:
       disposition: implemented
       required_assertions:

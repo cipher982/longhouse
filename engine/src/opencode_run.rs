@@ -74,7 +74,6 @@ pub struct OpenCodeRunConfig {
     pub image_paths: Vec<PathBuf>,
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
-    pub permission_mode: String,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -940,11 +939,6 @@ pub async fn start_opencode_run_turn(config: OpenCodeRunConfig) -> Result<OpenCo
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
-    }
-    if config.permission_mode != "bypass" {
-        anyhow::bail!(
-            "OpenCode Console supports permission_mode=bypass only; remote approval is unavailable"
-        );
     }
     let resume_provider_thread_id = normalized_optional(&config.resume_provider_thread_id);
     if let Some(value) = resume_provider_thread_id.as_deref() {
@@ -3127,7 +3121,6 @@ mod tests {
             image_paths: Vec::new(),
             resume_provider_thread_id: None,
             model: Some("openrouter/deepseek/deepseek-v4.1-flash".into()),
-            permission_mode: "bypass".into(),
             machine_name: "m".into(),
             local_db_path: None,
         };
@@ -3558,7 +3551,6 @@ mod tests {
                 image_paths: Vec::new(),
                 resume_provider_thread_id: resume.map(str::to_string),
                 model: Some("fake/model-1".to_string()),
-                permission_mode: "bypass".to_string(),
                 machine_name: "fake-opencode".to_string(),
                 local_db_path: None,
             })
@@ -4195,7 +4187,6 @@ mod tests {
             image_paths: Vec::new(),
             resume_provider_thread_id: None,
             model: std::env::var("LONGHOUSE_OPENCODE_MODEL").ok(),
-            permission_mode: "bypass".to_string(),
             machine_name: "opencode-steer-live".to_string(),
             local_db_path: None,
         })
@@ -4396,7 +4387,6 @@ mod tests {
                 image_paths: Vec::new(),
                 resume_provider_thread_id: resume,
                 model: None,
-                permission_mode: "bypass".to_string(),
                 machine_name: "opencode-console-canary".to_string(),
                 local_db_path: None,
             })
@@ -4490,7 +4480,6 @@ mod tests {
             image_paths: Vec::new(),
             resume_provider_thread_id: Some(provider_thread_id.clone()),
             model: None,
-            permission_mode: "bypass".to_string(),
             machine_name: "opencode-console-canary".to_string(),
             local_db_path: None,
         })

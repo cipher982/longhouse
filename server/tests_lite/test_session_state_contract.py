@@ -1552,12 +1552,14 @@ def test_branch_availability_is_narrower_than_resume():
     )
     assert unknown.reason == "permission_mode_unknown"
 
-    stricter = _branch_action_availability(
+    # A branch is a Console session (always bypass), so the parent's own
+    # posture, including a Helm parent that kept the user's settings, is fine.
+    helm_parent = _branch_action_availability(
         {"catalog": {"permission_mode": "provider_local", "permission_mode_source": "launch_plan"}},
         resume=available,
         supported_operations={"fork_thread"},
     )
-    assert stricter.reason == "permission_mode_unsupported"
+    assert helm_parent.state == "available"
 
 
 @pytest.mark.parametrize(

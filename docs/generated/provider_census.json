@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 356,
+  "file_count": 355,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -129,6 +129,18 @@
         "claude",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "engine/src/console_permission.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -2390,13 +2402,6 @@
       ]
     },
     {
-      "path": "server/zerg/catalogd/store_mixins/launch.py",
-      "providers": [
-        "codex",
-        "pi"
-      ]
-    },
-    {
       "path": "server/zerg/cli/onboard.py",
       "providers": [
         "antigravity",
@@ -2783,13 +2788,6 @@
         "cursor",
         "omp",
         "opencode",
-        "pi"
-      ]
-    },
-    {
-      "path": "server/zerg/services/live_catalog_launch.py",
-      "providers": [
-        "omp",
         "pi"
       ]
     },

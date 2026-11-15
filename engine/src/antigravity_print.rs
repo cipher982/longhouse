@@ -55,7 +55,6 @@ pub struct AntigravityPrintRunConfig {
     /// Continue an existing agy conversation instead of starting a new one.
     pub conversation_id: Option<String>,
     pub print_timeout_secs: Option<u64>,
-    pub permission_mode: String,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -108,9 +107,6 @@ pub async fn start_antigravity_print_turn(
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
-    }
-    if config.permission_mode != "bypass" {
-        anyhow::bail!("Antigravity Console currently supports bypass permission mode only");
     }
 
     let run_dir = crate::config::get_agent_dir()?
@@ -805,13 +801,13 @@ fn build_antigravity_args(
     conversation_id: Option<&str>,
     print_timeout_secs: u64,
 ) -> Vec<String> {
-    let mut args = vec![
-        "--dangerously-skip-permissions".to_string(),
+    let mut args = crate::console_permission::console_argv("antigravity");
+    args.extend([
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--print-timeout".to_string(),
         format!("{print_timeout_secs}s"),
-    ];
+    ]);
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".to_string(), model.to_string()]);
     }
@@ -2179,7 +2175,6 @@ elif prompt in ("restart-stop", "restart-mismatch"):
             model: None,
             conversation_id: Some(conversation_id),
             print_timeout_secs: Some(30),
-            permission_mode: "bypass".to_string(),
             machine_name: "antigravity-restart-test".to_string(),
             local_db_path: Some(root.join("state.db")),
         })

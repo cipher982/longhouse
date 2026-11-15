@@ -102,7 +102,6 @@ const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 // start with nothing failing to say so.
 use crate::codex_exec::DEFAULT_CONSOLE_APPROVAL_POLICY as REMOTE_CODEX_EXEC_APPROVAL_POLICY;
 use crate::codex_exec::DEFAULT_CONSOLE_SANDBOX as REMOTE_CODEX_EXEC_SANDBOX;
-const CONSOLE_DEFAULT_PERMISSION_MODE: &str = "bypass";
 // Generated beside the server's copy from the same schema, so advertised
 // supports[] and server-side contracts cannot drift silently. This copy omits the
 // source digests the engine never reads; they change on every adapter edit.
@@ -3851,69 +3850,6 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
             ));
             assert_eq!(wake["ok"], true, "{wake}");
         });
-    }
-
-    #[tokio::test]
-    async fn opencode_console_rejects_invisible_interactive_permission_mode() {
-        let run_id = Uuid::new_v4().to_string();
-        let mut cache = command_cache();
-        let response = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": run_id,
-                "session_id": Uuid::new_v4().to_string(),
-                "command_type": COMMAND_TURN_START,
-                "payload": {
-                    "provider": "opencode",
-                    "thread_id": Uuid::new_v4().to_string(),
-                    "turn_id": Uuid::new_v4().to_string(),
-                    "run_id": run_id,
-                    "cwd": std::env::temp_dir(),
-                    "message": "do work",
-                    "permission_mode": "remote_approve",
-                },
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-
-        assert_eq!(response["ok"], false);
-        assert_eq!(response["error"]["code"], "permission_mode_unsupported");
-    }
-
-    #[tokio::test]
-    async fn cursor_console_rejects_policies_without_a_valid_control_path() {
-        for permission_mode in ["provider_local", "remote_human", "remote_approve"] {
-            let run_id = Uuid::new_v4().to_string();
-            let mut cache = command_cache();
-            let response = handle_command_frame(
-                json!({
-                    "type": "command",
-                    "command_id": run_id,
-                    "session_id": Uuid::new_v4().to_string(),
-                    "command_type": COMMAND_TURN_START,
-                    "payload": {
-                        "provider": "cursor",
-                        "thread_id": Uuid::new_v4().to_string(),
-                        "turn_id": Uuid::new_v4().to_string(),
-                        "run_id": run_id,
-                        "cwd": std::env::temp_dir(),
-                        "message": "do work",
-                        "permission_mode": permission_mode,
-                    },
-                }),
-                &mut cache,
-                &test_config(),
-            )
-            .await;
-
-            assert_eq!(response["ok"], false, "{permission_mode}: {response}");
-            assert_eq!(
-                response["error"]["code"], "permission_policy_unsupported",
-                "{permission_mode}: {response}"
-            );
-        }
     }
 
     #[test]

@@ -47,7 +47,6 @@ pub struct ClaudePrintRunConfig {
     pub image_paths: Vec<PathBuf>,
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
-    pub permission_mode: String,
     pub origin: String,
     pub wake_id: Option<String>,
     pub invocation_id: Option<String>,
@@ -257,9 +256,6 @@ pub async fn start_claude_print_turn(
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
-    }
-    if config.permission_mode != "bypass" {
-        anyhow::bail!("Claude Console currently supports bypass permission mode only");
     }
     require_claude_lifecycle_hook()?;
 
@@ -2265,13 +2261,13 @@ fn build_claude_args(
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
-        "--dangerously-skip-permissions".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
         "--replay-user-messages".to_string(),
         // Token deltas as `stream_event` lines: the live reply text source.
         "--include-partial-messages".to_string(),
     ];
+    args.extend(crate::console_permission::console_argv("claude"));
     args.extend([
         if is_resume {
             "--resume"
@@ -2417,11 +2413,11 @@ mod tests {
                 "--output-format",
                 "stream-json",
                 "--verbose",
-                "--dangerously-skip-permissions",
                 "--input-format",
                 "stream-json",
                 "--replay-user-messages",
                 "--include-partial-messages",
+                "--dangerously-skip-permissions",
                 "--session-id",
                 &provider_id,
                 "--model",
@@ -2645,7 +2641,6 @@ mod tests {
                 image_paths: Vec::new(),
                 resume_provider_thread_id: resume,
                 model: None,
-                permission_mode: "bypass".to_string(),
                 origin: "user".to_string(),
                 wake_id: None,
                 invocation_id: None,
@@ -3005,7 +3000,6 @@ for _ in sys.stdin:
             image_paths: Vec::new(),
             resume_provider_thread_id,
             model: None,
-            permission_mode: "bypass".to_string(),
             origin: origin.to_string(),
             wake_id,
             invocation_id,
@@ -3925,7 +3919,6 @@ for _ in sys.stdin:
             image_paths: Vec::new(),
             resume_provider_thread_id: None,
             model: None,
-            permission_mode: "bypass".to_string(),
             origin: "user".to_string(),
             wake_id: None,
             invocation_id: None,

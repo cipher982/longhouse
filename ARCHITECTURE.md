@@ -66,7 +66,11 @@ other docs link here and do not redefine it.
   may persist while the TUI stays open.
 - **Console** - managed, headless, UI-dispatched. Web or iOS sends one-shot work
   through the Machine Agent. The provider process runs one turn and exits, and
-  state persists to disk.
+  state persists to disk. Longhouse picks the provider's flags here, so every
+  Console provider runs in its most permissive permission mode with no
+  per-session choice (`engine/src/console_permission.rs` is the one table).
+  Helm adds no permission flag of its own: it passes through the user's own
+  flags and settings. Shadow only observes.
 
 "Unmanaged" means Shadow and "managed" means Helm or Console. The two
 vocabularies answer different questions: can Longhouse steer this at all, and

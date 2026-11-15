@@ -335,9 +335,12 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         description="Optional allowlisted Claude launch env overrides to apply on the local runner",
     )
     permission_mode: str = Field(
-        "bypass",
+        "provider_local",
         description=(
-            "Managed permission policy: 'bypass', 'provider_local', or 'remote_approve' (answer permission prompts via Longhouse)"
+            "Helm permission policy: 'provider_local' (default: Longhouse adds no permission flag and the provider "
+            "keeps the user's own settings), 'bypass' (caller explicitly asks for the provider's skip-permissions "
+            "flag), or 'remote_approve' (answer permission prompts via Longhouse). Console ignores this field: it "
+            "always runs in the provider's most permissive mode."
         ),
     )
     provider_config: dict[str, object] | None = Field(
@@ -1317,7 +1320,6 @@ async def create_console_session_endpoint(
             project=body.project,
             display_name=body.display_name,
             provider_config={
-                "permission_mode": "bypass",
                 **({"model": body.model.strip()} if body.model and body.model.strip() else {}),
             },
             launch_surface=body.launch_surface,

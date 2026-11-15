@@ -58,7 +58,6 @@ pub struct PiPrintRunConfig {
     /// caller has one; otherwise `prepare_session` performs an exact UUID scan.
     pub resume_thread_id: Option<String>,
     pub resume_session_file: Option<PathBuf>,
-    pub permission_mode: String,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -115,9 +114,6 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     validate_uuid(&config.run_id, "run_id")?;
     if let Some(turn_id) = normalized_optional(&config.turn_id) {
         validate_uuid(&turn_id, "turn_id")?;
-    }
-    if config.permission_mode != "provider_local" {
-        anyhow::bail!("Pi Console currently supports provider_local permission mode only");
     }
     let launch_id = Uuid::new_v4().to_string();
     let target = prepare_session(
@@ -1986,7 +1982,6 @@ if args[:2] == ["--mode", "rpc"]:
             session_dir: Some(cwd.join("pi-sessions")),
             resume_thread_id: None,
             resume_session_file: None,
-            permission_mode: "provider_local".to_string(),
             machine_name: "pi-console-canary".to_string(),
             local_db_path: None,
         }

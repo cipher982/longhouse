@@ -507,15 +507,13 @@ def _branch_action_availability(
     # a build can do the first without the second.
     if "fork_thread" not in supported_operations:
         return SessionActionAvailability(state="unavailable", reason="fork_unsupported")
-    # Console runs with approvals disabled, so a branch can only carry a parent
-    # that positively ran under bypass. The stored posture cannot say that on
-    # its own -- it is non-null with a bypass default and manufactured in more
-    # than one place -- so an unrecorded source is unknown, never permissive.
+    # A branch is a Console session, which always runs in the provider's most
+    # permissive mode whatever the parent ran under, so the parent's posture
+    # does not matter. An unrecorded source is still unknown: the stored posture
+    # is non-null with a default and manufactured in more than one place.
     catalog = _mapping(catalog_facts.get("catalog"))
     if not _text(catalog.get("permission_mode_source")):
         return SessionActionAvailability(state="unavailable", reason="permission_mode_unknown")
-    if _text(catalog.get("permission_mode")) != "bypass":
-        return SessionActionAvailability(state="unavailable", reason="permission_mode_unsupported")
     return SessionActionAvailability(state="available")
 
 

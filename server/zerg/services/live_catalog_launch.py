@@ -33,21 +33,17 @@ LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
 logger = logging.getLogger(__name__)
 
 
-def normalize_console_permission_mode(provider: str, value: object) -> str:
-    normalized_provider = str(provider or "").strip().lower()
-    normalized = str(value or "").strip().lower()
-    if normalized_provider in {"pi", "omp"}:
-        if normalized in {"remote_approve", "remote_human"}:
-            raise ValueError(f"{normalized_provider.upper()} Console does not support remote approval; use provider_local")
-        return "provider_local"
-    return normalized or "bypass"
+# Console runs every provider in its most permissive mode and has no
+# per-session choice: the Machine Agent owns the flags (engine/src/
+# console_permission.rs). The stored value only records that posture.
+CONSOLE_PERMISSION_MODE = "bypass"
 
 
-def normalize_console_provider_config(provider: str, provider_config: dict[str, object] | None) -> dict[str, object]:
+def normalize_console_provider_config(provider_config: dict[str, object] | None) -> dict[str, object]:
+    """Drop a ``permission_mode`` an older client still sends; Console ignores it."""
+
     config = dict(provider_config or {})
-    if str(provider or "").strip().lower() not in {"pi", "omp"}:
-        return config
-    config["permission_mode"] = normalize_console_permission_mode(provider, config.get("permission_mode"))
+    config.pop("permission_mode", None)
     return config
 
 
@@ -57,8 +53,8 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
     session_id = str(data["session_id"])
     thread_id = str(data["thread_id"])
     provider = str(data["provider"])
-    provider_config = normalize_console_provider_config(provider, data.get("provider_config"))
-    permission_mode = normalize_console_permission_mode(provider, provider_config.get("permission_mode"))
+    provider_config = normalize_console_provider_config(data.get("provider_config"))
+    permission_mode = CONSOLE_PERMISSION_MODE
     device_id = str(data["device_id"])
     cwd = str(data["cwd"])
     started_at = data["started_at"]
@@ -451,8 +447,6 @@ def create_live_launch_catalog_shell(
 ) -> LiveSessionLaunchAttempt:
     """Create the synchronous launch identity in the live writer transaction."""
 
-    provider_config = normalize_console_provider_config(provider, provider_config)
-    permission_mode = normalize_console_permission_mode(provider, permission_mode)
     session_key = str(session_id)
     thread_key = str(thread_id)
     run_key = str(run_id) if run_id is not None else None

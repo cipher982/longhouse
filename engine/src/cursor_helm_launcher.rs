@@ -123,6 +123,23 @@ fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
     }
 }
 
+/// The Helm command line: the user's own arguments, plus the approval flags
+/// only when the caller explicitly asked for `auto_approve`. Helm never adds a
+/// permission flag on its own.
+fn helm_argv(
+    bin: &str,
+    conversation: &str,
+    permission_mode: &str,
+    user_args: &[String],
+) -> Vec<String> {
+    let mut argv = vec![bin.to_string(), "--resume".into(), conversation.to_string()];
+    if permission_mode == "auto_approve" {
+        argv.extend(["--force".into(), "--approve-mcps".into()]);
+    }
+    argv.extend(user_args.iter().cloned());
+    argv
+}
+
 fn permission_wire_mode(value: &str) -> &'static str {
     if value == "remote_human" {
         "remote_approve"
@@ -1329,7 +1346,12 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     } else {
         (
             None,
-            normalize_permission_mode(config.permission_mode.as_deref().unwrap_or("auto_approve"))?,
+            normalize_permission_mode(
+                config
+                    .permission_mode
+                    .as_deref()
+                    .unwrap_or("provider_local"),
+            )?,
         )
     };
     fs::create_dir_all(&dir)?;
@@ -1476,11 +1498,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     fs::set_permissions(&socket, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     // Build all exec data before forkpty. The parent is multi-threaded by this
     // point, so the child may only call async-signal-safe libc functions.
-    let mut argv = vec![bin.clone(), "--resume".into(), conversation.clone()];
-    if permission_mode == "auto_approve" {
-        argv.extend(["--force".into(), "--approve-mcps".into()]);
-    }
-    argv.extend(config.cursor_args.clone());
+    let argv = helm_argv(&bin, &conversation, &permission_mode, &config.cursor_args);
     let argv: Vec<CString> = argv
         .iter()
         .map(|value| CString::new(value.as_str()))
@@ -1720,6 +1738,21 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn helm_adds_no_permission_flag_the_user_did_not_ask_for() {
+        let default_mode = normalize_permission_mode("provider_local").unwrap();
+        let user = vec!["--model".to_string(), "x".to_string()];
+        assert_eq!(
+            helm_argv("cursor-agent", "conv", &default_mode, &user),
+            vec!["cursor-agent", "--resume", "conv", "--model", "x"]
+        );
+        let remote = normalize_permission_mode("remote_approve").unwrap();
+        let argv = helm_argv("cursor-agent", "conv", &remote, &[]);
+        assert!(!argv
+            .iter()
+            .any(|arg| arg == "--force" || arg == "--approve-mcps"));
+    }
+
     fn identity_env(
         inherited: &[(&str, &str)],
         permission_mode: &str,

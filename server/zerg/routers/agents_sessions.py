@@ -925,7 +925,6 @@ async def create_console_session(
             project=body.project,
             display_name=body.display_name,
             provider_config={
-                "permission_mode": "bypass",
                 **({"model": body.model.strip()} if body.model and body.model.strip() else {}),
             },
             launch_surface=body.launch_surface,

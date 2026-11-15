@@ -160,18 +160,15 @@ pub(crate) fn approval_answer(
     })
 }
 
-/// The Console's answer: a headless turn declines everything and answers no
-/// questions at all.
-pub(crate) fn console_decline_answer(method: &str) -> Option<Value> {
+/// The Console's answer under its bypass posture (`console_permission`):
+/// approvals are accepted, so a request that still reaches the adapter never
+/// denies work. Nobody is there to answer a question or an MCP elicitation, so
+/// those get an empty answer.
+pub(crate) fn console_bypass_answer(method: &str, params: &Value) -> Option<Value> {
     Some(match method {
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            json!({"decision": "decline"})
-        }
-        "item/permissions/requestApproval" => json!({"scope": "turn", "permissions": {}}),
         "item/tool/requestUserInput" => json!({"answers": {}}),
         "mcpServer/elicitation/request" => json!({"action": "decline", "content": null}),
-        "applyPatchApproval" | "execCommandApproval" => json!({"decision": "Denied"}),
-        _ => return None,
+        _ => return approval_answer(method, params, true, ""),
     })
 }
 
@@ -400,6 +397,34 @@ mod tests {
     #[test]
     fn an_unknown_server_request_has_no_default_answer() {
         assert!(approval_answer("bogus/request", &json!({}), true, "x").is_none());
-        assert!(console_decline_answer("bogus/request").is_none());
+        assert!(console_bypass_answer("bogus/request", &json!({})).is_none());
+    }
+
+    #[test]
+    fn console_accepts_every_approval_and_answers_no_questions() {
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            assert_eq!(
+                console_bypass_answer(method, &json!({})),
+                Some(json!({"decision": "accept"}))
+            );
+        }
+        for method in ["applyPatchApproval", "execCommandApproval"] {
+            assert_eq!(
+                console_bypass_answer(method, &json!({})),
+                Some(json!({"decision": "Approved"}))
+            );
+        }
+        let asked = json!({"permissions": {"fileSystem": {"write": ["/tmp"]}}});
+        assert_eq!(
+            console_bypass_answer("item/permissions/requestApproval", &asked),
+            Some(json!({"scope": "turn", "permissions": asked["permissions"]}))
+        );
+        assert_eq!(
+            console_bypass_answer("item/tool/requestUserInput", &json!({})),
+            Some(json!({"answers": {}}))
+        );
     }
 }

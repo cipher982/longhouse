@@ -5259,9 +5259,9 @@
         },
         "answer_pause": {
           "level": "none",
-          "source": "OMP provider-local Console approval surface",
+          "source": "Console runs omp --auto-approve, so no approval request exists to answer; Helm approvals are the provider-local TUI",
           "disposition": "not_implemented",
-          "reason": "OMP does not expose a proven remote approval transport",
+          "reason": "OMP does not expose a proven remote approval transport; Console never needs one because it runs with --auto-approve",
           "owner_action": "Add an OMP remote approval canary before exposing answer_pause",
           "blocker": "none"
         },

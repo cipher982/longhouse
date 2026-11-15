@@ -697,7 +697,7 @@ class LaunchMixin:
                     "cwd": parent_thread.cwd,
                     "project": parent.project,
                     "display_name": data.get("display_name"),
-                    "provider_config": {"permission_mode": "bypass"},
+                    "provider_config": {},
                     "launch_actor": "user",
                     "launch_surface": str(data.get("launch_surface") or "console"),
                     "started_at": now,
@@ -840,15 +840,18 @@ class LaunchMixin:
                 if thread is None or not thread.device_id or not thread.cwd:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_target_missing"}
-                if str(session.provider or "").strip().lower() == "pi":
-                    from zerg.services.live_catalog_launch import normalize_console_provider_config
+                # Console has one posture (bypass) and no per-session choice:
+                # drop any permission_mode an older thread stored, so it is
+                # never spread into the turn the Machine Agent runs.
+                from zerg.services.live_catalog_launch import CONSOLE_PERMISSION_MODE
+                from zerg.services.live_catalog_launch import normalize_console_provider_config
 
-                    thread.provider_config_json = json.dumps(
-                        normalize_console_provider_config("pi", _decode_json_object(thread.provider_config_json)),
-                        sort_keys=True,
-                    )
-                    session.permission_mode = "provider_local"
-                    session.permission_mode_source = "console_default"
+                thread.provider_config_json = json.dumps(
+                    normalize_console_provider_config(_decode_json_object(thread.provider_config_json)),
+                    sort_keys=True,
+                )
+                session.permission_mode = CONSOLE_PERMISSION_MODE
+                session.permission_mode_source = "console_default"
                 thread_provider_config = _decode_json_object(thread.provider_config_json)
                 requested_model = data["model"] if "model" in data else thread_provider_config.get("model")
                 turn_model = requested_model if isinstance(requested_model, str) else None
