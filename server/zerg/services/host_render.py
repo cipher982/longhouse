@@ -79,6 +79,7 @@ async def host_rebuild_session(
     worker: NormalizerWorker,
     session_id: str,
     only_missing: bool = False,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Rebuild one session into its host generation and commit it.
 
@@ -86,6 +87,9 @@ async def host_rebuild_session(
     in the current generation is not rebuilt: ingest committed raw it could
     not render on its own (an OpenCode or Cursor store envelope needs the
     epoch's earlier records), and only that needs filling.
+
+    With `commit=False` nothing is sealed or committed: each host-rendered
+    envelope's event count is compared with the render served for it.
 
     Returns the host-rendered envelope ids and whether the host generation is
     now current. Raises `HostRenderSkipped` when a complete generation cannot
@@ -110,6 +114,7 @@ async def host_rebuild_session(
 
     generation: dict[str, Any] | None = None
     objects: list[dict[str, Any]] = []
+    compared = {"compared": 0, "equal": 0, "differences": []}
     host_envelopes: list[str] = []
     for (_machine, provider, _source, epoch), rows in epochs.items():
         rows.sort(key=lambda row: row["range_start"])
@@ -155,6 +160,10 @@ async def host_rebuild_session(
             rebuilt = answer["render"]
             if rebuilt.get("withheld"):
                 # The parser holds this range back (an unfinished turn): no object.
+                if not commit:
+                    served = laptop_objects.get(row["envelope_id"])
+                    compared["compared"] += 1
+                    compared["equal"] += int(served is None or int(served["event_count"]) == 0)
                 host_envelopes.append(row["envelope_id"])
                 continue
             spec = await host_render_spec(
@@ -168,6 +177,16 @@ async def host_rebuild_session(
                 generation=epoch_generation,
                 manifest_cache=manifest_cache,
             )
+            if not commit:
+                served = laptop_objects.get(row["envelope_id"])
+                served_events = int(served["event_count"]) if served is not None else 0
+                compared["compared"] += 1
+                if served_events == len(spec.records):
+                    compared["equal"] += 1
+                elif len(compared["differences"]) < 5:
+                    compared["differences"].append({"envelope_id": row["envelope_id"], "served": served_events, "host": len(spec.records)})
+                host_envelopes.append(row["envelope_id"])
+                continue
             sealed = await render_workers.seal(spec, lane="repair")
             objects.append(
                 {
@@ -180,6 +199,9 @@ async def host_rebuild_session(
             host_envelopes.append(row["envelope_id"])
     if generation is None:
         raise HostRenderSkipped("nothing to rebuild" if only_missing else "no witnessed envelope")
+
+    if not commit:
+        return {**compared, "generation_id": generation["generation_id"], "current": str(current) == generation["generation_id"]}
 
     if current is not None and str(current) != generation["generation_id"]:
         # Carry every other native envelope the current generation serves.

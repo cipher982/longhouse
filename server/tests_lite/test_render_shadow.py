@@ -498,3 +498,31 @@ async def test_a_witnessed_envelope_without_a_laptop_render_is_served_from_the_h
         page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
         assert page.status_code == 200, page.text
         assert [event["content_text"] for event in page.json()["events"]] == ["hello", "world"]
+
+
+@pytest.mark.asyncio
+async def test_a_dry_rebuild_compares_host_event_counts_with_the_served_render(monkeypatch, tmp_path):
+    from zerg.services.host_render import host_rebuild_session
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-dry-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps({"generation_id": str(uuid4()), "parser_revision": "engine-parser-v2", "ordering_revision": "semantic-order-v2"}),
+        )
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=payload["render"]["records"]))
+        try:
+            result = await host_rebuild_session(
+                catalog=stack.catalog,
+                raw_workers=stack.raw_workers,
+                render_workers=stack.render_workers,
+                worker=worker,
+                session_id=session_id,
+                commit=False,
+            )
+        finally:
+            await worker.close()
+        assert (result["compared"], result["equal"], result["differences"]) == (1, 1, [])
+        # Nothing was committed: the laptop generation still serves.
+        session = (await stack.catalog.call("storage.session.read.v2", {"session_id": session_id}))["session"]
+        assert session["current_render_generation"] == payload["render"]["generation_id"]

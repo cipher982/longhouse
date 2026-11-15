@@ -244,3 +244,16 @@ for provider, session, detail in d["diffs"]:
 matched = sum(c for _p, o, c, _m in d["rows"] if o == "match")
 sys.exit(0 if d["raw"] > 0 and matched == d["raw"] == d["compared"] else 1)
 PY
+
+# Host-normalized transcripts Phase 4: on this disposable host, a full rebuild
+# of these sessions from raw matches what the host serves; committing it and
+# comparing again must still match.
+for mode in compare --apply compare; do
+  flag=""
+  [[ "$mode" == "--apply" ]] && flag="--apply"
+  echo "host rebuild from raw: ${mode}" >&2
+  # The device id expands here, on this side, by design.
+  # shellcheck disable=SC2029
+  ssh "$SSH_TARGET" "docker exec ${CONTAINER} longhouse-server db host-rebuild --machine ${DEVICE_ID} ${flag}" \
+    || { echo "host rebuild (${mode}) did not match what is served" >&2; exit 1; }
+done
