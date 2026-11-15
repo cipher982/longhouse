@@ -1060,6 +1060,7 @@
     {
       "path": "scripts/ui-fixtures/sessionDetailStress.ts",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "omp"

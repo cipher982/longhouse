@@ -2432,6 +2432,78 @@ export function buildSessionResearchTurnFixture(): SessionDetailFixture {
 }
 
 /**
+ * An Antigravity turn whose `view_file` result is a screenshot. The engine
+ * reads the file the transcript's `media` entry names and ships it as a media
+ * object, so the result row carries a media ref like any other provider's
+ * tool-result image. The second result's file was deleted before shipping and
+ * says so in its text.
+ */
+export function buildSessionAgyImageResultFixture(): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const sessionId = fixture.session.id;
+  const now = "2026-11-10T18:08:40Z";
+  fixture.session.provider = "antigravity";
+  fixture.session.project = "formula-lab";
+  fixture.session.cwd = "/Users/example/git/formula-lab";
+  fixture.session.summary_title = "Why are these services degraded?";
+  fixture.session.timeline_title = "Why are these services degraded?";
+  fixture.session.summary = "Read the status screenshot and explain the red tiles.";
+  fixture.session.started_at = "2026-11-10T18:06:50Z";
+  fixture.session.last_activity_at = now;
+  fixture.session.timeline_anchor_at = now;
+
+  const sha = "4b1f0c7a9e2d4a3b8c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3";
+  const events: AgentEvent[] = [];
+  const at = (hhmmss: string) => `2026-11-10T${hhmmss}Z`;
+  events.push(makeEvent(9000, "user", at("18:06:50"), { content_text: "why are these degraded? the screenshot is in the artifacts folder" }));
+  events.push(makeEvent(9001, "assistant", at("18:07:10"), {
+    tool_name: "view_file",
+    tool_input_json: { AbsolutePath: "/Users/example/.gemini/antigravity-cli/brain/57781a55/.system_generated/logs/media/step_132_media_0.jpg" },
+    tool_call_id: "antigravity-131-0",
+    tool_call_state: "completed",
+  }));
+  events.push(makeEvent(9002, "tool", at("18:07:18"), {
+    tool_name: "view_file",
+    tool_output_text: "Showing binary file of type image/jpeg",
+    tool_call_id: "antigravity-131-0",
+    media_refs: [
+      {
+        sha256: sha,
+        media_state: "present",
+        mime_type: "image/jpeg",
+        byte_size: 48213,
+        width: 960,
+        height: 540,
+        blob_url: `/api/media/${sha}/blob`,
+        thumb_url: `/api/media/${sha}/thumb`,
+        original_kind: "inline_data_url",
+      },
+    ],
+  }));
+  events.push(makeEvent(9003, "assistant", at("18:07:30"), {
+    tool_name: "view_file",
+    tool_input_json: { AbsolutePath: "/Users/example/.gemini/antigravity-cli/brain/57781a55/.system_generated/logs/media/step_140_media_0.jpg" },
+    tool_call_id: "antigravity-139-0",
+    tool_call_state: "completed",
+  }));
+  events.push(makeEvent(9004, "tool", at("18:07:36"), {
+    tool_name: "view_file",
+    tool_output_text: "Showing binary file of type image/jpeg\n[image unavailable: step_140_media_0.jpg]",
+    tool_call_id: "antigravity-139-0",
+  }));
+  events.push(makeEvent(9005, "assistant", at("18:08:40"), {
+    content_text: "Two tiles are red: the queue worker has no heartbeat for 14 minutes and the sync job is crash-looping. The second screenshot was no longer on disk when Longhouse shipped it, so I only read the first.",
+  }));
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  fixture.projection = { ...fixture.projection, items, total: items.length };
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
+  fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
+  fixture.workspace.thread = fixture.thread;
+  return fixture;
+}
+
+/**
  * A 41-minute Bash call still running in a Claude session, with a declared
  * 60-minute timeout. `expired` lets the work claim lapse three minutes before
  * the capture clock, the frame where the row must go still and say it cannot

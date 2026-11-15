@@ -45,6 +45,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-detail-stress
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-prose-idle --viewport=2000x1200 --css-variant=terminal
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-research-turn --viewport=2000x1200   # thoughts leading their tool calls
+ *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-agy-image-result   # Antigravity tool-result screenshots, one present and one unavailable
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-running-call   # a long Bash call on a fresh work claim (…-uncertain: expired)
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-input-outbox --viewport=mobile
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-remote-image-outbox --viewport=mobile
@@ -77,6 +78,7 @@ import {
   buildSessionProseIdleFixture,
   buildSessionConsoleFixture,
   buildSessionResearchTurnFixture,
+  buildSessionAgyImageResultFixture,
   buildSessionRunningCallFixture,
   buildSessionUnrecordedInputsFixture,
   buildRailSessionsFixture,
@@ -157,6 +159,7 @@ const SCENES = [
   "session-detail-stress",
   "session-prose-idle",
   "session-research-turn",
+  "session-agy-image-result",
   "session-running-call",
   "session-running-call-uncertain",
   "session-console",
@@ -226,11 +229,25 @@ const HOST_LINK_SCENES: readonly SceneName[] = [
   "host-link-reload",
 ];
 
+// A stand-in for the screenshot an Antigravity tool result carries: served for
+// every /api/media/* request in the session-agy-image-result scene.
+const AGY_STATUS_SCREENSHOT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"><rect width="960" height="540" fill="#101418"/><text x="32" y="56" font-family="Helvetica, Arial, sans-serif" font-size="28" fill="#e6edf3">Service status</text>${[
+  ["api", "#2ea043"],
+  ["web", "#2ea043"],
+  ["queue-worker", "#da3633"],
+  ["sync-job", "#da3633"],
+  ["search", "#2ea043"],
+  ["billing", "#d29922"],
+]
+  .map(([name, color], index) => `<rect x="${32 + (index % 3) * 304}" y="${100 + Math.floor(index / 3) * 200}" width="280" height="168" rx="12" fill="#161b22" stroke="${color}" stroke-width="4"/><text x="${52 + (index % 3) * 304}" y="${160 + Math.floor(index / 3) * 200}" font-family="Helvetica, Arial, sans-serif" font-size="24" fill="#e6edf3">${name}</text>`)
+  .join("")}</svg>`;
+
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
   "session-prose-idle",
   "session-research-turn",
+  "session-agy-image-result",
   "session-running-call",
   "session-running-call-uncertain",
   "session-console",
@@ -417,6 +434,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-detail-stress" ||
     scene === "session-prose-idle" ||
     scene === "session-research-turn" ||
+    scene === "session-agy-image-result" ||
     scene === "session-running-call" ||
     scene === "session-running-call-uncertain" ||
     scene === "session-console" ||
@@ -596,6 +614,8 @@ export async function installSceneMocks(
           ? buildSessionProseIdleFixture()
         : scene === "session-research-turn"
           ? buildSessionResearchTurnFixture()
+        : scene === "session-agy-image-result"
+          ? buildSessionAgyImageResultFixture()
         : scene === "session-running-call" || scene === "session-running-call-uncertain"
           ? buildSessionRunningCallFixture(scene === "session-running-call-uncertain")
         : scene === "session-console"
@@ -744,6 +764,11 @@ export async function installSceneMocks(
             ],
           }),
         });
+        return;
+      }
+
+      if (scene === "session-agy-image-result" && pathname.startsWith("/api/media/")) {
+        await route.fulfill({ status: 200, contentType: "image/svg+xml", body: AGY_STATUS_SCREENSHOT_SVG });
         return;
       }
 
