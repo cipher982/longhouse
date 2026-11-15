@@ -235,6 +235,10 @@ jobs:
           fi
           # The caches are a hostPath shared by this pool's pods. Without it the run still works and builds everything.
           cache=/ci-cache/terminal-truth
+          # A run on another ref shares the pool's disk with main's but not its caches: a branch run that prunes or
+          # rebuilds an entry while a main run is building into it fails the main run (2026-11-15, 1038eda96 and
+          # e9e1ed6dc, both "no readable fleet.json" at once).
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then cache=/ci-cache/terminal-truth-branch; fi
           if ! { mkdir -p "$cache" 2>/dev/null && [[ -w "$cache" ]]; }; then cache="$RUNNER_TEMP/terminal-truth-cache"; fi
           mkdir -p artifacts/terminal-truth "$cache"
           {
