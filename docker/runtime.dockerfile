@@ -187,8 +187,10 @@ FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5
 WORKDIR /src
 COPY engine/Cargo.toml engine/Cargo.lock engine/
 COPY .cargo/config.toml .cargo/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+# sharing=locked: concurrent image builds on one runner take turns on the
+# shared target cache instead of racing inside it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     mkdir -p engine/src \
     && printf 'fn main() {}\n' > engine/src/main.rs \
     && cp engine/src/main.rs engine/src/longhouse.rs \
@@ -200,10 +202,12 @@ COPY config/native_device_entrypoints.json config/
 # build.rs reads the repo-level identity; generate_build_identity.py stages
 # the same file into server/zerg/ before the context is sent.
 COPY server/zerg/build_identity.json .build/build-identity.json
-# The stub crate's outputs must never look fresh against the real sources.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    find target/ci -maxdepth 3 -name 'longhouse*' -prune -exec rm -r {} + \
+# The stub crate's outputs must never look fresh against the real sources:
+# COPY keeps the context's mtimes, which can predate the stub build, so the
+# real sources are touched to be newer than any cached fingerprint.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    find engine -type f \( -name '*.rs' -o -name Cargo.toml \) -exec touch {} + \
     && CARGO_TARGET_DIR=/src/target cargo build --manifest-path engine/Cargo.toml \
         --locked --profile ci --bin longhouse-engine \
     && install -D -m 0755 target/ci/longhouse-engine /out/longhouse-engine \
