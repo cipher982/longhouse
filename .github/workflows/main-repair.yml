@@ -1,0 +1,48 @@
+# ROLE: when CI or Terminal Truth finishes red on main, find the commit that broke it, revert it, and tell its author's session.
+name: Main Repair
+
+# Control-plane spec multi-agent-dev-loop-speed.md, change 3: landing is optimistic (no merge queue), so a red main must
+# repair itself. The logic and every guard live in scripts/ci/main_repair.py (tests: scripts/tests/main-repair.test.py):
+# only the newest run of the workflow speaks for main, a failed run is rerun once before anyone is blamed, the culprit is
+# bisected by running the failing check, a revert is never reverted, and the only ref written is refs/heads/main.
+#
+# A push made with this workflow's token starts no push workflows (GitHub's recursion rule), so the script dispatches
+# CI, the runtime image, Deploy and Verify and Terminal Truth at the revert itself. It holds no Longhouse credential:
+# it leaves refs/ship-repaired/<culprit>/<revert> and the Sauron job longhouse-ship-watch messages the author's session.
+
+on:
+  workflow_run:
+    workflows: ["CI", "Terminal Truth"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  # One repair at a time; a second red run waits and then sees the first one's revert.
+  group: main-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' }}
+    runs-on: ci-fast
+    name: "Repair main"
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Find the culprit and revert it
+        timeout-minutes: 80
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          git config user.name "longhouse-main-repair"
+          git config user.email "main-repair@users.noreply.github.com"
+          python3 scripts/ci/main_repair.py --run-id "${{ github.event.workflow_run.id }}"

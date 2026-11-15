@@ -121,8 +121,30 @@ A commit that spans lanes needs each lane run and verified on its own.
    deploys (a topic-branch ship always blocks).
 5. Already pushed and you want to watch: `make ship-watch SHA=<full-sha>`
    (`ARGS="--poll 30"`).
-6. Without WAIT, a zero exit means the push stood, not that CI passed. A non-zero
+6. Landing is optimistic. When another agent pushed first, `ship` replays your
+   commits on the newest `origin/main` in memory (`git merge-tree --write-tree` and
+   `git commit-tree`; no working tree or index is touched) and pushes that, retrying
+   a lost race up to five times. It fails (exit 5, nothing pushed) only on a real
+   conflict and names the files. The commit that lands has a new SHA; the watch
+   follows that one. Your local branch keeps the original commits; `git fetch &&
+   git rebase origin/main` drops them as already applied.
+7. Without WAIT, a zero exit means the push stood, not that CI passed. A non-zero
    exit means ship failed; do not report it as success.
+
+When main goes red anyway: the workflow `main-repair.yml` runs when CI or Terminal
+Truth fails on a main push (`scripts/ci/main_repair.py`). It acts only if that run
+is the newest non-cancelled run of its workflow (a newer green run containing the
+commit means someone already fixed forward; a newer run in progress reports for
+itself), reruns the failed jobs once and only acts on a second failure, finds the
+range since the last green ancestor, bisects it by running the failing check (a
+Terminal Truth failure is attributed only when exactly one commit in the range
+touches its paths), and reverts the culprit with a fast-forward push of
+`refs/heads/main`. It never reverts a revert or a commit marked `[no-auto-revert]`,
+stops after two automatic reverts in six hours, abstains on a conflicting revert,
+and never touches tags. The revert commit says why and carries a log excerpt; the
+Sauron job `longhouse-ship-watch` relays it to the session that shipped the culprit.
+Re-land your change with the fix on top. Dry run against any red run:
+`GITHUB_TOKEN=$(gh auth token) python3 scripts/ci/main_repair.py --run-id <id> --dry-run`.
 
 Waiting rules: use a completion event or blocking wait once and move on; no
 `pgrep`/`curl` loops. For a queued GitHub run use

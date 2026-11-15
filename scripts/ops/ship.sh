@@ -144,18 +144,78 @@ if [[ -n "$UNSHIPPED" ]]; then
   fi
 fi
 
-git -C "$ROOT" fetch --quiet origin "$BRANCH"
-REMOTE_REF="refs/remotes/origin/$BRANCH"
+# Optimistic landing. Other agents push to the same branch all day, so a plain push of SHA is usually rejected as
+# non-fast-forward. Instead of making the author rebase by hand (and race again), replay SHA's commits on the newest
+# origin/BRANCH in memory -- git merge-tree --write-tree plus git commit-tree, no working tree or index touched -- and
+# push that. Only a real conflict stops the landing. Control-plane spec multi-agent-dev-loop-speed.md, change 3.
+land_commit() {  # land_commit <onto> <sha>: prints the commit to push; returns 2 on a conflict, 1 on anything else
+  local onto="$1" sha="$2" base tip c tree out new
+  if git -C "$ROOT" merge-base --is-ancestor "$onto" "$sha"; then echo "$sha"; return 0; fi
+  base="$(git -C "$ROOT" merge-base "$onto" "$sha")" || return 1
+  tip="$onto"
+  while read -r c; do
+    if [[ "$(git -C "$ROOT" rev-list --parents -n 1 "$c" | wc -w)" -gt 2 ]]; then
+      echo "ship: ${c:0:10} is a merge commit; rebase it onto origin/${BRANCH} by hand" >&2
+      return 1
+    fi
+    if ! out="$(git -C "$ROOT" merge-tree --write-tree --merge-base="${c}^" "$tip" "$c" 2>&1)"; then
+      echo "ship: ${c:0:10} ($(git -C "$ROOT" log -1 --format=%s "$c")) conflicts with origin/${BRANCH}:" >&2
+      echo "$out" | sed 1d | sed 's/^/  /' >&2
+      return 2
+    fi
+    tree="$(echo "$out" | head -1)"
+    # A commit another agent already landed (same change) leaves the tree unchanged: drop it, as rebase does.
+    [[ "$tree" == "$(git -C "$ROOT" rev-parse "${tip}^{tree}")" ]] && continue
+    new="$(GIT_AUTHOR_NAME="$(git -C "$ROOT" log -1 --format=%an "$c")" \
+           GIT_AUTHOR_EMAIL="$(git -C "$ROOT" log -1 --format=%ae "$c")" \
+           GIT_AUTHOR_DATE="$(git -C "$ROOT" log -1 --format=%aI "$c")" \
+           git -C "$ROOT" commit-tree "$tree" -p "$tip" -m "$(git -C "$ROOT" log -1 --format=%B "$c")")" || return 1
+    tip="$new"
+  done < <(git -C "$ROOT" rev-list --reverse "${base}..${sha}")
+  echo "$tip"
+}
 
-if git -C "$ROOT" merge-base --is-ancestor "$SHA" "$REMOTE_REF"; then
-  echo "Commit ${SHA:0:10} is already on origin/${BRANCH}; skipping push and verifying exact SHA." >&2
-else
+ORIGINAL_SHA="$SHA"
+LANDED=0
+for attempt in 1 2 3 4 5; do
+  git -C "$ROOT" fetch --quiet origin "$BRANCH"
+  REMOTE_REF="refs/remotes/origin/$BRANCH"
+  if git -C "$ROOT" merge-base --is-ancestor "$ORIGINAL_SHA" "$REMOTE_REF"; then
+    echo "Commit ${ORIGINAL_SHA:0:10} is already on origin/${BRANCH}; skipping push and verifying exact SHA." >&2
+    SHA="$ORIGINAL_SHA"
+    LANDED=1
+    break
+  fi
+  rc=0
+  SHA="$(land_commit "$REMOTE_REF" "$ORIGINAL_SHA")" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    echo "ship: nothing was pushed. Rebase ${ORIGINAL_SHA:0:10} onto origin/${BRANCH} and resolve the conflict, then ship again." >&2
+    exit $(( rc == 2 ? 5 : 1 ))
+  fi
+  if [[ "$SHA" != "$ORIGINAL_SHA" ]]; then
+    echo "origin/${BRANCH} moved; replayed ${ORIGINAL_SHA:0:10} on it in memory as ${SHA:0:10}." >&2
+  fi
   # The verifier/subject import allowlist only shrinks (scripts/ci/verifier_boundary.py), checked on the
   # tree of the exact commit being pushed.
   python3 "$ROOT/scripts/ci/verifier_boundary.py" check --root "$ROOT" --rev "$SHA" --base "origin/$BRANCH" >&2
   echo "Pushing exact commit ${SHA:0:10} to ${BRANCH}..." >&2
-  LONGHOUSE_PREPUSH_GATE="$([[ "$GATED" == "1" ]] && echo "done:$SHA" || echo "${LONGHOUSE_PREPUSH_GATE:-}")" \
-    git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"
+  if LONGHOUSE_PREPUSH_GATE="$([[ "$GATED" == "1" ]] && echo "done:$SHA" || echo "${LONGHOUSE_PREPUSH_GATE:-}")" \
+      git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"; then
+    LANDED=1
+    break
+  fi
+  # Rejected: either another agent pushed in between (fetch shows it moved; try again) or a real failure.
+  before="$(git -C "$ROOT" rev-parse "$REMOTE_REF")"
+  git -C "$ROOT" fetch --quiet origin "$BRANCH"
+  if [[ "$(git -C "$ROOT" rev-parse "$REMOTE_REF")" == "$before" ]]; then
+    echo "ship: the push failed and origin/${BRANCH} did not move; not retrying." >&2
+    exit 1
+  fi
+  echo "ship: origin/${BRANCH} moved during the push; retrying ($attempt/5)." >&2
+done
+if [[ "$LANDED" != "1" ]]; then
+  echo "ship: could not land after 5 attempts." >&2
+  exit 1
 fi
 
 cleanup_lock

@@ -115,6 +115,65 @@ def test_a_passing_gate_runs_once_before_the_push_and_skip_bypasses_it() -> None
         assert result.returncode == 0 and "GATE-RAN" not in result.stderr, result.stderr
 
 
+def advance_origin(tmp: Path, bare: Path, files: dict[str, str], message: str = "someone else") -> str:
+    other = Path(tempfile.mkdtemp(dir=tmp, prefix="other-"))
+    shutil.rmtree(other)
+    git(tmp, "clone", "-q", str(bare), str(other))
+    git(other, "config", "user.email", "o@example.com")
+    git(other, "config", "user.name", "o")
+    for name, text in files.items():
+        (other / name).write_text(text)
+    git(other, "add", ".")
+    git(other, "commit", "-q", "-m", message)
+    git(other, "push", "-q", "origin", "main")
+    return git(other, "rev-parse", "HEAD")
+
+
+def test_a_moved_origin_is_replayed_in_memory_and_the_working_tree_is_untouched() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        bare, work = make_repo(tmp)
+        mine = git(work, "rev-parse", "HEAD")
+        theirs = advance_origin(tmp, bare, {"other.txt": "x\n"})
+        status_before = git(work, "status", "--porcelain")
+        result = run_ship(work, "--sha", mine)
+        assert result.returncode == 0, result.stderr
+        landed = git(bare, "rev-parse", "main")
+        assert landed not in (mine, theirs)
+        assert git(bare, "rev-parse", f"{landed}^") == theirs
+        assert git(bare, "log", "-1", "--format=%s", landed) == "change"
+        assert git(bare, "show", f"{landed}:a.txt") == "b" and git(bare, "show", f"{landed}:other.txt") == "x"
+        assert "replayed" in result.stderr
+        assert git(work, "rev-parse", "HEAD") == mine and git(work, "status", "--porcelain") == status_before
+        refs = git(bare, "for-each-ref", "--format=%(refname)", "refs/ship/")
+        assert landed in refs, "the watch follows the commit that actually landed"
+
+
+def test_a_real_conflict_stops_the_landing_and_pushes_nothing() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        bare, work = make_repo(tmp)
+        advance_origin(tmp, bare, {"a.txt": "conflicting\n"})
+        head = git(bare, "rev-parse", "main")
+        result = run_ship(work, "--sha", git(work, "rev-parse", "HEAD"))
+        assert result.returncode == 5, result.stderr
+        assert "conflicts with origin/main" in result.stderr and "a.txt" in result.stderr
+        assert git(bare, "rev-parse", "main") == head and git(bare, "for-each-ref", "refs/ship/") == ""
+
+
+def test_a_change_someone_already_landed_is_dropped_not_duplicated() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        bare, work = make_repo(tmp)
+        same = advance_origin(tmp, bare, {"a.txt": "b\n"}, message="same change, other sha")
+        advance_origin(tmp, bare, {"z.txt": "z\n"}, message="and more")
+        tip = git(bare, "rev-parse", "main")
+        result = run_ship(work, "--sha", git(work, "rev-parse", "HEAD"))
+        assert result.returncode == 0, result.stderr
+        assert git(bare, "rev-parse", "main") == tip, "nothing new to push"
+        assert same
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
