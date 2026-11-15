@@ -75,6 +75,7 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
         "unrebuilt_epochs": 0,
         "lossy": 0,
         "differences": [],
+        "failed": [],
     }
     try:
         for session_id in sessions:
@@ -90,6 +91,10 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
             except HostRenderSkipped as exc:
                 totals["skipped"] += 1
                 typer.echo(json.dumps({"session_id": session_id, "skipped": str(exc)}))
+                continue
+            except Exception as exc:  # noqa: BLE001 - one session's failure is reported, not fatal
+                totals["failed"].append({"session_id": session_id, "error": f"{type(exc).__name__}: {exc}"})
+                typer.echo(json.dumps({"session_id": session_id, "failed": f"{type(exc).__name__}: {exc}"}))
                 continue
             totals["current"] += int(bool(result.get("current")))
             totals["unrebuilt_epochs"] += int(result.get("unrebuilt_epochs") or 0)
@@ -108,7 +113,7 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
     # A check that compared nothing, or left an epoch unrebuilt, proves nothing.
     # A new normalizer revision may add rows and item facts; it may not lose
     # or change a row the host serves.
-    if totals["unrebuilt_epochs"] or (not apply and (totals["compared"] == 0 or totals["lossy"])):
+    if totals["failed"] or totals["unrebuilt_epochs"] or (not apply and (totals["compared"] == 0 or totals["lossy"])):
         raise typer.Exit(1)
 
 

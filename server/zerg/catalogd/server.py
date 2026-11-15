@@ -25,6 +25,7 @@ from typing import Any
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
+from zerg.catalogd.protocol import FrameTooLarge
 from zerg.catalogd.protocol import ProtocolError
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
@@ -545,7 +546,16 @@ class CatalogDaemon:
                         # blindly retry an unknown operation.
                         retryable=False,
                     )
-                await write_frame(writer, response)
+                try:
+                    await write_frame(writer, response)
+                except FrameTooLarge:
+                    # Answer instead of dropping the connection, which the
+                    # caller would read as catalogd being down.
+                    logger.warning("catalogd response exceeds the frame limit method=%s", message.method)
+                    await write_frame(
+                        writer,
+                        self._error(message, "resource_exhausted", "response exceeds the catalogd frame limit", retryable=False),
+                    )
         except (EOFError, asyncio.IncompleteReadError, ConnectionError, ProtocolError):
             pass
         finally:

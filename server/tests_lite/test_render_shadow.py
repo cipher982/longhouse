@@ -257,10 +257,12 @@ async def test_a_new_normalizer_revision_reopens_matches_and_errors_are_retried(
 
 
 @pytest.mark.asyncio
-async def test_a_session_too_large_to_rebuild_is_recorded_and_leaves_the_queue(monkeypatch, tmp_path):
+@pytest.mark.parametrize("limit", ["MAX_SHADOW_RAW_OBJECTS", "MAX_REBUILD_INPUT_BYTES"])
+async def test_a_session_too_large_to_rebuild_is_recorded_and_leaves_the_queue(monkeypatch, tmp_path, limit):
     from zerg.catalogd.store_mixins import render_shadow as shadow_store
 
-    monkeypatch.setattr(shadow_store, "MAX_SHADOW_RAW_OBJECTS", 0)
+    # Too many raw objects, or rows that would not fit one catalogd frame.
+    monkeypatch.setattr(shadow_store, limit, 0)
     async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-big-") as stack:
         session_id, _unused = await _commit(stack, witnessed=True)
         worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="die", render=[]))

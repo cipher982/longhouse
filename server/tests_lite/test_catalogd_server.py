@@ -786,6 +786,25 @@ async def test_device_revoke_survives_daemon_restart(daemon_paths):
 
 
 @pytest.mark.asyncio
+async def test_a_response_over_the_frame_limit_is_answered_not_dropped(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    assert daemon._store is not None
+    daemon._store.read_render_rebuild_inputs = lambda **_kwargs: {"found": True, "blob": "x" * (9 * 1024 * 1024)}
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("storage.session.rebuild_inputs.v2", {"session_id": str(uuid4())})
+        assert exc_info.value.code == "resource_exhausted"
+        assert exc_info.value.retryable is False
+        assert await client.call("ping.v2")
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_mutation_internal_error_is_not_marked_safe_to_retry(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)

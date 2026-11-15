@@ -39,6 +39,8 @@ from zerg.catalogd.store import storage_projectors_for_provider
 
 # A session this large is rebuilt by Phase 4's incremental path, not sampled.
 MAX_SHADOW_RAW_OBJECTS = 20_000
+# Leaves headroom under the 8 MiB catalogd frame for the response envelope.
+MAX_REBUILD_INPUT_BYTES = 6 * 1024 * 1024
 SHADOW_SESSION_COOLDOWN = timedelta(minutes=30)
 
 
@@ -182,7 +184,7 @@ class RenderShadowMixin:
                 .mappings()
                 .all()
             )
-        return {
+        result = {
             "found": True,
             "host_rendered": host_rendered,
             "provider": session["provider"],
@@ -208,6 +210,25 @@ class RenderShadowMixin:
             "media": [dict(row) for row in media_rows],
             "checked": checked,
         }
+        # The snapshot travels in one catalogd frame. A session whose rows do
+        # not fit is answered as too large, like one over the object cap,
+        # rather than as a reply the server cannot send.
+        if len(json.dumps(result, default=str).encode("utf-8")) > MAX_REBUILD_INPUT_BYTES:
+            return {
+                "found": True,
+                "too_large": True,
+                "checked": checked,
+                "raw_objects": [
+                    {
+                        "envelope_id": row["envelope_id"],
+                        "provider": row["provider"],
+                        "source_epoch": row["source_epoch"],
+                        "range_start": int(row["range_start"]),
+                    }
+                    for row in raw_rows
+                ],
+            }
+        return result
 
     def commit_host_render_objects(
         self,
