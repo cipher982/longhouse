@@ -6229,7 +6229,14 @@ fn extract_antigravity_events(
         let (content_text, tool_name, tool_output_text, raw_type) = match &role {
             Role::Tool => (
                 None,
-                Some(antigravity_tool_name_from_type(event_type)),
+                // A paired result is the call's result: name it for the call.
+                // The record's own type (`GENERIC` for most tools) names nothing.
+                Some(
+                    result_call
+                        .as_ref()
+                        .map(|call| call.name.clone())
+                        .unwrap_or_else(|| antigravity_tool_name_from_type(event_type)),
+                ),
                 Some(antigravity_strip_result_header(text).to_string()),
                 "antigravity_tool_result",
             ),

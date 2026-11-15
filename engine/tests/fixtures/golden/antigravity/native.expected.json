@@ -35,7 +35,7 @@
       "kind": "event",
       "role": "tool",
       "raw_type": "antigravity_tool_result",
-      "tool_name": "generic"
+      "tool_name": "run_command"
     },
     {
       "kind": "event",
@@ -66,7 +66,7 @@
       "kind": "event",
       "role": "tool",
       "raw_type": "antigravity_tool_result",
-      "tool_name": "invoke-subagent"
+      "tool_name": "INVOKE_SUBAGENT"
     },
     {
       "kind": "event",
