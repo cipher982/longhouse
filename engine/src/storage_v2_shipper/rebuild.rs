@@ -1301,7 +1301,10 @@ mod tests {
             media: HashMap::new(),
         };
         let file = epoch_generation(&request("claude", "byte_offset")).unwrap();
-        assert_eq!(file["generation_id"], Value::from(render_generation_id(session).to_string()));
+        assert_eq!(
+            file["generation_id"],
+            Value::from(render_generation_id(session).to_string())
+        );
         assert_eq!(file["parser_revision"], Value::from(PARSER_REVISION));
         assert_eq!(file["ordering_revision"], Value::from(ORDERING_REVISION));
         let cursor = epoch_generation(&request("cursor", "record_ordinal")).unwrap();
@@ -1309,7 +1312,10 @@ mod tests {
             cursor["generation_id"],
             Value::from(cursor_render_generation_id(&session.to_string()).to_string())
         );
-        assert_eq!(cursor["parser_revision"], Value::from(CURSOR_PARSER_REVISION));
+        assert_eq!(
+            cursor["parser_revision"],
+            Value::from(CURSOR_PARSER_REVISION)
+        );
         // A Cursor JSONL transcript goes through the file parser.
         let cursor_file = epoch_generation(&request("cursor", "byte_offset")).unwrap();
         assert_eq!(cursor_file["parser_revision"], Value::from(PARSER_REVISION));
