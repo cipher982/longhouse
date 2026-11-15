@@ -109,7 +109,6 @@ struct SessionSignalField<Content: View>: View {
                 .clipped()
             }
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay { BrassCornerPoints(inset: 9) }
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .strokeBorder(borderColor(for: kind), lineWidth: 0.75)

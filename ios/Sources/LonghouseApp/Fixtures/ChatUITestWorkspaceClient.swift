@@ -20,7 +20,7 @@ struct ChatUITestFixture: Sendable {
     }
 
     var usesRealtimeStream: Bool {
-        name.hasPrefix("assistant-stream") || name == "console-reconcile"
+        name.hasPrefix("assistant-stream") || name == "console-reconcile" || name.hasPrefix("claude-fidelity")
     }
 }
 
@@ -653,12 +653,12 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",
                 signalTier: "none",
-                state: isEndedCodexHelm ? "ended" : (isWorkingSession ? "thinking" : "idle"),
-                tone: isEndedCodexHelm ? "ended" : (isWorkingSession ? "thinking" : "idle"),
-                headline: isEndedCodexHelm ? "Ended" : (isWorkingSession ? "Thinking" : "Idle"),
+                state: isEndedCodexHelm ? "ended" : (isClaudeFidelity ? "running" : (isWorkingSession ? "thinking" : "idle")),
+                tone: isEndedCodexHelm ? "ended" : (isClaudeFidelity ? "running" : (isWorkingSession ? "thinking" : "idle")),
+                headline: isEndedCodexHelm ? "Ended" : (isClaudeFidelity ? "Using Bash" : (isWorkingSession ? "Thinking" : "Idle")),
                 detail: isEndedCodexHelm ? "Run ended" : idleDetail,
-                phaseLabel: isEndedCodexHelm ? "Ended" : (isWorkingSession ? "Thinking" : "Idle"),
-                compactToolLabel: nil,
+                phaseLabel: isEndedCodexHelm ? "Ended" : (isClaudeFidelity ? "Using Bash" : (isWorkingSession ? "Thinking" : "Idle")),
+                compactToolLabel: isClaudeFidelity ? "Bash" : nil,
                 isLive: !isEndedCodexHelm,
                 isExecuting: isWorkingSession,
                 needsAttention: false,
@@ -681,12 +681,12 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     dispositionCloseReason: nil,
                     launchState: nil,
                     runLifecycle: isEndedCodexHelm ? "ended" : "running",
-                    activityState: isEndedCodexHelm ? "ended" : (isWorkingSession ? "thinking" : "quiescent"),
+                    activityState: isEndedCodexHelm ? "ended" : (isClaudeFidelity ? "running" : (isWorkingSession ? "thinking" : "quiescent")),
                     activityRawKind: nil,
-                    activityTool: nil,
+                    activityTool: isClaudeFidelity ? "Bash" : nil,
                     activitySource: nil,
-                    activityObservedAt: isClaudeFidelity ? Self.fixedTimestamp(offset: 120) : nil,
-                    activityValidUntil: isTimelineDelegation ? "2000-01-01T00:00:00Z" : (isClaudeFidelity ? "2099-01-01T00:00:00Z" : nil),
+                    activityObservedAt: isClaudeFidelity ? Self.claudeFidelityTimestamp(secondsAgo: 2) : nil,
+                    activityValidUntil: isTimelineDelegation ? "2000-01-01T00:00:00Z" : (isClaudeFidelity ? Self.claudeFidelityTimestamp(secondsAgo: -3600) : nil),
                     controlOwnership: "owned",
                     controlConnection: "connected",
                     workingSet: "open",
@@ -706,10 +706,10 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     pendingInteractionCanRespond: isAttentionDelegation ? true : nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
-                        key: isEndedCodexHelm ? "ended" : (isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isWorkingSession ? "thinking" : "idle"))),
-                        label: isEndedCodexHelm ? "Ended" : (isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isWorkingSession ? "Thinking" : "Idle"))),
-                        tone: isEndedCodexHelm ? "quiet" : (isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isWorkingSession ? "thinking" : "idle"))),
-                        observedAt: nil
+                        key: isEndedCodexHelm ? "ended" : (isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isClaudeFidelity ? "running_tool" : (isWorkingSession ? "thinking" : "idle")))),
+                        label: isEndedCodexHelm ? "Ended" : (isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isClaudeFidelity ? "Using Bash" : (isWorkingSession ? "Thinking" : "Idle")))),
+                        tone: isEndedCodexHelm ? "quiet" : (isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isClaudeFidelity ? "running" : (isWorkingSession ? "thinking" : "idle")))),
+                        observedAt: isClaudeFidelity ? Self.claudeFidelityTimestamp(secondsAgo: 2) : nil
                     ),
                     access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
                     transcript: nil,
@@ -721,7 +721,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         if isClaudeFidelity {
             detail.recap = SessionRecap(
                 text: "Auditing Claude Code fidelity: 2 subagents running, 1 monitor watching QA.",
-                at: Self.fixedTimestamp(offset: 110)
+                at: Self.claudeFidelityTimestamp(secondsAgo: 10)
             )
             detail.usageLatest = SessionUsageLatest(
                 label: "Opus 5.5 · 126k ctx",
@@ -735,8 +735,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 usedPercent: 12.6,
                 costUsd: 53.89,
                 cumulativeDurationMs: 28_860_000,
-                rateLimits: [SessionRateLimit(kind: "5h", percentUsed: 84, resetsAt: "2026-11-15T20:00:00Z")],
-                at: Self.fixedTimestamp(offset: 120)
+                rateLimits: [SessionRateLimit(kind: "5h", percentUsed: 84, resetsAt: Self.claudeFidelityTimestamp(secondsAgo: -7200))],
+                at: Self.claudeFidelityTimestamp(secondsAgo: 2)
             )
             detail.permissionMode = "bypassPermissions"
             detail.worktree = SessionWorktree(
@@ -827,21 +827,21 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             SessionDelegationTask(
                 id: "sub-1",
                 kind: "subagent",
-                status: "running",
+                status: "waiting",
                 description: "Waiting on Claude terminal-truth output",
-                firstObservedAt: fixedTimestamp(offset: 15),
-                startedAt: fixedTimestamp(offset: 15),
-                lastActivityAt: fixedTimestamp(offset: 118),
+                firstObservedAt: claudeFidelityTimestamp(secondsAgo: 3203),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 3203),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 40),
                 sessionId: "019fc50b-2222-4222-8222-222222222221",
                 userMessages: 1,
                 assistantMessages: 3,
                 toolCalls: 9,
-                registeredAt: fixedTimestamp(offset: 15),
+                registeredAt: claudeFidelityTimestamp(secondsAgo: 3203),
                 nativeProgress: SessionDelegationProgress(
-                    observedAt: fixedTimestamp(offset: 118),
-                    status: "running",
-                    currentTool: "Bash",
-                    lastIntent: "Verify live hook output",
+                    observedAt: claudeFidelityTimestamp(secondsAgo: 40),
+                    status: "waiting",
+                    currentTool: "Read",
+                    lastIntent: "Waiting on sub-step",
                     toolCount: 11,
                     requests: 5,
                     tokens: 194_200,
@@ -858,21 +858,21 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             SessionDelegationTask(
                 id: "sub-2",
                 kind: "subagent",
-                status: "waiting",
+                status: "running",
                 description: "Checking release v0.1.80 tag",
-                firstObservedAt: fixedTimestamp(offset: 30),
-                startedAt: fixedTimestamp(offset: 30),
-                lastActivityAt: fixedTimestamp(offset: 110),
+                firstObservedAt: claudeFidelityTimestamp(secondsAgo: 1688),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 1688),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 3),
                 sessionId: "019fc50b-2222-4222-8222-222222222222",
                 userMessages: 1,
                 assistantMessages: 2,
                 toolCalls: 4,
-                registeredAt: fixedTimestamp(offset: 30),
+                registeredAt: claudeFidelityTimestamp(secondsAgo: 1688),
                 nativeProgress: SessionDelegationProgress(
-                    observedAt: fixedTimestamp(offset: 110),
-                    status: "waiting",
-                    currentTool: "Read",
-                    lastIntent: "Waiting on sub-step",
+                    observedAt: claudeFidelityTimestamp(secondsAgo: 3),
+                    status: "running",
+                    currentTool: "Bash",
+                    lastIntent: "Verify live hook output",
                     toolCount: 4,
                     requests: 2,
                     tokens: 116_500,
@@ -891,9 +891,9 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 kind: "shell",
                 status: "running",
                 description: "Cargo test workspace",
-                firstObservedAt: fixedTimestamp(offset: 40),
-                startedAt: fixedTimestamp(offset: 40),
-                lastActivityAt: fixedTimestamp(offset: 115),
+                firstObservedAt: claudeFidelityTimestamp(secondsAgo: 940),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 940),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 5),
                 sessionId: nil
             ),
             SessionDelegationTask(
@@ -901,9 +901,9 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 kind: "monitor",
                 status: "watching",
                 description: "Watch hosted-live-qa.yml run",
-                firstObservedAt: fixedTimestamp(offset: 50),
-                startedAt: fixedTimestamp(offset: 50),
-                lastActivityAt: fixedTimestamp(offset: 119),
+                firstObservedAt: claudeFidelityTimestamp(secondsAgo: 620),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 620),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 1),
                 sessionId: nil
             ),
         ]
@@ -912,8 +912,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             count: tasks.count,
             kinds: ["subagent": 2, "shell": 1, "monitor": 1],
             source: "claude_hook",
-            observedAt: fixedTimestamp(offset: 120),
-            validUntil: "2099-01-01T00:00:00Z",
+            observedAt: claudeFidelityTimestamp(secondsAgo: 1),
+            validUntil: claudeFidelityTimestamp(secondsAgo: -3600),
             items: tasks
         )
     }
@@ -925,8 +925,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 provider: "claude",
                 parentToolCallId: "toolu_agent_1",
                 runId: nil,
-                startedAt: fixedTimestamp(offset: 15),
-                lastActivityAt: fixedTimestamp(offset: 118),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 3203),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 40),
                 endedAt: nil,
                 userMessages: 1,
                 assistantMessages: 3,
@@ -943,7 +943,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 isFork: true,
                 spawnDepth: 1,
                 finished: false,
-                liveStatus: "running",
+                liveStatus: "waiting",
                 durationMs: 3_203_000,
                 inputTokens: 160_000,
                 outputTokens: 34_200,
@@ -956,8 +956,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 provider: "claude",
                 parentToolCallId: nil,
                 runId: nil,
-                startedAt: fixedTimestamp(offset: 30),
-                lastActivityAt: fixedTimestamp(offset: 110),
+                startedAt: claudeFidelityTimestamp(secondsAgo: 1688),
+                lastActivityAt: claudeFidelityTimestamp(secondsAgo: 3),
                 endedAt: nil,
                 userMessages: 1,
                 assistantMessages: 2,
@@ -974,7 +974,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 isFork: false,
                 spawnDepth: 2,
                 finished: false,
-                liveStatus: "waiting",
+                liveStatus: "running",
                 durationMs: 1_688_000,
                 inputTokens: 98_000,
                 outputTokens: 18_500,
@@ -992,7 +992,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 role: "user",
                 contentText: "Audit Claude Code fidelity across backend and mobile.",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 0), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                timestamp: claudeFidelityTimestamp(secondsAgo: 120), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
             ),
             SessionEvent(
                 id: 2,
@@ -1000,7 +1000,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: "Thinking:\nChecking live Claude subagents, monitors, and usage telemetry.",
                 interactionKind: "provider_reasoning",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 5), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                timestamp: claudeFidelityTimestamp(secondsAgo: 112), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
             ),
             SessionEvent(
                 id: 3,
@@ -1008,7 +1008,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: nil,
                 interactionKind: "provider_reasoning",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 8), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 108), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 reasoningWithheld: true
             ),
             SessionEvent(
@@ -1016,7 +1016,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 role: "assistant",
                 contentText: "Spawning background subagent workers while keeping main loop responsive.",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 12), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 100), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 messagePhase: "commentary"
             ),
             SessionEvent(
@@ -1031,7 +1031,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 toolOutputText: "Running make test-engine and checking hook state",
                 toolCallId: "toolu_agent_1",
                 toolCallState: .running,
-                timestamp: fixedTimestamp(offset: 15), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 42), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 toolIntent: "Audit Claude Code fidelity"
             ),
             SessionEvent(
@@ -1040,7 +1040,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: "Background agent \"Parity audit\" finished",
                 interactionKind: "provider_notification",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 60), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 35), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 taskNotification: [
                     "task_id": .string("task_parity_1"),
                     "status": .string("completed"),
@@ -1057,7 +1057,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: "Waiting for 2 background agents to finish",
                 interactionKind: "provider_notification",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 70), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 28), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 waitingBackgroundAgents: 2
             ),
             SessionEvent(
@@ -1066,7 +1066,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: "Rate limit warning: retry in 5s",
                 interactionKind: "provider_notification",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 80), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 20), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 apiError: [
                     "message": .string("Rate limit warning: retry in 5s"),
                     "retry_attempt": .int(1),
@@ -1080,17 +1080,17 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 contentText: "Microcompacted tool outputs [trigger=auto pre_tokens=180000 tokens_saved=42000]",
                 interactionKind: "compaction_boundary",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 90), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                timestamp: claudeFidelityTimestamp(secondsAgo: 12), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
             ),
             SessionEvent(
                 id: 10,
                 role: "assistant",
                 contentText: "Main loop is ready. Subagents continue streaming progress in the runtime dock.",
                 toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
-                timestamp: fixedTimestamp(offset: 120), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                timestamp: claudeFidelityTimestamp(secondsAgo: 2), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
                 turnEnd: SessionTurnEnd(
                     durationMs: 41_200,
-                    endedAt: fixedTimestamp(offset: 120),
+                    endedAt: claudeFidelityTimestamp(secondsAgo: 2),
                     messageCount: 2,
                     outcome: "completed",
                     stopHookContinued: false,
@@ -1534,6 +1534,13 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "User fixture message \(index): realistic request text for mobile chat stress testing, scroll anchoring, and duplicate render detection."
         }
         return "User fixture message \(index): request text for chat scroll anchoring."
+    }
+
+    private static let claudeFidelityAnchor = Date()
+
+    private static func claudeFidelityTimestamp(secondsAgo: TimeInterval) -> String {
+        let date = claudeFidelityAnchor.addingTimeInterval(-secondsAgo)
+        return ISO8601DateFormatter().string(from: date)
     }
 
     private static func fixedTimestamp(offset: Int) -> String {

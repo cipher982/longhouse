@@ -509,7 +509,14 @@ struct SessionRuntimeDock: View {
     }
 
     private func usesPrimaryDelegationHeadline(for state: SessionLedgerEvidence) -> Bool {
-        detail.stateFacts.primary?.key == "delegated_work" && detail.activePauseRequest == nil
+        guard detail.activePauseRequest == nil else { return false }
+        if detail.stateFacts.primary?.key == "delegated_work" { return true }
+        if let summary = delegationSummaryLabel,
+           detail.runtimeHeadline.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare(summary) == .orderedSame {
+            return true
+        }
+        return false
     }
 
     @ViewBuilder
@@ -701,7 +708,17 @@ struct SessionRuntimeDock: View {
     private func observationAge(asOf now: Date) -> String? {
         guard let primary = detail.stateFacts.primary, primary.key == "no_recent_activity" else { return nil }
         guard let observed = primary.observedAt.flatMap(LonghouseDateParser.parse) else { return nil }
-        return RuntimeElapsed.ageLabel(from: observed, to: now)
+        let targetNow: Date
+        if UITestHooks.holdsAmbientMotion {
+            targetNow = detail.stateFacts.activityObservedAt.flatMap(LonghouseDateParser.parse)
+                ?? observed
+        } else {
+            targetNow = now
+        }
+        if targetNow.timeIntervalSince(observed) > 86_400 {
+            return nil
+        }
+        return RuntimeElapsed.ageLabel(from: observed, to: targetNow)
     }
 
     /// Whole-word match, so "Bash" does not count as named by "Bashful".
@@ -919,6 +936,22 @@ struct SessionRuntimeDock: View {
 
     // Executing: a precise count while server evidence is valid. Once it
     // expires, the count freezes rather than following a wall-clock timer.
+    private func boundedElapsedEnd(start: Date, validUntil: Date?, candidateNow: Date) -> Date? {
+        let validBounded = RuntimeElapsed.observedEnd(validUntil: validUntil, now: candidateNow)
+        let staleObserved = detail.stateFacts.activityObservedAt.flatMap(LonghouseDateParser.parse)
+            ?? detail.lastActivityAt.flatMap(LonghouseDateParser.parse)
+        let shouldClampToObserved = UITestHooks.holdsAmbientMotion
+            || (realtimeConnection == .disconnected && validUntil.map { candidateNow > $0 } == true)
+        let end = (shouldClampToObserved ? staleObserved.map { min(validBounded, $0) } : nil) ?? validBounded
+        if end.timeIntervalSince(start) > 86_400 {
+            if let fallback = staleObserved, fallback >= start, fallback.timeIntervalSince(start) <= 86_400 {
+                return fallback
+            }
+            return nil
+        }
+        return end
+    }
+
     @ViewBuilder
     private func elapsed(asOf now: Date, state: SessionLedgerEvidence) -> some View {
         if state == .quiet, detail.stateFacts.lastResultAt != nil, let lastTurn = detail.lastTurn {
@@ -929,12 +962,14 @@ struct SessionRuntimeDock: View {
         } else if state == .working, let start = elapsedStart {
             let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
             if reduceMotion || UITestHooks.holdsAmbientMotion || hostUpdateIsActive {
-                let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: now)
-                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
+                if let end = boundedElapsedEnd(start: start, validUntil: validUntil, candidateNow: now) {
+                    elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
+                }
             } else {
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: context.date)
-                    elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
+                    if let end = boundedElapsedEnd(start: start, validUntil: validUntil, candidateNow: context.date) {
+                        elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
+                    }
                 }
             }
         }

@@ -2169,8 +2169,18 @@ final class SessionViewModel: ObservableObject {
             Task { await prior.stop() }
         }
         streamConnected = false
+        #if DEBUG
+        let rawBaseURL = (appState.serverURL.isEmpty && UITestHooks.chatFixtureName != nil)
+            ? "https://fixture.longhouse.invalid"
+            : appState.serverURL
+        #else
+        let rawBaseURL = appState.serverURL
+        #endif
+        guard !rawBaseURL.isEmpty, let base = URL(string: rawBaseURL) else {
+            realtimeConnection = .disconnected
+            return
+        }
         realtimeConnection = .connecting
-        guard let base = URL(string: appState.serverURL) else { return }
         // A sequence without its runtime epoch is not comparable to the
         // current process. Old snapshots may predate epoch persistence, so
         // deliberately start cold and let the durable tail provide truth.

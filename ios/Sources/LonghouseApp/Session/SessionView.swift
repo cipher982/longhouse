@@ -40,6 +40,7 @@ struct SessionView: View {
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false
+    @State private var dismissedRecapKey: String?
     init(
         sessionId: String,
         fallbackTitle: String,
@@ -67,13 +68,17 @@ struct SessionView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             // A bar over a scrolling transcript needs its own bottom edge, or
             // the text sliding under it reads as part of the banner.
-            if let recap = viewModel.detail?.recap {
+            if let recap = activeRecap {
                 VStack(spacing: 0) {
                     SessionRecapBanner(
                         recap: recap,
                         usage: viewModel.detail?.usageLatest,
-                        detail: viewModel.detail
+                        detail: viewModel.detail,
+                        onDismiss: {
+                            dismissedRecapKey = recapKey(for: recap)
+                        }
                     )
+                    .background(.bar)
                     Divider()
                 }
             } else if viewModel.detail?.usageLatest != nil || hasTopHudDetails {
@@ -82,7 +87,6 @@ struct SessionView: View {
                         usage: viewModel.detail?.usageLatest,
                         detail: viewModel.detail
                     )
-                    .padding(.horizontal, 16)
                     .padding(.vertical, 5)
                     .background(.bar)
                     Divider()
@@ -441,6 +445,15 @@ struct SessionView: View {
         .foregroundStyle(Color.primary)
         .accessibilityLabel("Session actions")
         .accessibilityIdentifier("session-overflow-menu")
+    }
+
+    private func recapKey(for recap: SessionRecap) -> String {
+        "\(recap.at ?? "")|\(recap.text)"
+    }
+
+    private var activeRecap: SessionRecap? {
+        guard let recap = viewModel.detail?.recap else { return nil }
+        return dismissedRecapKey == recapKey(for: recap) ? nil : recap
     }
 
     private var hasTopHudDetails: Bool {
@@ -960,23 +973,23 @@ struct SessionNavigationHeader: View {
     let subtitle: String?
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 1) {
             Text(title)
-                .font(Ember.serif(17, relativeTo: .headline, bold: true))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Ember.text)
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                .minimumScaleFactor(0.8)
                 .truncationMode(.tail)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.caption2.monospaced())
                     .foregroundStyle(Ember.textSecondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                    .minimumScaleFactor(0.8)
                     .truncationMode(.tail)
             }
         }
-        .frame(maxWidth: 200)
+        .frame(maxWidth: 240)
         .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
@@ -1027,40 +1040,56 @@ struct SessionRecapBanner: View {
     let recap: SessionRecap
     var usage: SessionUsageLatest? = nil
     var detail: SessionDetail? = nil
+    var onDismiss: (() -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "text.quote")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 2)
-                    Text(recap.text)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(expanded ? nil : 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "text.quote")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
+                        Text(recap.text)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(expanded ? nil : 2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("session-recap")
+                // One control: say everything it shows, and that it expands.
+                .accessibilityLabel(usage.map { "Recap: \(recap.text). Model: \($0.label)" } ?? "Recap: \(recap.text)")
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                .accessibilityHint(expanded ? "Collapses the recap" : "Expands the recap")
+                .accessibilityAddTraits(.isButton)
+
+                if let onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss recap")
+                    .accessibilityIdentifier("session-recap-dismiss")
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("session-recap")
-            // One control: say everything it shows, and that it expands.
-            .accessibilityLabel(usage.map { "Recap: \(recap.text). Model: \($0.label)" } ?? "Recap: \(recap.text)")
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            .accessibilityHint(expanded ? "Collapses the recap" : "Expands the recap")
-            .accessibilityAddTraits(.isButton)
+            .padding(.horizontal, 16)
 
             if usage != nil || detail != nil {
                 SessionUsageChip(usage: usage, detail: detail)
             }
         }
-        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.bar)
     }
@@ -1085,7 +1114,8 @@ struct SessionUsageChip: View {
                     hudPill(
                         text: modeLabel,
                         systemImage: isBypassPermission ? "bolt.shield.fill" : "shield",
-                        tint: isBypassPermission ? TranscriptPalette.attention : Ember.textSecondary
+                        tint: isBypassPermission ? TranscriptPalette.attention : Ember.textSecondary,
+                        border: isBypassPermission ? TranscriptPalette.attention.opacity(0.42) : Ember.border
                     )
                     .accessibilityIdentifier("session-hud-permission-mode")
                 }
@@ -1101,25 +1131,45 @@ struct SessionUsageChip: View {
                     hudPill(
                         text: "\(crons.count) \(crons.count == 1 ? "cron" : "crons")",
                         systemImage: "clock.arrow.2.circlepath",
-                        tint: Ember.gold
+                        tint: Ember.textSecondary
                     )
                     .accessibilityIdentifier("session-hud-crons")
                 }
             }
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, alignment: detail == nil ? .trailing : .leading)
         }
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.03),
+                    .init(color: .black, location: 0.94),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
     }
 
     private func usageCapsule(_ usage: SessionUsageLatest) -> some View {
-        var segments = [usage.label]
-        if let pctLabel = usage.formattedContextPercentOfWindow,
-           !usage.label.contains("%") {
+        let pctLabel = usage.formattedContextPercentOfWindow
+        let baseLabel: String = {
+            guard detail != nil, pctLabel != nil else { return usage.label }
+            let filtered = usage.label
+                .components(separatedBy: " · ")
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasSuffix(" ctx") }
+            return filtered.isEmpty ? usage.label : filtered.joined(separator: " · ")
+        }()
+        var segments = [baseLabel]
+        if let pctLabel, !baseLabel.contains("%") {
             segments.append(pctLabel)
         }
         if let cost = usage.formattedCost {
             segments.append(cost)
         }
-        if let cum = usage.formattedCumulativeDuration {
+        if detail == nil, let cum = usage.formattedCumulativeDuration {
             segments.append(cum)
         }
         let combined = segments.joined(separator: " · ")
@@ -1143,24 +1193,31 @@ struct SessionUsageChip: View {
             }
             Text(combined)
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Ember.textSecondary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(.quaternary))
+        .background(Capsule().fill(Ember.well))
+        .overlay(Capsule().stroke(Ember.border, lineWidth: 0.75))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session-usage-chip")
     }
 
-    private func hudPill(text: String, systemImage: String, tint: Color) -> some View {
+    private func hudPill(
+        text: String,
+        systemImage: String,
+        tint: Color,
+        border: Color = Ember.border
+    ) -> some View {
         Label(text, systemImage: systemImage)
             .font(.caption2.weight(.medium))
             .foregroundStyle(tint)
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(Capsule().fill(.quaternary))
+            .background(Capsule().fill(Ember.well))
+            .overlay(Capsule().stroke(border, lineWidth: 0.75))
     }
 
     private func rateLimitPill(_ limit: SessionRateLimit) -> some View {
@@ -1168,13 +1225,14 @@ struct SessionUsageChip: View {
         return hudPill(
             text: "\(limit.kind) \(pct)%",
             systemImage: "exclamationmark.triangle.fill",
-            tint: TranscriptPalette.attention
+            tint: TranscriptPalette.attention,
+            border: TranscriptPalette.attention.opacity(0.42)
         )
         .accessibilityIdentifier("session-hud-rate-limit")
     }
 
     private func highRateLimits(for usage: SessionUsageLatest) -> [SessionRateLimit] {
-        (usage.rateLimits ?? []).filter { ($0.percentUsed ?? 0) >= 80 }
+        (usage.rateLimits ?? []).filter { ($0.percentUsed ?? 0) >= 75 }
     }
 
     private var isBypassPermission: Bool {
@@ -1211,7 +1269,13 @@ struct SessionUsageChip: View {
             parts.append(dirName)
         }
         if let branch = branch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty {
-            parts.append("git:(\(branch))")
+            let wtLower = wtName?.lowercased()
+            let branchLower = branch.lowercased()
+            let branchLeaf = branchLower.split(separator: "/").last.map(String.init)
+            let matchesWorktree = wtLower != nil && (branchLower == wtLower || branchLeaf == wtLower)
+            if !matchesWorktree {
+                parts.append("git:(\(branch))")
+            }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
