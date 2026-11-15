@@ -29,6 +29,7 @@ SHA=""
 BRANCH=""
 REQUIRE_CLEAN=0
 WAIT=0
+GATE=1
 DEADLINE_MIN="${SHIP_DEADLINE_MIN:-60}"
 MONITOR_ARGS=()
 
@@ -54,6 +55,11 @@ while [[ $# -gt 0 ]]; do
       WAIT=1
       shift
       ;;
+    --no-gate)
+      # Same as LONGHOUSE_PREPUSH_GATE=skip: the push is not checked and says so.
+      GATE=0
+      shift
+      ;;
     --deadline-min)
       DEADLINE_MIN="${2:-}"
       shift 2
@@ -73,16 +79,34 @@ cleanup_lock() {
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
+# Pre-push gate (scripts/ci/prepush_gate.py): the CI lanes for these paths, on the ci VM, before the push. It runs
+# before the ship lock so one agent's gate does not hold every other agent's push. The push below tells the git
+# pre-push hook this exact commit was already gated.
+GATED=0
+gate_first() {
+  [[ "$GATE" == "1" && "$BRANCH_FOR_GATE" == "main" ]] || return 0
+  git -C "$ROOT" fetch --quiet origin main
+  if git -C "$ROOT" merge-base --is-ancestor "$SHA" refs/remotes/origin/main; then return 0; fi
+  python3 "$ROOT/scripts/ci/prepush_gate.py" --base origin/main --head "$SHA" >&2 || {
+    echo "ship: pre-push gate failed; nothing was pushed. (LONGHOUSE_PREPUSH_GATE=skip bypasses it for a revert that must land now.)" >&2
+    exit 4
+  }
+  GATED=1
+}
+if [[ -z "$SHA" ]]; then
+  echo "No explicit --sha supplied; defaulting to current HEAD. Shared-worktree agents should pass an exact SHA." >&2
+  SHA="$(git -C "$ROOT" rev-parse HEAD)"
+fi
+SHA="$(git -C "$ROOT" rev-parse --verify "${SHA}^{commit}")"
+BRANCH_FOR_GATE="${BRANCH:-$(git -C "$ROOT" symbolic-ref --quiet --short HEAD || true)}"
+if [[ "${LONGHOUSE_PREPUSH_GATE:-}" == "skip" ]]; then GATE=0; fi
+gate_first
+
 while ! mkdir "$LOCK_DIR" 2>/dev/null; do
   echo "Waiting for ship lock..." >&2
   sleep 0.2
 done
 trap cleanup_lock EXIT
-
-if [[ -z "$SHA" ]]; then
-  echo "No explicit --sha supplied; defaulting to current HEAD under lock. Shared-worktree agents should pass an exact SHA." >&2
-  SHA="$(git -C "$ROOT" rev-parse HEAD)"
-fi
 
 if [[ -z "$BRANCH" ]]; then
   BRANCH="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD)"
@@ -130,7 +154,8 @@ else
   # tree of the exact commit being pushed.
   python3 "$ROOT/scripts/ci/verifier_boundary.py" check --root "$ROOT" --rev "$SHA" --base "origin/$BRANCH" >&2
   echo "Pushing exact commit ${SHA:0:10} to ${BRANCH}..." >&2
-  git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"
+  LONGHOUSE_PREPUSH_GATE="$([[ "$GATED" == "1" ]] && echo "done:$SHA" || echo "${LONGHOUSE_PREPUSH_GATE:-}")" \
+    git -C "$ROOT" push origin "$SHA:refs/heads/$BRANCH"
 fi
 
 cleanup_lock

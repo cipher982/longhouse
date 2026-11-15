@@ -230,7 +230,9 @@ class AutofixTests(unittest.TestCase):
         pre_push.write_text("#!/bin/sh\n# longhouse-review-gate-pre-push: legacy Longhouse hook\n")
         installer = ROOT / "scripts" / "ops" / "install-precommit-autofix.sh"
         subprocess.run(["bash", str(installer)], cwd=self.dir, check=True, capture_output=True, text=True)
-        self.assertFalse(pre_push.exists())
+        # the legacy hook is gone and the pre-push gate shim took its place
+        self.assertNotIn("longhouse-review-gate-pre-push", pre_push.read_text())
+        self.assertIn("longhouse-prepush-gate", pre_push.read_text())
 
         unrelated = "#!/bin/sh\n# owned by another hook\n"
         pre_push.write_text(unrelated)

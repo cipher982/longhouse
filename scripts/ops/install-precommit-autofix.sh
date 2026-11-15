@@ -48,3 +48,13 @@ SHIM
 }
 install_shim pre-commit.legacy longhouse-autofix-snapshot "$(shim_body longhouse-autofix-snapshot snapshot)"
 install_shim post-commit longhouse-autofix-post-commit "$(shim_body longhouse-autofix-post-commit post-commit)"
+
+# --- the pre-push gate -----------------------------------------------------------------------------------------
+# Pushes to main run the CI lanes for their paths on the ci VM first (scripts/ci/prepush_gate.py). One hook in the shared
+# hooks directory covers every worktree; a checkout without the script skips it. LONGHOUSE_PREPUSH_GATE=skip bypasses it.
+install_shim pre-push longhouse-prepush-gate '#!/bin/sh
+# longhouse-prepush-gate: installed by scripts/ops/install-precommit-autofix.sh; see scripts/ci/prepush_gate.py.
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+script="$top/scripts/ci/prepush_gate.py"
+[ -f "$script" ] && command -v python3 >/dev/null 2>&1 || exit 0
+exec python3 "$script" --hook "$@"'

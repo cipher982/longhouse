@@ -149,17 +149,26 @@ def _verify_revision(root: Path, revision: str, label: str) -> str:
     return resolved
 
 
-def collect_paths(root: Path, base: str, head: str) -> dict[str, list[str]]:
-    """Collect committed, staged, unstaged, and nonignored untracked paths."""
+def collect_paths(root: Path, base: str, head: str, include_dirty: bool = False) -> dict[str, list[str]]:
+    """The paths a push would change: ``base...head``, i.e. head's commits since the merge base.
+
+    Only committed work. Another session's staged, unstaged and untracked files in a shared checkout are not part of
+    what is being pushed (2026-11-15: a gate that read them selected lanes for work nobody was shipping). Pass
+    ``include_dirty`` to add them for a local what-if.
+    """
 
     verified_base = _verify_revision(root, base, "BASE")
     verified_head = _verify_revision(root, head, "HEAD")
     committed = _nul_paths(
-        _git(root, ["diff", "--name-only", "--no-renames", "-z", verified_base, verified_head])
+        _git(root, ["diff", "--name-only", "--no-renames", "-z", f"{verified_base}...{verified_head}"])
     )
-    staged = _nul_paths(_git(root, ["diff", "--cached", "--name-only", "--no-renames", "-z"]))
-    unstaged = _nul_paths(_git(root, ["diff", "--name-only", "--no-renames", "-z"]))
-    untracked = _nul_paths(_git(root, ["ls-files", "--others", "--exclude-standard", "-z"]))
+    staged: list[str] = []
+    unstaged: list[str] = []
+    untracked: list[str] = []
+    if include_dirty:
+        staged = _nul_paths(_git(root, ["diff", "--cached", "--name-only", "--no-renames", "-z"]))
+        unstaged = _nul_paths(_git(root, ["diff", "--name-only", "--no-renames", "-z"]))
+        untracked = _nul_paths(_git(root, ["ls-files", "--others", "--exclude-standard", "-z"]))
     return {
         "committed": sorted(set(committed)),
         "staged": sorted(set(staged)),
@@ -322,6 +331,117 @@ def resolve(filters: dict[str, tuple[str, ...]], paths_by_source: dict[str, list
     }
 
 
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The pre-push gate: the lanes CI would run for these paths, runnable before the push.
+# ---------------------------------------------------------------------------------------------------------------------
+
+TERMINAL_TRUTH_WORKFLOW = ".github/workflows/terminal-truth.yml"
+
+
+@dataclass(frozen=True)
+class Lane:
+    name: str
+    command: str
+    where: str  # "local" (cheap, no build) or "remote" (the ci VM through scripts/ops/remote.sh)
+    why: str
+
+
+def terminal_truth_paths(root: Path) -> tuple[str, ...]:
+    """The push filter of the Terminal Truth workflow, read from it so the two cannot drift."""
+
+    try:
+        doc = yaml.safe_load((root / TERMINAL_TRUTH_WORKFLOW).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ResolverError(f"cannot read {TERMINAL_TRUTH_WORKFLOW}: {exc}") from exc
+    triggers = doc.get(True) or doc.get("on") or {}
+    paths = (triggers.get("push") or {}).get("paths") or []
+    if not paths:
+        raise ResolverError(f"{TERMINAL_TRUTH_WORKFLOW} has no push paths filter")
+    return tuple(str(p) for p in paths)
+
+
+def gate_plan(root: Path, result: dict[str, Any], *, backend_select: Any | None = None) -> dict[str, Any]:
+    """Lanes for ``result`` (from :func:`resolve`) that mirror ``.github/workflows/contract-first-ci.yml``.
+
+    ``make validate`` and the provider contract assertions run on every CI push, so they run on every gate. The rest
+    follow CI's own conditions. Lanes CI runs that the gate cannot (iOS on wisp, browsers, credentialed model smoke,
+    the nightly UI sweep) are listed in ``ci_only`` so a green gate never reads as "CI will pass".
+    """
+
+    files: list[str] = result["files"]
+    cats = set(result["categories"])
+    lanes: list[Lane] = []
+    ci_only: list[str] = []
+    notes: list[str] = []
+    if not files:
+        return {"lanes": [], "ci_only": [], "notes": ["no committed changes against the base"], "backend": None}
+
+    if "engine" in cats and any(f.startswith("engine/") for f in files):
+        lanes.append(Lane("rustfmt", "cargo fmt --manifest-path engine/Cargo.toml -- --check", "local",
+                          "CI Engine rustfmt gate (engine/**)"))
+    lanes.append(Lane("validate", "make validate", "remote", "CI Validation runs on every push"))
+    lanes.append(Lane("provider-contract", "make test-provider-contract", "remote",
+                      "CI provider-contract-tests runs on every push"))
+    if cats & {"backend", "engine", "schemas", "scripts", "ci_plumbing"}:
+        lanes.append(Lane("managed-launch", "make test-managed-launch-lifecycle", "remote",
+                          "CI Managed launch lifecycle (backend, engine, schemas, scripts or CI plumbing changed)"))
+    if cats & {"backend", "scripts", "schemas", "engine"}:
+        # CI runs the shards for backend|scripts; schemas and engine feed generated files the tests read.
+        if backend_select is None:
+            from importlib import util as _u
+
+            spec = _u.spec_from_file_location("backend_select", root / "scripts" / "ci" / "backend_select.py")
+            assert spec and spec.loader
+            backend_select = _u.module_from_spec(spec)
+            sys.modules.setdefault("backend_select", backend_select)
+            spec.loader.exec_module(backend_select)
+        selection = backend_select.select(root, files)
+        if selection.full:
+            lanes.append(Lane("backend-full", "make test", "remote", f"full backend suite: {selection.reason}"))
+        elif selection.tests:
+            targets = " ".join(selection.tests)
+            lanes.append(Lane("backend-selected", f'make test TEST="{targets}"', "remote", selection.reason))
+        else:
+            notes.append(f"backend tests: none reach the change ({selection.reason})")
+        backend = selection.as_dict()
+    else:
+        backend = None
+    if cats & {"engine", "backend"}:
+        lanes.append(Lane("engine", "make test-engine", "remote", "CI Engine tests (engine/** or server/** changed)"))
+        lanes.append(Lane("shipper-e2e", "make test-shipper-e2e", "remote",
+                          "CI Shipper pipeline E2E (fixture -> engine -> API -> DB)"))
+    if cats & {"frontend", "runner"}:
+        lanes.append(Lane("frontend", "make test-frontend-runner", "remote", "CI Frontend + runner tests"))
+    if "packaging" in cats:
+        lanes.append(Lane("wheel", "make test-wheel-package", "remote", "CI wheel packaging check"))
+    tt_paths = terminal_truth_paths(root)
+    tt_hits = [f for f in files if any(_matches(f, pattern) for pattern in tt_paths)]
+    if tt_hits:
+        lanes.append(Lane("terminal-truth-selfcheck",
+                          "python3 scripts/qa/test-isolation.py --target test-terminal-truth-selfcheck --command make --no-print-directory terminal-truth-selfcheck",
+                          "remote",
+                          f"Terminal Truth paths changed ({tt_hits[0]}{' ...' if len(tt_hits) > 1 else ''}): harness selfcheck, no provider"))
+        ci_only.append("Terminal Truth real-provider cells (the stock provider CLIs never run on the laptop or the ci VM guest): "
+                       "the post-push run is the verdict and the main-repair bot reverts a deterministic failure")
+    for cat, text in (
+        ("ios", "iOS tests on wisp"),
+        ("e2e", "Core E2E (Playwright)"),
+        ("models", "credentialed model smoke"),
+        ("ui_sweep", "UI popover sweep"),
+    ):
+        if cat in cats:
+            ci_only.append(text)
+    ci_only.append("engine-compat, OSS onboarding, transcript-stability replays (CI small checks)")
+    return {
+        "lanes": [lane.__dict__ for lane in lanes],
+        "ci_only": ci_only,
+        "notes": notes,
+        "backend": backend,
+        "terminal_truth_paths_hit": tt_hits,
+    }
+
+
 def _human(result: dict[str, Any], *, base: str, head: str) -> str:
     lines = [f"Affected files ({len(result['files'])}; BASE={base}, HEAD={head}):"]
     if result["files"]:
@@ -351,6 +471,19 @@ def _human(result: dict[str, Any], *, base: str, head: str) -> str:
     return "\n".join(lines)
 
 
+def _human_gate(gate: dict[str, Any]) -> str:
+    lines = ["Pre-push gate lanes:"]
+    for lane in gate["lanes"]:
+        lines.append(f"  [{lane['where']}] {lane['name']}: {lane['command']}  ({lane['why']})")
+    if not gate["lanes"]:
+        lines.append("  (none)")
+    for note in gate["notes"]:
+        lines.append(f"Note: {note}")
+    for item in gate["ci_only"]:
+        lines.append(f"CI only, not run by the gate: {item}")
+    return "\n".join(lines)
+
+
 def _run_commands(root: Path, commands: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run only commands represented by explicit supported ``make`` targets."""
 
@@ -372,12 +505,14 @@ def _run_commands(root: Path, commands: Iterable[dict[str, Any]]) -> list[dict[s
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=os.environ.get("BASE", "HEAD~1"), help="committed diff BASE (default: BASE or HEAD~1)")
+    parser.add_argument("--base", default=os.environ.get("BASE", "origin/main"), help="push base (default: BASE or origin/main); the diff is base...head")
     parser.add_argument("--head", default=os.environ.get("HEAD", "HEAD"), help="committed diff HEAD (default: HEAD or HEAD)")
     parser.add_argument("--repo", type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--filters", type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON instead of human text")
     parser.add_argument("--run", action="store_true", help="run the supported local make targets after resolving")
+    parser.add_argument("--include-dirty", action="store_true", help="also count staged, unstaged and untracked files (local what-if)")
+    parser.add_argument("--gate", action="store_true", help="print the pre-push gate plan (the CI lanes for these paths)")
     return parser
 
 
@@ -386,7 +521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.repo.resolve()
     filters_path = (args.filters or (root / ".github" / "path-filters.yml")).resolve()
     try:
-        sources = collect_paths(root, args.base, args.head)
+        sources = collect_paths(root, args.base, args.head, include_dirty=args.include_dirty)
         filters = _load_filters(filters_path)
         result = resolve(filters, sources)
         if args.run:
@@ -400,6 +535,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result["runs"] = _run_commands(root, result["commands"])
         else:
             result["runs"] = []
+        if args.gate:
+            result["gate"] = gate_plan(root, result)
     except ResolverError as exc:
         print(f"affected-check: ERROR: {exc}", file=sys.stderr)
         return 2
@@ -411,6 +548,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     else:
         print(_human(result, base=args.base, head=args.head))
+        if args.gate:
+            print(_human_gate(result["gate"]))
     return 0
 
 

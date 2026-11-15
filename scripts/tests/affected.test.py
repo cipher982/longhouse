@@ -106,7 +106,10 @@ def test_dirty_and_nonignored_untracked_paths_are_collected() -> None:
         (repo / "runner.txt").write_text("untracked\n", encoding="utf-8")
         (repo / "ignored.txt").write_text("ignored\n", encoding="utf-8")
 
-        sources = affected.collect_paths(repo, base, "HEAD")
+        default = affected.collect_paths(repo, base, "HEAD")
+        assert default["committed"] == [] and default["staged"] == [] and default["unstaged"] == []
+        assert default["untracked"] == [], "another session's dirty files must not count toward a push"
+        sources = affected.collect_paths(repo, base, "HEAD", include_dirty=True)
         assert sources["staged"] == ["server/staged.py"]
         assert sources["unstaged"] == ["web/base.css"]
         assert sources["untracked"] == ["runner.txt"]
@@ -134,6 +137,8 @@ def test_run_refuses_unmatched_paths() -> None:
         git(repo, "commit", "-qm", "initial")
         base = git(repo, "rev-parse", "HEAD")
         (repo / "README.local").write_text("unmatched\n", encoding="utf-8")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "unmatched")
         result = subprocess.run(
             [
                 sys.executable,
@@ -192,8 +197,12 @@ def test_cli_json_is_machine_readable() -> None:
         (repo / "web" / "style.css").write_text("a{}\n", encoding="utf-8")
         git(repo, "add", ".")
         git(repo, "commit", "-qm", "initial")
-        (repo / "web" / "new-style.css").write_text("a{}\n", encoding="utf-8")
         base = git(repo, "rev-parse", "HEAD")
+        (repo / "web" / "new-style.css").write_text("a{}\n", encoding="utf-8")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "style")
+        (repo / "server").mkdir()
+        (repo / "server" / "dirty.py").write_text("x\n", encoding="utf-8")  # uncommitted: not part of a push
         result = subprocess.run(
             [
                 sys.executable,
@@ -216,6 +225,7 @@ def test_cli_json_is_machine_readable() -> None:
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
         assert payload["files"] == ["web/new-style.css"], payload
+        assert "backend" not in payload["categories"]
         assert "frontend" in payload["categories"]
         human = subprocess.run(
             [argument for argument in result.args if argument != "--json"],
@@ -229,6 +239,57 @@ def test_cli_json_is_machine_readable() -> None:
         assert "web/new-style.css" in human.stdout
         assert "CI lanes: " in human.stdout
         assert "ubuntu-24.04-arm" in human.stdout
+
+
+def test_diff_is_against_the_merge_base_not_the_moving_base() -> None:
+    with tempfile.TemporaryDirectory(prefix="affected-mb-") as raw:
+        repo = Path(raw)
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "affected@example.invalid")
+        git(repo, "config", "user.name", "affected-test")
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "base")
+        git(repo, "checkout", "-q", "-b", "topic")
+        (repo / "web").mkdir()
+        (repo / "web" / "mine.css").write_text("a{}\n", encoding="utf-8")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "mine")
+        git(repo, "checkout", "-q", "main")
+        (repo / "server").mkdir()
+        (repo / "server" / "theirs.py").write_text("x\n", encoding="utf-8")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "theirs landed meanwhile")
+        sources = affected.collect_paths(repo, "main", "topic")
+        assert sources["committed"] == ["web/mine.css"], sources
+
+
+def lane_names(*paths: str) -> list[str]:
+    result = affected.resolve(FILTERS, {"committed": list(paths)})
+    plan = affected.gate_plan(ROOT, result)
+    return [lane["name"] for lane in plan["lanes"]]
+
+
+def test_gate_adds_the_lanes_ci_runs_for_each_path() -> None:
+    engine = lane_names("engine/src/main.rs")
+    for name in ("rustfmt", "validate", "provider-contract", "managed-launch", "engine"):
+        assert name in engine, (name, engine)
+    # a docs-only change still runs the unconditional CI lanes
+    assert lane_names("docs/x.md") == ["validate", "provider-contract"]
+    assert "frontend" in lane_names("web/src/a.ts")
+    assert "managed-launch" not in lane_names("web/src/a.ts")
+
+
+def test_gate_runs_a_terminal_truth_lane_for_its_paths() -> None:
+    names = lane_names("server/zerg/qa/scripted_model_profiles.py")
+    assert "terminal-truth-selfcheck" in names, names
+    assert "terminal-truth-selfcheck" not in lane_names("web/src/a.ts")
+    assert "terminal-truth-selfcheck" in lane_names("scripts/ci/terminal_truth_providers.py")
+
+
+def test_gate_with_nothing_committed_has_no_lanes() -> None:
+    result = affected.resolve(FILTERS, {"committed": []})
+    assert affected.gate_plan(ROOT, result)["lanes"] == []
 
 
 if __name__ == "__main__":

@@ -68,7 +68,9 @@ if [ -z "${FERNET_SECRET:-}" ]; then
 fi
 
 test_target="${LONGHOUSE_TEST_TARGET:-tests_lite/}"
-pytest_args=("$test_target" -p no:warnings --tb=short)
+# LONGHOUSE_TEST_TARGET may name several files or nodes separated by spaces (the pre-push gate selects by import graph).
+read -r -a test_targets <<<"$test_target"
+pytest_args=("${test_targets[@]}" -p no:warnings --tb=short)
 
 has_xdist_arg=0
 for arg in "$@"; do
@@ -96,7 +98,7 @@ if [ "$has_xdist_arg" -eq 0 ]; then
     # unassigned and the run sat for the whole job timeout.
     if [ -n "${PYTEST_XDIST_WORKERS:-}" ]; then
         xdist_workers="$PYTEST_XDIST_WORKERS"
-    elif [ -n "${LONGHOUSE_TEST_TARGET:-}" ]; then
+    elif [ -n "${LONGHOUSE_TEST_TARGET:-}" ] && [ "${#test_targets[@]}" -le 1 ]; then
         xdist_workers=0
     else
         xdist_workers="${LONGHOUSE_TEST_CPUS:-1}"
