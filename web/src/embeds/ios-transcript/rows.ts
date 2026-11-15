@@ -12,12 +12,13 @@ import {
 import { activityGroup, question, toolDetails } from "./toolCards";
 import type { TranscriptItem } from "./types";
 
-function renderApiErrorBlock(apiError: Record<string, unknown>, body?: string | null): string {
+function renderApiErrorBlock(apiError: Record<string, unknown>, body?: string | null, recovered = false): string {
   const summary = summarizeApiError(apiError, body);
   const badgeHtml = summary.badge ? `<span class="api-error-badge">${escapeHtml(summary.badge)}</span>` : "";
+  const recoveredClass = recovered ? " recovered" : "";
   if (summary.detail) {
     return `
-        <details class="tool row notice api-error-notice" data-testid="session-api-error-notice">
+        <details class="tool row notice api-error-notice${recoveredClass}" data-testid="session-api-error-notice">
           <summary>
             ${badgeHtml}
             <span class="tool-title">${escapeHtml(summary.title)}</span>
@@ -27,13 +28,13 @@ function renderApiErrorBlock(apiError: Record<string, unknown>, body?: string | 
       `;
   }
   return `
-        <div class="tool row notice static api-error-notice" data-testid="session-api-error-notice">
+        <div class="tool row notice static api-error-notice${recoveredClass}" data-testid="session-api-error-notice">
           <div class="tool-head">${badgeHtml}<span class="tool-title">${escapeHtml(summary.title)}</span></div>
         </div>
       `;
 }
 
-export function message(item: TranscriptItem, index: number): string {
+export function message(item: TranscriptItem, index: number, recovered = false): string {
   const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
   const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
   const media = mediaStrip(item.media || []);
@@ -67,12 +68,9 @@ export function message(item: TranscriptItem, index: number): string {
         `;
   }
   const commentaryClass = item.phase === "commentary" ? " commentary" : "";
-  const phaseBadge =
-    item.phase === "commentary" ? '<div class="message-phase-row"><span class="phase-badge">Commentary</span></div>' : "";
-  const errorNotice = item.apiError ? renderApiErrorBlock(item.apiError, item.body) : "";
+  const errorNotice = item.apiError ? renderApiErrorBlock(item.apiError, item.body, recovered) : "";
   return `
         <article class="row message assistant${commentaryClass}" data-message-index="${index}">
-          ${phaseBadge}
           <div class="message-content">${body}</div>
           ${media}
           ${expand}
@@ -160,7 +158,7 @@ export function compaction(item: TranscriptItem): string {
 /// Longhouse's own notice (origin "longhouse", e.g. a Stop's close receipt) is
 /// short server-authored prose whose last sentence may be the point, so it is
 /// shown whole, as the web timeline shows it.
-export function providerNotification(item: TranscriptItem): string {
+export function providerNotification(item: TranscriptItem, recovered = false): string {
   if (item.taskNotification) {
     const summary = summarizeTaskNotification(item.taskNotification, item.body);
     const statusDot = summary.status
@@ -192,7 +190,7 @@ export function providerNotification(item: TranscriptItem): string {
       `;
   }
   if (item.apiError) {
-    return renderApiErrorBlock(item.apiError, item.body);
+    return renderApiErrorBlock(item.apiError, item.body, recovered);
   }
   const wakeAttribute = item.wake ? ' data-wake="true"' : "";
   if (item.origin === "longhouse") {
@@ -242,12 +240,12 @@ export function reasoning(item: TranscriptItem): string {
       `;
 }
 
-export function renderItemBody(item: TranscriptItem, index: number): string {
-  if (item.kind === "message") return message(item, index);
+export function renderItemBody(item: TranscriptItem, index: number, recovered = false): string {
+  if (item.kind === "message") return message(item, index, recovered);
   if (item.kind === "submitted") return submitted(item);
   if (item.kind === "action") return action(item);
   if (item.kind === "compaction") return compaction(item);
-  if (item.kind === "providerNotification") return providerNotification(item);
+  if (item.kind === "providerNotification") return providerNotification(item, recovered);
   if (item.kind === "reasoning") return reasoning(item);
   if (item.kind === "question") return question(item);
   if (item.kind === "tool") return toolDetails(item);
@@ -255,8 +253,8 @@ export function renderItemBody(item: TranscriptItem, index: number): string {
   return "";
 }
 
-export function renderItem(item: TranscriptItem, index: number): string {
-  const html = renderItemBody(item, index);
+export function renderItem(item: TranscriptItem, index: number, recovered = false): string {
+  const html = renderItemBody(item, index, recovered);
   if (!html || !item.turnEnd) return html;
   const template = document.createElement("template");
   template.innerHTML = html.trim();

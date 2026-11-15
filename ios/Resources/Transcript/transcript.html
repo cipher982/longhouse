@@ -186,8 +186,19 @@ body {
   font-weight: 650;
 }
 
-.compaction-detail {
+.action.compaction {
+  margin: 4px 0;
+  color: var(--tertiary);
+  font-size: 11px;
+}
+
+.action.compaction .action-title {
   color: var(--secondary);
+  font-weight: 500;
+}
+
+.compaction-detail {
+  color: var(--tertiary);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -755,22 +766,6 @@ summary::-webkit-details-marker {
 }
 
 /* --- Claude Code fidelity signals & subagent tree --- */
-.message-phase-row {
-  margin-bottom: 4px;
-}
-
-.phase-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  color: var(--secondary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .message.assistant.commentary .message-content {
   color: var(--secondary);
   font-size: 13.5px;
@@ -841,7 +836,23 @@ summary::-webkit-details-marker {
 }
 
 .subagent-dot.status-waiting {
-  background: var(--secondary);
+  background: transparent;
+  border: 1.5px solid var(--secondary);
+}
+
+.subagent-notice-recovered,
+.api-error-notice.recovered {
+  border-left-color: var(--trace);
+}
+
+.api-error-notice.recovered .api-error-badge {
+  border-color: rgba(212, 184, 122, 0.25);
+  background: rgba(212, 184, 122, 0.08);
+  color: var(--secondary);
+}
+
+.api-error-notice.recovered .tool-title {
+  color: var(--secondary);
 }
 
 .task-notice-note {
@@ -871,6 +882,19 @@ summary::-webkit-details-marker {
 .subagents {
   margin: 2px 0 8px 2px;
   border-left: 1.5px solid var(--trace);
+}
+
+.subagents-single {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.subagents-branch {
+  color: var(--tertiary);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
 }
 
 .subagents summary {
@@ -1380,7 +1404,7 @@ summary::-webkit-details-marker {
 	function subagentNode(item) {
 		const children = item.subagents || [];
 		if (!children.length) return "";
-		const rows = children.map((child) => {
+		const rows = children.map((child, idx) => {
 			const depth = typeof child.depth === "number" && child.depth > 0 ? Math.min(child.depth, 4) : 0;
 			const indentAttr = depth > 0 ? ` data-depth="${depth}" style="margin-left:${depth * 14}px"` : "";
 			const liveStatus = child.liveStatus?.trim();
@@ -1388,9 +1412,13 @@ summary::-webkit-details-marker {
 			const typePill = child.agentType ? `<span class="subagent-pill">${escapeHtml(child.agentType)}</span>` : "";
 			const forkBadge = child.isFork ? "<span class=\"subagent-pill fork\">fork</span>" : "";
 			const waitTag = liveStatus === "waiting" ? "<span class=\"subagent-status waiting\">waiting</span>" : "";
-			return `<li${indentAttr}><button type="button" class="subagent-link" data-subagent-session="` + escapeHtml(child.sessionId) + "\">" + statusDot + typePill + forkBadge + "<span class=\"subagent-label\">" + escapeHtml(child.label) + "</span>" + waitTag + "<span class=\"subagent-meta\">" + escapeHtml(formatChildMeta(child)) + "</span></button></li>";
-		}).join("");
-		return "<details class=\"subagents\" data-open-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(item.subagentSummary || "") + "</summary><ul class=\"subagent-list\">" + rows + "</ul></details>";
+			const buttonHtml = `${children.length === 1 && idx === 0 ? "<span class=\"subagents-branch\" aria-hidden=\"true\">└─</span>" : ""}<button type="button" class="subagent-link" data-subagent-session="` + escapeHtml(child.sessionId) + "\">" + statusDot + typePill + forkBadge + "<span class=\"subagent-label\">" + escapeHtml(child.label) + "</span>" + waitTag + "<span class=\"subagent-meta\">" + escapeHtml(formatChildMeta(child)) + "</span></button>";
+			return children.length === 1 ? buttonHtml : `<li${indentAttr}>${buttonHtml}</li>`;
+		});
+		if (children.length === 1) return `<div class="subagents subagents-single" data-open-key="${escapeHtml(item.id)}">${rows[0]}</div>`;
+		const rawSummary = (item.subagentSummary || "").trim();
+		const summaryLabel = !rawSummary || rawSummary === "1 agent" && children.length > 1 ? `${children.length} agents` : rawSummary;
+		return "<details class=\"subagents\" data-open-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(summaryLabel) + "</summary><ul class=\"subagent-list\">" + rows.join("") + "</ul></details>";
 	}
 	function attachSubagentHandlers(scope = document) {
 		for (const button of scope.querySelectorAll("[data-subagent-session]")) button.addEventListener("click", () => {
@@ -1419,6 +1447,10 @@ summary::-webkit-details-marker {
 		if (!(item.bodyCursors || []).length) return "";
 		return "<p class=\"body-note\" role=\"status\">" + escapeHtml(BODY_NOTES[item.bodyState || "preview"] || BODY_NOTES.preview) + "</p>";
 	}
+	var MAX_LIVE_RUNNING_ELAPSED_MS = 864e5;
+	function isStaleRunningStart(startedAtMs, nowMs = Date.now()) {
+		return !Number.isFinite(startedAtMs) || nowMs - startedAtMs > MAX_LIVE_RUNNING_ELAPSED_MS;
+	}
 	function formatRunningElapsed(startedAtMs, nowMs = Date.now()) {
 		const total = Math.max(0, Math.floor((nowMs - startedAtMs) / 1e3));
 		const hours = Math.floor(total / 3600);
@@ -1438,7 +1470,7 @@ summary::-webkit-details-marker {
 		let updated = 0;
 		for (const el of nodes) {
 			const raw = Number(el.getAttribute("data-started-at-ms"));
-			if (!Number.isFinite(raw)) continue;
+			if (isStaleRunningStart(raw, nowMs)) continue;
 			el.textContent = formatRunningElapsed(raw, nowMs);
 			updated += 1;
 		}
@@ -1447,9 +1479,10 @@ summary::-webkit-details-marker {
 	function toolDetails(item) {
 		const isFailure = !!item.failurePreview || typeof item.status === "string" && (item.status.indexOf("exit ") === 0 || item.status === "failed");
 		const meta = item.status === "running" ? "running" : item.status === "dropped" ? "dropped" : item.status === "orphan" ? "orphan" : isFailure ? "failed" : "";
-		const runningClock = item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs) ? formatRunningElapsed(item.startedAtMs) : null;
+		const hasFreshRunningClock = item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs) && !isStaleRunningStart(item.startedAtMs);
+		const runningClock = hasFreshRunningClock ? formatRunningElapsed(item.startedAtMs) : null;
 		const status = isFailure ? item.status || "failed" : runningClock || item.duration || item.status || "";
-		const metaAttr = item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs) ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"` : "";
+		const metaAttr = hasFreshRunningClock ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"` : "";
 		const subtitleText = item.subtitle || item.toolIntent || "";
 		const intentNote = item.toolIntent && item.toolIntent !== subtitleText ? `<span class="tool-intent">${escapeHtml(item.toolIntent)}</span>` : "";
 		const diffHtml = renderDiff(item.diff);
@@ -1532,11 +1565,12 @@ summary::-webkit-details-marker {
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/rows.ts
-	function renderApiErrorBlock(apiError, body) {
+	function renderApiErrorBlock(apiError, body, recovered = false) {
 		const summary = summarizeApiError(apiError, body);
 		const badgeHtml = summary.badge ? `<span class="api-error-badge">${escapeHtml(summary.badge)}</span>` : "";
+		const recoveredClass = recovered ? " recovered" : "";
 		if (summary.detail) return `
-        <details class="tool row notice api-error-notice" data-testid="session-api-error-notice">
+        <details class="tool row notice api-error-notice${recoveredClass}" data-testid="session-api-error-notice">
           <summary>
             ${badgeHtml}
             <span class="tool-title">${escapeHtml(summary.title)}</span>
@@ -1545,12 +1579,12 @@ summary::-webkit-details-marker {
         </details>
       `;
 		return `
-        <div class="tool row notice static api-error-notice" data-testid="session-api-error-notice">
+        <div class="tool row notice static api-error-notice${recoveredClass}" data-testid="session-api-error-notice">
           <div class="tool-head">${badgeHtml}<span class="tool-title">${escapeHtml(summary.title)}</span></div>
         </div>
       `;
 	}
-	function message(item, index) {
+	function message(item, index, recovered = false) {
 		const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
 		const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
 		const media = mediaStrip(item.media || []);
@@ -1573,11 +1607,10 @@ summary::-webkit-details-marker {
 		}
 		return `
         <article class="row message assistant${item.phase === "commentary" ? " commentary" : ""}" data-message-index="${index}">
-          ${item.phase === "commentary" ? "<div class=\"message-phase-row\"><span class=\"phase-badge\">Commentary</span></div>" : ""}
           <div class="message-content">${body}</div>
           ${media}
           ${expand}
-          ${item.apiError ? renderApiErrorBlock(item.apiError, item.body) : ""}
+          ${item.apiError ? renderApiErrorBlock(item.apiError, item.body, recovered) : ""}
         </article>
       `;
 	}
@@ -1638,7 +1671,7 @@ summary::-webkit-details-marker {
         </div>
       `;
 	}
-	function providerNotification(item) {
+	function providerNotification(item, recovered = false) {
 		if (item.taskNotification) {
 			const summary = summarizeTaskNotification(item.taskNotification, item.body);
 			const statusDot = summary.status ? `<span class="task-notice-dot status-${escapeHtml(summary.status)}" aria-label="${escapeHtml(summary.status)}"></span>` : "";
@@ -1664,7 +1697,7 @@ summary::-webkit-details-marker {
         </div>
       `;
 		}
-		if (item.apiError) return renderApiErrorBlock(item.apiError, item.body);
+		if (item.apiError) return renderApiErrorBlock(item.apiError, item.body, recovered);
 		const wakeAttribute = item.wake ? " data-wake=\"true\"" : "";
 		if (item.origin === "longhouse") return `
         <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse"${wakeAttribute}>
@@ -1702,20 +1735,20 @@ summary::-webkit-details-marker {
         </details>
       `;
 	}
-	function renderItemBody(item, index) {
-		if (item.kind === "message") return message(item, index);
+	function renderItemBody(item, index, recovered = false) {
+		if (item.kind === "message") return message(item, index, recovered);
 		if (item.kind === "submitted") return submitted(item);
 		if (item.kind === "action") return action(item);
 		if (item.kind === "compaction") return compaction(item);
-		if (item.kind === "providerNotification") return providerNotification(item);
+		if (item.kind === "providerNotification") return providerNotification(item, recovered);
 		if (item.kind === "reasoning") return reasoning(item);
 		if (item.kind === "question") return question(item);
 		if (item.kind === "tool") return toolDetails(item);
 		if (item.kind === "activityGroup") return activityGroup(item);
 		return "";
 	}
-	function renderItem(item, index) {
-		const html = renderItemBody(item, index);
+	function renderItem(item, index, recovered = false) {
+		const html = renderItemBody(item, index, recovered);
 		if (!html || !item.turnEnd) return html;
 		const template = document.createElement("template");
 		template.innerHTML = html.trim();
@@ -1774,6 +1807,15 @@ summary::-webkit-details-marker {
 		attach(template.content);
 		return Array.from(template.content.children);
 	}
+	function isRecoveredApiError(items, index) {
+		if (!items[index]?.apiError) return false;
+		for (let j = items.length - 1; j > index; j--) {
+			const later = items[j];
+			if (later.kind === "tool" || later.kind === "activityGroup" || later.kind === "compaction") return true;
+			if (later.kind === "message" && (!later.apiError || Boolean(later.body?.trim()))) return true;
+		}
+		return false;
+	}
 	/**
 	* Make `root` show `items` (or the empty/error document) with the fewest DOM
 	* operations. Nodes already in the right place are not touched.
@@ -1819,7 +1861,9 @@ summary::-webkit-details-marker {
 			items.forEach((item, index) => {
 				const count = seen.get(item.id) ?? 0;
 				seen.set(item.id, count + 1);
-				place(count ? `${item.id}#${count}` : item.id, JSON.stringify(item), () => renderItem(item, index), index);
+				const recovered = isRecoveredApiError(items, index);
+				const sig = recovered ? `${JSON.stringify(item)}|rec` : JSON.stringify(item);
+				place(count ? `${item.id}#${count}` : item.id, sig, () => renderItem(item, index, recovered), index);
 			});
 		}
 		const carried = /* @__PURE__ */ new Map();

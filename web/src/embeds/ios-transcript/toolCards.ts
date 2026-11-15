@@ -26,6 +26,12 @@ function bodyNote(item: TranscriptItem): string {
   return '<p class="body-note" role="status">' + escapeHtml(text) + "</p>";
 }
 
+const MAX_LIVE_RUNNING_ELAPSED_MS = 86_400_000;
+
+export function isStaleRunningStart(startedAtMs: number, nowMs: number = Date.now()): boolean {
+  return !Number.isFinite(startedAtMs) || nowMs - startedAtMs > MAX_LIVE_RUNNING_ELAPSED_MS;
+}
+
 export function formatRunningElapsed(startedAtMs: number, nowMs: number = Date.now()): string {
   const total = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
   const hours = Math.floor(total / 3600);
@@ -51,7 +57,7 @@ export function updateRunningTimers(scope: ParentNode = document, nowMs: number 
   let updated = 0;
   for (const el of nodes) {
     const raw = Number(el.getAttribute("data-started-at-ms"));
-    if (!Number.isFinite(raw)) continue;
+    if (isStaleRunningStart(raw, nowMs)) continue;
     el.textContent = formatRunningElapsed(raw, nowMs);
     updated += 1;
   }
@@ -72,15 +78,16 @@ export function toolDetails(item: TranscriptItem): string {
           : isFailure
             ? "failed"
             : "";
-  const runningClock =
-    item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs)
-      ? formatRunningElapsed(item.startedAtMs)
-      : null;
+  const hasFreshRunningClock =
+    item.status === "running" &&
+    typeof item.startedAtMs === "number" &&
+    Number.isFinite(item.startedAtMs) &&
+    !isStaleRunningStart(item.startedAtMs);
+  const runningClock = hasFreshRunningClock ? formatRunningElapsed(item.startedAtMs as number) : null;
   const status = isFailure ? item.status || "failed" : runningClock || item.duration || item.status || "";
-  const metaAttr =
-    item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs)
-      ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"`
-      : "";
+  const metaAttr = hasFreshRunningClock
+    ? ` data-started-at-ms="${Math.round(item.startedAtMs as number)}"`
+    : "";
   const subtitleText = item.subtitle || item.toolIntent || "";
   const intentNote =
     item.toolIntent && item.toolIntent !== subtitleText

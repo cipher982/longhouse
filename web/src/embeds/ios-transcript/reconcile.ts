@@ -79,6 +79,17 @@ function build(html: string, attach: Handlers): Element[] {
   return Array.from(template.content.children);
 }
 
+function isRecoveredApiError(items: TranscriptItem[], index: number): boolean {
+  const item = items[index];
+  if (!item?.apiError) return false;
+  for (let j = items.length - 1; j > index; j--) {
+    const later = items[j];
+    if (later.kind === "tool" || later.kind === "activityGroup" || later.kind === "compaction") return true;
+    if (later.kind === "message" && (!later.apiError || Boolean(later.body?.trim()))) return true;
+  }
+  return false;
+}
+
 /**
  * Make `root` show `items` (or the empty/error document) with the fewest DOM
  * operations. Nodes already in the right place are not touched.
@@ -124,7 +135,9 @@ export function reconcile(
     items.forEach((item, index) => {
       const count = seen.get(item.id) ?? 0;
       seen.set(item.id, count + 1);
-      place(count ? `${item.id}#${count}` : item.id, JSON.stringify(item), () => renderItem(item, index), index);
+      const recovered = isRecoveredApiError(items, index);
+      const sig = recovered ? `${JSON.stringify(item)}|rec` : JSON.stringify(item);
+      place(count ? `${item.id}#${count}` : item.id, sig, () => renderItem(item, index, recovered), index);
     });
   }
 

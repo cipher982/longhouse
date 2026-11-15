@@ -622,7 +622,10 @@ describe("Claude fidelity signals", () => {
     expect(root().querySelector('[data-testid="session-reasoning-withheld"]')?.textContent?.trim()).toBe(
       "Reasoning withheld",
     );
-    expect(root().querySelector(".message.assistant.commentary .phase-badge")?.textContent).toBe("Commentary");
+    expect(root().querySelector(".message.assistant.commentary .phase-badge")).toBeNull();
+    expect(root().querySelector(".message.assistant.commentary .message-content")?.textContent).toContain(
+      "Launching audit workers.",
+    );
     expect(root().querySelector('[data-testid="session-waiting-background-agents"]')?.textContent).toContain(
       "Waiting for 3 background agents to finish",
     );

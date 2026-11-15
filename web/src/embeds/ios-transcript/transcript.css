@@ -180,8 +180,19 @@ body {
   font-weight: 650;
 }
 
-.compaction-detail {
+.action.compaction {
+  margin: 4px 0;
+  color: var(--tertiary);
+  font-size: 11px;
+}
+
+.action.compaction .action-title {
   color: var(--secondary);
+  font-weight: 500;
+}
+
+.compaction-detail {
+  color: var(--tertiary);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -749,22 +760,6 @@ summary::-webkit-details-marker {
 }
 
 /* --- Claude Code fidelity signals & subagent tree --- */
-.message-phase-row {
-  margin-bottom: 4px;
-}
-
-.phase-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  color: var(--secondary);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .message.assistant.commentary .message-content {
   color: var(--secondary);
   font-size: 13.5px;
@@ -835,7 +830,23 @@ summary::-webkit-details-marker {
 }
 
 .subagent-dot.status-waiting {
-  background: var(--secondary);
+  background: transparent;
+  border: 1.5px solid var(--secondary);
+}
+
+.subagent-notice-recovered,
+.api-error-notice.recovered {
+  border-left-color: var(--trace);
+}
+
+.api-error-notice.recovered .api-error-badge {
+  border-color: rgba(212, 184, 122, 0.25);
+  background: rgba(212, 184, 122, 0.08);
+  color: var(--secondary);
+}
+
+.api-error-notice.recovered .tool-title {
+  color: var(--secondary);
 }
 
 .task-notice-note {
@@ -865,6 +876,19 @@ summary::-webkit-details-marker {
 .subagents {
   margin: 2px 0 8px 2px;
   border-left: 1.5px solid var(--trace);
+}
+
+.subagents-single {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.subagents-branch {
+  color: var(--tertiary);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
 }
 
 .subagents summary {

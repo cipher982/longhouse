@@ -45,45 +45,53 @@ function formatChildMeta(child: Subagent): string {
 export function subagentNode(item: TranscriptItem): string {
   const children = item.subagents || [];
   if (!children.length) return "";
-  const rows = children
-    .map((child) => {
-      const depth = typeof child.depth === "number" && child.depth > 0 ? Math.min(child.depth, 4) : 0;
-      const indentAttr = depth > 0 ? ` data-depth="${depth}" style="margin-left:${depth * 14}px"` : "";
-      const liveStatus = child.liveStatus?.trim();
-      const statusDot = liveStatus
-        ? `<span class="subagent-dot status-${escapeHtml(liveStatus)}" aria-label="${escapeHtml(liveStatus)}"></span>`
-        : "";
-      const typePill = child.agentType
-        ? `<span class="subagent-pill">${escapeHtml(child.agentType)}</span>`
-        : "";
-      const forkBadge = child.isFork ? '<span class="subagent-pill fork">fork</span>' : "";
-      const waitTag =
-        liveStatus === "waiting" ? '<span class="subagent-status waiting">waiting</span>' : "";
-      return (
-        `<li${indentAttr}><button type="button" class="subagent-link" data-subagent-session="` +
-        escapeHtml(child.sessionId) +
-        '">' +
-        statusDot +
-        typePill +
-        forkBadge +
-        '<span class="subagent-label">' +
-        escapeHtml(child.label) +
-        "</span>" +
-        waitTag +
-        '<span class="subagent-meta">' +
-        escapeHtml(formatChildMeta(child)) +
-        "</span>" +
-        "</button></li>"
-      );
-    })
-    .join("");
+  const rows = children.map((child, idx) => {
+    const depth = typeof child.depth === "number" && child.depth > 0 ? Math.min(child.depth, 4) : 0;
+    const indentAttr = depth > 0 ? ` data-depth="${depth}" style="margin-left:${depth * 14}px"` : "";
+    const liveStatus = child.liveStatus?.trim();
+    const statusDot = liveStatus
+      ? `<span class="subagent-dot status-${escapeHtml(liveStatus)}" aria-label="${escapeHtml(liveStatus)}"></span>`
+      : "";
+    const typePill = child.agentType
+      ? `<span class="subagent-pill">${escapeHtml(child.agentType)}</span>`
+      : "";
+    const forkBadge = child.isFork ? '<span class="subagent-pill fork">fork</span>' : "";
+    const waitTag =
+      liveStatus === "waiting" ? '<span class="subagent-status waiting">waiting</span>' : "";
+    const branchGlyph =
+      children.length === 1 && idx === 0 ? '<span class="subagents-branch" aria-hidden="true">└─</span>' : "";
+    const buttonHtml =
+      `${branchGlyph}<button type="button" class="subagent-link" data-subagent-session="` +
+      escapeHtml(child.sessionId) +
+      '">' +
+      statusDot +
+      typePill +
+      forkBadge +
+      '<span class="subagent-label">' +
+      escapeHtml(child.label) +
+      "</span>" +
+      waitTag +
+      '<span class="subagent-meta">' +
+      escapeHtml(formatChildMeta(child)) +
+      "</span>" +
+      "</button>";
+    return children.length === 1 ? buttonHtml : `<li${indentAttr}>${buttonHtml}</li>`;
+  });
+  if (children.length === 1) {
+    return `<div class="subagents subagents-single" data-open-key="${escapeHtml(item.id)}">${rows[0]}</div>`;
+  }
+  const rawSummary = (item.subagentSummary || "").trim();
+  const summaryLabel =
+    !rawSummary || (rawSummary === "1 agent" && children.length > 1)
+      ? `${children.length} agents`
+      : rawSummary;
   return (
     '<details class="subagents" data-open-key="' +
     escapeHtml(item.id) +
     '"><summary>' +
-    escapeHtml(item.subagentSummary || "") +
+    escapeHtml(summaryLabel) +
     '</summary><ul class="subagent-list">' +
-    rows +
+    rows.join("") +
     "</ul></details>"
   );
 }
