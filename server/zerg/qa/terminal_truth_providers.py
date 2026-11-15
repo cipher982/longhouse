@@ -255,6 +255,12 @@ CODEX_SANDBOX_WORKS = sys.platform == "darwin"
 # Helm starts Codex through `longhouse codex`, which takes this flag and no other sandbox setting.
 CODEX_HELM_FLAGS: tuple[str, ...] = () if CODEX_SANDBOX_WORKS else ("--dangerously-bypass-approvals-and-sandbox",)
 
+# Helm adds no permission flag of its own, so the cells' Helm launches stand in for a user who chose to skip permission
+# prompts: the scripted model's tool calls would otherwise sit at a prompt nobody answers. Claude has no pass-through on
+# `longhouse claude`, so its choice is the user's own settings (seeded by `prepare_claude_profile`); Antigravity takes the flag
+# as the user would type it after `--`.
+ANTIGRAVITY_HELM_USER_ARGS: tuple[str, ...] = ("--", "--dangerously-skip-permissions")
+
 PROVIDERS: dict[str, ProviderDriver] = {
     "claude": ProviderDriver(
         "claude",
@@ -361,7 +367,7 @@ def _prepare_provider(
         onboard_claude(Path(binary), home=home, root=root, penv=penv, workspace_root=workspace_root)
         settings = Path(penv["CLAUDE_CONFIG_DIR"]) / "settings.json"
         current = json.loads(settings.read_text()) if settings.exists() else {}
-        current["skipDangerousModePermissionPrompt"] = True  # the Bypass Permissions screen Helm's flags trigger
+        current["skipDangerousModePermissionPrompt"] = True  # the Bypass Permissions screen (default mode: prepare_claude_profile)
         settings.write_text(json.dumps(current))
         # Console advertises claude.turn_start only once the lifecycle hook is in settings.json (Helm installs it at launch).
         if cli is None:

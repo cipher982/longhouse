@@ -1715,6 +1715,37 @@ def prepare_claude_profile(
     recording: Path,
     timeout: float = 90.0,
 ) -> dict[str, Any]:
+    """Onboard the disposable Claude profile, then give it the user's skip-permissions default.
+
+    Helm adds no permission flag of its own, so every harness that launches Claude Helm stands in for a user who chose
+    to skip permission prompts, through the user's own settings: Claude 2.1.x otherwise defaults to Auto mode and parks
+    a scripted tool call at a prompt nobody answers.
+    """
+
+    result = _onboard_claude_profile(
+        binary=binary, home=home, workspace=workspace, environment=environment, recording=recording, timeout=timeout
+    )
+    config_dir = Path(str(environment.get("CLAUDE_CONFIG_DIR") or home / ".claude"))
+    settings = config_dir / "settings.json"
+    try:
+        current = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    current["skipDangerousModePermissionPrompt"] = True
+    current.setdefault("permissions", {})["defaultMode"] = "bypassPermissions"
+    settings.write_text(json.dumps(current), encoding="utf-8")
+    return result
+
+
+def _onboard_claude_profile(
+    *,
+    binary: Path,
+    home: Path,
+    workspace: Path,
+    environment: dict[str, str],
+    recording: Path,
+    timeout: float = 90.0,
+) -> dict[str, Any]:
     """Complete Claude's real first-run onboarding in the disposable profile.
 
     Claude persists this setup outside the Longhouse channel state. Launching

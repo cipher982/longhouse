@@ -49,6 +49,7 @@ from zerg.qa.terminal_truth_lanes import _strip_text
 from zerg.qa.terminal_truth_lanes import host_publishes
 from zerg.qa.terminal_truth_lanes import state_snapshot
 from zerg.qa.terminal_truth_lanes import woken_view_lags
+from zerg.qa.terminal_truth_providers import ANTIGRAVITY_HELM_USER_ARGS
 from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
@@ -652,6 +653,8 @@ def _helm_argv(cli: Path, provider: str, workspace: Path, binary: str, url: str,
         argv += ["--provider", "longhouse-mock", "--model", "mock-model"]
     if provider == "codex":
         argv += CODEX_HELM_FLAGS
+    if provider == "antigravity":
+        argv += ANTIGRAVITY_HELM_USER_ARGS
     return argv
 
 
