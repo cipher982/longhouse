@@ -2874,7 +2874,11 @@ fn claude_task_notification_content(obj: &RawLine) -> Option<String> {
     if message.role.as_deref().is_some_and(|role| role != "user") {
         return None;
     }
-    extract_text_from_raw_content(message.content.get())
+    // Claude Code may put its own preamble ("[SYSTEM NOTIFICATION - NOT USER
+    // INPUT] ...") before the block; the notification is the block itself.
+    let text = extract_text_from_raw_content(message.content.get())?;
+    let start = text.find("<task-notification>")?;
+    Some(text[start..].to_string())
 }
 
 fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
@@ -5140,8 +5144,10 @@ fn extract_events(
                     raw_line: Some(raw_line.to_string()),
                 });
             }
+            return;
         }
-        return;
+        // A notification block that does not close falls through and is kept
+        // as a provider row rather than dropped.
     }
 
     if event_type == "system" {
@@ -8263,6 +8269,60 @@ mod tests {
         );
         assert_eq!(event.raw_type, "claude_task_notification");
         assert_eq!(event.raw_line.as_deref(), Some(raw_line.as_str()));
+    }
+
+    #[test]
+    fn test_claude_task_notification_after_a_preamble_is_kept() {
+        // Shape from a Claude Code 2.1 subagent transcript: the harness puts a
+        // preamble before the block, and a Monitor event has no status. Both
+        // rows were dropped when the block had to open the content.
+        let dir = tempfile::tempdir().unwrap();
+        let preamble = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\n\n";
+        let line = |uuid: &str, content: String| {
+            json!({
+                "type": "user",
+                "isMeta": true,
+                "isSidechain": true,
+                "uuid": uuid,
+                "timestamp": "2026-11-15T16:03:19.295Z",
+                "origin": {"kind": "task-notification", "producer": "session-task"},
+                "message": {"role": "user", "content": content},
+            })
+            .to_string()
+        };
+        let monitor = line(
+            "monitor-event",
+            format!("{preamble}<task-notification>\n<task-id>b6fssj8uy</task-id>\n<summary>Monitor event: \"first tick\"</summary>\n<event>tick 0 ok</event>\n</task-notification>"),
+        );
+        let unclosed = line(
+            "unclosed",
+            format!("{preamble}<task-notification>\n<task-id>x</task-id>"),
+        );
+        let path = make_jsonl_file(
+            dir.path(),
+            "claude-preamble-notification.jsonl",
+            &[monitor.as_str(), unclosed.as_str()],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let rows: Vec<(&str, &str)> = result
+            .events
+            .iter()
+            .map(|event| (event.uuid.as_str(), event.raw_type.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("monitor-event", "claude_task_notification"),
+                ("unclosed", "claude_meta")
+            ]
+        );
+        assert!(result.events[0]
+            .content_text
+            .as_deref()
+            .is_some_and(
+                |text| text.contains("first tick") && !text.contains("SYSTEM NOTIFICATION")
+            ));
     }
 
     #[test]

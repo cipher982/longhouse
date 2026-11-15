@@ -65,7 +65,7 @@ use self::render::*;
 use self::resume::*;
 pub(crate) use self::ship::*;
 
-pub(crate) const PARSER_REVISION: &str = "engine-parser-v3";
+pub(crate) const PARSER_REVISION: &str = "engine-parser-v4";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
