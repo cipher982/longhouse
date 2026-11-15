@@ -381,7 +381,7 @@ mod tests {
             assert_eq!(attachment_delivery(provider, "helm"), Some("path"));
             assert_eq!(attachment_delivery(provider, "console"), Some("path"));
         }
-        assert_eq!(attachment_delivery("antigravity", "console"), Some("path"));
+        assert_eq!(attachment_delivery("antigravity", "console"), Some("native"));
         assert_eq!(attachment_delivery("antigravity", "helm"), None);
         assert_eq!(attachment_delivery("codex", "shadow"), None);
     }

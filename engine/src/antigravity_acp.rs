@@ -992,7 +992,13 @@ impl AcpStream {
             .iter()
             .filter_map(|id| self.replies.get(id))
             .collect();
-        if cancel_requested {
+        // agy answers a `session/cancel` with `stopReason: cancelled`; that can
+        // arrive before the monitor's next look at the claim's cancel mark.
+        if cancel_requested
+            || replies.iter().any(
+                |reply| matches!(reply, PromptReply::Stopped { reason, .. } if reason == "cancelled"),
+            )
+        {
             return Verdict::Cancelled;
         }
         if let Some(PromptReply::Failed(message)) = replies
@@ -2543,9 +2549,13 @@ mod tests {
         let mut stream = AcpStream::new("run");
         stream.apply_lines(&[reply(4, "cancelled", true)]);
         assert_eq!(stream.verdict(&[4], true), Verdict::Cancelled);
+        // A provider-reported cancel is a cancel even before the claim shows it.
+        assert_eq!(stream.verdict(&[4], false), Verdict::Cancelled);
+        let mut stream = AcpStream::new("run");
+        stream.apply_lines(&[reply(4, "max_tokens", true)]);
         assert_eq!(
             stream.verdict(&[4], false),
-            Verdict::Failed("agy stopped the turn: cancelled".to_string())
+            Verdict::Failed("agy stopped the turn: max_tokens".to_string())
         );
         assert_eq!(stream.verdict(&[], false), Verdict::Pending);
     }
@@ -3537,7 +3547,7 @@ while True:
                     image_paths: images,
                     model: None,
                     conversation_id,
-                            machine_name: "agy-live-receipt".to_string(),
+                    machine_name: "agy-live-receipt".to_string(),
                     local_db_path: Some(db_path.clone()),
                 })
                 .await

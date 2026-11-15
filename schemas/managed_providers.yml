@@ -1960,16 +1960,16 @@ providers:
         terminationReason)."
       observed_provider_version: "1.5.9"
     interrupt:
-      level: hermetic
-      source: Console `session/cancel` with a bounded grace, against a scripted fake agy; Helm interrupt not built
+      level: scripted_model
+      source: real agy 1.5.9 on the bench against the scripted Gemini endpoint (scripts/qa/agy-acp-live-receipt.sh), plus hermetic fake-agy tests; Helm interrupt not built
       disposition: "implemented"
       reason: "Console (antigravity.turn_interrupt): the engine marks the claim
         cancel-requested, writes the ACP `session/cancel` notification, and kills
         the process group if the running prompt has not resolved within 5 s
         (the process is turn-scoped, so a kill loses nothing the transcript
-        has not already recorded). Whether agy 1.5.9 honours a cancel sent
-        mid-turn is recorded in the live receipt of antigravity-parity.md; the
-        grace kill makes the Stop reliable either way. Helm interrupt
+        has not already recorded). Live on 1.5.9, agy honoured a cancel sent
+        during a running tool call in under 0.5 s with `stopReason: cancelled`;
+        the grace kill covers a provider that does not. Helm interrupt
         (`antigravity.interrupt`, kill-and-resume or a PreInvocation
         `terminationBehavior: terminate`) is not built and stays unadvertised
         (step 4); the engine refuses it. Print mode's SIGINT and stream-json
@@ -1984,7 +1984,8 @@ providers:
         turn lands between tool steps (quirk: the first prompt's RPC returns
         `end_turn` immediately while the turn continues). The Console adapter
         uses it for `antigravity.turn_steer`, with text and native image parts,
-        hermetically tested. (2) Hooks: a PreInvocation hook returns
+        proven live on 1.5.9 against the scripted endpoint (the image reached
+        the model as inline data). (2) Hooks: a PreInvocation hook returns
         `injectSteps` with a `userMessage`, claimed after the running tool call;
         Helm does not route to it yet. Steering lands at an invocation boundary,
         so one long tool call delays it; it is bounded, not immediate."
@@ -2027,8 +2028,8 @@ providers:
       disposition: "implemented"
       owner_action: "real agy transcript assertion"
     turn_start:
-      level: hermetic
-      source: the ACP Console adapter driving a scripted fake agy over stdio (new turn, resume by full id, image part, steer, error-as-chunk, cancel, restart recovery, process-group reaping)
+      level: scripted_model
+      source: real agy 1.5.9 on the bench against the scripted Gemini endpoint through the adapter's own entry points (scripts/qa/agy-acp-live-receipt.sh, engine antigravity_acp::tests::live_agy_console_receipt), plus hermetic fake-agy tests for error-as-chunk, exit mid-turn and restart recovery
       disposition: "implemented"
       reason: "One `agy acp --dangerously-skip-permissions` process per Console
         turn. Handshake (`initialize`, `session/new` or `session/resume`,
@@ -2039,7 +2040,7 @@ providers:
         ordinary message chunk with a usage-less `end_turn` settles as a failed
         turn."
       observed_provider_version: "1.5.9"
-      owner_action: "live receipt against agy on the bench, then the factory Console lifecycle producer (step 6)"
+      owner_action: "factory Console lifecycle producer (step 6); retest the error-as-chunk quirk with a billed key"
   # Servable as of 2026-08-20. The identity a hook cannot mint for itself is
   # seeded by the Helm launcher into the state file the hook maintains, so the
   # hook scanner emits a real control fact and authorization has something to

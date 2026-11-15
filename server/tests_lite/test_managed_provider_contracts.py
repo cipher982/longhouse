@@ -538,7 +538,7 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     # Hermetic until the live receipt: the engine adapter is driven against a
     # scripted fake agy; the real-agy canary reads the adapter's argv from the
     # engine and drives the same ACP exchange.
-    assert turn_start_evidence["level"] == "hermetic"
+    assert turn_start_evidence["level"] == "scripted_model"
     assert turn_start_evidence["owner_action"]
     assert contract.machine_control_supports == (
         "antigravity.send",
