@@ -250,10 +250,18 @@ extension WebTranscriptView {
             turnEnd = nil
         }
         guard let turnEnd else { return nil }
-        let stopped = turnEnd.outcome == "aborted"
+        let outcome = turnEnd.outcome?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let stopped = outcome == "aborted" || outcome == "interrupted" || outcome == "error" || outcome == "failed"
+        let verb = (outcome == "error" || outcome == "failed")
+            ? "Failed after"
+            : (stopped ? "Interrupted after" : "Worked for")
+        let label = "\(verb) \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))"
+        let doneBase = TurnEndCopy.doneAt(turnEnd.endedAt, now: now, verb: stopped ? "stopped" : "Turn finished")
+        let hookSummary = turnEnd.stopHookSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let doneAt = (hookSummary?.isEmpty == false) ? "\(doneBase) · \(hookSummary!)" : doneBase
         return WebTranscriptTurnEnd(
-            label: "\(stopped ? "Interrupted after" : "Worked for") \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))",
-            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now, verb: stopped ? "stopped" : "Turn finished")
+            label: label,
+            doneAt: doneAt
         )
     }
 
@@ -288,14 +296,26 @@ extension WebTranscriptView {
                 role: "assistant",
                 text: event.contentText ?? "",
                 origin: nil,
-                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
+                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL),
+                phase: event.messagePhase,
+                apiError: event.apiError
             )
         case .compactionBoundary(let event):
             return compactionPayload(id: item.id, text: event.contentText ?? "")
         case .providerNotification(let event):
-            return providerNotificationPayload(id: item.id, text: event.contentText ?? "")
+            return providerNotificationPayload(
+                id: item.id,
+                text: event.contentText ?? "",
+                taskNotification: event.taskNotification,
+                waitingBackgroundAgents: event.waitingBackgroundAgents,
+                apiError: event.apiError
+            )
         case .reasoning(let event):
-            return reasoningPayload(id: item.id, text: event.contentText ?? "")
+            return reasoningPayload(
+                id: item.id,
+                text: event.contentText ?? "",
+                withheld: event.reasoningWithheld
+            )
         case .action(let action, _):
             return actionPayload(id: item.id, action: action)
         case .tool(let call, let result, _):
@@ -325,13 +345,16 @@ extension WebTranscriptView {
         text: String,
         origin: SessionInputAuthoredVia?,
         mediaRefs: [WebTranscriptMediaRef]? = nil,
-        attachmentThumbs: [String]? = nil
+        attachmentThumbs: [String]? = nil,
+        phase: String? = nil,
+        apiError: [String: JSONValue]? = nil
     ) -> WebTranscriptPayloadItem {
         let split = role == "user"
             ? TranscriptTextPolicy.splittingAttachmentsBlock(text)
             : (text: text, imageCount: nil as Int?)
         let displayText = split.text
         let collapsed = TranscriptTextPolicy.shouldCollapseMessage(displayText)
+        let cleanedPhase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WebTranscriptPayloadItem(
             id: id,
             kind: "message",
@@ -349,7 +372,9 @@ extension WebTranscriptView {
             origin: origin?.payloadValue,
             media: mediaRefs,
             attachedImages: split.imageCount,
-            attachmentThumbs: attachmentThumbs?.isEmpty == false ? attachmentThumbs : nil
+            attachmentThumbs: attachmentThumbs?.isEmpty == false ? attachmentThumbs : nil,
+            phase: cleanedPhase?.isEmpty == false ? cleanedPhase : nil,
+            apiError: apiError
         )
     }
 
@@ -393,7 +418,11 @@ extension WebTranscriptView {
         )
     }
 
-    private nonisolated static func reasoningPayload(id: String, text: String) -> WebTranscriptPayloadItem {
+    private nonisolated static func reasoningPayload(
+        id: String,
+        text: String,
+        withheld: Bool = false
+    ) -> WebTranscriptPayloadItem {
         let prefix = "Thinking:\n"
         return WebTranscriptPayloadItem(
             id: id,
@@ -410,7 +439,8 @@ extension WebTranscriptView {
             output: nil,
             calls: [],
             origin: nil,
-            media: nil
+            media: nil,
+            reasoningWithheld: withheld ? true : nil
         )
     }
 
@@ -420,7 +450,10 @@ extension WebTranscriptView {
         id: String,
         text: String,
         origin: String? = nil,
-        wake: Bool = false
+        wake: Bool = false,
+        taskNotification: [String: JSONValue]? = nil,
+        waitingBackgroundAgents: Int? = nil,
+        apiError: [String: JSONValue]? = nil
     ) -> WebTranscriptPayloadItem {
         var item = WebTranscriptPayloadItem(
             id: id,
@@ -437,7 +470,10 @@ extension WebTranscriptView {
             output: nil,
             calls: [],
             origin: origin == "longhouse" ? origin : nil,
-            media: nil
+            media: nil,
+            taskNotification: taskNotification,
+            waitingBackgroundAgents: waitingBackgroundAgents,
+            apiError: apiError
         )
         item.wake = wake ? true : nil
         return item
@@ -609,6 +645,12 @@ extension WebTranscriptView {
             toolCallId: call.toolCallId,
             toolOutputText: result?.toolOutputText
         )
+        let subagentsPayload = flattenedSubagentsPayload(spawned, all: subagents)
+        let cleanedIntent = call.toolIntent?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startedAtMs: Double? = call.toolCallState == .running
+            ? LonghouseDateParser.parse(call.timestamp).map { $0.timeIntervalSince1970 * 1000 }
+            : nil
+        let effectiveOutput = truncatedOutput(result ?? (call.toolCallState == .running ? call : nil))
 
         return WebTranscriptPayloadItem(
             id: id,
@@ -626,7 +668,7 @@ extension WebTranscriptView {
                     ? presentation?.toolInputValue
                     : call.toolInputValue
             ) ?? TimelineBuilder.inputSummary(for: call),
-            output: truncatedOutput(result),
+            output: effectiveOutput,
             calls: presentationCalls,
             origin: presentation?.disposition == "parsed"
                 ? "Parsed via \(presentation?.executionMethod ?? presentation?.sourceToolName ?? toolName)"
@@ -636,16 +678,10 @@ extension WebTranscriptView {
             diff: editStat.flatMap { EditSummary.diffLines(for: $0) }.map { lines in
                 lines.map { WebTranscriptDiffLine(kind: $0.kind.rawValue, text: $0.text) }
             },
-            subagents: spawned.isEmpty
-                ? nil
-                : spawned.map {
-                    WebTranscriptSubagent(
-                        sessionId: $0.sessionId,
-                        label: Subagents.label(for: $0),
-                        toolCalls: $0.toolCalls
-                    )
-                },
-            subagentSummary: spawned.isEmpty ? nil : Subagents.summary(spawned)
+            subagents: subagentsPayload,
+            subagentSummary: spawned.isEmpty ? nil : Subagents.summary(spawned),
+            toolIntent: cleanedIntent?.isEmpty == false ? cleanedIntent : nil,
+            startedAtMs: startedAtMs
         )
     }
 
@@ -703,15 +739,7 @@ extension WebTranscriptView {
                 )
             }
             .filter { seenSubagentIds.insert($0.sessionId).inserted }
-        let spawnedPayload = spawned.isEmpty
-            ? nil
-            : spawned.map {
-                WebTranscriptSubagent(
-                    sessionId: $0.sessionId,
-                    label: Subagents.label(for: $0),
-                    toolCalls: $0.toolCalls
-                )
-            }
+        let spawnedPayload = flattenedSubagentsPayload(spawned, all: subagents)
 
         // Pass every call; WebKit renderer collapses to latest-N with an
         // interactive "Show N earlier" control (never permanent hide).
@@ -724,6 +752,10 @@ extension WebTranscriptView {
                 case .none: return "done"
                 }
             }()
+            let intent = passive.call.toolIntent?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let startedAtMs: Double? = passive.call.toolCallState == .running
+                ? LonghouseDateParser.parse(passive.call.timestamp).map { $0.timeIntervalSince1970 * 1000 }
+                : nil
             return WebTranscriptToolCall(
                 title: passive.call.toolPresentation?.label
                     ?? ToolTiers.resolve(TimelineBuilder.presentedToolName(passive.call)).label,
@@ -737,8 +769,10 @@ extension WebTranscriptView {
                 rawInput: passive.call.toolPresentation?.wrapperRecedes == true
                     ? prettyJSONValue(passive.call.toolInputValue)
                     : nil,
-                output: truncatedOutput(passive.result),
-                media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL)
+                output: truncatedOutput(passive.result ?? (passive.call.toolCallState == .running ? passive.call : nil)),
+                media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL),
+                startedAtMs: startedAtMs,
+                toolIntent: intent?.isEmpty == false ? intent : nil
             )
         }
 
@@ -761,6 +795,46 @@ extension WebTranscriptView {
             subagents: spawnedPayload,
             subagentSummary: spawned.isEmpty ? nil : Subagents.summary(spawned)
         )
+    }
+
+    private nonisolated static func flattenedSubagentsPayload(
+        _ direct: [SessionSubagent],
+        all: [SessionSubagent]
+    ) -> [WebTranscriptSubagent]? {
+        guard !direct.isEmpty else { return nil }
+        var result: [WebTranscriptSubagent] = []
+        var visited = Set<String>()
+
+        func appendNode(_ child: SessionSubagent, depth: Int) {
+            guard visited.insert(child.sessionId).inserted else { return }
+            let label = Subagents.label(for: child)
+            let trimmedDescription = child.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let description = (trimmedDescription?.isEmpty == false && trimmedDescription != label)
+                ? trimmedDescription
+                : nil
+            result.append(
+                WebTranscriptSubagent(
+                    sessionId: child.sessionId,
+                    label: label,
+                    toolCalls: child.toolCalls,
+                    agentType: child.agentType,
+                    description: description,
+                    liveStatus: child.liveStatus,
+                    isFork: child.isFork ? true : nil,
+                    depth: depth > 0 ? depth : nil,
+                    durationMs: child.durationMs,
+                    totalTokens: child.totalTokens
+                )
+            )
+            for nested in Subagents.nestedChildren(of: child, in: all) {
+                appendNode(nested, depth: depth + 1)
+            }
+        }
+
+        for root in direct {
+            appendNode(root, depth: 0)
+        }
+        return result.isEmpty ? nil : result
     }
 
     private nonisolated static func payloadMediaRefs(
@@ -924,6 +998,20 @@ struct WebTranscriptPayloadItem: Encodable {
     var bodyCursors: [String]? = nil
     /// `preview`, `loading`, `failed` or `unavailable` while `bodyCursors` is set.
     var bodyState: String? = nil
+    /// Assistant message phase (`commentary` vs `final_answer`).
+    var phase: String? = nil
+    /// Claude Opus+ encrypted thinking block with withheld plaintext.
+    var reasoningWithheld: Bool? = nil
+    /// Structured `<task-notification>` completion/status card payload.
+    var taskNotification: [String: JSONValue]? = nil
+    /// `"Waiting for N background agents to finish"` pending count.
+    var waitingBackgroundAgents: Int? = nil
+    /// Transient provider API retry/error banner payload.
+    var apiError: [String: JSONValue]? = nil
+    /// Provider-emitted intent caption (`tool.intent`).
+    var toolIntent: String? = nil
+    /// Epoch milliseconds when a running tool call started (for live timers).
+    var startedAtMs: Double? = nil
 }
 
 struct WebTranscriptTurnEnd: Encodable, Equatable {
@@ -935,6 +1023,13 @@ struct WebTranscriptSubagent: Encodable {
     let sessionId: String
     let label: String
     let toolCalls: Int
+    var agentType: String? = nil
+    var description: String? = nil
+    var liveStatus: String? = nil
+    var isFork: Bool? = nil
+    var depth: Int? = nil
+    var durationMs: Int? = nil
+    var totalTokens: Int? = nil
 }
 
 struct WebTranscriptDiffLine: Encodable {
@@ -950,6 +1045,8 @@ struct WebTranscriptToolCall: Encodable {
     let rawInput: String?
     let output: String?
     let media: [WebTranscriptMediaRef]?
+    var startedAtMs: Double? = nil
+    var toolIntent: String? = nil
 }
 
 struct WebTranscriptMediaRef: Encodable {

@@ -29,7 +29,10 @@ struct ChatUITestFixtureView: View {
         }
         let client = ChatUITestWorkspaceClient(fixture: fixture, sessionID: sessionID)
         self.fixtureName = fixtureName
-        _showBackgroundSheet = State(initialValue: fixtureName.hasPrefix("background-tasks-") && fixtureName.hasSuffix("-sheet"))
+        _showBackgroundSheet = State(
+            initialValue: (fixtureName.hasPrefix("background-tasks-") && fixtureName.hasSuffix("-sheet"))
+                || fixtureName == "claude-fidelity-sheet"
+        )
         // Keep button updates on the same actor retained by the StateObject's
         // API factory when SwiftUI reconstructs this fixture view.
         _client = State(initialValue: client)
@@ -78,7 +81,7 @@ struct ChatUITestFixtureView: View {
                         probe.record(diagnostics)
                     }
                 },
-                onOpenSubagent: fixtureName.hasPrefix("background-tasks")
+                onOpenSubagent: fixtureName.hasPrefix("background-tasks") || fixtureName.hasPrefix("claude-fidelity")
                     ? { childSessionId in navigationPath.append(childSessionId) }
                     : nil,
                 onOpenSession: fixtureName == "ended-codex-helm"
@@ -117,6 +120,7 @@ struct ChatUITestFixtureView: View {
         .sheet(isPresented: $showBackgroundSheet) {
             SessionDelegationTaskSheet(
                 facts: viewModel.detail?.stateFacts.delegation,
+                pendingBackgroundAgentCount: viewModel.detail?.pendingBackgroundAgentCount,
                 asOf: Date(),
                 onOpenSubagent: { childSessionId in
                     showBackgroundSheet = false

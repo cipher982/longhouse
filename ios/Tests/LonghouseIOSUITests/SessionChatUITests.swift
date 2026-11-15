@@ -994,6 +994,39 @@ final class SessionChatUITests: XCTestCase {
         }
         return luminanceTotal / Double(width * height)
     }
+
+    func testCaptureClaudeFidelitySessionScreenshot() {
+        let app = launchChatFixture(name: "claude-fidelity", eventCount: 0)
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
+        )
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitForExistence(timeout: Self.patient(5)))
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "claude-fidelity-session"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testCaptureClaudeFidelitySheetScreenshot() {
+        let app = launchChatFixture(name: "claude-fidelity-sheet", eventCount: 0)
+        let parentAgent = app.buttons["session-runtime-background-task-sub-1"]
+        let childAgent = app.buttons["session-runtime-background-task-sub-2"]
+        XCTAssertTrue(parentAgent.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(childAgent.waitForExistence(timeout: Self.patient(5)))
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "claude-fidelity-sheet"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
 }
 
 private extension CGRect {

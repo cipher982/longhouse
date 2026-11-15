@@ -69,16 +69,22 @@ struct SessionView: View {
             // the text sliding under it reads as part of the banner.
             if let recap = viewModel.detail?.recap {
                 VStack(spacing: 0) {
-                    SessionRecapBanner(recap: recap, usage: viewModel.detail?.usageLatest)
+                    SessionRecapBanner(
+                        recap: recap,
+                        usage: viewModel.detail?.usageLatest,
+                        detail: viewModel.detail
+                    )
                     Divider()
                 }
-            } else if let usage = viewModel.detail?.usageLatest {
+            } else if viewModel.detail?.usageLatest != nil || hasTopHudDetails {
                 VStack(spacing: 0) {
-                    SessionUsageChip(usage: usage)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
-                        .background(.bar)
+                    SessionUsageChip(
+                        usage: viewModel.detail?.usageLatest,
+                        detail: viewModel.detail
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .background(.bar)
                     Divider()
                 }
             }
@@ -435,6 +441,15 @@ struct SessionView: View {
         .foregroundStyle(Color.primary)
         .accessibilityLabel("Session actions")
         .accessibilityIdentifier("session-overflow-menu")
+    }
+
+    private var hasTopHudDetails: Bool {
+        guard let detail = viewModel.detail else { return false }
+        let mode = detail.permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let nonDefaultMode = !mode.isEmpty && mode != "default"
+        let hasWorktree = detail.worktree != nil
+        let hasCrons = !(detail.sessionCrons ?? []).isEmpty
+        return nonDefaultMode || hasWorktree || hasCrons
     }
 
     private var sessionWebURL: URL? {
@@ -1011,13 +1026,14 @@ struct SessionLoadingDock: View {
 struct SessionRecapBanner: View {
     let recap: SessionRecap
     var usage: SessionUsageLatest? = nil
+    var detail: SessionDetail? = nil
     @State private var expanded = false
 
     var body: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "text.quote")
                         .font(.caption)
@@ -1030,36 +1046,173 @@ struct SessionRecapBanner: View {
                         .lineLimit(expanded ? nil : 2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if let usage {
-                    SessionUsageChip(usage: usage)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.bar)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("session-recap")
+            // One control: say everything it shows, and that it expands.
+            .accessibilityLabel(usage.map { "Recap: \(recap.text). Model: \($0.label)" } ?? "Recap: \(recap.text)")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(expanded ? "Collapses the recap" : "Expands the recap")
+            .accessibilityAddTraits(.isButton)
+
+            if usage != nil || detail != nil {
+                SessionUsageChip(usage: usage, detail: detail)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("session-recap")
-        // One control: say everything it shows, and that it expands.
-        .accessibilityLabel(usage.map { "Recap: \(recap.text). Model: \($0.label)" } ?? "Recap: \(recap.text)")
-        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-        .accessibilityHint(expanded ? "Collapses the recap" : "Expands the recap")
-        .accessibilityAddTraits(.isButton)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 }
 
-/// "opus 5 · high · 501k ctx": the provider's model line as a quiet chip.
+/// Top instrument strip: context ring, % of 1.0M, cost, duration, cwd/branch,
+/// permission mode, active crons, and high rate-limit warnings.
 struct SessionUsageChip: View {
-    let usage: SessionUsageLatest
+    let usage: SessionUsageLatest?
+    var detail: SessionDetail? = nil
 
     var body: some View {
-        Text(usage.label)
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                if let usage {
+                    usageCapsule(usage)
+                    ForEach(highRateLimits(for: usage), id: \.kind) { limit in
+                        rateLimitPill(limit)
+                    }
+                }
+                if let modeLabel = nonDefaultPermissionLabel {
+                    hudPill(
+                        text: modeLabel,
+                        systemImage: isBypassPermission ? "bolt.shield.fill" : "shield",
+                        tint: isBypassPermission ? TranscriptPalette.attention : Ember.textSecondary
+                    )
+                    .accessibilityIdentifier("session-hud-permission-mode")
+                }
+                if let repoLabel {
+                    hudPill(
+                        text: repoLabel,
+                        systemImage: detail?.worktree != nil ? "point.3.connected.trianglepath.dotted" : "arrow.triangle.branch",
+                        tint: Ember.textSecondary
+                    )
+                    .accessibilityIdentifier("session-hud-repo")
+                }
+                if let crons = detail?.sessionCrons, !crons.isEmpty {
+                    hudPill(
+                        text: "\(crons.count) \(crons.count == 1 ? "cron" : "crons")",
+                        systemImage: "clock.arrow.2.circlepath",
+                        tint: Ember.gold
+                    )
+                    .accessibilityIdentifier("session-hud-crons")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: detail == nil ? .trailing : .leading)
+        }
+    }
+
+    private func usageCapsule(_ usage: SessionUsageLatest) -> some View {
+        var segments = [usage.label]
+        if let pctLabel = usage.formattedContextPercentOfWindow,
+           !usage.label.contains("%") {
+            segments.append(pctLabel)
+        }
+        if let cost = usage.formattedCost {
+            segments.append(cost)
+        }
+        if let cum = usage.formattedCumulativeDuration {
+            segments.append(cum)
+        }
+        let combined = segments.joined(separator: " · ")
+
+        return HStack(spacing: 5) {
+            if let pct = usage.usedPercent, pct.isFinite, (usage.contextWindow ?? 0) > 0 {
+                let fraction = min(max(pct / 100.0, 0), 1)
+                let ringColor = pct >= 85 ? Ember.ember : (pct >= 65 ? Ember.flame : Ember.sage)
+                ZStack {
+                    Circle()
+                        .stroke(Ember.border, lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: fraction)
+                        .stroke(ringColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                .frame(width: 11, height: 11)
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("session-context-ring")
+                .accessibilityLabel("Context \(Int(pct.rounded())) percent used")
+            }
+            Text(combined)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(.quaternary))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session-usage-chip")
+    }
+
+    private func hudPill(text: String, systemImage: String, tint: Color) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(tint)
+            .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Capsule().fill(.quaternary))
-            .accessibilityIdentifier("session-usage-chip")
+    }
+
+    private func rateLimitPill(_ limit: SessionRateLimit) -> some View {
+        let pct = Int((limit.percentUsed ?? 0).rounded())
+        return hudPill(
+            text: "\(limit.kind) \(pct)%",
+            systemImage: "exclamationmark.triangle.fill",
+            tint: TranscriptPalette.attention
+        )
+        .accessibilityIdentifier("session-hud-rate-limit")
+    }
+
+    private func highRateLimits(for usage: SessionUsageLatest) -> [SessionRateLimit] {
+        (usage.rateLimits ?? []).filter { ($0.percentUsed ?? 0) >= 80 }
+    }
+
+    private var isBypassPermission: Bool {
+        detail?.permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines) == "bypassPermissions"
+    }
+
+    private var nonDefaultPermissionLabel: String? {
+        guard let raw = detail?.permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              raw != "default" else {
+            return nil
+        }
+        switch raw {
+        case "bypassPermissions": return "bypass permissions"
+        case "acceptEdits": return "accept edits"
+        case "dontAsk": return "don't ask"
+        case "plan": return "plan mode"
+        default: return raw
+        }
+    }
+
+    private var repoLabel: String? {
+        guard let detail else { return nil }
+        let rawPath = detail.worktree?.path ?? detail.cwd
+        let dirName = rawPath
+            .map { URL(fileURLWithPath: $0).lastPathComponent }
+            .flatMap { $0.isEmpty || $0 == "/" ? nil : $0 }
+        let branch = detail.worktree?.branch ?? detail.gitBranch
+        let wtName = detail.worktree?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        if let wtName, !wtName.isEmpty {
+            parts.append("wt:\(wtName)")
+        } else if let dirName {
+            parts.append(dirName)
+        }
+        if let branch = branch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty {
+            parts.append("git:(\(branch))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 }

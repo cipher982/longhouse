@@ -540,4 +540,152 @@ describe("compaction boundaries", () => {
     expect(row?.textContent).toContain("Context compacted");
     expect(row?.textContent).toContain("Auto · 155.7k tokens");
   });
+
+  it("renders microcompact boundaries with tokens saved", () => {
+    render({
+      items: [
+        {
+          id: "compaction-boundary:2",
+          kind: "compaction",
+          body: "Context microcompacted [trigger=auto tokens_saved=14200]",
+        },
+        {
+          id: "compaction-boundary:3",
+          kind: "compaction",
+          body: "Microcompacted tool outputs [trigger=auto pre_tokens=180000 tokens_saved=42000]",
+        },
+      ],
+    });
+
+    const rows = root().querySelectorAll('[data-testid="session-compaction-boundary"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Context microcompacted");
+    expect(rows[0]?.textContent).toContain("Auto · 14.2k saved");
+    expect(rows[1]?.textContent).toContain("Context microcompacted");
+    expect(rows[1]?.textContent).toContain("Auto · 180k tokens · 42k saved");
+  });
+});
+
+describe("Claude fidelity signals", () => {
+  it("keeps turnEnd visible outside collapsed details rows", () => {
+    render({
+      items: [
+        {
+          id: "tool:9",
+          kind: "tool",
+          title: "Bash",
+          subtitle: "pytest",
+          status: "done",
+          duration: "2s",
+          calls: [],
+          turnEnd: { label: "Worked for 12s", doneAt: "Turn finished 9:15 AM" },
+        },
+      ],
+    });
+
+    const details = root().querySelector("details.tool");
+    const turnEnd = root().querySelector('[data-testid="session-turn-end"]');
+    expect(details).not.toBeNull();
+    expect(turnEnd).not.toBeNull();
+    expect(details?.contains(turnEnd!)).toBe(false);
+    expect(turnEnd?.textContent).toBe("✻ Worked for 12s · Turn finished 9:15 AM");
+  });
+
+  it("renders commentary phase, withheld reasoning, task notifications, waiting notice, and api errors", () => {
+    render({
+      items: [
+        { id: "r1", kind: "reasoning", body: "", reasoningWithheld: true },
+        { id: "m1", kind: "message", role: "assistant", body: "Launching audit workers.", phase: "commentary" },
+        { id: "w1", kind: "providerNotification", waitingBackgroundAgents: 3 },
+        {
+          id: "tn1",
+          kind: "providerNotification",
+          taskNotification: {
+            task_id: "a101",
+            status: "completed",
+            summary: 'Agent "Laptop release" completed',
+            duration_ms: 1_613_000,
+            subagent_tokens: 94_200,
+            tool_uses: 18,
+            note: "TestFlight build queued",
+            result: "Uploaded internal build 0.1.81",
+          },
+        },
+        {
+          id: "e1",
+          kind: "providerNotification",
+          apiError: { retry_attempt: 1, max_retries: 4, status_code: 529, retry_in_ms: 4000, error: "Overloaded" },
+        },
+      ],
+    });
+
+    expect(root().querySelector('[data-testid="session-reasoning-withheld"]')?.textContent?.trim()).toBe(
+      "Reasoning withheld",
+    );
+    expect(root().querySelector(".message.assistant.commentary .phase-badge")?.textContent).toBe("Commentary");
+    expect(root().querySelector('[data-testid="session-waiting-background-agents"]')?.textContent).toContain(
+      "Waiting for 3 background agents to finish",
+    );
+    const taskNotice = root().querySelector('[data-testid="session-task-notification"]');
+    expect(taskNotice?.textContent).toContain('Agent "Laptop release" completed');
+    expect(taskNotice?.textContent).toContain("26m 53s · 94.2k tokens · 18 tool uses");
+    expect(taskNotice?.textContent).toContain("Uploaded internal build 0.1.81");
+    const apiErr = root().querySelector('[data-testid="session-api-error-notice"]');
+    expect(apiErr?.textContent).toContain("retry 1/4 · HTTP 529 · in 4s");
+    expect(apiErr?.textContent).toContain("Overloaded");
+  });
+
+  it("renders running tool intent, live timer attribute, output tail, and nested subagents", () => {
+    const postMessage = vi.fn();
+    (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { longhouse: { postMessage } } };
+    const fiveSecondsAgo = Date.now() - 5000;
+    render({
+      items: [
+        {
+          id: "tool:run",
+          kind: "tool",
+          title: "Bash",
+          subtitle: "make test-e2e-core",
+          status: "running",
+          startedAtMs: fiveSecondsAgo,
+          toolIntent: "Running browser suite",
+          output: "line 1\nline 2\nline 3",
+          calls: [],
+          subagentSummary: "2 agents",
+          subagents: [
+            {
+              sessionId: "sub-1",
+              label: "Inspect parser",
+              toolCalls: 14,
+              agentType: "Explore",
+              liveStatus: "running",
+              durationMs: 1_860_000,
+              totalTokens: 116_500,
+            },
+            {
+              sessionId: "sub-2",
+              label: "Verify meta lineage",
+              toolCalls: 9,
+              agentType: "general-purpose",
+              isFork: true,
+              liveStatus: "waiting",
+              depth: 1,
+            },
+          ],
+        },
+      ],
+    });
+
+    const meta = root().querySelector("[data-started-at-ms]");
+    expect(meta).not.toBeNull();
+    expect(meta?.textContent).toMatch(/^0:0[4-6]$/);
+    expect(root().querySelector(".tool-intent")?.textContent).toBe("Running browser suite");
+    expect(root().querySelector(".running-output-tail")?.textContent).toBe("line 2\nline 3");
+    const nested = root().querySelector('li[data-depth="1"]');
+    expect(nested?.textContent).toContain("general-purpose");
+    expect(nested?.textContent).toContain("fork");
+    expect(nested?.textContent).toContain("waiting");
+    root().querySelector<HTMLButtonElement>('[data-subagent-session="sub-2"]')?.click();
+    expect(postMessage).toHaveBeenCalledWith({ type: "openSubagent", sessionId: "sub-2" });
+  });
 });

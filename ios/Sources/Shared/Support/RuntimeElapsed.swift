@@ -37,4 +37,17 @@ enum RuntimeElapsed {
         if seconds < 60 { return "just now" }
         return "\(label(seconds: seconds, precise: false)) ago"
     }
+
+    static func compactTokens(_ tokens: Int) -> String {
+        let count = max(0, tokens)
+        if count < 1000 { return "\(count) tok" }
+        if count < 1_000_000 {
+            let k = Double(count) / 1000.0
+            if (count % 1000) >= 100 {
+                return String(format: "%.1fk tok", k)
+            }
+            return "\(count / 1000)k tok"
+        }
+        return String(format: "%.1fM tok", Double(count) / 1_000_000.0)
+    }
 }

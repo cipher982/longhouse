@@ -152,6 +152,7 @@ extension SessionEvent {
             id: id,
             role: role,
             contentText: text,
+            interactionKind: interactionKind,
             toolName: nil,
             toolInputJSON: nil,
             toolInputValue: nil,
@@ -165,10 +166,13 @@ extension SessionEvent {
             inputOrigin: inputOrigin,
             eventOrigin: eventOrigin,
             mediaRefs: mediaRefs,
+            turnEnd: turnEnd,
             cursor: cursor,
             orderTimeUs: orderTimeUs,
             threadId: threadId,
-            branchKind: branchKind
+            branchKind: branchKind,
+            messagePhase: messagePhase,
+            apiError: apiError
         )
     }
 }

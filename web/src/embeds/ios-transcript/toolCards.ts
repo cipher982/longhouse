@@ -26,6 +26,38 @@ function bodyNote(item: TranscriptItem): string {
   return '<p class="body-note" role="status">' + escapeHtml(text) + "</p>";
 }
 
+export function formatRunningElapsed(startedAtMs: number, nowMs: number = Date.now()): string {
+  const total = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+  return `${minutes}:${pad(seconds)}`;
+}
+
+function runningTailPreview(output: string | null | undefined): string {
+  const lines = (output || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+  if (!lines.length) return "";
+  return lines.slice(-2).join("\n");
+}
+
+export function updateRunningTimers(scope: ParentNode = document, nowMs: number = Date.now()): number {
+  const nodes = scope.querySelectorAll<HTMLElement>("[data-started-at-ms]");
+  let updated = 0;
+  for (const el of nodes) {
+    const raw = Number(el.getAttribute("data-started-at-ms"));
+    if (!Number.isFinite(raw)) continue;
+    el.textContent = formatRunningElapsed(raw, nowMs);
+    updated += 1;
+  }
+  return updated;
+}
+
 export function toolDetails(item: TranscriptItem): string {
   // A failure is never hidden behind a duration: the exit chip wins (R4).
   const isFailure =
@@ -40,7 +72,20 @@ export function toolDetails(item: TranscriptItem): string {
           : isFailure
             ? "failed"
             : "";
-  const status = isFailure ? item.status || "failed" : item.duration || item.status || "";
+  const runningClock =
+    item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs)
+      ? formatRunningElapsed(item.startedAtMs)
+      : null;
+  const status = isFailure ? item.status || "failed" : runningClock || item.duration || item.status || "";
+  const metaAttr =
+    item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs)
+      ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"`
+      : "";
+  const subtitleText = item.subtitle || item.toolIntent || "";
+  const intentNote =
+    item.toolIntent && item.toolIntent !== subtitleText
+      ? `<span class="tool-intent">${escapeHtml(item.toolIntent)}</span>`
+      : "";
   // A diff replaces the raw input block when the edit shape is known (R3).
   const diffHtml = renderDiff(item.diff);
   const input = diffHtml
@@ -77,15 +122,21 @@ export function toolDetails(item: TranscriptItem): string {
       escapeHtml(item.failurePreview) +
       "</pre></div>"
     : "";
+  const liveTail = item.status === "running" ? runningTailPreview(item.output) : "";
+  const runningTail = liveTail
+    ? '<div class="running-output-tail"><pre><code>' + escapeHtml(liveTail) + "</code></pre></div>"
+    : "";
   return `
         <details class="tool row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
-            <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
-            <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
+            <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
+            ${intentNote}
+            <span class="tool-meta ${meta}"${metaAttr}>${escapeHtml(status)}</span>
           </summary>
           <div class="details-body">${input}${provenance}${output}${media}${bodyNote(item)}</div>
         </details>
+        ${runningTail}
         ${preview}
         ${subagentNode(item)}
       `;
@@ -104,11 +155,12 @@ export function activityGroup(item: TranscriptItem): string {
       : "";
     const output = call.output ? '<div class="section-label">Output</div><pre><code>' + escapeHtml(call.output) + "</code></pre>" : "";
     const media = mediaStrip(call.media || []);
+    const intent = call.toolIntent ? `<div class="tool-intent">${escapeHtml(call.toolIntent)}</div>` : "";
     return `
           <div class="passive-call">
             <div class="passive-call-title">${escapeHtml(call.title || "Tool")}</div>
             <div class="passive-call-subtitle">${escapeHtml(call.subtitle || "")}</div>
-            ${input}${rawInput}${output}${media}
+            ${intent}${input}${rawInput}${output}${media}
           </div>
         `;
   };

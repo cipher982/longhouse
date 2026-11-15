@@ -4,15 +4,39 @@ import { attachSubmittedInputHandlers } from "./rows";
 import { captureAnchor, isStickingToBottom, resetScrollForTesting, retargetAnchor, setStickToBottom, settle } from "./scroll";
 import { attachSubagentHandlers } from "./subagents";
 import { attachToolBodyHandlers } from "./liteBodies";
+import { updateRunningTimers } from "./toolCards";
 import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
 
 let currentItems: TranscriptItem[] = [];
 const transcriptFrames = new Map<number, Promise<FrameMetrics>>();
+let runningTimerHandle: ReturnType<typeof setInterval> | null = null;
+
+function syncRunningTimerInterval(root: ParentNode): void {
+  const count = updateRunningTimers(root);
+  if (count > 0 && runningTimerHandle === null) {
+    runningTimerHandle = setInterval(() => {
+      const container = document.getElementById("root");
+      if (!container || updateRunningTimers(container) === 0) {
+        if (runningTimerHandle !== null) {
+          clearInterval(runningTimerHandle);
+          runningTimerHandle = null;
+        }
+      }
+    }, 1000);
+  } else if (count === 0 && runningTimerHandle !== null) {
+    clearInterval(runningTimerHandle);
+    runningTimerHandle = null;
+  }
+}
 
 /// Test seam: a fresh document state, as after a document load.
 export function resetTranscriptStateForTesting(): void {
   currentItems = [];
   transcriptFrames.clear();
+  if (runningTimerHandle !== null) {
+    clearInterval(runningTimerHandle);
+    runningTimerHandle = null;
+  }
   resetReconciler();
   resetScrollForTesting();
 }
@@ -76,6 +100,7 @@ export function renderTranscript(
   // The reader's place, taken before anything changes.
   if (!isStickingToBottom()) captureAnchor();
   const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
+  syncRunningTimerInterval(root);
   retargetAnchor(result.replaced);
   settle("render");
   const rafStartedAt = performance.now();

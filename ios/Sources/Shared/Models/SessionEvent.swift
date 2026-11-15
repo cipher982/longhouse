@@ -9,6 +9,9 @@ struct SessionTurnEnd: Codable, Hashable, Sendable {
     let messageCount: Int?
     /// "completed" or "aborted": Codex reports a stopped turn's duration too.
     var outcome: String? = nil
+    var stopHookContinued: Bool? = nil
+    var stopHookSummary: String? = nil
+    var source: String? = nil
 }
 
 
@@ -52,6 +55,12 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let toolOutputOriginalChars: Int?
     /// The full output (not sent) reads as a structured failure.
     let toolOutputFailed: Bool
+    let toolIntent: String?
+    let messagePhase: String?
+    let reasoningWithheld: Bool
+    let taskNotification: [String: JSONValue]?
+    let waitingBackgroundAgents: Int?
+    let apiError: [String: JSONValue]?
 
     init(
         id: String,
@@ -79,7 +88,13 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolInputTruncated: Bool = false,
         toolOutputTruncated: Bool = false,
         toolOutputOriginalChars: Int? = nil,
-        toolOutputFailed: Bool = false
+        toolOutputFailed: Bool = false,
+        toolIntent: String? = nil,
+        messagePhase: String? = nil,
+        reasoningWithheld: Bool = false,
+        taskNotification: [String: JSONValue]? = nil,
+        waitingBackgroundAgents: Int? = nil,
+        apiError: [String: JSONValue]? = nil
     ) {
         self.id = id
         self.cursor = cursor
@@ -87,6 +102,12 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.toolOutputTruncated = toolOutputTruncated
         self.toolOutputOriginalChars = toolOutputOriginalChars
         self.toolOutputFailed = toolOutputFailed
+        self.toolIntent = toolIntent
+        self.messagePhase = messagePhase
+        self.reasoningWithheld = reasoningWithheld
+        self.taskNotification = taskNotification
+        self.waitingBackgroundAgents = waitingBackgroundAgents
+        self.apiError = apiError
         self.orderTimeUs = orderTimeUs
         self.threadId = threadId
         self.branchKind = branchKind
@@ -133,7 +154,13 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         cursor: String? = nil,
         orderTimeUs: Int64? = nil,
         threadId: String? = nil,
-        branchKind: String? = nil
+        branchKind: String? = nil,
+        toolIntent: String? = nil,
+        messagePhase: String? = nil,
+        reasoningWithheld: Bool = false,
+        taskNotification: [String: JSONValue]? = nil,
+        waitingBackgroundAgents: Int? = nil,
+        apiError: [String: JSONValue]? = nil
     ) {
         self.init(
             id: String(id),
@@ -157,7 +184,13 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             cursor: cursor,
             orderTimeUs: orderTimeUs,
             threadId: threadId,
-            branchKind: branchKind
+            branchKind: branchKind,
+            toolIntent: toolIntent,
+            messagePhase: messagePhase,
+            reasoningWithheld: reasoningWithheld,
+            taskNotification: taskNotification,
+            waitingBackgroundAgents: waitingBackgroundAgents,
+            apiError: apiError
         )
     }
 
@@ -202,6 +235,12 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputTruncated = try container.decodeIfPresent(Bool.self, forKey: .toolOutputTruncated) ?? false
         toolOutputOriginalChars = try container.decodeIfPresent(Int.self, forKey: .toolOutputOriginalChars)
         toolOutputFailed = try container.decodeIfPresent(Bool.self, forKey: .toolOutputFailed) ?? false
+        toolIntent = try container.decodeIfPresent(String.self, forKey: .toolIntent)
+        messagePhase = try container.decodeIfPresent(String.self, forKey: .messagePhase)
+        reasoningWithheld = try container.decodeIfPresent(Bool.self, forKey: .reasoningWithheld) ?? false
+        taskNotification = try container.decodeIfPresent([String: JSONValue].self, forKey: .taskNotification)
+        waitingBackgroundAgents = try container.decodeIfPresent(Int.self, forKey: .waitingBackgroundAgents)
+        apiError = try container.decodeIfPresent([String: JSONValue].self, forKey: .apiError)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -226,10 +265,17 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(inputOrigin, forKey: .inputOrigin)
         try container.encodeIfPresent(eventOrigin, forKey: .eventOrigin)
         try container.encode(mediaRefs, forKey: .mediaRefs)
+        try container.encodeIfPresent(turnEnd, forKey: .turnEnd)
         if toolInputTruncated { try container.encode(true, forKey: .toolInputTruncated) }
         if toolOutputTruncated { try container.encode(true, forKey: .toolOutputTruncated) }
         try container.encodeIfPresent(toolOutputOriginalChars, forKey: .toolOutputOriginalChars)
         if toolOutputFailed { try container.encode(true, forKey: .toolOutputFailed) }
+        try container.encodeIfPresent(toolIntent, forKey: .toolIntent)
+        try container.encodeIfPresent(messagePhase, forKey: .messagePhase)
+        if reasoningWithheld { try container.encode(true, forKey: .reasoningWithheld) }
+        try container.encodeIfPresent(taskNotification, forKey: .taskNotification)
+        try container.encodeIfPresent(waitingBackgroundAgents, forKey: .waitingBackgroundAgents)
+        try container.encodeIfPresent(apiError, forKey: .apiError)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -259,6 +305,12 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case toolOutputTruncated
         case toolOutputOriginalChars
         case toolOutputFailed
+        case toolIntent
+        case messagePhase
+        case reasoningWithheld
+        case taskNotification
+        case waitingBackgroundAgents
+        case apiError
     }
 
     var legacyNumericId: Int? { Int(id) }
@@ -295,7 +347,13 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             orderTimeUs: orderTimeUs,
             threadId: threadId,
             branchKind: branchKind,
-            toolOutputFailed: toolOutputFailed
+            toolOutputFailed: toolOutputFailed,
+            toolIntent: toolIntent,
+            messagePhase: messagePhase,
+            reasoningWithheld: reasoningWithheld,
+            taskNotification: taskNotification,
+            waitingBackgroundAgents: waitingBackgroundAgents,
+            apiError: apiError
         )
     }
 

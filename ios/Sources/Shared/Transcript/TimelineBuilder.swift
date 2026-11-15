@@ -265,11 +265,26 @@ enum TimelineBuilder {
     }
 
     /// Completed, attributable tools may join prose-bounded activity groups.
-    static func isActivityEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
+    static func isActivityEligible(
+        call: SessionEvent,
+        result: SessionEvent?,
+        pairing: ToolPairing,
+        subagents: [SessionSubagent] = []
+    ) -> Bool {
         guard !(presentedToolName(call)).isEmpty else { return false }
         guard pairing == .id || pairing == .fifo else { return false }
         guard result != nil else { return false }
         if call.toolCallState == .dropped || call.toolCallState == .running {
+            return false
+        }
+        if call.turnEnd != nil || result?.turnEnd != nil {
+            return false
+        }
+        if !Subagents.children(
+            from: subagents,
+            toolCallId: call.toolCallId,
+            toolOutputText: result?.toolOutputText
+        ).isEmpty {
             return false
         }
         if let exit = ShellSalienceClassifier.parseExitCode(result?.toolOutputText), exit != 0 {
@@ -449,7 +464,7 @@ enum TimelineBuilder {
     /// After pairing, consecutive passive tool calls are collapsed into a
     /// single `.activityGroup` row. User/assistant prose and ineligible calls
     /// are boundaries that flush the buffer.
-    static func build(events: [SessionEvent]) -> [TimelineItem] {
+    static func build(events: [SessionEvent], subagents: [SessionSubagent] = []) -> [TimelineItem] {
         var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
         var fifoToolCallIndexes: [Int] = []
@@ -471,12 +486,17 @@ enum TimelineBuilder {
             }
             if event.interactionKind == "provider_reasoning" {
                 let thought = (event.contentText ?? "").replacingOccurrences(of: "Thinking:", with: "", options: .anchored)
-                if !thought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if event.reasoningWithheld || !thought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     raw.append(.reasoning(event))
                 }
                 continue
             }
-            if event.role == "system" { continue }
+            if event.role == "system" {
+                if event.taskNotification != nil || event.waitingBackgroundAgents != nil || event.apiError != nil {
+                    raw.append(.providerNotification(event))
+                }
+                continue
+            }
 
             switch event.role {
             case "user":
@@ -558,16 +578,19 @@ enum TimelineBuilder {
             }
         }
 
-        return collapseActivity(raw)
+        return collapseActivity(raw, subagents: subagents)
     }
 
-    static func build(items projectionItems: [SessionProjectionItem]) -> [TimelineItem] {
+    static func build(
+        items projectionItems: [SessionProjectionItem],
+        subagents: [SessionSubagent] = []
+    ) -> [TimelineItem] {
         var out: [TimelineItem] = []
         var eventBuffer: [SessionEvent] = []
 
         func flushEvents() {
             guard !eventBuffer.isEmpty else { return }
-            out.append(contentsOf: build(events: eventBuffer))
+            out.append(contentsOf: build(events: eventBuffer, subagents: subagents))
             eventBuffer.removeAll()
         }
 
@@ -629,7 +652,7 @@ enum TimelineBuilder {
     }
 
     /// Collapse runs of 2+ completed calls into one prose-bounded activity row.
-    static func collapseActivity(_ items: [TimelineItem]) -> [TimelineItem] {
+    static func collapseActivity(_ items: [TimelineItem], subagents: [SessionSubagent] = []) -> [TimelineItem] {
         var out: [TimelineItem] = []
         var buffer: [ActivityCall] = []
 
@@ -647,7 +670,7 @@ enum TimelineBuilder {
         for item in items {
             switch item {
             case .tool(let call, let result, let pairing)
-                where Self.isActivityEligible(call: call, result: result, pairing: pairing):
+                where Self.isActivityEligible(call: call, result: result, pairing: pairing, subagents: subagents):
                 buffer.append(ActivityCall(call: call, result: result, pairing: pairing))
             default:
                 flush()
@@ -702,11 +725,24 @@ enum TimelineBuilder {
             let extra = paths.count - 1
             let suffix = extra > 0 ? " + \(extra) \(extra == 1 ? "file" : "files")" : ""
             return (first as NSString).lastPathComponent + suffix
-        case "Task":
-            if let prompt = presentedToolInputString(event, "prompt") {
-                return prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
+        case "Task", "Agent", "dispatch_agent":
+            let agentType = presentedToolInputString(event, "subagent_type")
+            let description = presentedToolInputString(event, "description")
+            if let description, !description.isEmpty {
+                if let agentType, !agentType.isEmpty,
+                   !description.lowercased().hasPrefix(agentType.lowercased() + ":") {
+                    return "\(agentType): \(description)"
+                }
+                return description
             }
-            return presentedToolInputString(event, "description") ?? ""
+            if let prompt = presentedToolInputString(event, "prompt") {
+                let line = prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt
+                if let agentType, !agentType.isEmpty {
+                    return "\(agentType): \(line)"
+                }
+                return line
+            }
+            return agentType ?? ""
         case "WebFetch", "WebSearch":
             return presentedToolInputString(event, "url") ?? presentedToolInputString(event, "query") ?? ""
         default:

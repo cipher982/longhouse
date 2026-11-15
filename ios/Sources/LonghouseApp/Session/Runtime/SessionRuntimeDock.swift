@@ -225,6 +225,7 @@ struct SessionRuntimeDock: View {
         ) {
             SessionDelegationTaskSheet(
                 facts: detail.stateFacts.delegation,
+                pendingBackgroundAgentCount: detail.pendingBackgroundAgentCount,
                 asOf: evidenceNow,
                 onOpenSubagent: { childSessionId in
                     pendingChildSessionId = childSessionId
@@ -291,12 +292,57 @@ struct SessionRuntimeDock: View {
     private var delegationSummaryLabel: String? {
         switch delegationPresentation {
         case .absent:
+            if let pending = detail.pendingBackgroundAgentCount, pending > 0 {
+                return "Waiting for \(pending) background \(pending == 1 ? "agent" : "agents") to finish"
+            }
             return nil
         case .unknown:
             return "Background work status unknown"
         case .known(let facts):
             return delegationSummary(for: facts)
         }
+    }
+
+    private var delegationRosterPreview: String? {
+        guard case .known(let facts) = delegationPresentation,
+              let items = facts.items,
+              !items.isEmpty else {
+            return nil
+        }
+        let sorted = items.sorted { lhs, rhs in
+            let rank = { (task: SessionDelegationTask) -> Int in
+                let isAgent = SessionDelegationCategory(kind: task.kind) == .agents
+                let isRunning = task.status.lowercased() == "running"
+                if isAgent && isRunning { return 0 }
+                if isAgent { return 1 }
+                if isRunning { return 2 }
+                return 3
+            }
+            return rank(lhs) < rank(rhs)
+        }
+        guard let lead = sorted.first else { return nil }
+        var parts: [String] = []
+        if let agentType = lead.agentType?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agentType.isEmpty {
+            parts.append(agentType)
+        } else {
+            parts.append(lead.kind.capitalized)
+        }
+        if let desc = lead.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !desc.isEmpty {
+            parts.append(desc)
+        }
+        if let intent = lead.nativeProgress?.lastIntent?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !intent.isEmpty {
+            parts.append(intent)
+        } else if let tool = lead.nativeProgress?.currentTool?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !tool.isEmpty {
+            parts.append(tool)
+        }
+        if let tokens = lead.nativeProgress?.tokens, tokens > 0 {
+            parts.append(RuntimeElapsed.compactTokens(tokens))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
 
@@ -315,6 +361,7 @@ struct SessionRuntimeDock: View {
         components.append(detail.stateFacts.delegation?.state ?? "")
         components.append(detail.stateFacts.delegation?.observedAt ?? "")
         components.append(detail.stateFacts.delegation?.validUntil ?? "")
+        components.append(String(detail.pendingBackgroundAgentCount ?? 0))
         components.append(String(describing: hostUpdatePresentation))
         components.append(String(describing: ledger(asOf: providerEvidenceNow)))
         components.append(String(describing: realtimeConnection))
@@ -375,7 +422,10 @@ struct SessionRuntimeDock: View {
             "\(shouldExpand)", "\(evidenceDisclosure)", "\(noticeIsVisible)",
             headline(for: state), operationLine(for: state) ?? "",
             subline(for: state, asOf: providerEvidenceNow) ?? "",
-            delegationSummaryLabel ?? "", exceptionReason(state) ?? ""
+            delegationSummaryLabel ?? "",
+            delegationRosterPreview ?? "",
+            "\(detail.pendingBackgroundAgentCount ?? 0)",
+            exceptionReason(state) ?? ""
         ]
         return parts.joined(separator: "|")
     }
@@ -414,11 +464,15 @@ struct SessionRuntimeDock: View {
     private func delegationSummary(for facts: SessionDelegationFacts) -> String? {
         if let items = facts.items {
             guard !items.isEmpty else { return facts.recentItems?.isEmpty == false ? "Recently finished background work" : nil }
+            let waitingAgents = items.filter {
+                SessionDelegationCategory(kind: $0.kind) == .agents && $0.status.lowercased() == "waiting"
+            }.count
             return categorySummary(
                 counts: items.reduce(into: [SessionDelegationCategory: Int]()) { counts, task in
                     counts[SessionDelegationCategory(kind: task.kind), default: 0] += 1
                 },
-                total: items.count
+                total: items.count,
+                waitingAgents: waitingAgents
             )
         }
         if facts.state.lowercased() == "none" {
@@ -436,12 +490,17 @@ struct SessionRuntimeDock: View {
 
     private func categorySummary(
         counts: [SessionDelegationCategory: Int],
-        total: Int
+        total: Int,
+        waitingAgents: Int = 0
     ) -> String {
         let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
         let parts = order.compactMap { category -> String? in
             guard let count = counts[category], count > 0 else { return nil }
-            return category.countLabel(count)
+            let base = category.countLabel(count)
+            if category == .agents, waitingAgents > 0 {
+                return "\(base) (\(waitingAgents) waiting)"
+            }
+            return base
         }
         if parts.isEmpty {
             return "Background · \(total) \(total == 1 ? "task" : "tasks")"
@@ -459,14 +518,23 @@ struct SessionRuntimeDock: View {
             Button {
                 delegationSheetPresented = true
             } label: {
-                Text(summary)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(headlineColor(for: state))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transaction { $0.animation = nil }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(headlineColor(for: state))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transaction { $0.animation = nil }
+                    if let preview = delegationRosterPreview {
+                        Text(preview)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(summary)
@@ -540,10 +608,20 @@ struct SessionRuntimeDock: View {
                     HStack(spacing: 6) {
                         Image(systemName: delegationPresentation.isUnknown ? "questionmark.circle" : "arrow.triangle.branch")
                             .font(.caption2.weight(.semibold))
-                        Text(summary)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
-                            .multilineTextAlignment(.leading)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(summary)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                                .multilineTextAlignment(.leading)
+                            if let preview = delegationRosterPreview {
+                                Text(preview)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                                    .truncationMode(.tail)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))

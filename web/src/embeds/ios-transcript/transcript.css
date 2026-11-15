@@ -747,3 +747,186 @@ summary::-webkit-details-marker {
   border-radius: 10px;
   object-fit: cover;
 }
+
+/* --- Claude Code fidelity signals & subagent tree --- */
+.message-phase-row {
+  margin-bottom: 4px;
+}
+
+.phase-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message.assistant.commentary .message-content {
+  color: var(--secondary);
+  font-size: 13.5px;
+}
+
+.reasoning-withheld {
+  padding: 4px 10px;
+  margin-left: 2px;
+  border-left: 1.5px solid var(--trace);
+  color: var(--tertiary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.tool-intent {
+  color: var(--secondary);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+
+.running-output-tail {
+  margin: 0 10px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--code);
+  padding: 5px 8px;
+  overflow-x: auto;
+}
+
+.running-output-tail pre,
+.running-output-tail pre code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.45;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-notice-dot,
+.subagent-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--secondary);
+}
+
+.task-notice-dot.status-completed {
+  background: #67b87a;
+}
+
+.task-notice-dot.status-running,
+.subagent-dot.status-running {
+  background: #e2a452;
+}
+
+.task-notice-dot.status-failed,
+.task-notice-dot.status-killed {
+  background: var(--attention);
+}
+
+.subagent-dot.status-waiting {
+  background: var(--secondary);
+}
+
+.task-notice-note {
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.waiting-agents-icon {
+  color: #e2a452;
+  font-weight: 700;
+}
+
+.api-error-notice {
+  border-left-color: var(--attention);
+}
+
+.api-error-badge {
+  padding: 1px 6px;
+  border: 1px solid rgba(200, 80, 70, 0.4);
+  border-radius: 4px;
+  background: rgba(200, 80, 70, 0.14);
+  color: var(--attention);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
+
+.subagents {
+  margin: 2px 0 8px 2px;
+  border-left: 1.5px solid var(--trace);
+}
+
+.subagents summary {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.subagent-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 8px 6px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.subagent-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.subagent-pill {
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--secondary);
+  font: 10.5px ui-monospace, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
+}
+
+.subagent-pill.fork {
+  color: #e2a452;
+  border-color: rgba(226, 164, 82, 0.38);
+}
+
+.subagent-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-status.waiting {
+  color: var(--secondary);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.subagent-meta {
+  color: var(--tertiary);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
