@@ -828,7 +828,7 @@ describe("SessionDetailPage", () => {
       fireEvent.click(within(row).getByRole("button", { expanded: false }));
 
       expect(row).not.toHaveTextContent("Result not recorded yet.");
-      expect(row).toHaveTextContent(/No output|Activity uncertain/);
+      expect(row).toHaveTextContent(/Waiting for return|Unconfirmed|No output recorded/);
       expect(row).not.toHaveTextContent(
         "Tool call dropped \u2014 no result was ever recorded.",
       );
