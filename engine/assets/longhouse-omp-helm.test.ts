@@ -783,9 +783,12 @@ describe("busy send", () => {
       },
       sendUserMessage: (content: unknown, options: unknown) => {
         sent.push([content, options]);
+        // OMP settles an idle send only when the turn it starts is over.
+        return holdTurn ? new Promise<void>(() => undefined) : undefined;
       },
     });
     let idle = false;
+    let holdTurn = false;
     const ctx = {
       isIdle: () => idle,
       sessionManager: {
@@ -861,6 +864,17 @@ describe("busy send", () => {
       expect(delivered.ok).toBe(true);
       expect(sent.length).toBe(1);
       expect(sent[0][1]).toBeUndefined();
+
+      // A turn that outlives the launcher's acknowledgement wait is acknowledged
+      // when it begins, not when it ends; the prompt was taken either way.
+      holdTurn = true;
+      const longTurn = command("long-turn");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(frames.some((f) => f.kind === "command_result" && f.request_id === "long-turn")).toBe(false);
+      await handlers.agent_start({ type: "agent_start" }, ctx);
+      const accepted = await longTurn;
+      expect(accepted.ok).toBe(true);
+      expect(sent.length).toBe(2);
     } finally {
       await handlers.session_shutdown({ type: "session_shutdown" }, ctx);
       for (const socket of sockets) socket.destroy();

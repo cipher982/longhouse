@@ -1669,6 +1669,30 @@ export default function (pi: any) {
     return connectionPromise;
   };
 
+  // `sendUserMessage` on an idle OMP resolves when the turn it starts is over
+  // (measured on 18.20.2: 27 ms for a one-line reply, 8 s for a turn running
+  // `sleep 8`), so awaiting it holds the acknowledgement for the whole turn. The
+  // launcher waits 8 s for the acknowledgement and then reports the delivery as
+  // unknown, for a prompt the provider took in the first millisecond.
+  // Acknowledge once the provider has taken the prompt: its turn has begun
+  // (`agent_start`), or it settled the call, or it refused it. A refusal after
+  // the acknowledgement has no command left to fail, so it is only swallowed.
+  const turnStartWaiters = new Set<() => void>();
+  const deliverIdleSend = async (content: unknown) => {
+    const delivery = Promise.resolve(pi.sendUserMessage(content));
+    void delivery.catch(() => undefined);
+    let wake: () => void = () => undefined;
+    const started = new Promise<void>((resolveStarted) => {
+      wake = resolveStarted;
+      turnStartWaiters.add(wake);
+    });
+    try {
+      await Promise.race([delivery, started]);
+    } finally {
+      turnStartWaiters.delete(wake);
+    }
+  };
+
   const handleCommand = async (
     command: Frame,
     ctx: any,
@@ -1710,7 +1734,7 @@ export default function (pi: any) {
         // it, so accepting into it is not delivery. Refuse; the Runtime Host
         // keeps the durable receipt, images included, queued for the
         // turn-boundary drain.
-        if (providerIsIdle(ctx)) await Promise.resolve(pi.sendUserMessage(content));
+        if (providerIsIdle(ctx)) await deliverIdleSend(content);
         else
           throw Object.assign(
             new Error("OMP provider is mid-turn; send waits for the turn boundary"),
@@ -1839,6 +1863,7 @@ export default function (pi: any) {
     if (subagentSessionContext(ctx)) return;
     turnGeneration += 1;
     lastAgentEndTerminal = undefined;
+    for (const wake of [...turnStartWaiters]) wake();
     lifecycle("agent_start", event, ctx);
   });
   pi.on("tool_execution_start", async (event: Frame, ctx: any) =>
