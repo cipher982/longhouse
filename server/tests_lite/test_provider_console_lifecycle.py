@@ -1456,7 +1456,7 @@ def test_steer_cell_is_its_own_factory_invocation():
     steer = lifecycle.STEER_VARIANTS["codex"]
     assert steer != lifecycle.SUPPORTED_VARIANT
     assert lifecycle.PRODUCER.parser().parse_args([*base, "--variant", steer]).variant == steer
-    assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude", "opencode"}
+    assert set(lifecycle.STEER_VARIANTS) == {"codex", "claude", "opencode", "antigravity"}
     for producer in (pi_console_tool_producer, omp_console_producer):
         assert producer._STEER_VARIANT != producer._VARIANT
         assert producer._STEER_VARIANT.endswith(f":{lifecycle.STEER_ASSERTION_ID}:{producer.SCENARIO_ID}")
@@ -1654,6 +1654,18 @@ def _turn_claim(
         events = [{"type": "user", "message": message("user", prompt)}]
         events += [{"type": "assistant", "uuid": f"reply-{n}", "message": message("assistant", text)} for n, text in enumerate(replies)]
         end = {"type": "result", "subtype": "success"}
+    elif provider == "antigravity":
+        # agy acp's stdout is JSON-RPC: a message arrives as session/update chunks and a prompt ends with the
+        # response that carries its stopReason.
+        def chunk(kind: str, text: str) -> dict[str, object]:
+            return {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {"update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}},
+            }
+
+        events = [chunk("user_message_chunk", prompt)] + [chunk("agent_message_chunk", text) for text in replies]
+        end = {"jsonrpc": "2.0", "id": 4, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1}}}
     elif provider == "opencode":
         # OpenCode echoes no prompt, and writes a text part again as it grows.
         events = [{"type": "text", "part": {"type": "text", "text": text[:cut]}} for text in replies for cut in (len(text) // 2, len(text))]
@@ -1913,6 +1925,9 @@ _STEERED_TURN = {
     "pi": (("prompt", 0.0), ("call", 0.6), ("result", 15.6), ("steer", 15.6), ("reply", 15.9)),
     "omp": (("prompt", 0.0), ("call", 0.9), ("output", 6.0), ("steer", 6.1), ("reply", 7.3), ("reply", 21.6)),
     "claude": (("prompt", 0.0), ("call", 1.1), ("result", 16.2), ("steer", 16.3), ("reply", 18.2)),
+    # Antigravity: the shape of the agy 1.5.9 ACP probe (a tool step, then the steer lands between tool steps
+    # and the model answers it); the transcript records the steer as a SYSTEM_SDK user input.
+    "antigravity": (("prompt", 0.0), ("call", 2.9), ("result", 9.0), ("steer", 24.9), ("reply", 33.0)),
     "opencode": (("prompt", 0.0), ("steer", 0.6), ("said", 2.4), ("call", 5.5), ("result", 20.6), ("said", 22.2), ("reply", 23.1)),
 }
 _SAID = ("Running the command.", "The command has finished.")
@@ -2198,3 +2213,52 @@ def test_a_dropped_steer_put_down_to_the_model_is_not_a_detected_drop(tmp_path, 
     # The assertion is false, and the factory would still have retried the run and kept it off the findings.
     assert result["negative_control"]["verdict"] == "undetected" and result["negative_control"]["target_outcome"] == "model_deviation"
     assert result["status"] == "fail"
+
+
+def test_antigravity_acp_stream_gives_the_turns_reply_prompt_and_every_end(tmp_path) -> None:
+    """agy acp's stdout is JSON-RPC: a reply arrives in fragments (a marker may straddle two) and a steered turn
+    holds two prompt responses, the first of them early (the shape in the 1.5.9 probe)."""
+
+    def update(kind: str, text: str) -> dict:
+        return {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {"update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}},
+        }
+
+    frames = [
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": 1}},
+        update("user_message_chunk", "Reply with LH_"),
+        update("user_message_chunk", "MARK"),
+        {"jsonrpc": "2.0", "method": "session/update", "params": {"update": {"sessionUpdate": "usage_update", "used": 1}}},
+        update("agent_message_chunk", "LH_MA"),
+        update("agent_message_chunk", "RK"),
+        {"jsonrpc": "2.0", "id": 4, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1}}},
+        update("agent_message_chunk", "again"),
+        {"jsonrpc": "2.0", "id": 5, "result": {"stopReason": "end_turn"}},
+    ]
+    content = "\n".join(json.dumps(frame) for frame in frames)
+    assert lifecycle._stream_events("antigravity", content) == [
+        ("user", "Reply with LH_MARK"),
+        ("assistant", "LH_MARK"),
+        ("end", ""),
+        ("assistant", "again"),
+        ("end", ""),
+    ]
+    stdout = tmp_path / "stdout.log"
+    stdout.write_text(content, encoding="utf-8")
+    evidence = lifecycle._claim_output_evidence("antigravity", {"stdout_path": str(stdout)}, "LH_MARK")
+    assert evidence is not None
+    assert evidence["provider_response_marker_count"] == 1
+
+
+def test_antigravity_console_lifecycle_tables_agree() -> None:
+    assert "antigravity" in lifecycle.PROVIDERS
+    assert lifecycle.ADAPTERS["antigravity"] == "antigravity_acp"
+    assert lifecycle.PROVIDER_BIN_ENV["antigravity"] == "LONGHOUSE_ANTIGRAVITY_BIN"
+    assert "antigravity_console_adapter_lifecycle" in lifecycle.SCENARIO_IDS
+    assert "antigravity" in lifecycle.STEER_VARIANTS
+    assert lifecycle._VERSION_PATTERNS["antigravity"].fullmatch("1.5.9")
+    claim = {"result": {"model": "gemini-4-hydrogen-low"}}
+    assert lifecycle._claim_uses_selected_model(claim, provider="antigravity", model="gemini-4-hydrogen-low")
+    assert not lifecycle._claim_uses_selected_model({"result": {}}, provider="antigravity", model="gemini-4-hydrogen-low")

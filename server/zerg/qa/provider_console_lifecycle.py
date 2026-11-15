@@ -74,7 +74,7 @@ from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import waited_on
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
-PROVIDERS = ("codex", "claude", "opencode", "cursor")
+PROVIDERS = ("codex", "claude", "opencode", "cursor", "antigravity")
 # Only OMP's retained JSONL stream carries the terminal agent_end contract used
 # by the post-interrupt evidence check. The other supported adapters settle via
 # their own Runtime Host/claim contracts.
@@ -84,7 +84,7 @@ ASSERTION_ID = "console_adapter_release_contract_preserved"
 # the strict gate on session.turn.start, so a steer failure cannot switch off
 # Console turns (docs/specs/console-full-control.md, A2).
 STEER_ASSERTION_ID = "console_turn_steer_preserved"
-STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode"})
+STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode", "antigravity"})
 SUPPORTED_VARIANT = "interrupt_supported"
 SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
 
@@ -123,6 +123,7 @@ PROVIDER_BIN_ENV = {
     "cursor": "LONGHOUSE_CURSOR_BIN",
     "pi": "LONGHOUSE_PI_BIN",
     "omp": "LONGHOUSE_OMP_BIN",
+    "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
 }
 ADAPTERS = {
     "codex": "codex_exec",
@@ -131,8 +132,9 @@ ADAPTERS = {
     "cursor": "cursor_print",
     "pi": "pi_print",
     "omp": "omp_print",
+    "antigravity": "antigravity_acp",
 }
-CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp"})
+CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp", "antigravity"})
 OMP_CONTEXT_LABEL = "LONGHOUSE_CONTEXT_VALUE"
 _VERSION_PATTERNS = {
     "codex": re.compile(r"^codex-cli (?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
@@ -141,11 +143,13 @@ _VERSION_PATTERNS = {
     "cursor": re.compile(r"^(?P<version>\d{4}\.\d{2}\.\d{2}(?:-[0-9A-Za-z.-]+)?)$"),
     "pi": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
     "omp": re.compile(r"^omp/(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
+    # `agy --version` prints the bare version (1.5.9).
+    "antigravity": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
 }
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=15,
+    producer_revision=16,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     # 5: Codex Console interrupt is supported (turn/interrupt).
@@ -153,7 +157,8 @@ REGISTRATION = ProducerRegistration(
     # 22: the waits for a served reply read the newest events, as the steer receipt does.
     # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead), and the
     # steer step asks for its command in the foreground, as the interrupt step does.
-    scenario_revision=23,
+    # 24: Antigravity (agy acp) joins the lifecycle: Console turn, steer and resume through the ACP adapter.
+    scenario_revision=24,
     assertion_cells=(
         # Every Console adapter interrupts (Codex last, with turn/interrupt), so this is the cell's one variant.
         (ASSERTION_ID, SUPPORTED_VARIANT),
@@ -522,6 +527,10 @@ _SERVED_IDS_NOT_NATIVE = {
         "Cursor writes no id per record: the engine names a transcript record by its byte offset, "
         "and the print stream this producer reads has no ids at all"
     ),
+    "antigravity": (
+        "the ACP stream carries message chunks with no ids, and the transcript step a chunk came from is not "
+        "named in the stream, so a served event cannot be tied to a native row by id"
+    ),
     "opencode": (
         "the print stream names messages and parts (msg_..., prt_...) and the served id is the engine's own "
         "derivation from them; reproducing that derivation here would compare the engine with itself"
@@ -879,12 +888,39 @@ def _stream_event(provider: str, event: Mapping[str, object]) -> tuple[str, str]
         if kind == "event_msg" and payload.get("type") in {"task_started", "task_complete"}:
             return ("open" if payload["type"] == "task_started" else "end"), ""
         return None
+    if provider == "antigravity":
+        return _acp_stream_event(event)
     if provider not in {"pi", "omp"}:
         return None
     if kind == "message_end" and isinstance(message, Mapping) and message.get("role") in {"assistant", "user"}:
         return str(message["role"]), _native_message_text(message)
     if kind == "agent_end":
         return ("end" if provider == "pi" or omp_agent_end_is_terminal(event) else "open"), ""
+    return None
+
+
+def _acp_stream_event(event: Mapping[str, object]) -> tuple[str, str] | None:
+    """One JSON-RPC frame of `agy acp`'s stdout, as a turn event.
+
+    A message arrives as ``session/update`` chunks (`_stream_events` joins consecutive ones); the end of a
+    prompt is the response to a ``session/prompt``, which carries ``stopReason``. After a steer the first
+    prompt's response comes early while the turn goes on, so a stream can hold several ends.
+    """
+
+    if event.get("method") == "session/update":
+        params = event.get("params")
+        update = params.get("update") if isinstance(params, Mapping) else None
+        if not isinstance(update, Mapping):
+            return None
+        kind = update.get("sessionUpdate")
+        content = update.get("content")
+        text = content.get("text") if isinstance(content, Mapping) else None
+        if kind in {"agent_message_chunk", "user_message_chunk"} and isinstance(text, str):
+            return ("assistant" if kind == "agent_message_chunk" else "user"), text
+        return None
+    result = event.get("result")
+    if isinstance(result, Mapping) and isinstance(result.get("stopReason"), str):
+        return "end", ""
     return None
 
 
@@ -896,8 +932,14 @@ def _stream_events(provider: str, content: str) -> list[tuple[str, str]]:
         except json.JSONDecodeError:
             continue
         found = _stream_event(provider, event) if isinstance(event, Mapping) else None
-        if found is not None:
-            read.append(found)
+        if found is None:
+            continue
+        # ACP streams a message as fragments: a marker may be split across two, so consecutive chunks of one
+        # kind are one message.
+        if provider == "antigravity" and found[0] in {"assistant", "user"} and read and read[-1][0] == found[0]:
+            read[-1] = (found[0], read[-1][1] + found[1])
+            continue
+        read.append(found)
     return read
 
 
@@ -968,6 +1010,7 @@ _TURN_STREAM_IN_CLAIM = {
     "opencode": "stdout_path",
     "pi": "stdout_path",
     "omp": "stdout_path",
+    "antigravity": "stdout_path",
     "codex": "source_path",
 }
 
@@ -2387,8 +2430,8 @@ def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, mo
             return False
         return _codex_native_turn_model(Path(source_path)) == expected
     result = claim.get("result")
-    if provider == "opencode":
-        # The Console adapter sends the model in the prompt body, not on argv
+    if provider in {"opencode", "antigravity"}:
+        # The adapter sends the model in the prompt body (OpenCode) or `session/set_model` (agy), not on argv
         # (`opencode serve` takes no model); the claim records what it sent.
         return isinstance(result, Mapping) and result.get("model") == expected
     argv = result.get("argv") if isinstance(result, Mapping) else None

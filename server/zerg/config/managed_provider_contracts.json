@@ -269,7 +269,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },
@@ -297,7 +297,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },
@@ -1467,7 +1467,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },
@@ -1495,7 +1495,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             },
             {
               "id": "real_print_marker_returned",
@@ -2289,7 +2289,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },
@@ -2317,7 +2317,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },
@@ -3036,6 +3036,89 @@
             }
           ]
         },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_adapter_release_contract_preserved",
+              "variant": "interrupt_supported",
+              "scenario_id": "antigravity_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 24,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "assurance_priority": "sampled",
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
+            }
+          ]
+        },
+        "session.turn.steer": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.turn_steer",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "console_turn_steer_preserved",
+              "scenario_id": "antigravity_console_adapter_lifecycle",
+              "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
+              "minimum_scenario_revision": 24,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "assurance_priority": "sampled",
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
+            }
+          ]
+        },
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.antigravity.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "antigravity_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 7,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "assurance_priority": "sampled",
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -3522,7 +3605,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "994bdbd5e31a31a9d450386cd3181fcadc769469a73dfd064c4641d213684010"
+              "oracle_digest": "4513508ba25afb7a88d00b6ca476772baff5e7a36b0b700bdbe14ae8acb08b1b"
             }
           ]
         },

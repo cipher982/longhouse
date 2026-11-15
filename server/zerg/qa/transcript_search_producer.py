@@ -39,7 +39,7 @@ from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 
-PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp")
+PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp", "antigravity")
 ASSERTION_ID = "transcript_ingested_searchable"
 NEGATIVE_CONTROLS = (oracle.FAULT_NAME,)
 SCENARIO_IDS = tuple(f"{provider}_transcript_search" for provider in PROVIDERS)
@@ -56,7 +56,8 @@ REGISTRATION = ProducerRegistration(
     # 5: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead).
     # 6: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
     # its preconditions were not evaluated.
-    scenario_revision=6,
+    # 7: Antigravity joins the providers.
+    scenario_revision=7,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),

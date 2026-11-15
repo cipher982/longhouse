@@ -270,6 +270,9 @@ pub async fn start_antigravity_acp_turn(
         "run_id": config.run_id,
         "provider": "antigravity",
         "transport": ANTIGRAVITY_ACP_ADAPTER,
+        // The ACP model is chosen by `session/set_model`, not argv, so the claim records it
+        // (the factory's Console lifecycle checks the selected model here).
+        "model": config.model,
         "provider_thread_id": resume_id,
         "launch_id": launch_id,
         "pid": pid,

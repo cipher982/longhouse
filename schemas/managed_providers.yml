@@ -1876,6 +1876,55 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
         max_age_seconds: 604800
+    # Console on `agy acp` (antigravity-parity.md step 2). The factory proves these through the shared
+    # Console lifecycle and transcript-search producers, which a live run needs a billed Gemini key
+    # for (the CI key is free tier), so the rows stay `sampled` and gate nothing until a key or the
+    # factory's scripted lane covers them.
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - <<: *console_release_interrupt_supported
+        scenario_id: antigravity_console_adapter_lifecycle
+        minimum_scenario_revision: 24
+        assurance_priority: sampled
+    session.turn.steer:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.turn_steer
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: console_turn_steer_preserved
+        scenario_id: antigravity_console_adapter_lifecycle
+        oracle_source: server/zerg/qa/provider_console_lifecycle.py
+        minimum_scenario_revision: 24
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+        assurance_priority: sampled
+    session.transcript.search:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.antigravity.transcript_search
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: []
+      required_assertions:
+      - id: transcript_ingested_searchable
+        scenario_id: antigravity_transcript_search
+        oracle_source: server/zerg/qa/search_ingest_oracle.py
+        minimum_scenario_revision: 7
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+        assurance_priority: sampled
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing

@@ -1757,6 +1757,7 @@
     {
       "path": "server/tests_lite/test_provider_console_lifecycle.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1963,6 +1964,7 @@
     {
       "path": "server/tests_lite/test_search_ingest_oracle.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -2499,6 +2501,7 @@
     {
       "path": "server/zerg/qa/provider_console_lifecycle.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -2677,6 +2680,7 @@
     {
       "path": "server/zerg/qa/transcript_search_producer.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
