@@ -1540,16 +1540,23 @@ async def _wait_for_session_change(subscription):
     return await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
 
 
-async def _wait_for_workspace_stream_messages(session_subscription, lifecycle_subscription):
+async def _wait_for_workspace_stream_messages(session_subscription, lifecycle_subscription, side_task=None):
+    """Wait for a session or lifecycle message, or for ``side_task`` to finish.
+
+    ``side_task`` (a pushed projection delta being read) only wakes the wait;
+    it is never cancelled here and its result is read by the caller.
+    """
+
     async def next_message(subscription):
         return await _wait_for_session_change(subscription)
 
     session_task = asyncio.create_task(next_message(session_subscription))
     lifecycle_task = asyncio.create_task(next_message(lifecycle_subscription))
-    done, pending = await asyncio.wait(
-        {session_task, lifecycle_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    waiting = {session_task, lifecycle_task}
+    if side_task is not None and not side_task.done():
+        waiting.add(side_task)
+    done, pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+    pending.discard(side_task)
     for task in pending:
         task.cancel()
     if pending:
@@ -1570,6 +1577,70 @@ def _canary_workspace_marker_fields(payload: dict | None) -> dict[str, int]:
     return {"canary_seq": canary_seq, "canary_emitted_at_ms": emitted_at_ms}
 
 
+# A pushed transcript delta: the newest rows of the head projection, read when
+# an ingest wake arrives and sent as their own `projection_delta` frame, so a
+# client that asked for it applies the rows without reading them back over
+# HTTP. The window overlaps what the client already holds, as its own HTTP
+# delta does, so a row whose state can still change (a tool call finishing)
+# arrives fresh. The read runs beside the frame loop: a catalog read in front
+# of the loop once made every live preview behind it arrive seconds late.
+PROJECTION_DELTA_WINDOW = 40
+PROJECTION_DELTA_TIMEOUT_SECONDS = 3.0
+PROJECTION_DELTA_MAX_BYTES = 256_000
+
+
+async def _workspace_projection_delta(session_id: UUID, owner_id: int) -> dict | None:
+    """The newest head rows as a delta after the window's first row, or None."""
+    started = monotonic()
+    try:
+        workspace = await asyncio.wait_for(
+            build_storage_v2_workspace(
+                session_id=session_id,
+                owner_id=owner_id,
+                branch_mode="head",
+                limit=PROJECTION_DELTA_WINDOW,
+                anchor="tail",
+                detail="lite",
+            ),
+            timeout=PROJECTION_DELTA_TIMEOUT_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 - a delta is an optimization; the client reads over HTTP instead
+        logger.info(
+            "workspace stream projection delta unavailable session=%s took_ms=%.0f",
+            session_id,
+            (monotonic() - started) * 1000,
+            exc_info=True,
+        )
+        return None
+    projection = workspace.get("projection") if isinstance(workspace, dict) else None
+    if not isinstance(projection, dict) or not projection.get("generation_id"):
+        return None
+    items = projection.get("items")
+    if not isinstance(items, list):
+        return None
+    anchor_index = next(
+        (
+            index
+            for index, item in enumerate(items)
+            if isinstance(item, dict) and isinstance(item.get("event"), dict) and item["event"].get("cursor")
+        ),
+        None,
+    )
+    if anchor_index is None:
+        return None
+    delta = {
+        **projection,
+        "anchor_cursor": items[anchor_index]["event"]["cursor"],
+        "items": items[anchor_index + 1 :],
+        # A delta continues the held tail: nothing newer is left out of it.
+        "has_more": False,
+        "next_cursor": None,
+    }
+    if len(json.dumps(delta, default=str)) > PROJECTION_DELTA_MAX_BYTES:
+        return None
+    return delta
+
+
 async def _live_catalog_workspace_stream(
     request: Request,
     *,
@@ -1582,6 +1653,7 @@ async def _live_catalog_workspace_stream(
     include_canary_markers: bool = False,
     heartbeat_interval_seconds: float | None = None,
     accepted_preview_kinds: frozenset[str] = frozenset(),
+    projection_delta: bool = False,
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1660,69 +1732,105 @@ async def _live_catalog_workspace_stream(
                 ),
             }
         last_heartbeat = monotonic()
-        while not await request.is_disconnected():
-            message, lifecycle_message = await _wait_for_workspace_stream_messages(subscription, lifecycle_subscription)
-            if lifecycle_message is not None and lifecycle_message.payload.get("kind") == "runtime_lifecycle":
-                lifecycle = lifecycle_message.payload.get("host_lifecycle")
-                if isinstance(lifecycle, dict):
-                    yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
-                if lifecycle_message.payload.get("drain_complete"):
-                    return
-            if message is None:
-                if heartbeat_interval_seconds is None or monotonic() - last_heartbeat >= heartbeat_interval_seconds:
-                    yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
-                    last_heartbeat = monotonic()
-                continue
-            preview = _workspace_transcript_preview_from_payload(message.payload)
-            if isinstance(preview, dict) and preview.get("kind") not in (None, "reply", "tool", "subagent"):
-                if preview.get("kind") not in accepted_preview_kinds:
-                    # A client that did not ask for this kind (thinking) cannot tell it from the reply, so it gets no frame at all,
-                    # not even a wake: the web tabs and the iOS build that predate kinds see exactly what they saw before.
+        # One projection read at a time; an ingest that lands during it asks
+        # for one more read when it finishes, which covers both.
+        delta_task: asyncio.Task | None = None
+        delta_rerun = False
+        delta_seq = 0
+        try:
+            while not await request.is_disconnected():
+                if delta_task is not None and delta_task.done():
+                    delta = delta_task.result()
+                    delta_task = None
+                    if delta is not None:
+                        yield {
+                            "event": "projection_delta",
+                            "data": json.dumps(
+                                {
+                                    "session_id": str(session_id),
+                                    "pubsub_seq": delta_seq,
+                                    "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                                    "delta": delta,
+                                },
+                                default=str,
+                            ),
+                        }
+                    if delta_rerun and owner_id is not None:
+                        delta_rerun = False
+                        delta_task = asyncio.create_task(_workspace_projection_delta(session_id, owner_id))
+                message, lifecycle_message = await _wait_for_workspace_stream_messages(subscription, lifecycle_subscription, delta_task)
+                if lifecycle_message is not None and lifecycle_message.payload.get("kind") == "runtime_lifecycle":
+                    lifecycle = lifecycle_message.payload.get("host_lifecycle")
+                    if isinstance(lifecycle, dict):
+                        yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
+                    if lifecycle_message.payload.get("drain_complete"):
+                        return
+                if message is None:
+                    if heartbeat_interval_seconds is None or monotonic() - last_heartbeat >= heartbeat_interval_seconds:
+                        yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
+                        last_heartbeat = monotonic()
                     continue
-            preview_event_id = _workspace_preview_event_id(preview)
-            latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
-            catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
-            # A live preview wake is provisional text that arrives before its durable write; it has no commit of its
-            # own. Looking up the current commit would only attach an unrelated one, and the lookup is a catalog read
-            # in a worker thread behind every other read on the host: on a busy host each preview frame waited for it
-            # and the live reply reached the client seconds late, in a burst.
-            if catalog_commit_seq is None and owner_id is not None and _workspace_change_kind(message.payload) != "transcript_preview":
-                _lookup_started = monotonic()
-                try:
-                    _session, _provider_alias, raw_commit_seq = await asyncio.to_thread(
-                        read_live_catalog_session,
-                        session_id,
-                        owner_id=owner_id,
-                    )
-                    if str(raw_commit_seq).isdecimal():
-                        catalog_commit_seq = int(raw_commit_seq)
-                except (CatalogReadError, TypeError, ValueError):
-                    logger.debug(
-                        "Could not attach a live catalog commit to workspace wake session=%s",
-                        session_id,
-                        exc_info=True,
-                    )
-                _lookup_s = monotonic() - _lookup_started
-                if _lookup_s > 0.25:
-                    logger.info("workspace stream commit lookup slow session=%s took_ms=%.0f", session_id, _lookup_s * 1000)
-            yield {
-                "event": "workspace_changed",
-                "id": str(message.seq),
-                "data": json.dumps(
-                    {
-                        "session_id": str(session_id),
-                        "stream_epoch": current_stream_epoch,
-                        "change_kind": _workspace_change_kind(message.payload),
-                        "latest_event_id": latest_event_id,
-                        "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
-                        "catalog_commit_seq": catalog_commit_seq,
-                        "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
-                        "pubsub_seq": message.seq,
-                        **(_canary_workspace_marker_fields(message.payload) if include_canary_markers else {}),
-                        "transcript_preview": preview,
-                    }
-                ),
-            }
+                preview = _workspace_transcript_preview_from_payload(message.payload)
+                if isinstance(preview, dict) and preview.get("kind") not in (None, "reply", "tool", "subagent"):
+                    if preview.get("kind") not in accepted_preview_kinds:
+                        # A client that did not ask for this kind (thinking) cannot tell it from the reply, so it gets no frame at all,
+                        # not even a wake: the web tabs and the iOS build that predate kinds see exactly what they saw before.
+                        continue
+                preview_event_id = _workspace_preview_event_id(preview)
+                latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
+                catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
+                # A live preview wake is provisional text that arrives before its durable write; it has no commit of its
+                # own. Looking up the current commit would only attach an unrelated one, and the lookup is a catalog read
+                # in a worker thread behind every other read on the host: on a busy host each preview frame waited for it
+                # and the live reply reached the client seconds late, in a burst.
+                if catalog_commit_seq is None and owner_id is not None and _workspace_change_kind(message.payload) != "transcript_preview":
+                    _lookup_started = monotonic()
+                    try:
+                        _session, _provider_alias, raw_commit_seq = await asyncio.to_thread(
+                            read_live_catalog_session,
+                            session_id,
+                            owner_id=owner_id,
+                        )
+                        if str(raw_commit_seq).isdecimal():
+                            catalog_commit_seq = int(raw_commit_seq)
+                    except (CatalogReadError, TypeError, ValueError):
+                        logger.debug(
+                            "Could not attach a live catalog commit to workspace wake session=%s",
+                            session_id,
+                            exc_info=True,
+                        )
+                    _lookup_s = monotonic() - _lookup_started
+                    if _lookup_s > 0.25:
+                        logger.info("workspace stream commit lookup slow session=%s took_ms=%.0f", session_id, _lookup_s * 1000)
+                delta_follows = projection_delta and owner_id is not None and _workspace_change_kind(message.payload) == "ingest"
+                if delta_follows:
+                    delta_seq = message.seq
+                    if delta_task is None:
+                        delta_task = asyncio.create_task(_workspace_projection_delta(session_id, owner_id))
+                    else:
+                        delta_rerun = True
+                yield {
+                    "event": "workspace_changed",
+                    "id": str(message.seq),
+                    "data": json.dumps(
+                        {
+                            "session_id": str(session_id),
+                            "stream_epoch": current_stream_epoch,
+                            "change_kind": _workspace_change_kind(message.payload),
+                            **({"projection_delta": "follows"} if delta_follows else {}),
+                            "latest_event_id": latest_event_id,
+                            "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                            "catalog_commit_seq": catalog_commit_seq,
+                            "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
+                            "pubsub_seq": message.seq,
+                            **(_canary_workspace_marker_fields(message.payload) if include_canary_markers else {}),
+                            "transcript_preview": preview,
+                        }
+                    ),
+                }
+        finally:
+            if delta_task is not None:
+                delta_task.cancel()
 
 
 @timeline_stream_router.get("/sessions/{session_id}/workspace/stream")
@@ -1748,6 +1856,13 @@ async def stream_session_workspace(
         description=(
             "Comma-separated preview kinds the client can render beyond reply, tool and subagent. `thinking` sends reasoning text on "
             "transcript_preview frames; without it a thinking preview is never sent to this connection."
+        ),
+    ),
+    projection_delta: bool = Query(
+        False,
+        description=(
+            "When true, an ingest wake is marked `projection_delta: follows` and the newest head rows (lite detail) arrive "
+            "in a following `projection_delta` frame, so the client need not read them back over HTTP."
         ),
     ),
     caller: Caller = Depends(get_current_browser_caller_short_lived),
@@ -1792,5 +1907,6 @@ async def stream_session_workspace(
             owner_id=caller.owner_id,
             stream_epoch=stream_epoch,
             accepted_preview_kinds=frozenset(k.strip() for k in (preview_kinds or "").split(",") if k.strip()),
+            projection_delta=projection_delta,
         )
     )

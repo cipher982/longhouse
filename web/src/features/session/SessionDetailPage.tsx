@@ -978,6 +978,7 @@ function SessionDetailWorkspaceRoute({
                     timelineItems={items}
                     activityFeed={activityFeed ?? null}
                     onOutboxChange={setOutboxEntries}
+                    streamConnected={streamConnected}
                     composerHeaderAccessory={
                       <SessionRuntimeStrip
                         session={displaySession}

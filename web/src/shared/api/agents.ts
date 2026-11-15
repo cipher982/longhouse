@@ -967,12 +967,24 @@ export interface SessionWorkspaceStreamChange {
   catalog_commit_seq?: number | null;
   pubsub_seq?: number;
   transcript_preview?: SessionTranscriptPreview | null;
+  /** "follows": a `projection_delta` frame with the newest rows is on its way. */
+  projection_delta?: "follows" | null;
+}
+
+/** The newest head rows, pushed after an ingest wake (opt-in). */
+export interface SessionWorkspaceProjectionDelta {
+  session_id: string;
+  pubsub_seq?: number;
+  server_now_ms?: number;
+  /** A delta after `anchor_cursor`, the shape a cursor read with anchor=start returns. */
+  delta: AgentSessionProjectionResponse & { anchor_cursor: string };
 }
 
 export interface SessionWorkspaceStreamHandlers {
   onConnected?: (data: SessionWorkspaceStreamConnected) => void;
   onReplayGap?: (data: SessionWorkspaceStreamReplayGap) => void;
   onWorkspaceChanged?: (data: SessionWorkspaceStreamChange) => void;
+  onProjectionDelta?: (data: SessionWorkspaceProjectionDelta) => void;
   onHeartbeat?: (timestamp: string) => void;
   onError?: (error: Event) => void;
   onHostLifecycle?: (data: HostLifecycle) => void;
@@ -992,9 +1004,14 @@ export function connectSessionWorkspaceStream(
     streamEpoch?: string | null;
     /** Live item kinds this client can draw beyond reply, tool and subagent. */
     previewKinds?: readonly string[];
+    /** Ask for the newest rows after each ingest wake instead of reading them back. */
+    projectionDelta?: boolean;
   } = {},
 ): () => void {
   const params = new URLSearchParams();
+  if (options.projectionDelta) {
+    params.set("projection_delta", "true");
+  }
   if (options.previewKinds?.length) {
     params.set("preview_kinds", options.previewKinds.join(","));
   }
@@ -1056,6 +1073,15 @@ export function connectSessionWorkspaceStream(
             data.transcript_preview?.text?.length ?? null,
         });
         handlers.onWorkspaceChanged?.(data);
+      }
+    });
+    eventSource.addEventListener("projection_delta", (event: MessageEvent) => {
+      const data = parseStreamEventData<SessionWorkspaceProjectionDelta>(event);
+      if (data?.delta?.anchor_cursor) {
+        handlers.onProjectionDelta?.({
+          ...data,
+          delta: { ...hydrateLiteProjection(data.delta), anchor_cursor: data.delta.anchor_cursor },
+        });
       }
     });
     eventSource.addEventListener("host_lifecycle", (event: MessageEvent) => {

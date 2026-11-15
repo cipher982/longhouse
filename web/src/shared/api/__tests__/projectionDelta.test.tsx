@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyProjectionDelta,
+  applyPushedProjectionDelta,
   projectionDeltaAnchor,
   refreshAgentSessionProjectionTail,
   useAgentSessionProjectionInfinite,
@@ -172,5 +173,62 @@ describe("refreshAgentSessionProjectionTail with a delta", () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls.at(-1)).toMatchObject({ limit: 200, anchor: "tail" });
     expect(calls.at(-1)?.cursor).toBeUndefined();
+  });
+});
+
+describe("applyPushedProjectionDelta", () => {
+  let sessionCounter = 0;
+  function seeded(
+    tail: AgentSessionProjectionResponse,
+    branchMode: "head" | "all" = "head",
+  ): { queryClient: QueryClient; sessionId: string; key: unknown[] } {
+    sessionCounter += 1;
+    const sessionId = `pushed-${sessionCounter}`;
+    const queryClient = new QueryClient();
+    const key = ["agent-session-projection-infinite", sessionId, { limit: 1000, branch_mode: branchMode }];
+    queryClient.setQueryData(key, { pages: [tail], pageParams: [{ anchor: "tail" }] });
+    return { queryClient, sessionId, key };
+  }
+  async function afterFullRead(queryClient: QueryClient, sessionId: string) {
+    // A full tail read starts the once-a-minute correction clock.
+    apiMocks.fetchAgentSessionProjection.mockResolvedValue(page(range(1, 30)));
+    await refreshAgentSessionProjectionTail(queryClient, sessionId);
+    apiMocks.fetchAgentSessionProjection.mockClear();
+  }
+  const pushed = (ids: number[], anchor: number) => ({ ...page(ids), anchor_cursor: `c-${anchor}` });
+
+  it("splices the pushed rows after the anchor without reading anything", async () => {
+    const { queryClient, sessionId, key } = seeded(page(range(1, 30)));
+    await afterFullRead(queryClient, sessionId);
+    queryClient.setQueryData(key, { pages: [page(range(1, 30))], pageParams: [{ anchor: "tail" }] });
+
+    expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(11, 32), 10))).toBe(true);
+    const data = queryClient.getQueryData<{ pages: AgentSessionProjectionResponse[] }>(key);
+    expect(data?.pages.at(-1)?.items.map((item) => item.event?.id)).toEqual(range(1, 32));
+    expect(apiMocks.fetchAgentSessionProjection).not.toHaveBeenCalled();
+  });
+
+  it("declines when the held tail does not reach the pushed anchor", async () => {
+    const { queryClient, sessionId } = seeded(page(range(1, 30)));
+    await afterFullRead(queryClient, sessionId);
+    expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(41, 60), 40))).toBe(false);
+  });
+
+  it("declines when a tool call at or before the anchor is still running", async () => {
+    const { queryClient, sessionId, key } = seeded(page(range(1, 30)));
+    await afterFullRead(queryClient, sessionId);
+    queryClient.setQueryData(key, { pages: [page(range(1, 30), { running: [8] })], pageParams: [{ anchor: "tail" }] });
+    expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(11, 31), 10))).toBe(false);
+  });
+
+  it("declines when the once-a-minute full read is due", () => {
+    const { queryClient, sessionId } = seeded(page(range(1, 30)));
+    expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(11, 31), 10))).toBe(false);
+  });
+
+  it("declines for a view of every branch: the push carries head rows only", async () => {
+    const { queryClient, sessionId } = seeded(page(range(1, 30)), "all");
+    await afterFullRead(queryClient, sessionId);
+    expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(11, 31), 10))).toBe(false);
   });
 });

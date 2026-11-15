@@ -1610,6 +1610,47 @@ describe("TimelinePane outbox", () => {
       expect(before[0]).toHaveTextContent("Longhouse");
     });
 
+    it("never takes an older row with the same words for a new send's echo", () => {
+      const errors: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args) => {
+        errors.push(String(args[0]));
+      });
+      const userRow = (id: number, timestamp: string, requestId?: string): TimelineItem => ({
+        kind: "message",
+        event: {
+          ...messageItem.event,
+          id,
+          role: "user",
+          content_text: "yes",
+          timestamp,
+          input_origin: requestId ? { authored_via: "longhouse", client_request_id: requestId } : null,
+        },
+      });
+      // "yes" typed in the terminal, then "yes" sent from the web 3 s later.
+      const typed = userRow(50, "2026-03-19T16:00:01Z");
+      const again = {
+        key: "pending:web-2",
+        clientRequestId: "web-2",
+        sentAt: "2026-03-19T16:00:04Z",
+        text: "yes",
+        state: "sending" as const,
+      };
+      const { rerender } = render(<TimelinePane {...paneProps} items={[typed]} outbox={[again]} />);
+      expect(screen.getAllByTestId("session-outbox-row")).toHaveLength(1);
+
+      rerender(
+        <TimelinePane
+          {...paneProps}
+          items={[typed, userRow(55, "2026-03-19T16:00:05Z", "web-2")]}
+          outbox={[again]}
+        />,
+      );
+      spy.mockRestore();
+      expect(document.querySelectorAll(".tl-msg--user")).toHaveLength(2);
+      expect(document.querySelector("#event-50")).not.toHaveTextContent("Longhouse");
+      expect(errors.filter((message) => /same key/i.test(message))).toEqual([]);
+    });
+
     it("puts a send still on its way above the live thinking it started", () => {
       const thinking: TimelineItem = {
         kind: "reasoning",

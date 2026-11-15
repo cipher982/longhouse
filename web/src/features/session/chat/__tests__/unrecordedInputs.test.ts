@@ -5,7 +5,7 @@ import {
   failedBeforeRecorded,
   isSettledDelivery,
   normalizeInputText,
-  receiptsShownByTranscript,
+  matchSendsToTranscript,
 } from "../unrecordedInputs";
 
 function receipt(overrides: Partial<QueuedInputSummary>): QueuedInputSummary {
@@ -34,6 +34,26 @@ function userRow(id: number, text: string, timestamp: string, extra: object = {}
       ...extra,
     },
   };
+}
+
+// The receipts the loaded rows show, as the chat asks (nothing loaded at first sight).
+function receiptsShownByTranscript(
+  rows: QueuedInputSummary[],
+  items: TimelineItem[],
+  loadedAtFirstSight: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
+): Set<QueuedInputSummary> {
+  const matches = matchSendsToTranscript(
+    rows.map((row) => ({
+      sendKey: row.client_request_id!,
+      clientRequestId: row.client_request_id!,
+      inputId: row.id,
+      text: row.text,
+      at: row.created_at,
+    })),
+    items,
+    { loadedAtFirstSight, boundTo: new Map() },
+  );
+  return new Set(rows.filter((row) => matches.has(row.client_request_id!)));
 }
 
 describe("unrecorded inputs", () => {
@@ -68,7 +88,7 @@ describe("unrecorded inputs", () => {
   });
 
   it("never pairs a receipt with a row written before it was sent", () => {
-    const later = receipt({ created_at: "2026-10-07T13:17:33Z" });
+    const later = receipt({ client_request_id: "web-later", created_at: "2026-10-07T13:17:33Z" });
     const shown = receiptsShownByTranscript([later], [userRow(1, "keep going", "2026-10-07T12:00:00Z")]);
     expect(shown.size).toBe(0);
   });
@@ -86,5 +106,35 @@ describe("unrecorded inputs", () => {
     );
     expect(shown.has(owner)).toBe(true);
     expect(shown.has(other)).toBe(false);
+  });
+
+  it("pairs two quick sends of the same words with their rows in send order", () => {
+    const first = receipt({ client_request_id: "web-1", text: "yes", created_at: "2026-10-07T13:00:00Z" });
+    const second = receipt({ client_request_id: "web-2", text: "yes", created_at: "2026-10-07T13:00:01Z" });
+    const matches = matchSendsToTranscript(
+      [second, first].map((row) => ({
+        sendKey: row.client_request_id!,
+        clientRequestId: row.client_request_id!,
+        text: row.text,
+        at: row.created_at,
+      })),
+      [userRow(1, "yes", "2026-10-07T13:00:02Z"), userRow(2, "yes", "2026-10-07T13:00:03Z")],
+      { loadedAtFirstSight: new Map(), boundTo: new Map() },
+    );
+    expect(matches.get("web-1")).toBe(1);
+    expect(matches.get("web-2")).toBe(2);
+  });
+
+  it("never takes a row that was loaded before the send for its echo, unless stamped after it", () => {
+    const send = receipt({ client_request_id: "web-yes", text: "yes", created_at: "2026-10-07T13:00:03Z" });
+    const typedEarlier = userRow(1, "yes", "2026-10-07T13:00:00Z");
+    const loaded = new Map([["web-yes", new Set(["1"])]]);
+    expect(receiptsShownByTranscript([send], [typedEarlier], loaded).size).toBe(0);
+    // Without first sight the clock allowance would take it.
+    expect(receiptsShownByTranscript([send], [typedEarlier]).size).toBe(1);
+    // After a reload the echo is loaded at first sight but stamped after the send.
+    const echo = userRow(2, "yes", "2026-10-07T13:00:04Z");
+    const reloaded = new Map([["web-yes", new Set(["1", "2"])]]);
+    expect(receiptsShownByTranscript([send], [typedEarlier, echo], reloaded).size).toBe(1);
   });
 });

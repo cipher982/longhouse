@@ -80,7 +80,12 @@ export function agentSessionWorkspaceQueryOptions(
   const params = { limit, branch_mode };
   return {
     queryKey: ["agent-session-workspace", sessionId, params] as const,
-    queryFn: () => fetchAgentSessionWorkspace(sessionId!, params),
+    queryFn: async () => {
+      const workspace = await fetchAgentSessionWorkspace(sessionId!, params);
+      // Its projection seeds the transcript pages: a full tail read.
+      if (workspace.projection) tailReadFromNetworkAt.set(workspace.projection, Date.now());
+      return workspace;
+    },
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   };
@@ -122,14 +127,18 @@ export function useAgentSessionProjectionInfinite(
     ProjectionPageParam
   >({
     queryKey: ["agent-session-projection-infinite", sessionId, { limit, branch_mode }],
-    queryFn: ({ pageParam }) =>
-      fetchAgentSessionProjection(sessionId!, {
+    queryFn: async ({ pageParam }) => {
+      const page = await fetchAgentSessionProjection(sessionId!, {
         limit: pageParam.anchor === "tail" ? limit : pageParam.limit,
         anchor: pageParam.anchor,
         cursor: pageParam.anchor === "tail" ? pageParam.cursor : undefined,
         offset: pageParam.anchor === "start" ? pageParam.offset : undefined,
         branch_mode,
-      }),
+      });
+      // Reading the newest page is a full tail read: deltas may build on it.
+      if (pageParam.anchor === "tail" && !pageParam.cursor) lastFullTailRefreshAt.set(sessionId!, Date.now());
+      return page;
+    },
     initialPageParam: { anchor: "tail" },
     // The initial page is the latest tail window. "Previous" pages are older
     // slices prepended above it in display order.
@@ -241,6 +250,22 @@ const DELTA_OVERLAP_EVENTS = 20;
 /** A delta never re-reads older rows; one full tail read per this window corrects any drift. */
 const FULL_TAIL_REFRESH_MS = 60_000;
 const lastFullTailRefreshAt = new Map<string, number>();
+/**
+ * Tail pages read whole from the server (a workspace read seeds the first
+ * one). A page seeded from disk is never here, so it is never mistaken for a
+ * fresh full read.
+ */
+const tailReadFromNetworkAt = new WeakMap<AgentSessionProjectionResponse, number>();
+
+function fullTailReadDue(sessionId: string, tail: AgentSessionProjectionResponse | undefined): boolean {
+  let at = lastFullTailRefreshAt.get(sessionId);
+  const seeded = tail ? tailReadFromNetworkAt.get(tail) : undefined;
+  if (seeded !== undefined && (at === undefined || seeded > at)) {
+    at = seeded;
+    lastFullTailRefreshAt.set(sessionId, seeded);
+  }
+  return Date.now() - (at ?? 0) >= FULL_TAIL_REFRESH_MS;
+}
 
 /**
  * Where a delta read starts: the cursor before the oldest row that may still
@@ -349,7 +374,7 @@ export async function refreshAgentSessionProjectionTail(
       const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
       const tail = data?.pages[data.pages.length - 1];
       const anchor = tail?.generation_id ? projectionDeltaAnchor(tail) : null;
-      const fullDue = Date.now() - (lastFullTailRefreshAt.get(sessionId) ?? 0) >= FULL_TAIL_REFRESH_MS;
+      const fullDue = fullTailReadDue(sessionId, tail);
       if (!data || !anchor || fullDue) {
         await refreshTailInFull(queryClient, sessionId, queryKey, data);
         return;
@@ -378,6 +403,50 @@ export async function refreshAgentSessionProjectionTail(
       if (!applied) await refreshTailInFull(queryClient, sessionId, queryKey, data);
     }),
   );
+}
+
+/**
+ * Applies the newest rows the workspace stream pushed after an ingest wake,
+ * instead of reading them back. True when every held transcript took them;
+ * false sends the caller to refreshAgentSessionProjectionTail, which reads
+ * over HTTP: a branch-mode "all" view (the push carries head rows), a pushed
+ * anchor the held tail does not reach, a running tool call at or before that
+ * anchor (its state may still change, and the push would not carry it), or
+ * the once-a-minute full read that corrects drift.
+ */
+export function applyPushedProjectionDelta(
+  queryClient: QueryClient,
+  sessionId: string,
+  delta: AgentSessionProjectionResponse & { anchor_cursor: string },
+): boolean {
+  const queries = projectionInfiniteQueries(queryClient, sessionId);
+  if (queries.length === 0) return false;
+  const plans = queries.map((query) => {
+    const queryKey = query.queryKey as ProjectionInfiniteKey;
+    const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
+    const tail = data?.pages[data.pages.length - 1];
+    if (!data || !tail || queryKey[2]?.branch_mode !== "head") return null;
+    if (fullTailReadDue(sessionId, tail)) return null;
+    const anchorAt = tail.items.findIndex((item) => item.event?.cursor === delta.anchor_cursor);
+    if (anchorAt < 0) return null;
+    const firstRunning = tail.items.findIndex((item) => item.event?.tool_call_state === "running");
+    if (firstRunning >= 0 && firstRunning <= anchorAt) return null;
+    return queryKey;
+  });
+  if (plans.some((plan) => plan === null)) return false;
+  let applied = true;
+  for (const queryKey of plans as ProjectionInfiniteKey[]) {
+    queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
+      if (!current) {
+        applied = false;
+        return current;
+      }
+      const next = applyProjectionDelta(current, delta, delta.anchor_cursor);
+      if (next === null) applied = false;
+      return next ?? current;
+    });
+  }
+  return applied;
 }
 
 /**

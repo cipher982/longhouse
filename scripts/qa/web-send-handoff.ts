@@ -81,6 +81,9 @@ const INIT_SCRIPT = `
   window.__emitWorkspaceChanged = (payload) => {
     for (const inst of instances) if (inst.readyState === 1) inst._dispatch("workspace_changed", payload);
   };
+  window.__emitStreamEvent = (type, payload) => {
+    for (const inst of instances) if (inst.readyState === 1) inst._dispatch(type, payload);
+  };
 
   // Every element that shows the token, every frame. A WeakMap gives each DOM
   // node a stable id, so a remount (new key, new component) is a new id even
@@ -91,6 +94,11 @@ const INIT_SCRIPT = `
   let frames = [];
   let sampling = false;
   let t0 = 0;
+  // Rows that showed the text before the send (an earlier identical message)
+  // are not this send. Their nodes are remembered; a remount of one of them
+  // would show up as a new node.
+  let baseline = new Set();
+  let ingestAt = null;
   const label = (el) => (el ? el.textContent.replace(/\\s+/g, " ").trim() : "");
   // The header without its delivery status and actions: the status word is
   // meant to change ("Sending…", "Sent", then gone); the rest is the row's shape.
@@ -107,6 +115,7 @@ const INIT_SCRIPT = `
     const shown = [];
     rows.forEach((el, index) => {
       if (!token || !(el.textContent || "").includes(token)) return;
+      if (baseline.has(el)) return;
       if (!ids.has(el)) ids.set(el, nextId++);
       const r = el.getBoundingClientRect();
       shown.push({
@@ -121,8 +130,11 @@ const INIT_SCRIPT = `
         height: Math.round(r.height),
       });
     });
+    const box = document.querySelector(".session-chat-composer textarea");
     return {
       t: Math.round(performance.now() - t0),
+      composerEmpty: box ? box.value.trim() === "" : false,
+      ingestAt,
       scrollTop: scroller ? Math.round(scroller.scrollTop) : 0,
       scrollGap: scroller ? Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) : 0,
       tail: rows.slice(-3).map((el) => el.getAttribute("data-row-kind") || el.getAttribute("data-testid") || el.className.split(" ")[0]).join(","),
@@ -135,7 +147,18 @@ const INIT_SCRIPT = `
     requestAnimationFrame(tick);
   }
   window.__handoff = {
-    start(t) { token = t; frames = []; t0 = performance.now(); sampling = true; requestAnimationFrame(tick); },
+    start(t) {
+      token = t;
+      frames = [];
+      ingestAt = null;
+      baseline = new Set(
+        Array.from(document.querySelectorAll(".timeline-pane__rows > *")).filter((el) => (el.textContent || "").includes(t)),
+      );
+      t0 = performance.now();
+      sampling = true;
+      requestAnimationFrame(tick);
+    },
+    markIngest() { ingestAt = Math.round(performance.now() - t0); },
     stop() { sampling = false; frames.push(read()); return frames; },
   };
 })();
@@ -153,6 +176,8 @@ interface Shown {
 }
 interface Frame {
   t: number;
+  composerEmpty: boolean;
+  ingestAt: number | null;
   scrollTop: number;
   scrollGap: number;
   tail: string;
@@ -192,13 +217,27 @@ interface Scenario {
   ingestOrigin: boolean;
   /** Server time to answer a workspace/projection read. */
   fetchLatencyMs: number;
+  /**
+   * After an ingest wake the server pushes the newest rows (a projection_delta
+   * frame, read in fetchLatencyMs), as the real stream does for the web
+   * ("push", the default). "lost": the wake promises them but they never
+   * come, so the client reads them over HTTP after its wait. "none": an
+   * older server with no push.
+   */
+  push?: "push" | "lost" | "none";
+  /** The same words were typed in the terminal a few seconds before the send. */
+  repeatOfTypedRow?: boolean;
 }
+
+// Rows a pushed delta carries, as the server's PROJECTION_DELTA_WINDOW.
+const PUSH_WINDOW = 40;
+type Projection = { items: Array<{ event?: { id: number; cursor?: string } | null }>; total?: number } & Record<string, unknown>;
 
 class Harness {
   context!: BrowserContext;
   page!: Page;
   fixture = buildSessionProseIdleFixture();
-  workspace = structuredClone(this.fixture.workspace) as { projection: { items: unknown[]; total?: number } } & Record<string, unknown>;
+  workspace = structuredClone(this.fixture.workspace) as { projection: Projection } & Record<string, unknown>;
   sessionId = this.fixture.session.id as string;
   state: ServerState = { receipt: null, projectionHasUserRow: false };
   clientRequestId: string | null = null;
@@ -215,6 +254,18 @@ class Harness {
   }
 
   async open(browser: Browser, scenario: Scenario): Promise<void> {
+    // A storage-v2 projection: a generation and a cursor per event, so the
+    // client's delta reads and the pushed deltas both apply.
+    const projection = this.workspace.projection;
+    projection.generation_id = "gen-qa";
+    projection.head_session_id = projection.head_session_id ?? this.sessionId;
+    projection.has_more = false;
+    projection.next_cursor = null;
+    if (scenario.repeatOfTypedRow) {
+      const ts = new Date(Date.now() - 3_000).toISOString();
+      projection.items.push(projectionEvent(makeEvent(this.nextEventId++, "user", ts, { content_text: MESSAGE } as never), this.sessionId) as never);
+    }
+    for (const item of projection.items) if (item.event) item.event.cursor = `c-${item.event.id}`;
     this.context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
     await this.context.addInitScript(INIT_SCRIPT);
     const base = `/api/timeline/sessions/${this.sessionId}`;
@@ -226,7 +277,15 @@ class Harness {
       if (p === `${base}/thread`) return this.json(route, this.fixture.thread);
       if (p === `${base}/workspace` || p === `${base}/projection`) {
         // The server reads its state when the request arrives and answers later.
-        const body = structuredClone(p.endsWith("/workspace") ? this.workspace : this.workspace.projection);
+        const body = structuredClone(p.endsWith("/workspace") ? this.workspace : this.workspace.projection) as Record<string, unknown>;
+        const cursor = url.searchParams.get("cursor");
+        if (p.endsWith("/projection") && cursor) {
+          const items = (body.items as Projection["items"]) ?? [];
+          const at = items.findIndex((item) => item.event?.cursor === cursor);
+          body.items = url.searchParams.get("anchor") === "tail" ? (at < 0 ? [] : items.slice(0, at)) : items.slice(at + 1);
+          body.has_more = false;
+        }
+        if (p.endsWith("/projection")) this.note(cursor ? "GET projection delta" : "GET projection");
         await sleep(scenario.fetchLatencyMs);
         return this.json(route, body);
       }
@@ -292,7 +351,9 @@ class Harness {
   }
 
   /** Server: ingest puts the user's row in the projection and wakes the stream. */
-  async ingestUserRow(withOrigin: boolean) {
+  fetchLatencyMs = 0;
+
+  async ingestUserRow(withOrigin: boolean, mode: "push" | "lost" | "none") {
     const id = this.nextEventId++;
     const ts = new Date(this.postedAt).toISOString();
     const event = makeEvent(id, "user", ts, {
@@ -301,10 +362,35 @@ class Harness {
         ? { input_origin: { authored_via: "longhouse", origin: "user", client_request_id: this.clientRequestId, session_input_id: null } }
         : {}),
     } as never);
-    this.workspace.projection.items.push(projectionEvent(event, this.sessionId));
+    (event as { cursor?: string }).cursor = `c-${id}`;
+    this.workspace.projection.items.push(projectionEvent(event, this.sessionId) as never);
     this.workspace.projection.total = this.workspace.projection.items.length;
     this.state.projectionHasUserRow = true;
-    await this.emit({ change_kind: "ingest", latest_event_id: id });
+    await this.page.evaluate(() => (window as unknown as { __handoff: { markIngest: () => void } }).__handoff.markIngest());
+    await this.emit({ change_kind: "ingest", latest_event_id: id, transcript_preview: null, ...(mode !== "none" ? { projection_delta: "follows" } : {}) });
+    if (mode !== "push") return;
+    // The server reads the newest rows beside the frame loop and pushes them.
+    const snapshot = structuredClone(this.workspace.projection);
+    setTimeout(() => {
+      const items = snapshot.items;
+      const tail = items.slice(-PUSH_WINDOW);
+      const anchorAt = tail.findIndex((item) => item.event?.cursor);
+      if (anchorAt < 0) return;
+      const delta = {
+        ...snapshot,
+        anchor_cursor: tail[anchorAt].event!.cursor,
+        items: tail.slice(anchorAt + 1),
+        has_more: false,
+        next_cursor: null,
+      };
+      this.note("projection_delta pushed");
+      void this.page
+        .evaluate(
+          (payload) => (window as unknown as { __emitStreamEvent: (t: string, p: unknown) => void }).__emitStreamEvent("projection_delta", payload),
+          { session_id: this.sessionId, delta },
+        )
+        .catch(() => {});
+    }, this.fetchLatencyMs);
   }
 
   async send() {
@@ -360,7 +446,7 @@ function steps(s: Scenario): Array<{ at: number; what: string; apply(h: Harness)
   if (s.deliverAt != null) out.push({ at: s.deliverAt, what: "receipt delivered", apply: (h) => h.deliver() });
   if (s.linkAt != null) out.push({ at: s.linkAt, what: "receipt linked to transcript event", apply: (h) => h.link() });
   if (s.thinkingAt != null) out.push({ at: s.thinkingAt, what: "thinking preview", apply: (h) => h.thinking("Checking how the turn list reads user rows…") });
-  out.push({ at: s.ingestAt, what: `user row ingested${s.ingestOrigin ? "" : " (no origin)"}`, apply: (h) => h.ingestUserRow(s.ingestOrigin) });
+  out.push({ at: s.ingestAt, what: `user row ingested${s.ingestOrigin ? "" : " (no origin)"}`, apply: (h) => h.ingestUserRow(s.ingestOrigin, s.push ?? "push") });
   return out.sort((a, b) => a.at - b.at);
 }
 
@@ -406,6 +492,28 @@ const named: Scenario[] = [
     ingestOrigin: false,
     fetchLatencyMs: 150,
   },
+  {
+    name: "repeated_text_after_typed_row",
+    about:
+      "The same words ('yes') were typed in the terminal 3 s earlier. The new send's echo has no origin; the older row must not be taken for it.",
+    postStatus: "delivered",
+    thinkingAt: 400,
+    ingestAt: 1600,
+    ingestOrigin: false,
+    fetchLatencyMs: 150,
+    repeatOfTypedRow: true,
+  },
+  {
+    name: "push_lost_http_fallback",
+    about: "The server marks the ingest wake 'projection_delta follows' but the pushed rows never arrive; the client reads them over HTTP after its wait.",
+    postStatus: "delivered",
+    linkAt: 300,
+    thinkingAt: 400,
+    ingestAt: 1600,
+    ingestOrigin: true,
+    fetchLatencyMs: 150,
+    push: "lost",
+  },
 ];
 
 // --sweep: every combination of when each fact lands. The rule must hold for
@@ -416,18 +524,21 @@ function sweep(): Scenario[] {
     for (const linkAt of [300, 1200, undefined])
       for (const thinkingAt of [400, undefined])
         for (const ingestAt of [150, 900, 2600])
-          for (const fetchLatencyMs of [50, 800]) {
+          for (const fetchLatencyMs of [50, 800])
+            for (const ingestOrigin of [true, false]) {
             const deliverAt = postStatus === "delivering" ? Math.min(linkAt ?? 700, 700) : undefined;
             out.push({
-              name: `sweep_${postStatus}_link${linkAt ?? "never"}_think${thinkingAt ?? "none"}_ingest${ingestAt}_read${fetchLatencyMs}`,
+              name: `sweep_${postStatus}_link${linkAt ?? "never"}_think${thinkingAt ?? "none"}_ingest${ingestAt}_read${fetchLatencyMs}_${ingestOrigin ? "origin" : "noorigin"}`,
               about: "generated ordering",
               postStatus,
               deliverAt,
               linkAt,
               thinkingAt,
               ingestAt,
-              ingestOrigin: linkAt != null,
+              ingestOrigin,
               fetchLatencyMs,
+              // Rotates through push, lost push and no push.
+              push: (["push", "lost", "none"] as const)[out.length % 3],
             });
           }
   return out;
@@ -449,6 +560,15 @@ function judge(frames: Frame[]): { checks: Check[]; story: string[] } {
   const story: string[] = [];
   let lastSig = "";
   let prevTop: number | null = null;
+  // The composer clears in the same frame the row appears; a frame with an
+  // empty composer and no row is the message vanishing for a moment.
+  const cleared = frames.findIndex((f) => f.composerEmpty);
+  const blank = cleared < 0 ? 0 : frames.slice(cleared, first < 0 ? undefined : first).length;
+  // Advisory: ingest to the transcript row showing (the row's head names the
+  // ask time, not the pending status word).
+  const ingestAt = frames.findLast((f) => f.ingestAt != null)?.ingestAt ?? null;
+  const echoed = ingestAt == null ? undefined : frames.find((f) => f.t >= ingestAt && f.shown.length === 1 && !f.shown[0].status);
+  const echoMs = ingestAt == null || !echoed ? null : echoed.t - ingestAt;
   for (const f of tail) {
     if (f.shown.length === 0) gaps += 1;
     if (f.shown.length > 1) dups += 1;
@@ -465,9 +585,11 @@ function judge(frames: Frame[]): { checks: Check[]; story: string[] } {
     lastSig = sig;
   }
   if (first < 0) story.push("the sent text never appeared");
+  story.push(`echo: ${echoMs == null ? "not seen" : `${echoMs} ms from ingest to transcript row`} (advisory)`);
   return {
     checks: [
       le("appeared", first < 0 ? 1 : 0, 0, "bool"),
+      le("cleared, no row", blank, 0, "frames"),
       le("gap frames", gaps, 0, "frames"),
       le("duplicate frames", dups, 0, "frames"),
       le("remounts", Math.max(0, nodes.size - 1), 0, "nodes"),
@@ -492,6 +614,7 @@ try {
     if (only && !only.includes(scenario.name)) continue;
     const h = new Harness();
     try {
+      h.fetchLatencyMs = scenario.fetchLatencyMs;
       await h.open(browser, scenario);
       await h.send();
       const deadline = Date.now() + 5_000;

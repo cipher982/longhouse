@@ -66,8 +66,7 @@ import { CodeFence, detectLanguage } from "./CodeFence";
 import { EditDiffView } from "./EditDiffView";
 import { MarkdownBody } from "./MarkdownBody";
 import { OUTBOX_STATE_LABEL, OutboxRow, type OutboxEntry } from "./OutboxRow";
-import { matchReceiptsToTranscript } from "./chat/unrecordedInputs";
-import type { QueuedInputSummary } from "@/shared/api/sessionChat";
+import { matchSendsToTranscript, type SendForMatch } from "./chat/unrecordedInputs";
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 import { errorDetails } from "@/shared/ui/errorDetails";
@@ -1770,34 +1769,63 @@ export const TimelinePane = memo(function TimelinePane({
   // uses for echoes the server could not link; a row matched by text keeps
   // that key for as long as this pane lives.
   const sendKeyByEventRef = useRef(new Map<string, string>());
+  // The user rows loaded when each send first appeared: none of them can be
+  // its echo. Keyed by send key, so it survives the pending-to-receipt handoff.
+  const loadedAtFirstSightRef = useRef(new Map<string, Set<string>>());
   const echoedSendKeys = useMemo(() => {
-    const echoed = new Set<string>();
-    const sends = outbox.filter(
-      (entry) => entry.clientRequestId && entry.origin !== "wake" && entry.origin !== "longhouse",
+    const sends: SendForMatch[] = outbox.flatMap((entry) =>
+      entry.clientRequestId && entry.origin !== "wake" && entry.origin !== "longhouse"
+        ? [
+            {
+              sendKey: sendKey(entry.clientRequestId),
+              clientRequestId: entry.clientRequestId,
+              text: entry.text,
+              at: entry.at ?? entry.sentAt ?? null,
+            },
+          ]
+        : [],
     );
-    if (sends.length === 0) return echoed;
-    const asReceipts = new Map<QueuedInputSummary, OutboxEntry>();
-    for (const entry of sends) {
-      asReceipts.set(
-        {
-          client_request_id: entry.clientRequestId,
-          text: entry.text,
-          intent: "auto",
-          status: "delivered",
-          created_at: entry.at ?? entry.sentAt ?? null,
-        },
-        entry,
-      );
+    const firstSight = loadedAtFirstSightRef.current;
+    const current = new Set(sends.map((send) => send.sendKey));
+    for (const key of [...firstSight.keys()]) {
+      if (!current.has(key)) firstSight.delete(key);
     }
-    for (const [receipt, eventId] of matchReceiptsToTranscript([...asReceipts.keys()], filteredItems)) {
-      const entry = asReceipts.get(receipt);
-      if (!entry?.clientRequestId) continue;
-      const key = sendKey(entry.clientRequestId);
-      echoed.add(key);
+    if (sends.length === 0) return new Set<string>();
+    let loadedUserRows: Set<string> | null = null;
+    for (const send of sends) {
+      if (firstSight.has(send.sendKey)) continue;
+      loadedUserRows ??= new Set(
+        filteredItems.flatMap((item) =>
+          item.kind === "message" && item.event.role === "user" ? [String(item.event.id)] : [],
+        ),
+      );
+      firstSight.set(send.sendKey, loadedUserRows);
+    }
+    const matches = matchSendsToTranscript(sends, filteredItems, {
+      loadedAtFirstSight: firstSight,
+      boundTo: sendKeyByEventRef.current,
+    });
+    for (const [key, eventId] of matches) {
       sendKeyByEventRef.current.set(String(eventId), key);
     }
-    return echoed;
+    return new Set(matches.keys());
   }, [filteredItems, outbox]);
+  // Send keys that a row stamped with its request id already holds: a row
+  // bound by text never takes one of those, so no two rows share a key.
+  const stampedSendKeys = useMemo(
+    () =>
+      new Set(
+        filteredItems.flatMap((item) =>
+          item.kind === "message" &&
+          item.event.role === "user" &&
+          item.event.is_head_branch !== false &&
+          item.event.input_origin?.client_request_id
+            ? [sendKey(item.event.input_origin.client_request_id)]
+            : [],
+        ),
+      ),
+    [filteredItems],
+  );
   const isShownSend = (entry: OutboxEntry) =>
     !entry.clientRequestId || !echoedSendKeys.has(sendKey(entry.clientRequestId));
 
@@ -1896,7 +1924,8 @@ export const TimelinePane = memo(function TimelinePane({
     if (event.role !== "user" || event.is_head_branch === false) return event.id;
     const requestId = event.input_origin?.client_request_id;
     if (requestId) return sendKey(requestId);
-    return sendKeyByEventRef.current.get(String(event.id)) ?? event.id;
+    const bound = sendKeyByEventRef.current.get(String(event.id));
+    return bound && !stampedSendKeys.has(bound) ? bound : event.id;
   }
 
   const renderTimelineItem = (item: TimelineItem) => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   holdsOlderPages,
+  applyPushedProjectionDelta,
   refreshAgentSessionProjectionTail,
   sessionHoldsOlderProjectionPages,
   useAgentSessionProjectionInfinite,
@@ -39,6 +40,10 @@ import {
 } from "@/shared/api/agents";
 
 const STREAM_FRAME_FRESHNESS_MS = 45_000;
+// How long an ingest wake marked "follows" waits for its pushed rows before
+// reading them over HTTP. The server reads them in the background, usually in
+// well under a second; past this the push is late or lost.
+const PUSHED_DELTA_WAIT_MS = 2_000;
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
@@ -371,6 +376,24 @@ export function useSessionWorkspace(
       runLane(lanes.base);
       if (includeTranscript) runLane(lanes.transcript);
     };
+    // An ingest wake marked "follows" is trailed by a projection_delta frame
+    // carrying the newest rows. The transcript read waits for it, then falls
+    // back to HTTP if it does not come or cannot be applied.
+    let deltaWait: number | null = null;
+    const stopWaitingForDelta = () => {
+      if (deltaWait === null) return false;
+      window.clearTimeout(deltaWait);
+      deltaWait = null;
+      return true;
+    };
+    const waitForPushedDelta = () => {
+      runLane(lanes.base);
+      stopWaitingForDelta();
+      deltaWait = window.setTimeout(() => {
+        deltaWait = null;
+        if (!disposed) runLane(lanes.transcript);
+      }, PUSHED_DELTA_WAIT_MS);
+    };
     // A transcript paged above its tail opts out of mount and focus refetches
     // (they would drop those pages), so reopening or refocusing the session
     // refreshes its tail here instead. Session open stays a durable refresh.
@@ -479,7 +502,29 @@ export function useSessionWorkspace(
             // transcript queries; runtime wakes must not evict it.
             return;
           }
+          if (isTranscriptMutation && data.projection_delta === "follows") {
+            waitForPushedDelta();
+            return;
+          }
           refreshWorkspaceQueries(isTranscriptMutation);
+        },
+        onProjectionDelta: (data) => {
+          armFreshnessDeadline();
+          const waited = stopWaitingForDelta();
+          if (!applyPushedProjectionDelta(queryClient, sessionId, data.delta)) {
+            // Not applicable here: read over HTTP as an unmarked wake would.
+            if (waited) runLane(lanes.transcript);
+            return;
+          }
+          // The rows are on the page. The other transcript queries refresh as
+          // on any ingest, and a reply preview the rows replace retires now.
+          for (const queryKey of transcriptRefreshQueryKeys) {
+            void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+          }
+          if (lanes.transcript.retirePreview && !lanes.transcript.inFlight) {
+            lanes.transcript.retirePreview = false;
+            applyStreamTranscriptPreview(null, { keepThinking: true });
+          }
         },
         onError: () => {
           if (freshnessTimer !== null) {
@@ -491,6 +536,7 @@ export function useSessionWorkspace(
       },
       {
         previewKinds: ["thinking"],
+        projectionDelta: true,
         skipInitial: workspaceReady,
         knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
         ...(streamEpochRef.current
@@ -502,6 +548,7 @@ export function useSessionWorkspace(
     return () => {
       disposed = true;
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
+      stopWaitingForDelta();
       cleanup();
     };
   }, [

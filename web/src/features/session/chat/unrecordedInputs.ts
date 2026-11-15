@@ -52,43 +52,51 @@ export function normalizeInputText(value: string | null | undefined): string {
 
 // The server links an event that starts up to 5 s before the receipt's clock.
 const LINK_SKEW_MS = 5_000;
+/** Sends of the same words this close to their row pair in send order. */
+const RECENT_SEND_MS = 60_000;
 
 function timeMs(value: string | null | undefined): number {
   if (!value) return Number.NaN;
   return parseUTC(value).getTime();
 }
 
-/**
- * Receipts the loaded transcript already shows although the server never
- * linked them (its linker refuses ambiguous text, e.g. a resend of the same
- * words). Each user row stands for at most one receipt: the newest unclaimed
- * one with the same text sent before it. A row stamped with a Longhouse
- * request or input id belongs to that request only.
- */
-export function receiptsShownByTranscript(
-  rows: readonly QueuedInputSummary[],
-  items: readonly TimelineItem[] | null | undefined,
-): Set<QueuedInputSummary> {
-  return new Set(matchReceiptsToTranscript(rows, items).keys());
+/** A send the chat still holds, as the transcript pane matches it. */
+export interface SendForMatch {
+  /** The React key the send and its echo share. */
+  sendKey: string;
+  clientRequestId: string;
+  /** The receipt's id, which a transcript row may carry instead of the request id. */
+  inputId?: number | null;
+  text: string;
+  /** When it was sent or received: client clock for a send, server clock for a receipt. */
+  at: string | null | undefined;
 }
 
-/** The same matching, naming the transcript row that shows each receipt. */
-export function matchReceiptsToTranscript(
-  rows: readonly QueuedInputSummary[],
+/**
+ * Which loaded transcript row echoes each send. A row stamped with the
+ * send's request id (or its receipt's id) is its echo. A row with no
+ * Longhouse ids may echo a send by the same text when it is not bound to a
+ * different send (`boundTo`) and is not older than the send by more than the
+ * clock allowance. A row already loaded when the send first appeared
+ * (`loadedAtFirstSight`) gets no allowance: it must be stamped at or after
+ * the send, as after a reload. Each row echoes at most one send (the rule
+ * for picking which is below). Without the first-sight rule a "yes" sent
+ * seconds after a "yes" typed in the terminal was taken for the older row
+ * and vanished on send.
+ */
+export function matchSendsToTranscript(
+  sends: readonly SendForMatch[],
   items: readonly TimelineItem[] | null | undefined,
-): Map<QueuedInputSummary, AgentEventId> {
-  const shown = new Map<QueuedInputSummary, AgentEventId>();
-  if (!items?.length || rows.length === 0) return shown;
-  const byRequestId = new Map<string, QueuedInputSummary>();
-  const byInputId = new Map<number, QueuedInputSummary>();
-  for (const row of rows) {
-    if (row.client_request_id) byRequestId.set(row.client_request_id, row);
-    if (row.id != null) byInputId.set(row.id, row);
-  }
-  const candidates = rows
-    .filter((row) => !row.durable_event_id && Number.isFinite(timeMs(row.created_at)))
-    .map((row) => ({ row, text: normalizeInputText(row.text), at: timeMs(row.created_at) }))
-    .sort((a, b) => b.at - a.at);
+  {
+    loadedAtFirstSight,
+    boundTo,
+  }: {
+    loadedAtFirstSight: ReadonlyMap<string, ReadonlySet<string>>;
+    boundTo: ReadonlyMap<string, string>;
+  },
+): Map<string, AgentEventId> {
+  const matched = new Map<string, AgentEventId>();
+  if (!items?.length || sends.length === 0) return matched;
   const userRows = items
     .flatMap((item) =>
       item.kind === "message" &&
@@ -98,27 +106,56 @@ export function matchReceiptsToTranscript(
         : [],
     )
     .sort((a, b) => timeMs(a.timestamp) - timeMs(b.timestamp));
+  const byRequestId = new Map<string, AgentEventId>();
+  const byInputId = new Map<number, AgentEventId>();
   for (const event of userRows) {
-    const origin = event.input_origin;
-    const requestId = origin?.client_request_id;
-    const inputId = origin?.session_input_id;
-    if (requestId || inputId != null) {
-      const owner =
-        (requestId ? byRequestId.get(requestId) : undefined) ??
-        (inputId != null ? byInputId.get(inputId) : undefined);
-      if (owner) shown.set(owner, event.id);
-      continue;
+    const requestId = event.input_origin?.client_request_id;
+    const inputId = event.input_origin?.session_input_id;
+    if (requestId && !byRequestId.has(requestId)) byRequestId.set(requestId, event.id);
+    if (inputId != null && !byInputId.has(inputId)) byInputId.set(inputId, event.id);
+  }
+  const claimed = new Set<string>();
+  const unmatched: SendForMatch[] = [];
+  for (const send of sends) {
+    const eventId =
+      byRequestId.get(send.clientRequestId) ??
+      (send.inputId != null ? byInputId.get(send.inputId) : undefined);
+    if (eventId !== undefined) {
+      matched.set(send.sendKey, eventId);
+      claimed.add(String(eventId));
+    } else {
+      unmatched.push(send);
     }
+  }
+  unmatched.sort((a, b) => (timeMs(a.at) || 0) - (timeMs(b.at) || 0));
+  // Rows oldest first; each takes one send with the same words that it may
+  // echo. Among those, the oldest sent within the last minute (two quick
+  // sends of the same words keep their order), else the newest (a send that
+  // was lost does not take its resend's row).
+  for (const event of userRows) {
+    if (unmatched.length === 0) break;
+    const id = String(event.id);
+    const origin = event.input_origin;
+    if (origin?.client_request_id || origin?.session_input_id != null) continue;
+    if (claimed.has(id)) continue;
     const text = normalizeInputText(event.content_text);
     if (!text) continue;
     const eventAt = timeMs(event.timestamp);
-    const match = candidates.find(
-      (candidate) =>
-        !shown.has(candidate.row) &&
-        candidate.text === text &&
-        candidate.at <= eventAt + LINK_SKEW_MS,
-    );
-    if (match) shown.set(match.row, event.id);
+    const bound = boundTo.get(id);
+    const eligible = unmatched.filter((send) => {
+      if (bound !== undefined && bound !== send.sendKey) return false;
+      if (normalizeInputText(send.text) !== text) return false;
+      const sentAt = timeMs(send.at);
+      if (!Number.isFinite(sentAt)) return true;
+      const allowance = loadedAtFirstSight.get(send.sendKey)?.has(id) ? 0 : LINK_SKEW_MS;
+      return eventAt >= sentAt - allowance;
+    });
+    if (eligible.length === 0) continue;
+    const recent = eligible.filter((send) => !(eventAt - timeMs(send.at) > RECENT_SEND_MS));
+    const send = recent[0] ?? eligible[eligible.length - 1];
+    matched.set(send.sendKey, event.id);
+    claimed.add(id);
+    unmatched.splice(unmatched.indexOf(send), 1);
   }
-  return shown;
+  return matched;
 }

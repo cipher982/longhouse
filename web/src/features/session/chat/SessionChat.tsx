@@ -69,7 +69,7 @@ import {
 import {
   failedBeforeRecorded,
   isSettledDelivery,
-  receiptsShownByTranscript,
+  matchSendsToTranscript,
 } from "./unrecordedInputs";
 import { parseUTC } from "@/shared/lib/dateUtils";
 import "./session-chat.css";
@@ -213,6 +213,8 @@ interface SessionChatProps {
    * composer.
    */
   onOutboxChange?: (entries: OutboxEntry[]) => void;
+  /** The session's live workspace stream is connected and fresh. */
+  streamConnected?: boolean;
 }
 
 export type SessionChatTarget = Pick<
@@ -614,16 +616,37 @@ function inTranscript(row: { durable_event_id?: string | null } | null | undefin
 // message, but this browser may not have loaded that row yet: the server
 // links the receipt and ingests the row in a race, and the read that brings
 // the row in takes time. Until the loaded rows show it, the receipt keeps the
-// user's row on screen, for at most this long.
+// user's row on screen, for at most this long after this browser first saw
+// it linked (this browser's clock, so a skewed clock cannot shorten it).
 const LINKED_RECEIPT_BRIDGE_MS = 60_000;
+// Only a recent send is bridged: an old linked receipt loaded with the page
+// is history the transcript already shows. Loose on purpose, since it
+// compares the server's clock with this browser's.
+const LINKED_RECEIPT_RECENT_MS = 10 * 60_000;
 
-function linkedReceiptBridgeEndsAt(row: QueuedInputSummary): number | null {
+function bridgeReceiptKey(row: QueuedInputSummary): string | null {
+  return row.client_request_id ?? row.live_input_id ?? (row.id != null ? String(row.id) : null);
+}
+
+function linkedReceiptBridgeEndsAt(
+  row: QueuedInputSummary,
+  firstSeenLinkedAt: Map<string, number>,
+  now: number,
+): number | null {
   if (!inTranscript(row) || !row.created_at) return null;
   if (row.origin === "wake" || row.origin === "longhouse" || row.turn?.origin === "wake") {
     return null;
   }
   const created = parseUTC(row.created_at).getTime();
-  return Number.isFinite(created) ? created + LINKED_RECEIPT_BRIDGE_MS : null;
+  if (!Number.isFinite(created) || now - created > LINKED_RECEIPT_RECENT_MS) return null;
+  const key = bridgeReceiptKey(row);
+  if (!key) return null;
+  let seen = firstSeenLinkedAt.get(key);
+  if (seen === undefined) {
+    seen = now;
+    firstSeenLinkedAt.set(key, seen);
+  }
+  return seen + LINKED_RECEIPT_BRIDGE_MS;
 }
 
 const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
@@ -683,6 +706,7 @@ export function SessionChat({
   activityFeed = null,
   composerHeaderAccessory,
   onOutboxChange,
+  streamConnected = false,
 }: SessionChatProps) {
   const outboxInTranscript = Boolean(onOutboxChange);
   const activity = session.session_state.activity;
@@ -872,6 +896,55 @@ export function SessionChat({
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
+  // After a send the server wakes the live stream (its runtime state, then the
+  // ingested rows), so a connected page needs no read of its own; the POST
+  // answer already put the receipt in the cache. Without a live stream, read.
+  const streamConnectedRef = useRef(streamConnected);
+  streamConnectedRef.current = streamConnected;
+  const refreshAfterSend = useCallback(() => {
+    if (!streamConnectedRef.current) void refreshCurrentSessionWorkspace();
+  }, [refreshCurrentSessionWorkspace]);
+  // A send whose POST is still out: its own answer will say what happened,
+  // so its receipt is not polled meanwhile.
+  const postsInFlightRef = useRef(new Set<string>());
+  // Receipts the loaded rows show although the server never linked them,
+  // matched by the same rules as the transcript pane (matchSendsToTranscript):
+  // each receipt remembers which user rows were loaded when it first
+  // appeared, so an older row with the same words is never taken for it.
+  const receiptFirstSightRef = useRef(new Map<string, ReadonlySet<string>>());
+  const receiptsShownInTranscript = useCallback(
+    (rows: readonly QueuedInputSummary[]): Set<QueuedInputSummary> => {
+      const shown = new Set<QueuedInputSummary>();
+      const keyed = rows.filter((row) => row.client_request_id);
+      const firstSight = receiptFirstSightRef.current;
+      let loadedUserRows: Set<string> | null = null;
+      for (const row of keyed) {
+        const key = row.client_request_id!;
+        if (firstSight.has(key)) continue;
+        loadedUserRows ??= new Set(
+          (timelineItems ?? []).flatMap((item) =>
+            item.kind === "message" && item.event.role === "user" ? [String(item.event.id)] : [],
+          ),
+        );
+        firstSight.set(key, loadedUserRows);
+      }
+      if (!timelineItems?.length || keyed.length === 0) return shown;
+      const matches = matchSendsToTranscript(
+        keyed.map((row) => ({
+          sendKey: row.client_request_id!,
+          clientRequestId: row.client_request_id!,
+          inputId: row.id,
+          text: row.text,
+          at: row.created_at,
+        })),
+        timelineItems,
+        { loadedAtFirstSight: firstSight, boundTo: new Map() },
+      );
+      for (const row of keyed) if (matches.has(row.client_request_id!)) shown.add(row);
+      return shown;
+    },
+    [timelineItems],
+  );
 
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
@@ -997,7 +1070,15 @@ export function SessionChat({
       enabled:
         Boolean(session.id) &&
         isManagedLocal &&
-        pending.phase !== "failed",
+        pending.phase !== "failed" &&
+        !postsInFlightRef.current.has(pending.clientRequestId) &&
+        // Delivered, and the POST answer already listed its receipt.
+        !(
+          pending.phase === "delivered" &&
+          (queuedInputsQuery.data ?? []).some(
+            (row) => row.client_request_id === pending.clientRequestId,
+          )
+        ),
       refetchOnWindowFocus: false,
       staleTime: 1_000,
       refetchInterval: (query: { state: { data: unknown } }) => {
@@ -1047,7 +1128,7 @@ export function SessionChat({
   useEffect(() => {
     const listed = queuedInputsQuery.data ?? [];
     const shownByTranscript = new Set(
-      Array.from(receiptsShownByTranscript(listed, timelineItems)).map(
+      Array.from(receiptsShownInTranscript(listed)).map(
         (row) => row.client_request_id,
       ),
     );
@@ -1106,6 +1187,7 @@ export function SessionChat({
     pendingManagedLocalInputs,
     queryClient,
     queuedInputsQuery.data,
+    receiptsShownInTranscript,
     session.id,
     timelineItems,
   ]);
@@ -1322,6 +1404,30 @@ export function SessionChat({
         Object.prototype.hasOwnProperty.call(options, "model")
           ? options.model
           : selectedModel.trim() || null;
+      // A new send's row appears in the same frame the composer clears; the
+      // storage write follows. If the write fails, the row goes and the
+      // caller puts the draft back.
+      const isNewSend = !options.existingClientRequestId;
+      const sentAt = new Date().toISOString();
+      const pendingFields = {
+        text: message,
+        clientRequestId,
+        sentAt,
+        serverInputId: null,
+        serverLiveInputId: null,
+        intent,
+        model,
+        legacyModelMissing: options.legacyModelMissing,
+        attachments,
+        phase: "submitting" as const,
+        detail: options.autoRetryAttempt ? RECONNECTING_DETAIL : null,
+      };
+      // From here until its POST answers, the send's own answer is coming:
+      // its receipt is not polled (the finally around the POST clears this).
+      postsInFlightRef.current.add(clientRequestId);
+      if (isNewSend) {
+        setPendingManagedLocalInputs((current) => [...current, pendingFields]);
+      }
       try {
         await persistInputOutbox(session.id, {
           text: message,
@@ -1349,6 +1455,12 @@ export function SessionChat({
           storageError instanceof Error
             ? storageError.message
             : "Could not persist input intent before sending";
+        postsInFlightRef.current.delete(clientRequestId);
+        if (isNewSend) {
+          setPendingManagedLocalInputs((current) =>
+            current.filter((pending) => pending.clientRequestId !== clientRequestId),
+          );
+        }
         if (hostResumeRetryWaitersRef.current.get(clientRequestId) === null) {
           hostResumeRetryWaitersRef.current.delete(clientRequestId);
           setInputWaitingForHostUpdate(session.id, clientRequestId, false);
@@ -1385,19 +1497,7 @@ export function SessionChat({
           ),
         );
       }
-      const nextPending: PendingManagedLocalInput = {
-        text: message,
-        clientRequestId,
-        sentAt: new Date().toISOString(),
-        serverInputId: null,
-        serverLiveInputId: null,
-        intent,
-        model,
-        legacyModelMissing: options.legacyModelMissing,
-        attachments,
-        phase: "submitting",
-        detail: options.autoRetryAttempt ? RECONNECTING_DETAIL : null,
-      };
+      const nextPending: PendingManagedLocalInput = pendingFields;
       setPendingManagedLocalInputs((current) => {
         const existing = current.some(
           (pending) => pending.clientRequestId === clientRequestId,
@@ -1650,7 +1750,7 @@ export function SessionChat({
             ...receipt,
             turn: receipt.turn ?? result.turn,
           });
-          if (accepted.kind === "accepted") void refreshCurrentSessionWorkspace();
+          if (accepted.kind === "accepted") refreshAfterSend();
           return accepted;
         }
         const responseTurnPhase =
@@ -1671,7 +1771,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          void refreshCurrentSessionWorkspace();
+          refreshAfterSend();
           return { kind: "accepted", clientRequestId };
         }
         if (
@@ -1693,7 +1793,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          void refreshCurrentSessionWorkspace();
+          refreshAfterSend();
           return { kind: "accepted", clientRequestId };
         }
         if (result.outcome === "sent") {
@@ -1718,7 +1818,7 @@ export function SessionChat({
             () => setSentConfirmation(false),
             2_000,
           );
-          void refreshCurrentSessionWorkspace();
+          refreshAfterSend();
           return { kind: "accepted", clientRequestId };
         }
         if (disposition === "accepted" && result.outcome === "unknown") {
@@ -1910,13 +2010,14 @@ export function SessionChat({
         setError(UNCONFIRMED_DELIVERY_ERROR);
         return { kind: "unknown", clientRequestId, error: UNCONFIRMED_DELIVERY_ERROR };
       } finally {
+        postsInFlightRef.current.delete(clientRequestId);
         setIsSubmitting(false);
       }
     },
     [
       markInputDelivered,
       queryClient,
-      refreshCurrentSessionWorkspace,
+      refreshAfterSend,
       queueSendUntilHostServes,
       selectedModel,
       session.id,
@@ -2238,26 +2339,37 @@ export function SessionChat({
       hostResumeRetryWaitersRef.current.set(pending.clientRequestId, cancel);
     }
   }, [pendingManagedLocalInputs]);
-  // The listed receipts, with each send's own receipt (polled by request id)
-  // taking precedence: it is often the fresher of the two.
+  // The listed receipts, with a send's own receipt (polled by request id) in
+  // place of its listed copy when it was read more recently.
+  const exactReadAt = new Map<string, number>();
+  exactInputQueries.forEach((query, index) => {
+    const clientRequestId = pendingManagedLocalInputs[index]?.clientRequestId;
+    if (clientRequestId && query.data) exactReadAt.set(clientRequestId, query.dataUpdatedAt);
+  });
+  const exactReadAtKey = JSON.stringify([...exactReadAt]);
+  const listedReadAt = queuedInputsQuery.dataUpdatedAt;
   const receiptRows = useMemo<QueuedInputSummary[]>(() => {
     const listed = queuedInputsQuery.data ?? [];
-    const merged = listed.map((row) =>
-      (row.client_request_id && exactInputRows.get(row.client_request_id)) || row,
-    );
+    const readAt = new Map<string, number>(JSON.parse(exactReadAtKey) as [string, number][]);
+    const merged = listed.map((row) => {
+      const exact = row.client_request_id ? exactInputRows.get(row.client_request_id) : undefined;
+      if (!exact || !row.client_request_id) return row;
+      return (readAt.get(row.client_request_id) ?? 0) >= listedReadAt ? exact : row;
+    });
     const listedIds = new Set(listed.map((row) => row.client_request_id));
     for (const [clientRequestId, row] of exactInputRows) {
       if (!listedIds.has(clientRequestId)) merged.push(row);
     }
     return merged;
-  }, [exactInputRows, queuedInputsQuery.data]);
+  }, [exactInputRows, exactReadAtKey, listedReadAt, queuedInputsQuery.data]);
   // Re-render when a linked receipt's bridge window closes.
   const [bridgeClock, setBridgeClock] = useState(0);
+  const firstSeenLinkedAtRef = useRef(new Map<string, number>());
   useEffect(() => {
     const now = Date.now();
     const next = Math.min(
       ...receiptRows
-        .map(linkedReceiptBridgeEndsAt)
+        .map((row) => linkedReceiptBridgeEndsAt(row, firstSeenLinkedAtRef.current, now))
         .filter((at): at is number => at != null && at > now),
     );
     if (!Number.isFinite(next)) return;
@@ -2283,12 +2395,12 @@ export function SessionChat({
     const placed: OutboxEntry[] = [];
 
     const dismissedReceipts = readDismissedInputIds(session.id);
-    const shownByTranscript = receiptsShownByTranscript(rows, timelineItems);
+    const shownByTranscript = receiptsShownInTranscript(rows);
     for (const row of rows) {
       const clientRequestId = row.client_request_id;
       // A linked receipt the loaded rows do not show yet stays, so the
       // user's row never blanks between the link and the transcript read.
-      const bridgeEndsAt = linkedReceiptBridgeEndsAt(row);
+      const bridgeEndsAt = linkedReceiptBridgeEndsAt(row, firstSeenLinkedAtRef.current, now);
       if (
         (inTranscript(row) && !(bridgeEndsAt != null && now < bridgeEndsAt)) ||
         shownByTranscript.has(row) ||
@@ -2534,11 +2646,14 @@ export function SessionChat({
     isSubmitting,
     pendingManagedLocalInputs,
     receiptRows,
+    receiptsShownInTranscript,
     session.id,
     timelineItems,
     turnEndedDraft,
   ]);
-  useEffect(() => {
+  // Before paint, so the transcript shows a send in the same frame the
+  // composer clears instead of one frame later.
+  useLayoutEffect(() => {
     onOutboxChange?.(outboxEntries);
   }, [onOutboxChange, outboxEntries]);
   useEffect(() => {

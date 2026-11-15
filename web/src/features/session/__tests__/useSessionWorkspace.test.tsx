@@ -8,6 +8,7 @@ const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionProjectionInfinite: vi.fn(),
   holdsOlderPages: vi.fn(() => false),
   refreshAgentSessionProjectionTail: vi.fn(() => Promise.resolve()),
+  applyPushedProjectionDelta: vi.fn(() => true),
   sessionHoldsOlderProjectionPages: vi.fn(() => false),
 }));
 const visibilityMocks = vi.hoisted(() => ({
@@ -368,6 +369,7 @@ describe("useSessionWorkspace", () => {
       expect.any(Object),
       {
         previewKinds: ["thinking"],
+        projectionDelta: true,
         skipInitial: false,
         knownWorkspaceFingerprint: null,
       },
@@ -382,6 +384,7 @@ describe("useSessionWorkspace", () => {
       expect.any(Object),
       {
         previewKinds: ["thinking"],
+        projectionDelta: true,
         skipInitial: true,
         knownWorkspaceFingerprint: "sha256:workspace",
       },
@@ -579,6 +582,66 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+
+  describe("pushed transcript rows", () => {
+    type Handlers = {
+      onWorkspaceChanged?: (data: Record<string, unknown>) => void;
+      onProjectionDelta?: (data: Record<string, unknown>) => void;
+    };
+    const capture = () => {
+      let handlers: Handlers | undefined;
+      streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+        handlers = nextHandlers as Handlers;
+        return vi.fn();
+      });
+      renderHook(() => useSessionWorkspace(baseSession.id));
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockClear();
+      return () => handlers;
+    };
+    const ingestFollowedByDelta = {
+      session_id: baseSession.id,
+      change_kind: "ingest",
+      latest_event_id: 0,
+      thread_session_count: 1,
+      transcript_preview: null,
+      projection_delta: "follows",
+    };
+    const delta = { session_id: baseSession.id, delta: { items: [], anchor_cursor: "c-1" } };
+
+    it("applies pushed rows instead of reading the transcript over HTTP", async () => {
+      const handlers = capture();
+      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
+      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      act(() => handlers()?.onProjectionDelta?.(delta));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_200));
+      });
+      expect(agentSessionMocks.applyPushedProjectionDelta).toHaveBeenCalledWith(
+        expect.anything(),
+        baseSession.id,
+        delta.delta,
+      );
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
+    });
+
+    it("reads over HTTP when the pushed rows cannot be applied", () => {
+      const handlers = capture();
+      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(false);
+      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      act(() => handlers()?.onProjectionDelta?.(delta));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads over HTTP when the pushed rows never come", async () => {
+      const handlers = capture();
+      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_100));
+      });
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it("does not lose a runtime-only wake while a workspace refresh is active", async () => {
     let handlers:
