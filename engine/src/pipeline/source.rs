@@ -763,11 +763,16 @@ mod equivalence {
         ] {
             assert!(items.contains(&&expected), "missing {expected:?}");
         }
-        assert!(!parsed
+        // A redacted block's payload reaches no row, of any role.
+        assert!(!parsed.events.iter().any(|event| event
+            .content_text
+            .as_deref()
+            .is_some_and(|text| text.contains("opaque"))));
+        assert!(parsed
             .events
             .iter()
-            .any(|event| event.role == Role::Assistant
-                && event.content_text.as_deref() == Some("opaque")));
+            .all(|event| event.role != Role::Assistant
+                || event.content_text.as_deref() != Some("opaque")));
         // Every row orders from the anchor, the turn ends included.
         assert!(parsed.events.iter().all(|event| event.timestamp == anchor));
     }
