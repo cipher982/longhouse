@@ -104,7 +104,7 @@ const config = {
     actionTimeout: 10_000,
   },
 
-  // Visual baselines are Linux renders made on the crunch VM (see the
+  // Visual baselines are Linux renders made on the ci VM (see the
   // qa-ui-baseline targets). Both screenshot APIs share one honest name; only
   // the single-worker visual-baseline project writes them.
   snapshotPathTemplate: VISUAL_BASELINE_PATH,

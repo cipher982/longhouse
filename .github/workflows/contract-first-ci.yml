@@ -35,12 +35,11 @@ env:
   # so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # Test jobs run on the crunch VM (runs-on: crunch: 14 vCPU, 3 runner slots for this
-  # repo; control-plane docs/specs/build-compute-pipeline.md 6.2). The
+  # Test jobs run on the `ci` VM's ARC lanes (runs-on: ci-*). The
   # repository is private, where GitHub-hosted runners are 2-CPU and metered, and no
   # job here uploads an Actions artifact: receipts go to the object store
   # (scripts/ops/ci_receipts.py) and evidence stays on the runner. Each isolated
-  # guest gets 4 CPUs / 8 GiB; three at once fit crunch-docker.slice (30 GiB).
+  # guest gets 4 CPUs / 8 GiB.
   LONGHOUSE_TEST_CPUS: "4"
   LONGHOUSE_TEST_MEMORY: "8g"
   # CI receipts live in the artifact object store (scripts/ops/ci_receipts.py).

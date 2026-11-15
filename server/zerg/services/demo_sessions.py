@@ -726,7 +726,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     ]
 
     # -------------------------------------------------------------------------
-    # Session 6: Claude — Production incident: OOM on zerg server (ops)
+    # Session 6: Claude — Production incident: OOM on zerg server (ops)  # retired-ok: demo text
     # Urgent debug session, 16 events
     # -------------------------------------------------------------------------
     t6 = anchor - timedelta(hours=9)

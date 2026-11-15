@@ -136,7 +136,7 @@ def run_self_tests() -> None:
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
-        _write(root / "docs/runbooks/reclaim.md", "ssh zerg 'docker exec longhouse-david010 true'\n")
+        _write(root / "docs/runbooks/reclaim.md", "ssh zerg 'docker exec longhouse-david010 true'\n")  # retired-ok: scanner fixture
         failures = scan(root)
         assert len(failures) == 2, f"ssh/container fixture: {failures}"
         assert any("personal SSH host alias" in failure for failure in failures), f"ssh/container fixture: {failures}"

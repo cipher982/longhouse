@@ -195,7 +195,7 @@ export function buildMachinesFleetFixture() {
     {
       machine: clifford,
       activity: {
-        ...empty(live("5d6f0c1e-0000-4000-8000-000000000020", "crunch-runner reconnect connect error", "agent-sessions", 2 * 24 * 60, "opencode")),
+        ...empty(live("5d6f0c1e-0000-4000-8000-000000000020", "crunch-runner reconnect connect error", "agent-sessions", 2 * 24 * 60, "opencode")), // retired-ok: demo text
         sessions_started: 8,
         daily: daily([{}, {}, { opencode: 1 }, { opencode: 2 }, {}, { opencode: 1 }, {}, {}, {}, { opencode: 1 }, { opencode: 2 }, { opencode: 1 }]),
         top_projects: [{ project: "agent-sessions", sessions: 8 }],

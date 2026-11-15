@@ -64,7 +64,7 @@ export function getPlatformScopedSnapshotName(name: string): string {
 
 /**
  * Baselines are Linux renders (playwright.config.js pins the suffix), made on
- * the crunch VM so they match the environment CI runs in. A macOS run renders
+ * the ci VM so they match the environment CI runs in. A macOS run renders
  * fonts differently and should not be compared against them.
  */
 export function getPlatformScopedDesktopSnapshotFile(

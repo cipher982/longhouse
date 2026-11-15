@@ -231,3 +231,14 @@ repos:
         files: ^server/zerg/
         exclude: ^server/zerg/generated/
         pass_filenames: false
+
+      # -----------------------------------------------------------------------
+      # Retired host names (crunch, grind, zerg as an ssh alias). The list lives
+      # in the personal infra repo (tailnet-devices.toml [[retired]]); skipped
+      # quietly where that checkout is absent.
+      # -----------------------------------------------------------------------
+      - id: retired-host-names
+        name: Retired host names
+        entry: bash -c 'f="$HOME/git/me/scripts/retired-names.py"; [ -f "$f" ] || exit 0; python3 "$f" "$@"' --
+        language: system
+        types: [text]
