@@ -377,20 +377,26 @@ export function useSessionWorkspace(
       if (includeTranscript) runLane(lanes.transcript);
     };
     // An ingest wake marked "follows" is trailed by a projection_delta frame
-    // carrying the newest rows. The transcript read waits for it, then falls
-    // back to HTTP if it does not come or cannot be applied.
+    // carrying the newest rows. The transcript read waits for one that covers
+    // the latest such wake, then falls back to HTTP if it does not come in
+    // time or cannot be applied. The wait runs from the first wake it covers,
+    // so a steady run of wakes cannot postpone the fallback forever.
     let deltaWait: number | null = null;
+    let awaitedDeltaSeq = 0;
     const stopWaitingForDelta = () => {
+      awaitedDeltaSeq = 0;
       if (deltaWait === null) return false;
       window.clearTimeout(deltaWait);
       deltaWait = null;
       return true;
     };
-    const waitForPushedDelta = () => {
+    const waitForPushedDelta = (pubsubSeq: number | null | undefined) => {
       runLane(lanes.base);
-      stopWaitingForDelta();
+      awaitedDeltaSeq = Math.max(awaitedDeltaSeq, pubsubSeq ?? 0);
+      if (deltaWait !== null) return;
       deltaWait = window.setTimeout(() => {
         deltaWait = null;
+        awaitedDeltaSeq = 0;
         if (!disposed) runLane(lanes.transcript);
       }, PUSHED_DELTA_WAIT_MS);
     };
@@ -503,19 +509,20 @@ export function useSessionWorkspace(
             return;
           }
           if (isTranscriptMutation && data.projection_delta === "follows") {
-            waitForPushedDelta();
+            waitForPushedDelta(data.pubsub_seq);
             return;
           }
           refreshWorkspaceQueries(isTranscriptMutation);
         },
         onProjectionDelta: (data) => {
           armFreshnessDeadline();
-          const waited = stopWaitingForDelta();
           if (!applyPushedProjectionDelta(queryClient, sessionId, data.delta)) {
             // Not applicable here: read over HTTP as an unmarked wake would.
-            if (waited) runLane(lanes.transcript);
+            if (stopWaitingForDelta()) runLane(lanes.transcript);
             return;
           }
+          // Read before a later wake: keep waiting for the push that covers it.
+          if ((data.pubsub_seq ?? Number.POSITIVE_INFINITY) >= awaitedDeltaSeq) stopWaitingForDelta();
           // The rows are on the page. The other transcript queries refresh as
           // on any ingest, and a reply preview the rows replace retires now.
           for (const queryKey of transcriptRefreshQueryKeys) {

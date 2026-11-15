@@ -1734,7 +1734,10 @@ async def _live_catalog_workspace_stream(
         last_heartbeat = monotonic()
         # One projection read at a time; an ingest that lands during it asks
         # for one more read when it finishes, which covers both.
+        # Each pushed delta names the newest ingest wake read before it began,
+        # so the client keeps waiting for one that covers a later wake.
         delta_task: asyncio.Task | None = None
+        delta_task_seq = 0
         delta_rerun = False
         delta_seq = 0
         try:
@@ -1748,7 +1751,7 @@ async def _live_catalog_workspace_stream(
                             "data": json.dumps(
                                 {
                                     "session_id": str(session_id),
-                                    "pubsub_seq": delta_seq,
+                                    "pubsub_seq": delta_task_seq,
                                     "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                                     "delta": delta,
                                 },
@@ -1757,6 +1760,7 @@ async def _live_catalog_workspace_stream(
                         }
                     if delta_rerun and owner_id is not None:
                         delta_rerun = False
+                        delta_task_seq = delta_seq
                         delta_task = asyncio.create_task(_workspace_projection_delta(session_id, owner_id))
                 message, lifecycle_message = await _wait_for_workspace_stream_messages(subscription, lifecycle_subscription, delta_task)
                 if lifecycle_message is not None and lifecycle_message.payload.get("kind") == "runtime_lifecycle":
@@ -1765,6 +1769,8 @@ async def _live_catalog_workspace_stream(
                         yield {"event": "host_lifecycle", "data": json.dumps(lifecycle)}
                     if lifecycle_message.payload.get("drain_complete"):
                         return
+                if message is None and lifecycle_message is None and delta_task is not None and delta_task.done():
+                    continue  # the delta read finished; the loop top sends it
                 if message is None:
                     if heartbeat_interval_seconds is None or monotonic() - last_heartbeat >= heartbeat_interval_seconds:
                         yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
@@ -1806,6 +1812,7 @@ async def _live_catalog_workspace_stream(
                 if delta_follows:
                     delta_seq = message.seq
                     if delta_task is None:
+                        delta_task_seq = delta_seq
                         delta_task = asyncio.create_task(_workspace_projection_delta(session_id, owner_id))
                     else:
                         delta_rerun = True

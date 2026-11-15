@@ -641,6 +641,19 @@ describe("useSessionWorkspace", () => {
       });
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
     });
+
+    it("keeps waiting when the pushed rows were read before a later ingest", async () => {
+      const handlers = capture();
+      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
+      act(() => handlers()?.onWorkspaceChanged?.({ ...ingestFollowedByDelta, pubsub_seq: 7 }));
+      act(() => handlers()?.onWorkspaceChanged?.({ ...ingestFollowedByDelta, pubsub_seq: 8 }));
+      // The push for wake 7 lands; wake 8's rows may not be in it.
+      act(() => handlers()?.onProjectionDelta?.({ ...delta, pubsub_seq: 7 }));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_100));
+      });
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not lose a runtime-only wake while a workspace refresh is active", async () => {

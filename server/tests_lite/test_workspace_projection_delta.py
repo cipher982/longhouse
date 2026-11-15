@@ -41,7 +41,7 @@ def _workspace(rows: list[dict]) -> dict:
     }
 
 
-def _frames(monkeypatch, *, projection_delta: bool, build, owner_id: int | None = 7) -> list[tuple[str, dict]]:
+def _frames(monkeypatch, *, projection_delta: bool, build, owner_id: int | None = 7, ingests: int = 1) -> list[tuple[str, dict]]:
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import topic_session
@@ -51,7 +51,8 @@ def _frames(monkeypatch, *, projection_delta: bool, build, owner_id: int | None 
     monkeypatch.setattr(timeline_mod, "build_storage_v2_workspace", build)
     monkeypatch.setattr(timeline_mod, "read_live_catalog_session", lambda *_a, **_k: (None, None, "9"))
     session_id = uuid4()
-    get_pubsub().publish(topic_session(str(session_id)), {"session_id": str(session_id), "kind": "ingest", "source": "storage_v2"})
+    for _ in range(ingests):
+        get_pubsub().publish(topic_session(str(session_id)), {"session_id": str(session_id), "kind": "ingest", "source": "storage_v2"})
 
     async def run() -> list[tuple[str, dict]]:
         out = []
@@ -132,3 +133,22 @@ def test_a_window_with_no_cursor_or_an_oversized_window_is_not_sent(monkeypatch)
         return _workspace([_row(1, "c1", "a"), _row(2, "c2", "x" * (timeline_mod.PROJECTION_DELTA_MAX_BYTES + 1))])
 
     assert [kind for kind, _ in _frames(monkeypatch, projection_delta=True, build=huge)] == ["workspace_changed"]
+
+
+def test_an_ingest_during_a_read_gets_its_own_later_delta(monkeypatch) -> None:
+    # Each delta names the newest wake read before it began, so the client
+    # keeps waiting for the one that covers the second ingest.
+    calls = []
+
+    async def build(**kwargs):
+        calls.append(kwargs)
+        await asyncio.sleep(0.02)
+        return _workspace([_row(1, "c1", "old"), _row(2, "c2", f"read {len(calls)}")])
+
+    frames = _frames(monkeypatch, projection_delta=True, build=build, ingests=2)
+    wakes = [data["pubsub_seq"] for kind, data in frames if kind == "workspace_changed"]
+    deltas = [data for kind, data in frames if kind == "projection_delta"]
+    assert len(wakes) == 2
+    assert len(calls) == 2
+    assert [delta["pubsub_seq"] for delta in deltas] == wakes
+    assert deltas[-1]["delta"]["items"][0]["event"]["content_text"] == "read 2"
