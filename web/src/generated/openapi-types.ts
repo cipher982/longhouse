@@ -13622,6 +13622,8 @@ export interface operations {
                 stream_epoch?: string | null;
                 /** @description Comma-separated preview kinds the client can render beyond reply, tool and subagent. `thinking` sends reasoning text on transcript_preview frames; without it a thinking preview is never sent to this connection. */
                 preview_kinds?: string | null;
+                /** @description When true, an ingest wake is marked `projection_delta: follows` and the newest head rows (lite detail) arrive in a following `projection_delta` frame, so the client need not read them back over HTTP. */
+                projection_delta?: boolean;
             };
             header?: never;
             path: {
