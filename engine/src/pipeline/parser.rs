@@ -1340,78 +1340,76 @@ pub(crate) fn workflow_run_id_from_path(path: &Path) -> Option<String> {
     None
 }
 
-/// Seed the antigravity pending-call queue from the record immediately before an
-/// incremental resume `offset`.
+/// Seed the antigravity pending-call queue at an incremental resume `offset`.
 ///
-/// Antigravity tool results inherit their call id from the adjacent preceding
-/// planner. The shipper resumes at a stored byte offset, which routinely lands
-/// between a `PLANNER_RESPONSE` and its result record, so without this seed every
-/// flush boundary would mint a fresh live orphan. Bounded backward scan: read the
-/// single line ending at `offset`. Returns empty pending if `offset == 0`, the prior
-/// record is not an antigravity planner with tool_calls, or anything fails.
+/// Antigravity tool results inherit their call id from the planner that proposed
+/// them, and a planner's results land one record at a time while the session is
+/// live, so a flush boundary can fall after any of them. Walk back from `offset`
+/// to the last `PLANNER_RESPONSE` that carried tool calls and replay the records
+/// from there to `offset` through the same extractor the forward parse uses. The
+/// queue then holds exactly the calls whose results have not appeared, and
+/// `next_result_step` sits after the last result seen. Scan windows double from
+/// 256 KiB up to `SEED_MAX_WINDOW_BYTES` (results can be tens of KiB each); a
+/// planner beyond that, or any read or parse failure, yields an empty queue
+/// (fail closed). Non-antigravity files cost one 256 KiB read at most.
 fn seed_antigravity_pending(source: &dyn SourceBytes, offset: u64) -> AntigravityPending {
+    const SEED_MIN_WINDOW_BYTES: u64 = 256 * 1024;
+    const SEED_MAX_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
     if offset == 0 {
         return AntigravityPending::default();
     }
-    // Read a bounded window ending at `offset`, then take the last complete line.
-    const SEED_WINDOW_BYTES: u64 = 256 * 1024;
-    let window = SEED_WINDOW_BYTES.min(offset);
-    let start = offset - window;
-
-    let buf = match source.read_range(start, offset) {
-        Ok(buf) if buf.len() as u64 == window => buf,
-        _ => return AntigravityPending::default(),
-    };
-    // Drop a possibly-partial leading line when we started mid-file.
-    let search = if start > 0 {
-        match buf.iter().position(|&b| b == b'\n') {
-            Some(nl) => &buf[nl + 1..],
-            None => return AntigravityPending::default(),
-        }
-    } else {
-        &buf[..]
-    };
-    // The record ending at `offset` is the last newline-terminated line in the window.
-    let trimmed = trim_bytes(search);
-    let last_line = match trimmed.iter().rposition(|&b| b == b'\n') {
-        Some(nl) => &trimmed[nl + 1..],
-        None => trimmed,
-    };
-    if last_line.is_empty() {
-        return AntigravityPending::default();
-    }
-    let Ok(obj) = serde_json::from_slice::<RawLine>(last_line) else {
-        return AntigravityPending::default();
-    };
-    if !is_antigravity_line(&obj) {
-        return AntigravityPending::default();
-    }
-    let Some(tool_calls) = obj.tool_calls.as_ref() else {
-        return AntigravityPending::default();
-    };
-    let mut calls: VecDeque<PendingAntigravityCall> = VecDeque::new();
-    for (idx, call) in tool_calls.iter().enumerate() {
-        let Some(name) = call
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        else {
-            continue;
+    let mut window_size = SEED_MIN_WINDOW_BYTES;
+    loop {
+        let window = window_size.min(offset);
+        let start = offset - window;
+        let buf = match source.read_range(start, offset) {
+            Ok(buf) if buf.len() as u64 == window => buf,
+            _ => return AntigravityPending::default(),
         };
-        if let Some(step) = obj.step_index {
-            calls.push_back(PendingAntigravityCall {
-                id: format!("antigravity-{step}-{idx}"),
-                name: name.to_string(),
-            });
+        // Drop a possibly-partial leading line when we started mid-file.
+        let complete: &[u8] = if start > 0 {
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(nl) => &buf[nl + 1..],
+                None => &[],
+            }
+        } else {
+            &buf[..]
+        };
+        let mut records: Vec<RawLine> = Vec::new();
+        for line in complete.split(|&b| b == b'\n') {
+            let line = trim_bytes(line);
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_slice::<RawLine>(line) {
+                Ok(obj) => records.push(obj),
+                Err(_) => return AntigravityPending::default(),
+            }
         }
-    }
-    if calls.is_empty() {
-        return AntigravityPending::default();
-    }
-    AntigravityPending {
-        calls,
-        next_result_step: obj.step_index.map(|step| step + 1),
+        match records.last() {
+            Some(last) if is_antigravity_line(last) => {}
+            _ => return AntigravityPending::default(),
+        }
+        let planner = records.iter().rposition(|obj| {
+            is_antigravity_line(obj) && obj.tool_calls.as_ref().is_some_and(|c| !c.is_empty())
+        });
+        if let Some(planner) = planner {
+            let mut pending = AntigravityPending::default();
+            let (mut events, mut facts) = (Vec::new(), Vec::new());
+            for obj in &records[planner..] {
+                if !is_antigravity_line(obj) {
+                    return AntigravityPending::default();
+                }
+                extract_antigravity_events(obj, "", 0, "", &mut events, &mut facts, &mut pending);
+                events.clear();
+                facts.clear();
+            }
+            return pending;
+        }
+        if start == 0 || window_size >= SEED_MAX_WINDOW_BYTES {
+            return AntigravityPending::default();
+        }
+        window_size *= 2;
     }
 }
 
@@ -5735,6 +5733,31 @@ fn antigravity_error_attempt(message: &str) -> Option<u64> {
     rest.split(')').next()?.trim().parse().ok()
 }
 
+/// Antigravity prefixes every tool result with its own `Created At:` and
+/// `Completed At:` lines (often repeated). They are bookkeeping, not tool output;
+/// leaving them makes the timestamp the row title. Header-only content is kept
+/// as is so the row still exists.
+fn antigravity_strip_result_header(text: &str) -> &str {
+    let mut rest = text;
+    loop {
+        let Some((line, tail)) = rest.split_once('\n') else {
+            break;
+        };
+        let line = line.trim();
+        if line.starts_with("Created At: ") || line.starts_with("Completed At: ") {
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        text
+    } else {
+        rest
+    }
+}
+
 fn antigravity_tool_name_from_type(event_type: &str) -> String {
     event_type.trim().to_ascii_lowercase().replace('_', "-")
 }
@@ -6113,7 +6136,7 @@ fn extract_antigravity_events(
             Role::Tool => (
                 None,
                 Some(antigravity_tool_name_from_type(event_type)),
-                Some(text.to_string()),
+                Some(antigravity_strip_result_header(text).to_string()),
                 "antigravity_tool_result",
             ),
             Role::System => (Some(text.to_string()), None, None, "antigravity_system"),
@@ -11836,6 +11859,86 @@ please research the steering shaft options"#;
             .find(|e| e.role == Role::Tool)
             .expect("result event present in resumed batch");
         assert_eq!(tool.tool_call_id.as_deref(), Some("antigravity-5-0"));
+    }
+
+    /// (tool_call_id, tool_name, tool_output_text) of every tool result event.
+    fn antigravity_result_rows(
+        events: &[ParsedEvent],
+    ) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+        events
+            .iter()
+            .filter(|e| e.role == Role::Tool)
+            .map(|e| {
+                (
+                    e.tool_call_id.clone(),
+                    e.tool_name.clone(),
+                    e.tool_output_text.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_antigravity_split_at_every_record_boundary_pairs_like_an_unsplit_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/antigravity_split/transcript_full.jsonl");
+        let raw = std::fs::read_to_string(&fixture).unwrap();
+        let lines: Vec<String> = raw.lines().map(str::to_string).collect();
+        let path = write_antigravity_transcript(
+            dir.path(),
+            "55555555-5555-4555-8555-555555555555",
+            &lines,
+        );
+        let whole = parse_session_file(&path, 0).unwrap();
+        let expected = antigravity_result_rows(&whole.events);
+        // Every result is paired to a call in the unsplit parse.
+        assert_eq!(expected.len(), 5);
+        assert!(expected
+            .iter()
+            .all(|(id, name, _)| id.is_some() && name.is_some()));
+
+        // The shipper resumes at a record boundary: parse the head as an earlier
+        // pass saw it, then resume at the boundary and compare with the whole.
+        let mut offset = 0u64;
+        for k in 1..lines.len() {
+            offset += lines[k - 1].len() as u64 + 1;
+            let head_dir = tempfile::tempdir().unwrap();
+            let head_path = write_antigravity_transcript(
+                head_dir.path(),
+                "55555555-5555-4555-8555-555555555555",
+                &lines[..k],
+            );
+            let head = parse_session_file(&head_path, 0).unwrap();
+            let tail = parse_session_file(&path, offset).unwrap();
+            let mut combined = antigravity_result_rows(&head.events);
+            combined.extend(antigravity_result_rows(&tail.events));
+            assert_eq!(combined, expected, "split after record {k} (byte {offset})");
+        }
+    }
+
+    #[test]
+    fn test_antigravity_result_header_is_stripped_and_background_form_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/antigravity_split/transcript_full.jsonl");
+        let lines: Vec<String> = std::fs::read_to_string(&fixture)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let path = write_antigravity_transcript(
+            dir.path(),
+            "55555555-5555-4555-8555-555555555555",
+            &lines,
+        );
+        let rows = antigravity_result_rows(&parse_session_file(&path, 0).unwrap().events);
+        let outputs: Vec<&str> = rows.iter().map(|r| r.2.as_deref().unwrap()).collect();
+        assert!(outputs[0].starts_with("Tool is running as a background task"));
+        assert!(outputs[1].starts_with("Showing lines 1-3 of 3"));
+        assert!(outputs
+            .iter()
+            .all(|o| !o.contains("Created At:") && !o.contains("Completed At:")));
     }
 
     #[test]
