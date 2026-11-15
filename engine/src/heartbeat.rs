@@ -7771,16 +7771,22 @@ mod tests {
     }
 
     #[test]
-    fn a_launcher_owned_antigravity_session_grants_send_while_its_hook_is_live() {
+    fn a_launcher_owned_antigravity_session_grants_control_while_its_hook_is_live() {
         let control =
             antigravity_control(&[antigravity_observation(Some("2026-05-08T12:00:08Z"), true)]);
         assert_eq!(control.len(), 1);
         assert_eq!(control[0].connection_id.as_deref(), Some("conn-agy"));
         assert_eq!(control[0].lease_generation.as_deref(), Some("gen-agy"));
         assert_eq!(control[0].state, "attached");
+        // Hook-inbox send, the hook's terminate-at-boundary interrupt, and the
+        // launcher-recorded process-group terminate; steer rides on send.
         assert_eq!(
             control[0].granted_operations,
-            vec!["send_input".to_string()]
+            vec![
+                "interrupt".to_string(),
+                "send_input".to_string(),
+                "terminate".to_string()
+            ]
         );
     }
 
