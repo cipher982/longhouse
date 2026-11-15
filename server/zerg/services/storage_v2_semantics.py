@@ -26,6 +26,7 @@ from zerg.services.provider_interaction_semantics import seed_provider_interacti
 from zerg.services.provider_interaction_semantics import use_json_decoder
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import aggregate_render_object
 from zerg.utils import fast_json
@@ -739,12 +740,15 @@ async def repair_storage_session_semantic_projection(
     session_id: str,
     owner_id: str,
     generation_id: str,
+    replay_below: int = 1,
 ) -> dict[str, Any]:
-    """Replay legacy render objects and repair their catalog aggregates.
+    """Replay render objects from raw and make their classification final.
 
-    The object bytes remain immutable. Only catalog-owned derived counts and
-    previews are updated after the Runtime Host verifies each object against
-    its raw companion.
+    An object whose replayed kinds differ from its stored ones is re-sealed and
+    replaced in its generation (the old object retired); every replayed object
+    is then marked `SEMANTIC_PROJECTION_VERSION`, which readers trust without
+    raw. The projector replays pending objects (below 1) and their raw
+    neighbors; `db semantic-backfill` passes `replay_below=2` for history.
     """
 
     session_read = await catalog.call("storage.session.projector.read.v2", {"session_id": session_id})
@@ -830,6 +834,7 @@ async def repair_storage_session_semantic_projection(
     replay_object_ids = _semantic_repair_replay_set(
         [item for objects in manifest_pages for item in objects],
         raw_manifests=raw_manifest_cache.get(session_id),
+        replay_below=replay_below,
     )
     for page_index, objects in enumerate(manifest_pages):
         corrections: list[dict[str, object]] = []
@@ -864,8 +869,24 @@ async def repair_storage_session_semantic_projection(
                 projector_read=True,
             )
             aggregate = aggregate_render_object(recovered_spec)
+            if any(
+                getattr(old, "interaction_kind", None) != getattr(new, "interaction_kind", None)
+                for old, new in zip(spec.records, recovered_spec.records, strict=True)
+            ):
+                # The replayed kinds differ from the stored ones: seal them into
+                # the object itself, replacing it in its generation, so readers
+                # never replay raw for it again.
+                object_id = await _reseal_render_object(
+                    catalog=catalog,
+                    render_workers=render_workers,
+                    session_id=session_id,
+                    generation_id=generation_id,
+                    item=item,
+                    spec=recovered_spec,
+                )
             corrections.append(
                 {
+                    "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
                     "object_id": object_id,
                     "event_count": len(spec.records),
                     "user_messages": int(aggregate["user_messages"]),
@@ -919,6 +940,7 @@ def _semantic_repair_replay_set(
     objects: list[dict[str, object]],
     *,
     raw_manifests: Mapping[str, Mapping[str, object]] | None,
+    replay_below: int = 1,
 ) -> set[str] | None:
     """Return the render objects whose semantic kinds can differ from their stored facts.
 
@@ -939,7 +961,7 @@ def _semantic_repair_replay_set(
     pending = {
         str(item.get("source_envelope_id"))
         for item in objects
-        if int(item.get("semantic_projection_version") or 0) < 1 or item.get("abandoned_events", 0) is None
+        if int(item.get("semantic_projection_version") or 0) < replay_below or item.get("abandoned_events", 0) is None
     }
     if not pending:
         return None
@@ -962,6 +984,46 @@ def _semantic_repair_replay_set(
                     envelopes[max(0, index - _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS) : index + _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS + 1]
                 )
     return {str(item.get("object_id") or "") for item in objects if str(item.get("source_envelope_id")) in affected}
+
+
+async def _reseal_render_object(
+    *,
+    catalog: CatalogClient,
+    render_workers: Any,
+    session_id: str,
+    generation_id: str,
+    item: Mapping[str, object],
+    spec: RenderObjectSpec,
+) -> str:
+    """Seal `spec` and replace the envelope's object in its generation; the old
+    object is retired, not deleted. Returns the new object id."""
+
+    from zerg.services.host_render import render_manifest
+
+    sealed = await render_workers.seal(spec, lane="repair")
+    manifest = {
+        **render_manifest(spec, sealed),
+        "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
+        "source_envelope_id": str(item.get("source_envelope_id")),
+        "render_source": str(item.get("render_source") or "laptop"),
+        "object_parser_revision": item.get("object_parser_revision") or spec.parser_revision,
+    }
+    answer = await catalog.call(
+        "storage.render.host_commit.v2",
+        {
+            "session_id": session_id,
+            "generation_id": generation_id,
+            "parser_revision": spec.parser_revision,
+            "ordering_revision": spec.ordering_revision,
+            "objects": [
+                {key: value for key, value in manifest.items() if key not in {"generation_id", "parser_revision", "ordering_revision"}}
+            ],
+            "promote": True,
+        },
+    )
+    if answer.get("conflict") or answer.get("session_deleted") or answer.get("not_found"):
+        raise StorageV2SemanticRecoveryError(f"render object {item.get('object_id')} could not be replaced: {answer}")
+    return str(manifest["object_id"])
 
 
 async def recover_render_spec(

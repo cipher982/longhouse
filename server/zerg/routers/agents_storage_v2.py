@@ -82,6 +82,7 @@ from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectValidationError
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
@@ -2068,18 +2069,24 @@ async def _read_storage_v2_session_events_page_admitted(
                     raise ValueError("render object does not match its catalog manifest")
                 semantic_recovery_started_at = monotonic()
                 try:
-                    recovered_kinds = await recover_render_interaction_kinds(
-                        catalog=catalogd,
-                        raw_workers=raw_workers,
-                        session_id=str(session_id),
-                        owner_id=owner_id,
-                        provider=spec.provider,
-                        records=spec.records,
-                        source_envelope_id=spec.source_envelope_id,
-                        manifest_cache=raw_manifest_cache,
-                        sequence_context_cache=sequence_context_cache,
-                        reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
-                        stats=semantic_recovery_stats,
+                    # A final object (version 2) holds its own kinds, so the
+                    # page reads no raw for it; only older objects replay.
+                    recovered_kinds = (
+                        {}
+                        if int(item.get("semantic_projection_version") or 0) >= SEMANTIC_PROJECTION_VERSION
+                        else await recover_render_interaction_kinds(
+                            catalog=catalogd,
+                            raw_workers=raw_workers,
+                            session_id=str(session_id),
+                            owner_id=owner_id,
+                            provider=spec.provider,
+                            records=spec.records,
+                            source_envelope_id=spec.source_envelope_id,
+                            manifest_cache=raw_manifest_cache,
+                            sequence_context_cache=sequence_context_cache,
+                            reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                            stats=semantic_recovery_stats,
+                        )
                     )
                 finally:
                     semantic_recovery_duration_ms += (monotonic() - semantic_recovery_started_at) * 1000.0

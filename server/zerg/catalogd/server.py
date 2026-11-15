@@ -41,6 +41,7 @@ from zerg.catalogd.store import adopt_orphan_subagents_once
 from zerg.storage_v2.fields import bounded_text
 from zerg.storage_v2.fields import canonical_text
 from zerg.storage_v2.fields import parse_session_facts
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -3971,8 +3972,11 @@ class CatalogDaemon:
                     "last_visible_text_preview",
                 }
                 count_fields = {"object_id", "event_count", "abandoned_events"}
-                if set(item) not in (object_expected, object_expected | {"user_turns"}, count_fields):
+                if set(item) != count_fields and set(item) - {"user_turns", "semantic_projection_version"} != object_expected:
                     raise ValueError("semantic repair object has invalid fields")
+                version = item.get("semantic_projection_version", 1)
+                if type(version) is not int or not 1 <= version <= SEMANTIC_PROJECTION_VERSION:
+                    raise ValueError("semantic repair semantic_projection_version is invalid")
                 if not _is_hash(item["object_id"]):
                     raise ValueError("semantic repair object_id must be lowercase SHA-256 hex")
                 for field in item.keys() & {"event_count", "user_messages", "assistant_messages", "tool_calls", "abandoned_events"}:
@@ -5123,7 +5127,10 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
     abandoned_events = result["abandoned_events"]
     if abandoned_events is not None and (type(abandoned_events) is not int or not 0 <= abandoned_events <= result["event_count"]):
         raise ValueError("render_manifest.abandoned_events exceeds its bound")
-    if type(result["semantic_projection_version"]) is not int or not 0 <= result["semantic_projection_version"] <= 1:
+    if (
+        type(result["semantic_projection_version"]) is not int
+        or not 0 <= result["semantic_projection_version"] <= SEMANTIC_PROJECTION_VERSION
+    ):
         raise ValueError("render_manifest.semantic_projection_version is invalid")
     for field in ("first_order_key", "last_order_key"):
         raw = result[field]

@@ -25,6 +25,7 @@ from zerg.cli.provider import app as provider_app
 from zerg.cli.render_counts import repair_render_counts
 from zerg.cli.render_shadow import host_rebuild
 from zerg.cli.render_shadow import render_shadow_summary
+from zerg.cli.render_shadow import semantic_backfill
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import hash_password
@@ -763,6 +764,7 @@ def db_reconcile_session_visibility(
 db_app.command(name="repair-render-counts")(repair_render_counts)
 db_app.command(name="render-shadow")(render_shadow_summary)
 db_app.command(name="host-rebuild")(host_rebuild)
+db_app.command(name="semantic-backfill")(semantic_backfill)
 
 
 @db_app.command(name="backfill-hatch-lineage")

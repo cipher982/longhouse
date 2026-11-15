@@ -110,3 +110,111 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
     # or change a row the host serves.
     if totals["unrebuilt_epochs"] or (not apply and (totals["compared"] == 0 or totals["lossy"])):
         raise typer.Exit(1)
+
+
+def semantic_backfill(
+    session: list[str] = typer.Option(
+        [], "--session", help="Session to backfill; repeatable. Default: every session with an older object."
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Re-seal and mark the objects. Default reports only."),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="At most this many sessions."),
+    socket_path: Path | None = typer.Option(None, "--socket", help="Catalog socket; defaults to this Runtime Host's."),
+) -> None:
+    """Make every current render object's classification final (host-normalized-transcripts Phase 6).
+
+    An object below semantic projection version 2 is replayed once from raw.
+    Without --apply nothing is written: the report counts the objects and how
+    many would change. With --apply an object whose kinds change is re-sealed
+    and replaced in its generation (the old object retired, not deleted), and
+    every replayed object is marked final, so reads never open raw for it.
+    """
+    asyncio.run(_semantic_backfill(session, apply=apply, limit=limit, socket_path=socket_path))
+
+
+async def _semantic_backfill(sessions: list[str], *, apply: bool, limit: int | None, socket_path: Path | None) -> None:
+    import sqlite3
+
+    from zerg.catalogd.client import CatalogClient
+    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.services.raw_object_workers import RawObjectWorkerPool
+    from zerg.services.raw_object_workers import storage_v2_root
+    from zerg.services.render_object_workers import RenderObjectWorkerPool
+    from zerg.services.storage_v2_semantics import recover_render_spec
+    from zerg.services.storage_v2_semantics import repair_storage_session_semantic_projection
+    from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
+
+    database, default_socket = catalogd_paths()
+    connection = sqlite3.connect(f"file:{Path(database).resolve()}?mode=ro", uri=True, timeout=5)
+    try:
+        query = (
+            "SELECT s.session_id, s.owner_id, s.current_render_generation, o.object_id, o.object_path, o.object_hash"
+            " FROM sessions s JOIN render_objects o ON o.generation_id = s.current_render_generation"
+            " WHERE o.retired_at IS NULL AND o.semantic_projection_version < ?"
+            + (f" AND s.session_id IN ({','.join('?' * len(sessions))})" if sessions else "")
+            + " ORDER BY s.session_id"
+        )
+        pending: dict[str, dict[str, object]] = {}
+        for session_id, owner_id, generation_id, object_id, object_path, object_hash in connection.execute(
+            query, (SEMANTIC_PROJECTION_VERSION, *sessions)
+        ):
+            entry = pending.setdefault(str(session_id), {"owner_id": owner_id, "generation_id": str(generation_id), "objects": []})
+            entry["objects"].append((object_id, object_path, object_hash))  # type: ignore[union-attr]
+    finally:
+        connection.close()
+    selected = list(pending.items())[:limit] if limit is not None else list(pending.items())
+    catalog = CatalogClient(socket_path or default_socket, default_timeout_seconds=60)
+    raw_workers = RawObjectWorkerPool(storage_v2_root())
+    render_workers = RenderObjectWorkerPool(storage_v2_root(), repair_workers=1)
+    totals = {
+        "sessions_below_final": len(pending),
+        "sessions": len(selected),
+        "objects": 0,
+        "would_change": 0,
+        "records_changed": 0,
+        "failed": 0,
+    }
+    try:
+        for session_id, entry in selected:
+            objects = entry["objects"]
+            totals["objects"] += len(objects)  # type: ignore[arg-type]
+            try:
+                if apply:
+                    result = await repair_storage_session_semantic_projection(
+                        catalog=catalog,
+                        render_workers=render_workers,
+                        raw_workers=raw_workers,
+                        session_id=session_id,
+                        owner_id=str(entry["owner_id"]),
+                        generation_id=str(entry["generation_id"]),
+                        replay_below=SEMANTIC_PROJECTION_VERSION,
+                    )
+                    if result.get("complete") is not True:
+                        raise RuntimeError(f"repair did not complete: {result}")
+                    continue
+                cache: dict[str, dict[str, dict[str, object]]] = {}
+                for _object_id, object_path, object_hash in objects:  # type: ignore[union-attr]
+                    decoded = await render_workers.read(str(object_path), str(object_hash), lane="background")
+                    recovered = await recover_render_spec(
+                        catalog=catalog,
+                        raw_workers=raw_workers,
+                        session_id=session_id,
+                        owner_id=str(entry["owner_id"]),
+                        spec=decoded.spec,
+                        manifest_cache=cache,
+                        projector_read=True,
+                    )
+                    changed = sum(
+                        old.interaction_kind != new.interaction_kind
+                        for old, new in zip(decoded.spec.records, recovered.records, strict=True)
+                    )
+                    totals["would_change"] += int(changed > 0)
+                    totals["records_changed"] += changed
+            except Exception as exc:  # noqa: BLE001 - one session's failure is reported, not fatal
+                totals["failed"] += 1
+                typer.echo(json.dumps({"session_id": session_id, "failed": f"{type(exc).__name__}: {exc}"[:300]}))
+    finally:
+        await render_workers.close()
+        await raw_workers.close()
+    typer.echo(json.dumps(totals, indent=2, sort_keys=True))
+    if totals["failed"]:
+        raise typer.Exit(1)

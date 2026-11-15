@@ -763,6 +763,81 @@ async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypa
     assert len(catalog.repairs) == 2
 
 
+@pytest.mark.asyncio
+async def test_semantic_repair_reseals_an_object_whose_kinds_change(monkeypatch) -> None:
+    """Phase 6: the object itself carries the replayed kind, so readers never replay it again."""
+    first = _spec()
+    second = replace(first, source_envelope_id="b" * 64)
+    objects = [
+        {"object_id": "object-1", "object_path": "object-1", "object_hash": "hash-1", "source_envelope_id": first.source_envelope_id},
+        {"object_id": "object-2", "object_path": "object-2", "object_hash": "hash-2", "source_envelope_id": second.source_envelope_id},
+    ]
+
+    class Catalog:
+        def __init__(self):
+            self.repairs: list[dict[str, object]] = []
+            self.commits: list[dict[str, object]] = []
+
+        async def call(self, method, params, **_kwargs):
+            if method == "storage.session.projector.read.v2":
+                return {"found": True, "commit_seq": 9}
+            if method == "storage.session.render_objects.list.v2":
+                return {
+                    "found": True,
+                    "generation_id": str(first.render_generation),
+                    "snapshot_object_count": 2,
+                    "objects": objects,
+                    "has_more": False,
+                }
+            if method == "storage.render.host_commit.v2":
+                self.commits.append(params)
+                return {"current": True, "written": 1}
+            if method == "storage.session.semantic_projection.repair.v2":
+                self.repairs.append(params)
+                return {"complete": True, "updated_object_count": len(params["objects"])}
+            raise AssertionError(method)
+
+    class RenderWorkers:
+        def __init__(self):
+            self.sealed = []
+
+        async def read(self, path, expected_hash, *, lane, queue_timeout_seconds=None):
+            return SimpleNamespace(spec=first if path == "object-1" else second, object_hash=expected_hash)
+
+        async def seal(self, spec, *, lane):
+            self.sealed.append(spec)
+            return SimpleNamespace()
+
+    async def recovery(**kwargs):
+        # The first object's first record is a local control the stored render called durable.
+        return {0: "local_control"} if kwargs["source_envelope_id"] == first.source_envelope_id else {}
+
+    monkeypatch.setattr("zerg.services.storage_v2_semantics._load_raw_manifests", lambda *_a, **_k: _empty_async_mapping())
+    monkeypatch.setattr("zerg.services.storage_v2_semantics.recover_render_interaction_kinds", recovery)
+    monkeypatch.setattr("zerg.services.host_render.render_manifest", lambda spec, sealed: {"object_id": "c" * 64})
+
+    catalog = Catalog()
+    workers = RenderWorkers()
+    result = await repair_storage_session_semantic_projection(
+        catalog=catalog,
+        render_workers=workers,
+        raw_workers=object(),
+        session_id=str(first.session_id),
+        owner_id="42",
+        generation_id=str(first.render_generation),
+        replay_below=2,
+    )
+
+    assert result["complete"] is True
+    assert [spec.records[0].interaction_kind for spec in workers.sealed] == ["local_control"]
+    (commit,) = catalog.commits
+    assert commit["objects"][0]["semantic_projection_version"] == 2
+    assert commit["objects"][0]["source_envelope_id"] == first.source_envelope_id
+    corrections = {item["object_id"]: item for item in catalog.repairs[0]["objects"]}
+    assert set(corrections) == {"c" * 64, "object-2"}
+    assert {item["semantic_projection_version"] for item in corrections.values()} == {2}
+
+
 async def _empty_async_mapping():
     return {}
 

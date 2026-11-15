@@ -2613,7 +2613,11 @@ class StorageMixin:
                         # A correction without a turn list clears the stale one;
                         # the turn index read then decodes this object instead.
                         user_turns=item.get("user_turns"),
-                        semantic_projection_version=1,
+                        # 2 only when the object's records were re-sealed with
+                        # their replayed kinds; never lower a row's version.
+                        semantic_projection_version=max(
+                            int(item.get("semantic_projection_version", 1)), int(row["semantic_projection_version"] or 0)
+                        ),
                     )
                 if any(row[field] != value for field, value in values.items()):
                     updates.append((object_id, values))

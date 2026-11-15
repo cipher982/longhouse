@@ -25,7 +25,10 @@ from zerg.services.provider_interaction_semantics import semantic_event_included
 # reading v2 objects so an explicit migration can replay old raw companions;
 # new objects must advertise the additive wire contract to older readers.
 FORMAT_VERSION = 3
-SEMANTIC_PROJECTION_VERSION = 1
+# 1: the catalog's counts and previews were repaired from raw.
+# 2: the object's own records hold their final interaction kinds, so a reader
+# trusts them and never opens raw (host-normalized-transcripts Phase 6).
+SEMANTIC_PROJECTION_VERSION = 2
 _READABLE_FORMAT_VERSIONS = frozenset({2, FORMAT_VERSION})
 MAX_RENDER_BYTES = 4 * 1024 * 1024
 MAX_RENDER_EVENTS = 10_000

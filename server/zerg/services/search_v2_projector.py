@@ -27,6 +27,7 @@ from zerg.services.session_visibility_policy import visible_in_test_scope
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
+from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)
@@ -333,7 +334,9 @@ class SearchV2Projector:
             )
         recovered_kinds = {}
         source_envelope_id = getattr(spec, "source_envelope_id", None)
-        if source_envelope_id and session_id not in self._semantic_recovery_degraded_sessions:
+        # A final object (version 2) holds its own kinds; replay only older ones.
+        final = int(manifest.get("semantic_projection_version") or 0) >= SEMANTIC_PROJECTION_VERSION
+        if source_envelope_id and not final and session_id not in self._semantic_recovery_degraded_sessions:
             try:
                 recovered_kinds = await recover_render_interaction_kinds(
                     catalog=self.catalog,
