@@ -1,11 +1,20 @@
 {
-  "event_count": 12,
+  "event_count": 13,
   "events": [
     {
       "kind": "event",
       "role": "user",
       "raw_type": "pi_user",
       "content_text": "Run the tests."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "pi_thinking",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      }
     },
     {
       "kind": "event",

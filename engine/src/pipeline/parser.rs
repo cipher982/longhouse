@@ -3098,13 +3098,20 @@ fn extract_pi_message_events(
                         );
                     }
                     "thinking" => {
-                        let Some(text) = block
+                        let text = block
                             .get("thinking")
                             .and_then(Value::as_str)
-                            .filter(|text| !text.trim().is_empty())
-                        else {
+                            .filter(|text| !text.trim().is_empty());
+                        // A signature with no text is reasoning the provider
+                        // withheld: a row with no text, so it is not lost.
+                        if text.is_none()
+                            && block
+                                .get("thinkingSignature")
+                                .and_then(Value::as_str)
+                                .is_none_or(|signature| signature.is_empty())
+                        {
                             continue;
-                        };
+                        }
                         push_pi_event(
                             obj,
                             session_id,
@@ -3114,7 +3121,7 @@ fn extract_pi_message_events(
                             &mut first_raw_line,
                             &format!("thinking-{index}"),
                             Role::System,
-                            Some(format!("Thinking:\n{text}")),
+                            text.map(|text| format!("Thinking:\n{text}")),
                             None,
                             None,
                             None,
@@ -3516,7 +3523,11 @@ fn assert_pi_assistant_items(
             .collect();
     for event in &mut events[start..] {
         if event.raw_type.ends_with("_thinking") {
-            event.item = ItemFacts::reasoning(Visibility::Full);
+            event.item = ItemFacts::reasoning(if event.content_text.is_some() {
+                Visibility::Full
+            } else {
+                Visibility::Withheld
+            });
         } else if event.role == Role::Assistant && event.tool_name.is_none() {
             if let Some(phase) = &phase {
                 event.item = phase.clone();

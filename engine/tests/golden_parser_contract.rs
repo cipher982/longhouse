@@ -629,6 +629,8 @@ fn golden_pi_items() {
         serde_json::json!({"phase": "commentary", "phase_source": "derived"}),
         serde_json::json!({"phase": "final", "phase_source": "derived"}),
         serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        // A signature with no text: withheld, not dropped.
+        serde_json::json!({"kind": "reasoning", "visibility": "withheld"}),
         serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
         serde_json::json!({"kind": "turn_end", "end_reason": "aborted"}),
     ] {
@@ -646,6 +648,7 @@ fn golden_omp_items() {
         serde_json::json!({"phase": "commentary", "phase_source": "derived"}),
         serde_json::json!({"phase": "final", "phase_source": "derived"}),
         serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "withheld"}),
         serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
         serde_json::json!({"intent": "Run the test suite"}),
         serde_json::json!({"intent": "Read the notes"}),
