@@ -1608,6 +1608,19 @@ fn opencode_turn_end(
     part_data: &Value,
     last_part: bool,
 ) -> Option<EndReason> {
+    // An errored message's turn ends at its last part, whatever that part is.
+    if let Some(error) = message_data.get("error").filter(|error| !error.is_null()) {
+        if !last_part {
+            return None;
+        }
+        return Some(
+            if error.get("name").and_then(Value::as_str) == Some("MessageAbortedError") {
+                EndReason::Interrupted
+            } else {
+                EndReason::Error
+            },
+        );
+    }
     if part_data.get("type").and_then(Value::as_str) == Some("step-finish") {
         return match part_data.get("reason").and_then(Value::as_str) {
             Some("stop") => Some(EndReason::Completed),
@@ -1615,17 +1628,7 @@ fn opencode_turn_end(
             _ => None,
         };
     }
-    let error = message_data.get("error")?;
-    if !last_part || error.is_null() {
-        return None;
-    }
-    Some(
-        if error.get("name").and_then(Value::as_str) == Some("MessageAbortedError") {
-            EndReason::Interrupted
-        } else {
-            EndReason::Error
-        },
-    )
+    None
 }
 
 #[allow(clippy::too_many_arguments)]

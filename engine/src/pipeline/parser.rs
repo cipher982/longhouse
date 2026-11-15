@@ -321,10 +321,10 @@ struct RawLine {
     input_tokens: Option<Value>,
     cache_read_tokens: Option<Value>,
     output_tokens: Option<Value>,
-    /// Antigravity `SYSTEM/ERROR_MESSAGE`: `API error (attempt N): ...`.
     /// Cursor transcript `turn_ended`: `success`, `error` or `aborted`.
     /// Raw, because Antigravity uses the same name for its step status.
     status: Option<Value>,
+    /// Antigravity `SYSTEM/ERROR_MESSAGE`: `API error (attempt N): ...`.
     error: Option<Value>,
 }
 
@@ -3965,9 +3965,6 @@ fn extract_events(
         return;
     }
 
-    // Claude's background-task completion envelope is a provider-authored
-    // status row, not a user prompt. Keep the source line archived verbatim,
-    // but project the row as a compact system notification for clients.
     // Cursor's agent transcript closes every turn with its outcome.
     if event_type == "turn_ended" {
         // Like Cursor's message lines, it has no clock of its own: it orders
@@ -4010,6 +4007,9 @@ fn extract_events(
         return;
     }
 
+    // Claude's background-task completion envelope is a provider-authored
+    // status row, not a user prompt. Keep the source line archived verbatim,
+    // but project the row as a compact system notification for clients.
     if let Some(display_text) = claude_task_notification_display(obj) {
         events.push(ParsedEvent {
             item: Default::default(),
@@ -4135,7 +4135,7 @@ fn extract_events(
             }
             if event_type == "user"
                 && extract_text_from_raw_content(content_str)
-                    .is_some_and(|text| text.trim_start().starts_with("[Request interrupted"))
+                    .is_some_and(|text| CLAUDE_INTERRUPT_MARKERS.contains(&text.trim()))
             {
                 events.push(turn_end_event(
                     format!("{msg_uuid}-turn-end"),
@@ -4344,6 +4344,27 @@ fn extract_cursor_events(
         let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
         let event_uuid = format!("{msg_uuid}-cursor-{index}");
         match kind {
+            "redacted-reasoning" if !matches!(source_role, "user" | "tool" | "system") => {
+                // The model reasoned and Cursor withheld it: a row with no
+                // text, whatever the block carries instead.
+                let mut event = cursor_event(
+                    event_uuid,
+                    session_id,
+                    timestamp,
+                    Role::System,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    line_offset,
+                    "cursor_reasoning",
+                    raw_line,
+                );
+                event.item = ItemFacts::reasoning(Visibility::Withheld);
+                events.push(event);
+                emitted = true;
+            }
             "text" | "reasoning" | "redacted-reasoning" => {
                 let Some(text) = block.get("text").and_then(Value::as_str) else {
                     continue;
@@ -4387,11 +4408,7 @@ fn extract_cursor_events(
                     raw_line,
                 );
                 if reasoning {
-                    event.item = ItemFacts::reasoning(if kind == "reasoning" {
-                        Visibility::Full
-                    } else {
-                        Visibility::Withheld
-                    });
+                    event.item = ItemFacts::reasoning(Visibility::Full);
                 }
                 events.push(event);
                 emitted = true;
@@ -6543,6 +6560,13 @@ fn extract_assistant_events(
     }
 }
 
+/// The whole text Claude writes as a user row when a person interrupts a
+/// turn. Exact, so a prompt that merely quotes one does not end a turn.
+const CLAUDE_INTERRUPT_MARKERS: [&str; 2] = [
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
+];
+
 /// A row that ends a turn and says why.
 #[allow(clippy::too_many_arguments)]
 fn turn_end_event(
@@ -8559,6 +8583,27 @@ mod tests {
             result.events[1].content_text.as_deref(),
             Some("next real prompt")
         );
+    }
+
+    #[test]
+    fn claude_interrupt_turn_end_needs_the_exact_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "5d0a7f3e-1c2b-4a5d-8e9f-0a1b2c3d4e60.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u-1","timestamp":"2026-11-15T10:00:00Z","message":{"role":"user","content":"[Request interrupted by user] keeps showing up in my log, why?"}}"#,
+                r#"{"type":"user","uuid":"u-2","timestamp":"2026-11-15T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#,
+            ],
+        );
+        let result = parse_session_file(&path, 0).unwrap();
+        let ends: Vec<&str> = result
+            .events
+            .iter()
+            .filter(|event| event.item == ItemFacts::turn_end(EndReason::Interrupted))
+            .map(|event| event.uuid.as_str())
+            .collect();
+        assert_eq!(ends, ["u-2-turn-end"]);
     }
 
     #[test]

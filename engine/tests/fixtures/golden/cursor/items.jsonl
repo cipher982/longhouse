@@ -1,5 +1,5 @@
 {"role":"user","version":"1.0.0","message":{"content":[{"type":"text","text":"<user_query>List the files.</user_query>"}]}}
-{"role":"assistant","version":"1.0.0","message":{"content":[{"type":"reasoning","text":"A directory listing answers this."},{"type":"redacted-reasoning","text":"opaque"},{"type":"text","text":"Listing them."},{"type":"tool-call","toolName":"Shell","toolCallId":"call-1","args":{"command":"ls","description":"List the files"}}]}}
+{"role":"assistant","version":"1.0.0","message":{"content":[{"type":"reasoning","text":"A directory listing answers this."},{"type":"redacted-reasoning","data":"opaque"},{"type":"text","text":"Listing them."},{"type":"tool-call","toolName":"Shell","toolCallId":"call-1","args":{"command":"ls","description":"List the files"}}]}}
 {"role":"tool","version":"1.0.0","message":{"content":[{"type":"tool-result","toolName":"Shell","toolCallId":"call-1","result":"a.txt"}]}}
 {"role":"assistant","version":"1.0.0","message":{"content":[{"type":"text","text":"There is one file, a.txt."}]}}
 {"type":"turn_ended","status":"success"}
