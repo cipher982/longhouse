@@ -5,6 +5,8 @@ name: Main Repair
 # repair itself. The logic and every guard live in scripts/ci/main_repair.py (tests: scripts/tests/main-repair.test.py):
 # only the newest run of the workflow speaks for main, a failed run is rerun once before anyone is blamed, the culprit is
 # bisected by running the failing check, a revert is never reverted, and the only ref written is refs/heads/main.
+# A failure of the runners or network (full disk, lost runner, TLS handshake timeout, API rate limit) is rerun, never
+# reverted: it says nothing about the commit.
 #
 # A push made with this workflow's token starts no push workflows (GitHub's recursion rule), so the script dispatches
 # CI, the runtime image, Deploy and Verify and Terminal Truth at the revert itself. It holds no Longhouse credential:

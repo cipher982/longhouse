@@ -12,6 +12,9 @@ It acts only when every guard below holds, and otherwise says why it did nothing
    still in progress will report for itself.
 2. Flake check: the first time a run fails, rerun its failed jobs once and stop; the rerun's own completion starts
    this script again. Only a run that failed on its second attempt (attempt >= 2) is deterministic.
+   Infrastructure failures are never deterministic (full disk on the runner, a lost runner, network or TLS handshake
+   timeouts, a GitHub API rate limit): a failed job whose log shows one is rerun again, up to MAX_INFRA_ATTEMPTS
+   attempts, and after that main-repair abstains. A commit is never reverted for something its code did not do.
 3. The range is the commits since the newest earlier green run of the same workflow that is an ancestor of the
    failing head. No green ancestor, a merge commit, or more than MAX_RANGE commits: abstain.
 4. Attribution by evidence. One commit in range: it. Several: bisect by running the failing check at each probe
@@ -56,6 +59,8 @@ REVALIDATE = (  # workflow file, inputs; a GITHUB_TOKEN push starts nothing, but
 HANDLED_WORKFLOWS = ("CI", "Terminal Truth")
 FAILED = frozenset({"failure", "timed_out", "startup_failure"})
 MAX_RANGE = 30
+MAX_INFRA_ATTEMPTS = 4  # attempts of one run; infrastructure failures are rerun until then, never reverted
+MAX_LOGS = 12
 MAX_REVERTS_PER_6H = 2
 NO_REVERT_MARKER = "[no-auto-revert]"
 TRAILER = "Main-Repair"
@@ -64,6 +69,16 @@ TT_PATHS_FILE = ".github/workflows/terminal-truth.yml"
 _FAILED_TEST = re.compile(r"FAILED\s+(tests_lite/[\w/.\-]+\.py)(?:::(\S+))?")
 _RUST_FAILED = re.compile(r"test\s+([\w:]+)\s+\.\.\.\s+FAILED")
 _TS = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z\s?")
+# Failures of the machinery, not of the commit. scripts/tests/main-repair.test.py holds real lines from failed runs on the
+# ci VM. Keep the patterns narrow: one that also matches an ordinary test failure would hide a real regression behind reruns.
+INFRA_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("the runner ran out of disk space", re.compile(r"no space left on device|\[Errno 28\]", re.I)),
+    ("the runner was lost", re.compile(r"lost communication with the server|received a shutdown signal", re.I)),
+    ("a network or TLS handshake timeout", re.compile(
+        r"TLS handshake timeout|dial tcp [^\s]+: i/o timeout|Temporary failure in name resolution|Could not resolve host", re.I)),
+    ("a GitHub API rate limit", re.compile(r"API rate limit exceeded|secondary rate limit|rate limit exceeded", re.I)),
+)
+
 _ERROR_LINE = re.compile(r"(##\[error\]|\bFAILED\b|\bERROR\b|error(\[E\d+\])?:|AssertionError|panicked at|Diff in|Traceback)")
 
 
@@ -127,6 +142,15 @@ def excerpt(log: str, limit: int = 1800) -> str:
     else:
         text = "\n".join(lines[-30:])
     return text[-limit:]
+
+
+def infrastructure_failure(logs: dict[int, str]) -> str | None:
+    """Why a failed run is infrastructure, not code: the first category any failed job's log shows, else None."""
+    for text in logs.values():
+        for reason, pattern in INFRA_PATTERNS:
+            if pattern.search(text):
+                return reason
+    return None
 
 
 def probes_for(workflow: str, failed_jobs: list[dict[str, Any]], logs: dict[int, str]) -> list[Probe] | None:
@@ -358,6 +382,24 @@ def repair(
             return Outcome("abstained", f"rerun request refused ({res['_status']}); not acting on an unconfirmed failure", run_url=url)
         return Outcome("rerun_requested", "rerunning the failed jobs once to rule out a flake", run_url=url)
 
+    jobs = gh.get(f"actions/runs/{run_id}/jobs", per_page=100).get("jobs") or []
+    failed_jobs = [j for j in jobs if j.get("conclusion") in FAILED]
+    logs = {j["id"]: gh.log(j["id"]) for j in failed_jobs[:MAX_LOGS]}
+
+    # Guard 2b: infrastructure is not a verdict on the commit. Rerun, never revert, until the cap.
+    infra = infrastructure_failure(logs)
+    if infra:
+        if attempt >= MAX_INFRA_ATTEMPTS:
+            return Outcome("abstained", f"attempt {attempt} still failed because of infrastructure ({infra}); "
+                           "not reverting anything, a human looks at the runners", run_url=url)
+        if dry_run:
+            return Outcome("dry_run", f"would rerun again: infrastructure failure ({infra}), not a code failure", run_url=url)
+        res = gh.post(f"actions/runs/{run_id}/rerun-failed-jobs")
+        if res.get("_status"):
+            return Outcome("abstained", f"rerun request refused ({res['_status']}) after an infrastructure failure ({infra})", run_url=url)
+        return Outcome("rerun_requested", f"infrastructure failure ({infra}), not a code failure: rerunning the failed jobs "
+                       f"(attempt {attempt} of {MAX_INFRA_ATTEMPTS}), nothing is reverted", run_url=url)
+
     # Guard 3: the range since the newest earlier green ancestor.
     older = [r for r in listing.get("workflow_runs") or []
              if int(r["run_number"]) < int(run["run_number"]) and r.get("status") == "completed" and r.get("conclusion") == "success"]
@@ -380,9 +422,6 @@ def repair(
         return Outcome("abstained", f"{len(recent)} automatic reverts already landed in the last 6 hours; a human looks next", run_url=url)
 
     # Guard 4: attribution.
-    jobs = gh.get(f"actions/runs/{run_id}/jobs", per_page=100).get("jobs") or []
-    failed_jobs = [j for j in jobs if j.get("conclusion") in FAILED]
-    logs = {j["id"]: gh.log(j["id"]) for j in failed_jobs[:6]}
     probes = probes_for(name, failed_jobs, logs)
     culprit: str | None = None
     if len(commits) == 1:

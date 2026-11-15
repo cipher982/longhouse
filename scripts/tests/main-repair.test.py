@@ -299,6 +299,85 @@ def test_only_ci_and_terminal_truth_on_main_pushes_are_handled() -> None:
         assert mr.repair(gh, mr.Repo(w.work), 100).kind == "stood_down"
 
 
+# Real lines from the failed ci-VM runs https://github.com/cipher982/longhouse/actions/runs/43760730494 (docs-only commit
+# 5484c3a82), .../43735505356 and .../43668365434, plus the TLS handshake line from cube-ci-runner-pools.md.
+REAL_INFRA_LOGS = {
+    "the runner ran out of disk space": [
+        "2026-11-15T21:14:12.2645451Z Error response from daemon: failed to create prepare snapshot dir: failed to create temp dir: "
+        "mkdir /var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/new-250879412: no space left on device",
+        "2026-11-15T21:14:11.6110024Z OSError: [Errno 28] No space left on device: '/work/.build/locks'",
+        "2026-11-15T02:44:43.8995626Z write /var/lib/docker/containerd/daemon/io.containerd.metadata.v1.bolt/meta.db: no space left on device",
+    ],
+    "the runner was lost": [
+        "The self-hosted runner: ci-fast-5swdc-runner-tr2wh lost communication with the server. Verify the machine is running and has a healthy network connection.",
+        "The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled.",
+    ],
+    "a network or TLS handshake timeout": [
+        "2026-09-30T12:00:00.0Z net/http: TLS handshake timeout",
+        "2026-11-14T09:00:00.0Z dial tcp 140.82.112.3:443: i/o timeout",
+    ],
+    "a GitHub API rate limit": [
+        "gh: API rate limit exceeded for installation ID 1234. If you reach out to GitHub Support for help, please include the request ID (HTTP 403)",
+        "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+    ],
+}
+
+
+def test_real_infrastructure_log_lines_are_classified() -> None:
+    for reason, lines in REAL_INFRA_LOGS.items():
+        for line in lines:
+            assert mr.infrastructure_failure({1: "make: ok\n" + line + "\nmake: *** Error 1"}) == reason, line
+    for ordinary in ("E   AssertionError: boom", "FAILED tests_lite/test_a.py::test_x - assert 1 == 2",
+                     "error[E0308]: mismatched types", "Diff in engine/src/lib.rs", ""):
+        assert mr.infrastructure_failure({1: ordinary}) is None, ordinary
+
+
+def test_infrastructure_failure_reruns_and_never_reverts_even_for_one_docs_commit() -> None:
+    """The 2026-11-15 case: a docs-only commit, red on every attempt for lack of disk, must not be reverted."""
+    for reason, lines in REAL_INFRA_LOGS.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            w = World(tmp)
+            docs = w.commit("docs only", {"docs/x.md": "hello\n"})
+            w.push()
+            gh = FakeGh(w, docs, attempt=2, log=lines[0] + "\n",
+                        jobs=[{"id": 1, "name": "Validation", "conclusion": "failure", "steps": []}])
+            head = w.origin_head()
+            outcome, sent, probed = run_repair(w, gh)
+            assert outcome.kind == "rerun_requested" and reason in outcome.reason, outcome
+            assert gh.reruns == [100] and "not a code failure" in outcome.reason
+            assert w.origin_head() == head and probed == [] and sent == []
+
+
+def test_infrastructure_failure_in_one_of_many_jobs_stops_the_revert_too() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        w, shas = broken_world(tmp)
+        jobs = [{"id": 1, "name": "Validation", "conclusion": "failure", "steps": []},
+                {"id": 2, "name": "Small checks", "conclusion": "failure", "steps": []}]
+        gh = FakeGh(w, shas[-1], attempt=3, jobs=jobs)
+        gh.log = lambda job_id: REAL_INFRA_LOGS["the runner ran out of disk space"][2] if job_id == 2 else "AssertionError: boom"
+        head = w.origin_head()
+        outcome, sent, probed = run_repair(w, gh)
+        assert outcome.kind == "rerun_requested" and w.origin_head() == head and probed == []
+
+
+def test_infrastructure_failure_past_the_attempt_cap_abstains_without_reverting() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        w, shas = broken_world(tmp)
+        gh = FakeGh(w, shas[-1], attempt=mr.MAX_INFRA_ATTEMPTS, log=REAL_INFRA_LOGS["the runner was lost"][0])
+        head = w.origin_head()
+        outcome, sent, probed = run_repair(w, gh)
+        assert outcome.kind == "abstained" and "infrastructure" in outcome.reason and gh.reruns == []
+        assert w.origin_head() == head and probed == [] and sent == []
+
+
+def test_infrastructure_failure_dry_run_changes_nothing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        w, shas = broken_world(tmp)
+        gh = FakeGh(w, shas[-1], attempt=2, log=REAL_INFRA_LOGS["the runner ran out of disk space"][0])
+        out, *_ = run_repair(w, gh, dry=True)
+        assert out.kind == "dry_run" and "infrastructure" in out.reason and gh.reruns == []
+
+
 def test_log_parsing() -> None:
     log = "FAILED tests_lite/test_a.py::test_x - AssertionError\nFAILED tests_lite/test_a.py::test_y\nFAILED tests_lite/test_b.py"
     assert mr.parse_tests([log]) == ["tests_lite/test_a.py", "tests_lite/test_b.py"]
