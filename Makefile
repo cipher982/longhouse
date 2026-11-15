@@ -916,6 +916,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/promotion-gates.test.py
 	@python3 scripts/tests/promote-production.test.py
 	@python3 scripts/tests/ring-promoter.test.py
+	@python3 scripts/tests/terminal-truth-cover.test.py
 	@python3 scripts/tests/remote.test.py
 
 validate-terminal-truth-ci: ## @internal Terminal-truth CI lane: pinned provider versions, verdict script, workflow shape

@@ -160,9 +160,15 @@ class WorkflowTests(unittest.TestCase):
 
     def test_one_queue_a_short_limit_and_scratch_on_the_ram_backed_work_volume(self):
         text = WORKFLOW.read_text()
-        # One queue for every run: two runs on one host disk made a pass fail (2026-11-12).
+        # One queue for main (push, nightly, a dispatch on main): two runs on one host disk made a pass fail
+        # (2026-11-12). Every other ref has a queue of its own, so a branch dispatch cannot take main's pending slot
+        # (it cancelled the pending run of 430ea7f3c on 2026-11-15). Nothing is ever cancelled once running.
         group = next(line for line in text.splitlines() if line.strip().startswith("group:"))
-        self.assertEqual(group.strip(), "group: terminal-truth-${{ github.repository }}")
+        self.assertEqual(
+            group.strip(),
+            "group: terminal-truth-${{ github.repository }}-${{ github.ref == 'refs/heads/main' && 'main' || github.ref }}",
+        )
+        self.assertIn("cancel-in-progress: false", text)
         limit = next(line for line in text.splitlines() if line.strip().startswith("timeout-minutes:"))
         self.assertIn("github.event_name == 'workflow_dispatch' && 240 || 45", limit)
         # /tmp in the pod is the host's shared disk; the work volume is RAM-backed. Short, for unix socket paths.

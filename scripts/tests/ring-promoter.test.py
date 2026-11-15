@@ -29,11 +29,14 @@ class World:
 
     def __init__(self, dogfood=A, production=A, published=C):
         self.served = {promoter.DOGFOOD_HEALTH: dogfood, promoter.PRODUCTION_HEALTH: production}
-        self.published = published
+        self.published = published  # the newest published image; older ones are in `older`
+        self.older: list[str] = []
+        self.needs: dict[str, str | None] = {}  # candidate -> the Terminal Truth commit its range needs
         self.gone: set[str] = set()  # ring health URLs that answer 410 Gone
         self.answers: dict[str, tuple[int, str, str]] = {}  # script key -> (rc, stdout, stderr)
         self.gates: dict | None = None  # the receipt promote-production saves
         self.calls: list[list[str]] = []
+        self.by_target: dict[tuple[str, str], tuple[int, str, str]] = {}  # (script key, target) -> answer
 
     def is_ancestor(self, older, newer):
         if older not in HISTORY or newer not in HISTORY:
@@ -46,6 +49,8 @@ class World:
         rc, out, err = self.answers.get(key, (0, "", ""))
         if "promote-production.sh" in key and self.gates is not None:
             Path(env["PROMOTION_RECEIPT_DIR"], "production-x.json").write_text(json.dumps(self.gates))
+        if "promote-dogfood.sh" in key:
+            rc, out, err = self.by_target.get((key, argv[-1]), (rc, out, err))
         if rc == 0 and "promote-dogfood.sh" in key:
             self.served[promoter.DOGFOOD_HEALTH] = argv[-1]
         return rc, out, err, 0.1
@@ -57,7 +62,8 @@ class PromoterTests(unittest.TestCase):
         patches = {
             "served": lambda url: self.world.served.get(url),
             "gone": lambda url: url in self.world.gone,
-            "newest_published": lambda main: self.world.published,
+            "published_candidates": lambda main: [self.world.published, *self.world.older],
+            "required_terminal_truth_commit": lambda base, head: self.world.needs.get(head),
             "is_ancestor": self.world.is_ancestor,
             "run_script": self.world.run_script,
         }
@@ -97,6 +103,51 @@ class PromoterTests(unittest.TestCase):
         self.assertEqual((d["action"], d["lane"]), ("refused", "canary-qualified"))
         self.assertIn("is failure", d["reason"])
         self.assertEqual(promoter.STATE[d["action"]], "failure")
+
+    def test_an_older_green_commit_is_promoted_while_the_newest_waits_for_terminal_truth(self):
+        # 2026-11-15: 7861a9eb6 (B) was green, 81099b157 (C) had no verdict; dogfood sat on A for hours
+        self.world.older = [B]
+        self.world.needs = {C: "c1", B: "b1"}
+        self.world.by_target[("scripts/ops/promote-dogfood.sh --fast-lane", C)] = (4, "", "no terminal-truth status yet")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["target"], d["lane"]), ("promoted", B, "fast-lane"))
+        self.assertIn("not ready", d["reason"])
+        self.assertEqual(self.world.served[promoter.DOGFOOD_HEALTH], B)
+
+    def test_a_red_terminal_truth_commit_is_never_promoted_and_an_older_green_one_is(self):
+        self.world.older = [B]
+        self.world.needs = {C: "c1", B: "b1"}
+        self.world.by_target[("scripts/ops/promote-dogfood.sh --fast-lane", C)] = (5, "", "status is failure")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["target"]), ("promoted", B))
+        self.assertNotIn(["scripts/ops/promote-dogfood.sh", C], self.world.calls)
+
+    def test_candidates_that_share_the_waiting_terminal_truth_commit_are_not_tried_again(self):
+        self.world.older = [B]
+        self.world.needs = {C: "c1", B: "c1"}
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (4, "", "pending")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["target"], d["waiting_on"]), ("waiting", C, ["terminal-truth"]))
+        self.assertEqual(len(self.world.calls), 1)
+
+    def test_when_every_candidate_waits_the_newest_ones_outcome_is_reported(self):
+        self.world.older = [B]
+        self.world.needs = {C: "c1", B: "b1"}
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (4, "", "pending")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["target"]), ("waiting", C))
+        self.assertEqual(self.world.served[promoter.DOGFOOD_HEALTH], A)
+
+    def test_a_failed_deploy_of_the_newest_does_not_fall_back_to_an_older_commit(self):
+        self.world.older = [B]
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (1, "", "deployment failed")
+        d = promoter.decide_dogfood(C, dry_run=False)
+        self.assertEqual((d["action"], d["target"]), ("failed", C))
+        self.assertEqual(len(self.world.calls), 1)
+
+    def test_a_fast_lane_terminal_truth_wait_is_a_wait_not_a_failure(self):
+        self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (4, "", "pending")
+        self.assertEqual(promoter.decide_dogfood(C, dry_run=False)["action"], "waiting")
 
     def test_a_fast_lane_deploy_that_fails_is_a_failure_not_a_wait(self):
         self.world.answers["scripts/ops/promote-dogfood.sh --fast-lane"] = (1, "", "deployment failed")
@@ -198,7 +249,7 @@ class WakeWiringTests(unittest.TestCase):
         listed = re.search(r"^    workflows: \[(.*)\]$", text, re.MULTILINE)
         self.assertIsNotNone(listed)
         names = {n.strip().strip('"') for n in listed.group(1).split(",")}
-        self.assertEqual(names, {"Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI"})
+        self.assertEqual(names, {"Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI", "Terminal Truth"})
         self.assertNotRegex(text, r"(?m)^  schedule:", "the catch-all is Sauron longhouse-ring-wake")
 
     def test_hosted_live_qa_wakes_the_promoter_and_the_promoter_waits_for_it(self) -> None:

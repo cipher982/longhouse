@@ -135,8 +135,15 @@ permissions:
 # One run at a time. Two runs on the pool's two slots share one host: on 2026-11-12 a mutation run beside a pass made
 # the pass fail (run 43311962428: an engine rebuild wrote 326 MB in one second and the scratch host's catalog call
 # missed its deadline).
+#
+# main's runs and every other ref's are separate groups: GitHub keeps one pending run per group and cancels the older
+# one, so a dispatch from a branch used to take the pending slot of a main push and cancel it (2026-11-15, 430ea7f3c).
+# A branch run can now share the pool's second slot with a main run; main's rerun-alone step absorbs a slowed cell.
+# Nothing in main's group is ever cancelled once it is running. The pending push that a newer push replaces is covered
+# by a later green run (scripts/ops/terminal_truth_cover.py) or passed over for an older green commit
+# (scripts/ops/ring_promoter.py), so a missing verdict no longer stops dogfood.
 concurrency:
-  group: terminal-truth-${{ github.repository }}
+  group: terminal-truth-${{ github.repository }}-${{ github.ref == 'refs/heads/main' && 'main' || github.ref }}
   cancel-in-progress: false
 
 jobs:

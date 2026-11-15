@@ -97,14 +97,24 @@ def gh_json(*args: str):
     return json.loads(proc.stdout or "null")
 
 
-def newest_published(main: str) -> str | None:
-    """The newest main commit with a successful runtime image publication."""
-    runs = gh_json("api", f"repos/{REPO}/actions/workflows/runtime-image.yml/runs?branch=main&status=success&per_page=30")
+def published_candidates(main: str, limit: int = 30) -> list[str]:
+    """Main commits with a successful runtime image publication, newest first."""
+    runs = gh_json("api", f"repos/{REPO}/actions/workflows/runtime-image.yml/runs?branch=main&status=success&per_page={limit}")
+    found: list[str] = []
     for run in sorted(runs.get("workflow_runs") or [], key=lambda r: int(r.get("run_number") or 0), reverse=True):
         sha = str(run.get("head_sha") or "")
-        if run.get("event") in ("push", "workflow_dispatch") and SHA_RE.match(sha) and is_ancestor(sha, main):
-            return sha
-    return None
+        if (run.get("event") in ("push", "workflow_dispatch") and SHA_RE.match(sha) and sha not in found
+                and is_ancestor(sha, main)):
+            found.append(sha)
+    return found
+
+
+def required_terminal_truth_commit(base: str, head: str) -> str | None:
+    """The commit whose Terminal Truth verdict a promotion of base..head needs (None: no live-preview change)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dogfood_sensitive_paths
+
+    return dogfood_sensitive_paths.newest_live_preview_commit(ROOT, base, head)
 
 
 def run_script(argv: list[str], env: dict | None = None) -> tuple[int, str, str, float]:
@@ -119,34 +129,79 @@ def tail(text: str, lines: int = 6) -> str:
     return " | ".join(line.strip() for line in text.strip().splitlines()[-lines:] if line.strip())[:600]
 
 
+MAX_CANDIDATES = 6  # published images tried per run, newest first; each try is one gate check, not a deploy
+
+
 def decide_dogfood(main: str, dry_run: bool) -> dict:
+    """Promote the newest published commit whose gates are all green, not only the newest published one.
+
+    Terminal Truth and Deploy and Verify run one at a time and GitHub keeps one pending run, so with pushes every few
+    minutes the newest commit rarely has its own verdict while an older one does. Insisting on the newest left dogfood
+    on one commit for hours on 2026-11-15 (7861a9eb6 green, 81099b157 waiting). A candidate that is waiting on a
+    gate, or whose Terminal Truth verdict is red, is passed over for the next older one that contains what dogfood
+    serves; the newest candidate's own outcome is what is reported when none can go. A commit whose own or covering
+    Terminal Truth failed is never promoted: promote-dogfood.sh refuses it (exit 5) and the promoter only moves on.
+    """
     current = served(DOGFOOD_HEALTH)
-    target = newest_published(main)
-    d = {"ring": "dogfood", "served": current, "target": target}
+    candidates = published_candidates(main)
+    newest = candidates[0] if candidates else None
+    d = {"ring": "dogfood", "served": current, "target": newest}
     if current is None:
         return {**d, "action": "waiting", "reason": f"{DOGFOOD} health is unreadable"}
-    if target is None:
+    if newest is None:
         return {**d, "action": "up_to_date", "reason": "no published runtime image on main"}
-    if target == current or is_ancestor(target, current):
-        return {**d, "action": "up_to_date", "reason": f"{DOGFOOD} serves {current[:12]}, newest published is {target[:12]}"}
-    if not is_ancestor(current, target):
-        return {**d, "action": "refused", "reason": f"{target[:12]} does not contain what {DOGFOOD} serves; never sideways"}
+    if newest == current or is_ancestor(newest, current):
+        return {**d, "action": "up_to_date", "reason": f"{DOGFOOD} serves {current[:12]}, newest published is {newest[:12]}"}
+    if not is_ancestor(current, newest):
+        return {**d, "action": "refused", "reason": f"{newest[:12]} does not contain what {DOGFOOD} serves; never sideways"}
     if dry_run:
         return {**d, "action": "would_promote"}
+    ahead = [c for c in candidates if c != current and not is_ancestor(c, current) and is_ancestor(current, c)]
+    first: dict | None = None
+    skipped: list[str] = []
+    passed_over: set[str] = set()  # Terminal Truth commits already seen waiting or red: older candidates share the verdict
+    for candidate in ahead[:MAX_CANDIDATES]:
+        needed = required_terminal_truth_commit(current, candidate)
+        if needed and needed in passed_over:
+            continue
+        result = attempt_dogfood({**d, "target": candidate}, candidate)
+        first = first or result
+        if result["action"] == "promoted":
+            if skipped:
+                result["reason"] = f"newer published {', '.join(s[:12] for s in skipped)} not ready: {first['reason']}"[:600]
+            return result
+        movable = (result["action"] == "waiting" and "lock" not in (result.get("waiting_on") or [])) or (
+            result["action"] == "refused" and result.get("waiting_on_verdict") is True)
+        if not movable:
+            return first if candidate == ahead[0] else result
+        skipped.append(candidate)
+        if needed:
+            passed_over.add(needed)
+    return {**(first or d), "target": newest}
+
+
+def terminal_truth_outcome(d: dict, rc: int, err: str, lane: str) -> dict:
+    """A live-preview change needs its passing `longhouse/terminal-truth` status (promote-dogfood.sh): exit 4 is a
+    missing or pending status with no covering later run (wait for Terminal Truth), exit 5 a failed one (a refusal)."""
+    if rc == TERMINAL_TRUTH_WAITING:
+        return {**d, "action": "waiting", "lane": lane, "waiting_on": ["terminal-truth"], "reason": tail(err, 2)}
+    return {**d, "action": "refused", "lane": lane, "waiting_on_verdict": True, "reason": tail(err, 2)}
+
+
+def attempt_dogfood(d: dict, target: str) -> dict:
+    """One promote-dogfood.sh attempt for one target: fast lane first, then the canary-qualified path."""
     rc, out, err, elapsed = run_script(["bash", "scripts/ops/promote-dogfood.sh", "--fast-lane", target])
     if rc == 0:
         return {**d, "action": "promoted", "lane": "fast-lane", "elapsed_s": elapsed, "reason": tail(out, 2)}
+    if rc in (TERMINAL_TRUTH_WAITING, TERMINAL_TRUTH_REFUSED):
+        return terminal_truth_outcome(d, rc, err, "fast-lane")
     if rc != FAST_LANE_NOT_ALLOWED:
         return {**d, "action": "failed", "lane": "fast-lane", "elapsed_s": elapsed, "reason": tail(err)}
     rc, out, err, elapsed = run_script(["bash", "scripts/ops/promote-dogfood.sh", target])
     if rc == 0:
         return {**d, "action": "promoted", "lane": "canary-qualified", "elapsed_s": elapsed, "reason": tail(out, 2)}
-    # A live-preview change needs its passing `longhouse/terminal-truth` status (promote-dogfood.sh): exit 4 is a
-    # missing or pending status (wait for the Terminal Truth run), exit 5 a failed one (a refusal, not a retry).
-    if rc == TERMINAL_TRUTH_WAITING:
-        return {**d, "action": "waiting", "lane": "canary-qualified", "waiting_on": ["terminal-truth"], "reason": tail(err, 2)}
-    if rc == TERMINAL_TRUTH_REFUSED:
-        return {**d, "action": "refused", "lane": "canary-qualified", "reason": tail(err, 2)}
+    if rc in (TERMINAL_TRUTH_WAITING, TERMINAL_TRUTH_REFUSED):
+        return terminal_truth_outcome(d, rc, err, "canary-qualified")
     # A missing canary verification receipt means Deploy and Verify is still running
     # or a newer push superseded this target.
     waiting = []

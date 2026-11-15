@@ -38,6 +38,7 @@ class PromotionAuthorizationTests(unittest.TestCase):
         statuses: list | None = None,
         status_unreadable: bool = False,
         health_unreadable: bool = False,
+        cover: str = "",
     ):
         s3 = fake_s3.FakeS3()
         s3.__enter__()
@@ -141,6 +142,11 @@ elif name == 'curl' and args[-1].endswith('/api/health'):
         sys.exit(22)
     print(json.dumps({'build': {'commit': os.environ['FIXTURE_SERVED']}}))
 elif name == 'python3':
+    if args and args[0].endswith('terminal_truth_cover.py'):
+        with open(root/'cover_calls', 'a') as log:
+            log.write(args[-1] + '\n')
+        print(os.environ['FIXTURE_COVER'], end='')
+        sys.exit(0)
     if args and args[0].endswith('dogfood_sensitive_paths.py') and 'live-preview' in args:
         with open(root/'live_preview_calls', 'a') as log:
             log.write(f"{args[args.index('--base') + 1]} {args[args.index('--head') + 1]}\n")
@@ -179,6 +185,7 @@ else:
                 "FIXTURE_LIVE_PREVIEW": live_preview,
                 "FIXTURE_STATUSES": json.dumps(statuses if statuses is not None else []),
                 "FIXTURE_STATUS_UNREADABLE": "1" if status_unreadable else "0",
+                "FIXTURE_COVER": cover,
                 "FIXTURE_HEALTH_UNREADABLE": "1" if health_unreadable else "0",
                 **s3.env(),
             }
@@ -364,6 +371,30 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="failure"), self.PASSED])
         self.assertEqual((result.returncode, promotions), (5, []))
+
+    def test_a_later_passing_run_covers_a_commit_that_has_no_status_of_its_own(self):
+        later = "9" * 40
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[], cover=f"{later}\thttps://x/runs/2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(promotions), 1)
+        self.assertIn("a later main commit that contains it, passed", result.stdout)
+
+    def test_a_later_passing_run_covers_a_pending_status(self):
+        later = "9" * 40
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state="pending")],
+                                                cover=f"{later}\thttps://x/runs/2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_later_passing_run_never_covers_a_failed_status_of_the_commit_itself(self):
+        later = "9" * 40
+        for state in ("failure", "error"):
+            result, promotions = self.run_promotion(live_preview=self.LP, statuses=[self.status(state=state)],
+                                                    cover=f"{later}\thttps://x/runs/2")
+            self.assertEqual((result.returncode, promotions), (5, []), state)
+
+    def test_no_covering_run_still_waits(self):
+        result, promotions = self.run_promotion(live_preview=self.LP, statuses=[], cover="")
+        self.assertEqual((result.returncode, promotions), (4, []))
 
     def test_an_unreadable_status_waits(self):
         result, promotions = self.run_promotion(live_preview=self.LP, status_unreadable=True)

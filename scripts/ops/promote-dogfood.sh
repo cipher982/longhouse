@@ -77,8 +77,20 @@ receipt_path="$(mktemp)"
 # passing `longhouse/terminal-truth` commit status, posted by the Terminal Truth workflow run on that exact
 # commit (.github/workflows/terminal-truth.yml). The commit is the newest one in served..SHA that touches such
 # a path: its run tested the tree holding every earlier live-preview change in the range. No such commit, no
-# requirement. Exit 4: the status is missing or still pending (the promoter waits). Exit 5: it failed, errored
+# requirement. When that commit has no status or a pending one (Terminal Truth keeps one pending run, so a push
+# followed by another never gets its own), a later main commit that descends from it and carries a passing status
+# covers it (terminal_truth_cover.py); a failed or errored status of its own is never overridden. Exit 4: the status is missing or still pending (the promoter waits). Exit 5: it failed, errored
 # or was not posted by GitHub Actions (the promoter records a refusal).
+# A later commit on main that descends from $1 and has a passing terminal-truth status covers it (see above).
+covered_by_later_run() {
+  local found cover_sha cover_url
+  found="$(python3 "$ROOT/scripts/ops/terminal_truth_cover.py" --repo "$ROOT" "$1" 2>/dev/null)" || return 1
+  [[ -n "$found" ]] || return 1
+  cover_sha="${found%%$'\t'*}"
+  cover_url="${found#*$'\t'}"
+  echo "terminal-truth: ${1:0:12} has no verdict of its own; ${cover_sha:0:12}, a later main commit that contains it, passed ($cover_url)"
+}
+
 require_terminal_truth() {
   local base="$1" commit status_json row state creator url
   commit="$(python3 "$ROOT/scripts/ops/dogfood_sensitive_paths.py" --repo "$ROOT" live-preview --base "$base" --head "$SHA")" || {
@@ -94,6 +106,9 @@ require_terminal_truth() {
     exit 4
   }
   row="$(jq -c '[.[] | select(.context == "longhouse/terminal-truth")] | first // empty' <<<"$status_json")"
+  if [[ -z "$row" ]] && covered_by_later_run "$commit"; then
+    return 0
+  fi
   if [[ -z "$row" ]]; then
     echo "Refusing $SHA: ${commit:0:12} touches live-preview paths and has no terminal-truth status yet (its Terminal Truth run has not reported; dispatch it on main with publish_status if it was superseded)." >&2
     exit 4
@@ -110,6 +125,9 @@ require_terminal_truth() {
       echo "terminal-truth: ${commit:0:12} passed ($url)"
       ;;
     pending)
+      if covered_by_later_run "$commit"; then
+        return 0
+      fi
       echo "Refusing $SHA: the terminal-truth status on ${commit:0:12} is still pending ($url)." >&2
       exit 4
       ;;

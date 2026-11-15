@@ -9,10 +9,12 @@ name: Promote Rings
 on:
   workflow_run:
     # Image published (dogfood fast lane), canary qualified (blocking-list
-    # ranges), CI receipts and the OCI archive (production gates). These runs
+    # ranges), Terminal Truth (the live-preview verdict dogfood waits on; a
+    # branch dispatch is filtered out by `branches`), CI receipts and the OCI
+    # archive (production gates). These runs
     # start from a push (the pusher is the actor), so their completion fires
     # this trigger: 101 of 101 completions on main, 2026-10-07..08.
-    workflows: ["Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI"]
+    workflows: ["Publish Runtime Image", "Archive Runtime Image", "Deploy and Verify", "CI", "Terminal Truth"]
     types: [completed]
     branches: [main]
   # Hosted Live QA is not in that list because its completion never fires it
