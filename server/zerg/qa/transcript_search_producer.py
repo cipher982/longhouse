@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.qa import antigravity_scripted_lane
 from zerg.qa import provider_console_lifecycle as console
 from zerg.qa import search_ingest_oracle as oracle
 from zerg.qa.codex_auth import login_with_api_key
@@ -39,7 +40,9 @@ from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 
-PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp", "antigravity")
+# Antigravity runs on its own scripted-only registration (antigravity_transcript_search_producer): the CI Gemini key
+# is free tier, and one registration cannot bind credentials both per provider and per evidence class.
+PROVIDERS = ("codex", "claude", "opencode", "cursor", "pi", "omp")
 ASSERTION_ID = "transcript_ingested_searchable"
 NEGATIVE_CONTROLS = (oracle.FAULT_NAME,)
 SCENARIO_IDS = tuple(f"{provider}_transcript_search" for provider in PROVIDERS)
@@ -57,7 +60,8 @@ REGISTRATION = ProducerRegistration(
     # 6: a control whose run raised before a verdict says so (producer_shell): whether its fault had fired, and that
     # its preconditions were not evaluated.
     # 7: Antigravity joins the providers.
-    scenario_revision=7,
+    # 8: Antigravity leaves for antigravity.transcript_search.v1 (scripted model).
+    scenario_revision=8,
     assertion_cells=((ASSERTION_ID, None),),
     providers=PROVIDERS,
     platforms=("linux", "darwin"),
@@ -158,7 +162,9 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
     home = isolated_provider_home()
     environment = console._provider_environment(provider, args, home)
     fault_receipt_path = root / "qa-fault-receipt.jsonl"
-    marker = oracle.new_marker()
+    # One marker per attempt, drawn up front so a scripted model can be told each joined word before it runs.
+    markers = [oracle.new_marker() for _ in range(_MARKER_ATTEMPTS)]
+    marker = markers[0]
     if args.negative_control:
         environment["LONGHOUSE_QA_FAULT"] = args.negative_control
         environment["LONGHOUSE_QA_FAULT_MARKER"] = marker["marker"]
@@ -206,6 +212,10 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
     shipper: TranscriptShipper | None = None
     session_id: str | None = None
     observation: dict[str, Any] = {"provider": provider}
+    scripted_lane: antigravity_scripted_lane.ScriptedLane | None = None
+    if provider == "antigravity":
+        scripted_lane = antigravity_scripted_lane.start(root, home, environment, tuple(markers))
+        args.model = args.model or antigravity_scripted_lane.SCRIPTED_AGY_MODEL
     failure: BaseException | None = None
     try:
         shipper = start_transcript_shipper(
@@ -228,7 +238,7 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
                 if args.negative_control:
                     # The fault is bound to one marker at Machine Agent start.
                     break
-                marker = oracle.new_marker()
+                marker = markers[attempt]
             turn = _search_turn(
                 provider=provider,
                 args=args,
@@ -259,6 +269,9 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
         # read as a product regression or a harness gap from the evidence.
         observation["claims"] = [console.claim_identity_summary(claim) for claim in claims]
     finally:
+        if scripted_lane is not None:
+            write_json(root / "scripted-model-receipt.json", scripted_lane.receipt())
+            scripted_lane.close()
         # A completed Console turn has already released its run; terminate only
         # a run a failure may have left owning a provider.
         termination = console._terminate_live_qualification_session(api_url, token, session_id) if failure is not None else None

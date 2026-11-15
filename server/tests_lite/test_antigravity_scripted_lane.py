@@ -123,7 +123,7 @@ def test_the_whole_lifecycle_is_answered_turn_by_turn(turns):
 
 def test_every_expected_turn_exists_and_the_fixture_loads(tmp_path, turns):
     tag, fixture = turns
-    assert {turn["id"] for turn in fixture} == set(lane.EXPECTED_TURNS) | {"interrupt-tool-result"}
+    assert {turn["id"] for turn in fixture} == set(lane.EXPECTED_TURNS) | {"interrupt-tool-result"}  # no search markers
     path = tmp_path / "script.json"
     path.write_text(json.dumps({"turns": fixture}), encoding="utf-8")
     loaded, digest = server.load_script(path)
@@ -152,3 +152,18 @@ def test_registration_is_scripted_only_with_no_model_token():
     assert registration["scenario_ids"] == ["antigravity_console_adapter_lifecycle"]
     assert "antigravity" not in lifecycle.REGISTRATION.to_dict()["providers"]
     assert producer.STEER_VARIANT in producer.PRODUCER.variants
+
+
+def test_transcript_search_prompts_are_answered_with_their_joined_word():
+    from zerg.qa import search_ingest_oracle as oracle
+    from zerg.qa import antigravity_transcript_search_producer as search_producer
+
+    markers = (oracle.new_marker(), oracle.new_marker())
+    fixture = lane.script(uuid4().hex, markers)["turns"]
+    for index, marker in enumerate(markers):
+        plan = _plan(fixture, [_user(oracle.search_prompt(marker)), SYSTEM])
+        assert (plan.turn_id, plan.text) == (f"search-{index}", marker["marker"])
+    registration = search_producer.REGISTRATION.to_dict()
+    assert registration["providers"] == ["antigravity"]
+    assert registration["evidence_classes"] == ["scripted_model"]
+    assert registration["credential_binding_ids_by_evidence_class"] == {"scripted_model": ["runtime_host_control"]}

@@ -1967,7 +1967,6 @@
     {
       "path": "server/tests_lite/test_search_ingest_oracle.py",
       "providers": [
-        "antigravity",
         "claude",
         "codex",
         "cursor",

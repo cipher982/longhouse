@@ -55,14 +55,22 @@ def steer_tag() -> str | None:
     return _steer_tag
 
 
-def script(tag: str) -> dict[str, Any]:
-    """The fixture for the whole lifecycle, newest turn first."""
+def script(tag: str, search_markers: tuple[dict[str, str], ...] = ()) -> dict[str, Any]:
+    """The fixture for the whole lifecycle, newest turn first.
+
+    ``search_markers`` add the transcript-search producer's turns: its prompt asks the model to join three pieces
+    into one word, so each marker's joined word is the scripted reply to the prompt that carries its pieces.
+    """
 
     def shell(command: str) -> dict[str, Any]:
         return {"type": "shell", "name": "run_command", "command": command}
 
     echo = "{{input_marker}}"
     turns: list[dict[str, Any]] = [
+        {"id": f"search-{index}", "match": marker["pieces"], "match_scope": "any_user", "reply": marker["marker"]}
+        for index, marker in reversed(list(enumerate(search_markers)))
+    ]
+    turns += [
         {"id": "post-interrupt", "match": f"{_PREFIX}_POST_INTERRUPT_", "match_scope": "any_user", "reply": echo},
         # The interrupted tool normally never returns; if it does, answer like the model would.
         {"id": "interrupt-tool-result", "match": "AGY_INTERRUPT_TOOL_DONE", "match_scope": "any_input", "reply": echo},
@@ -129,13 +137,13 @@ class ScriptedLane:
             return {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
 
 
-def start(root: Path, home: Path, environment: dict[str, str]) -> ScriptedLane:
+def start(root: Path, home: Path, environment: dict[str, str], search_markers: tuple[dict[str, str], ...] = ()) -> ScriptedLane:
     """Serve the fixture on loopback and point a scratch agy profile (``home``) at it."""
 
     global _steer_tag
     tag = uuid4().hex
     path = root / "scripted-model-fixture.json"
-    path.write_text(json.dumps(script(tag), sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(script(tag, search_markers), sort_keys=True) + "\n", encoding="utf-8")
     path.chmod(0o600)
     turns, digest = scripted_model_server.load_script(path)
     server = scripted_model_server.ThreadedServer(

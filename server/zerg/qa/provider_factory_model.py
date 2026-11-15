@@ -211,6 +211,7 @@ PRODUCER_MODULES: tuple[str, ...] = (
     "zerg.qa.cursor_helm_lifecycle",
     "zerg.qa.opencode_helm_lifecycle",
     "zerg.qa.transcript_search_producer",
+    "zerg.qa.antigravity_transcript_search_producer",
 )
 
 # contract-first-ci.yml runs `make provider-capability-coordination-proof` on

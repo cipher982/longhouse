@@ -42,7 +42,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
       interrupt: false,
       steerMidTurn: false,
       resume: false,
-      search: true,
+      search: false,
     },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse antigravity",

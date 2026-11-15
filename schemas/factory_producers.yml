@@ -84,3 +84,5 @@ producers:
     module: zerg.qa.opencode_helm_lifecycle
   - producer_id: provider.transcript_search.v1
     module: zerg.qa.transcript_search_producer
+  - producer_id: antigravity.transcript_search.v1
+    module: zerg.qa.antigravity_transcript_search_producer

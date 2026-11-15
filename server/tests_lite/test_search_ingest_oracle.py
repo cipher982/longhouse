@@ -126,6 +126,7 @@ def test_registration_names_one_live_token_console_cell_per_provider() -> None:
     assert registration["assertion_cells"] == [{"assertion_id": "transcript_ingested_searchable", "variant": None}] or registration[
         "assertion_cells"
     ] == [["transcript_ingested_searchable", None]]
-    assert set(producer.PROVIDERS) == {"claude", "codex", "cursor", "opencode", "pi", "omp", "antigravity"}
+    # Antigravity runs on antigravity.transcript_search.v1, scripted (the CI Gemini key is free tier).
+    assert set(producer.PROVIDERS) == {"claude", "codex", "cursor", "opencode", "pi", "omp"}
     assert registration["evidence_classes"] == ["live_token"]
     assert registration["modes"] == ["console"]
