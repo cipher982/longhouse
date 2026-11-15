@@ -5711,7 +5711,7 @@ export interface components {
             attach_command: string;
             /**
              * Permission Mode
-             * @default bypass
+             * @default provider_local
              */
             permission_mode: string;
             /** Hook Token */
@@ -5774,8 +5774,8 @@ export interface components {
             } | null;
             /**
              * Permission Mode
-             * @description Managed permission policy: 'bypass', 'provider_local', or 'remote_approve' (answer permission prompts via Longhouse)
-             * @default bypass
+             * @description Helm permission policy: 'provider_local' (default: Longhouse adds no permission flag and the provider keeps the user's own settings), 'bypass' (caller explicitly asks for the provider's skip-permissions flag), or 'remote_approve' (answer permission prompts via Longhouse). Console ignores this field: it always runs in the provider's most permissive mode.
+             * @default provider_local
              */
             permission_mode: string;
             /**
