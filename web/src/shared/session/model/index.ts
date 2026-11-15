@@ -68,6 +68,14 @@ export {
 export { formatFinalAnswer } from "./finalAnswer";
 
 export {
+  collapsingProviderNotifications,
+  presentTranscript,
+  type LiteBodyState,
+  type PresentedTranscriptItem,
+  type PresentTranscriptInput,
+} from "./presentTranscript";
+
+export {
   buildSubagentTree,
   childrenForToolCall,
   flattenSubagentTree,
