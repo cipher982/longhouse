@@ -1015,6 +1015,9 @@ export function buildTimelineModel(
 
     const event = projectionItem.event;
     if (!event) continue;
+    // Turn ends and withheld reasoning carry facts but no text; until the
+    // shared presentation renders them they add nothing to read.
+    if ((event.item?.kind === "turn_end" || event.item?.kind === "reasoning") && !event.content_text) continue;
     if (event.interaction_kind === "provider_reasoning") {
       items.push({ kind: "reasoning", event });
       continue;

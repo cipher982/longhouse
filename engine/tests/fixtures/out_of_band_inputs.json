@@ -14,6 +14,12 @@
   "golden/claude/basic.jsonl@start": [
     "git_info"
   ],
+  "golden/claude/items.jsonl@resume": [
+    "git_info"
+  ],
+  "golden/claude/items.jsonl@start": [
+    "git_info"
+  ],
   "golden/claude/recap_title.jsonl@resume": [
     "git_info"
   ],
@@ -35,6 +41,9 @@
   "golden/codex/basic.jsonl@start": [
     "git_info"
   ],
+  "golden/codex/rollout-items.jsonl@start": [
+    "git_info"
+  ],
   "golden/codex/rollout-turn_signals.jsonl@start": [
     "git_info"
   ],
@@ -51,6 +60,12 @@
     "git_info"
   ],
   "golden/omp/fork-child.jsonl@start": [
+    "git_info"
+  ],
+  "golden/omp/items.jsonl@resume": [
+    "git_info"
+  ],
+  "golden/omp/items.jsonl@start": [
     "git_info"
   ],
   "golden/omp/native.jsonl@resume": [
@@ -70,6 +85,9 @@
   ],
   "golden/pi/basic.jsonl@start": [
     "fallback_time"
+  ],
+  "golden/pi/items.jsonl@start": [
+    "git_info"
   ],
   "golden/pi/native.jsonl@start": [
     "git_info"

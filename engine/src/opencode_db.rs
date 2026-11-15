@@ -22,6 +22,7 @@ use crate::config::get_longhouse_home;
 use crate::media_redaction::{
     redact_inline_image_data_url, redact_source_line_with_media, InlineImageRedaction,
 };
+use crate::pipeline::items::{phase_from_stop_reason, EndReason, ItemFacts, Visibility};
 use crate::pipeline::parser::{
     ParseResult, ParsedEvent, ParsedMediaObject, ParsedSourceLine, Role, SessionMetadata,
 };
@@ -608,6 +609,11 @@ fn parse_rows_with_context(
     let mut candidate_records = 0usize;
     let mut last_source_offset = 0u64;
     let mut line_ordinals = Vec::new();
+    // An errored message has no finishing step; its turn ends at its last part.
+    let last_part_of_message: HashMap<&str, &str> = parts
+        .iter()
+        .map(|part| (part.message_id.as_str(), part.id.as_str()))
+        .collect();
 
     for part in parts.iter() {
         let ordinal = match shipped_parts {
@@ -666,12 +672,35 @@ fn parse_rows_with_context(
             provider_session_id,
             &longhouse_session_id,
             message,
+            &message_data,
             part,
             &part_data,
             role,
             source_offset,
             &mut events,
         )?;
+        if let Some(reason) = opencode_turn_end(
+            &message_data,
+            &part_data,
+            last_part_of_message.get(message.id.as_str()) == Some(&part.id.as_str()),
+        ) {
+            events.push(ParsedEvent {
+                item: ItemFacts::turn_end(reason),
+                uuid: stable_event_uuid(provider_session_id, &part.id, "turn_end"),
+                parent_uuid: None,
+                session_id: longhouse_session_id.to_string(),
+                timestamp: timestamp_from_ms(part.time_updated.max(message.time_created)),
+                role: Role::System,
+                content_text: None,
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset,
+                raw_type: "opencode_turn_end".to_string(),
+                raw_line: None,
+            });
+        }
         if let Some(spawn) = opencode_task_spawn_evidence(&part_data) {
             let parent_claim = spawn
                 .metadata
@@ -1572,10 +1601,39 @@ fn load_parts(conn: &Connection, provider_session_id: &str) -> Result<Vec<OpenCo
     Ok(parts)
 }
 
+/// Why a turn ended, read at the part that ends it: the step that finished
+/// with `stop` (or the output limit), or an errored message's last part.
+fn opencode_turn_end(
+    message_data: &Value,
+    part_data: &Value,
+    last_part: bool,
+) -> Option<EndReason> {
+    if part_data.get("type").and_then(Value::as_str) == Some("step-finish") {
+        return match part_data.get("reason").and_then(Value::as_str) {
+            Some("stop") => Some(EndReason::Completed),
+            Some("length") => Some(EndReason::Length),
+            _ => None,
+        };
+    }
+    let error = message_data.get("error")?;
+    if !last_part || error.is_null() {
+        return None;
+    }
+    Some(
+        if error.get("name").and_then(Value::as_str) == Some("MessageAbortedError") {
+            EndReason::Interrupted
+        } else {
+            EndReason::Error
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn extract_events_from_part(
     provider_session_id: &str,
     longhouse_session_id: &str,
     message: &OpenCodeMessageRow,
+    message_data: &Value,
     part: &OpenCodePartRow,
     part_data: &Value,
     role: &str,
@@ -1589,7 +1647,16 @@ fn extract_events_from_part(
             if text.trim().is_empty() {
                 return Ok(());
             }
+            // OpenCode's `finish` on the message: `tool-calls` while the turn
+            // goes on, `stop` on the answer.
+            let item = if role == "assistant" {
+                phase_from_stop_reason(message_data.get("finish").and_then(Value::as_str))
+                    .unwrap_or_default()
+            } else {
+                ItemFacts::default()
+            };
             events.push(ParsedEvent {
+                item,
                 uuid: stable_event_uuid(provider_session_id, &part.id, "text"),
                 parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
@@ -1618,6 +1685,9 @@ fn extract_events_from_part(
             let state = part_data.get("state").unwrap_or(&Value::Null);
             let input = state.get("input").and_then(raw_value_from_json);
             events.push(ParsedEvent {
+                item: ItemFacts::intent(
+                    state.pointer("/input/description").and_then(Value::as_str),
+                ),
                 uuid: stable_event_uuid(provider_session_id, &part.id, "tool_call"),
                 parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
@@ -1634,6 +1704,7 @@ fn extract_events_from_part(
             });
             if let Some(output) = tool_output_text(state) {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: stable_event_uuid(provider_session_id, &part.id, "tool_result"),
                     parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
@@ -1653,6 +1724,7 @@ fn extract_events_from_part(
         "file" => {
             if let Some(text) = file_part_text(part_data) {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: stable_event_uuid(provider_session_id, &part.id, "file"),
                     parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
@@ -1672,6 +1744,7 @@ fn extract_events_from_part(
         "patch" => {
             if let Some(text) = patch_part_text(part_data) {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: stable_event_uuid(provider_session_id, &part.id, "patch"),
                     parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
@@ -1688,7 +1761,33 @@ fn extract_events_from_part(
                 });
             }
         }
-        "reasoning" | "step-start" | "step-finish" => {}
+        "reasoning" => {
+            let text = part_data
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() {
+                return Ok(());
+            }
+            events.push(ParsedEvent {
+                item: ItemFacts::reasoning(Visibility::Full),
+                uuid: stable_event_uuid(provider_session_id, &part.id, "reasoning"),
+                parent_uuid: None,
+                session_id: longhouse_session_id.to_string(),
+                timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
+                role: Role::System,
+                content_text: Some(format!("Thinking:\n{text}")),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset,
+                raw_type: "opencode_reasoning".to_string(),
+                raw_line: Some(part.data.clone()),
+            });
+        }
+        "step-start" | "step-finish" => {}
         _ => {
             // OpenCode adds part types independently of the message schema.
             // Preserve a future textual part as conservative system context;
@@ -1703,6 +1802,7 @@ fn extract_events_from_part(
                 return Ok(());
             }
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: stable_event_uuid(provider_session_id, &part.id, "unknown_text"),
                 parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
@@ -3477,6 +3577,81 @@ mod tests {
         let after = session_fingerprint(&conn, "ses_test", true).unwrap();
 
         assert_ne!(before, after);
+    }
+
+    /// OpenCode's `finish` splits commentary (`tool-calls`) from the answer
+    /// (`stop`); a step that finishes with `stop` ends the turn, and an aborted
+    /// message ends it interrupted; bash calls state their `description`.
+    #[test]
+    fn opencode_items_carry_phase_reasoning_intent_and_turn_end() {
+        use crate::pipeline::items::{EndReason, Phase, PhaseSource};
+
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/golden/opencode/items.json"))
+                .unwrap();
+        for message in fixture["messages"].as_array().unwrap() {
+            let time = message["time"].as_i64().unwrap();
+            conn.execute(
+                "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, 'ses_test', ?2, ?2, ?3)",
+                params![message["id"].as_str().unwrap(), time, message["data"].to_string()],
+            )
+            .unwrap();
+        }
+        for part in fixture["parts"].as_array().unwrap() {
+            let time = part["time"].as_i64().unwrap();
+            conn.execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, 'ses_test', ?3, ?3, ?4)",
+                params![
+                    part["id"].as_str().unwrap(),
+                    part["message"].as_str().unwrap(),
+                    time,
+                    part["data"].to_string()
+                ],
+            )
+            .unwrap();
+        }
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+        let item_of = |text: &str| {
+            result
+                .events
+                .iter()
+                .find(|event| event.content_text.as_deref() == Some(text))
+                .map(|event| event.item.clone())
+                .unwrap_or_else(|| panic!("no row {text}"))
+        };
+        assert_eq!(
+            item_of("Running the suite."),
+            ItemFacts::phase(Phase::Commentary, PhaseSource::Derived)
+        );
+        assert_eq!(
+            item_of("All 42 tests pass."),
+            ItemFacts::phase(Phase::Final, PhaseSource::Derived)
+        );
+        assert_eq!(
+            item_of("Thinking:\nThe suite is the check."),
+            ItemFacts::reasoning(Visibility::Full)
+        );
+        let items: Vec<&ItemFacts> = result.events.iter().map(|event| &event.item).collect();
+        for expected in [
+            ItemFacts::intent(Some("Run the test suite")),
+            ItemFacts::turn_end(EndReason::Completed),
+            ItemFacts::turn_end(EndReason::Interrupted),
+        ] {
+            assert!(items.contains(&&expected), "missing {expected:?}");
+        }
+        // A step that stops to call tools does not end the turn.
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item.kind == Some(crate::pipeline::items::ItemKind::TurnEnd))
+                .count(),
+            2
+        );
     }
 
     #[test]

@@ -102,7 +102,7 @@ def _assert_all_classified(provider: str, records: list[dict]) -> int:
 # Claude's `extract_assistant_events` makes an event from each block it has an arm for and passes over
 # every other block in its catch-all arm. These are the blocks the catalog names that the parser passes
 # over: the catalog says what each is, and the parser makes no event from it.
-CLAUDE_BLOCKS_WITHOUT_AN_ARM = {"thinking", "fallback"}
+CLAUDE_BLOCKS_WITHOUT_AN_ARM = {"fallback"}
 
 
 def test_claude_assistant_family_names_every_block_the_parser_has_an_arm_for():
@@ -124,7 +124,7 @@ def test_claude_assistant_family_names_every_block_the_parser_has_an_arm_for():
     assert re.search(r"^\s*_ => \{$", _rust_function(PARSER, "extract_assistant_events"), re.MULTILINE)
     assert set(names) - arms == CLAUDE_BLOCKS_WITHOUT_AN_ARM
 
-    # Every combination of those blocks on one line is a shape the catalog classifies: fifteen from four.
+    # Every combination of those blocks on one line is a shape the catalog classifies: 31 from five.
     records = [{"type": "assistant", "message": {"content": _content(combo)}} for combo in _subsets(sorted(names))]
     assert _assert_all_classified("claude", records) == 2 ** len(names) - 1
 

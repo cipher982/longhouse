@@ -1,0 +1,90 @@
+{
+  "event_count": 10,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "codex_user",
+      "content_text": "Check the build."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "codex_reasoning",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_assistant",
+      "content_text": "Checking the build now.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "native"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_function_call",
+      "tool_name": "exec_command",
+      "tool_input_json": {
+        "cmd": "make build"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "codex_function_call_output"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "codex_reasoning",
+      "content_text": "Thinking:\nThe build succeeded.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "summary"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "codex_assistant",
+      "content_text": "The build is green.",
+      "item": {
+        "phase": "final",
+        "phase_source": "native"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "codex_turn_end",
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "codex_user",
+      "content_text": "Deploy it."
+    },
+    {
+      "kind": "action",
+      "role": "system",
+      "raw_type": "codex_turn_interrupted",
+      "action_kind": "turn_interrupted",
+      "content_text": "User interrupted the turn",
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      }
+    }
+  ]
+}

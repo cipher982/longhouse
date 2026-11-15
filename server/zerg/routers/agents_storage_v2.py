@@ -1538,6 +1538,7 @@ def _render_event_wire(
         "role": role,
         "content_text": content_text,
         "interaction_kind": effective_interaction_kind,
+        "item": record.item,
         "tool_name": record.tool_name,
         "tool_input_json": record.tool_input_json,
         "tool_output_text": record.tool_output_text,

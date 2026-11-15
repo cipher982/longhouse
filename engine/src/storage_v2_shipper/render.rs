@@ -149,6 +149,7 @@ pub(super) fn render_record(
         .transpose()
         .context("parsed tool input is not JSON")?;
     Ok(StorageV2RenderRecord {
+        item: event.item.clone(),
         event_id: event.uuid.clone(),
         parent_uuid: event.parent_uuid.clone(),
         order_time_us: event.timestamp.timestamp_micros(),
@@ -206,6 +207,7 @@ pub(super) fn insert_conversation_reset_boundary(
         .as_bytes(),
     );
     records.push(StorageV2RenderRecord {
+        item: Default::default(),
         event_id: event_id.to_string(),
         order_time_us,
         source_position,

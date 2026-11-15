@@ -1,0 +1,84 @@
+{
+  "event_count": 10,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "antigravity_user",
+      "content_text": "Run sleep 6, then reply ALLDONE."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "antigravity_thinking",
+      "content_text": "Thinking:\n**Assessing the request**\n\nI will run the command and then answer.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "antigravity_tool_call",
+      "tool_name": "run_command",
+      "tool_input_json": {
+        "CommandLine": "sleep 6",
+        "WaitMsBeforeAsync": 10000,
+        "toolSummary": "Sleep 6 seconds"
+      },
+      "item": {
+        "intent": "Sleep 6 seconds"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "antigravity_tool_result",
+      "tool_name": "generic"
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "antigravity_user",
+      "content_text": "STEER: stop the plan now and reply with exactly STEER_OK"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "antigravity_assistant",
+      "content_text": "STEER_OK",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "antigravity_tool_call",
+      "tool_name": "INVOKE_SUBAGENT",
+      "tool_input_json": {
+        "prompt": "inspect"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "antigravity_tool_result",
+      "tool_name": "invoke-subagent"
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "antigravity_user",
+      "content_text": "/compact"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "antigravity_system",
+      "content_text": "# Resuming from a compaction\n\nYou are continuing work on the task described above."
+    }
+  ]
+}

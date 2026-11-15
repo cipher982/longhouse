@@ -656,6 +656,16 @@ def _validate_transcript_signal_surfaces(payload: dict[str, Any], items: list[di
     return deepcopy(surfaces)
 
 
+# Signals carried as canonical item facts on render rows
+# (engine/src/pipeline/items.rs), and what a row must hold to prove each.
+_ITEM_SIGNAL_PROOF: dict[str, Any] = {
+    "message.phase": lambda item: "phase" in item and "phase_source" in item,
+    "turn.thinking": lambda item: item.get("kind") == "reasoning" and "visibility" in item,
+    "turn.end": lambda item: item.get("kind") == "turn_end" and "end_reason" in item,
+    "tool.intent": lambda item: bool(item.get("intent")),
+}
+
+
 def _validate_signal_golden_fixtures(
     items: list[dict[str, Any]],
     surfaces: dict[str, dict[str, Any]] | None,
@@ -674,6 +684,18 @@ def _validate_signal_golden_fixtures(
             fixture_path = source_root / relative
             if not fixture_path.is_file():
                 raise ValueError(f"managed provider contract {provider}: fixture not found: {fixture}")
+            prove_item = _ITEM_SIGNAL_PROOF.get(signal_id)
+            if prove_item is not None:
+                # Item signals ride on rows, not provider facts: the fixture's
+                # event snapshot, when it has one, must hold a row proving it.
+                expected_events = fixture_path.with_suffix(".expected.json")
+                if expected_events.is_file():
+                    events = json.loads(expected_events.read_text(encoding="utf-8")).get("events", [])
+                    if not any(prove_item(event.get("item") or {}) for event in events):
+                        raise ValueError(
+                            f"managed provider contract {provider}: {expected_events.relative_to(source_root)} has no row proving {signal_id}"
+                        )
+                continue
             if relative.suffix == ".jsonl":
                 expected_facts = fixture_path.with_suffix(".facts.expected.json")
                 if expected_facts.is_file():

@@ -50,6 +50,7 @@ SWEEP_PACE_SECONDS = 2.0
 SESSION_BACKOFF_SECONDS = 30 * 60.0
 SWEEP_BATCH = 4
 RENDER_FIELDS = (
+    "item",
     "event_id",
     "parent_uuid",
     "order_time_us",

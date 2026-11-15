@@ -11,13 +11,21 @@
       "kind": "event",
       "role": "system",
       "raw_type": "antigravity_thinking",
-      "content_text": "Thinking:\n**Observing the Request**\n\nI'm focusing now on the user's input and will answer with the requested word."
+      "content_text": "Thinking:\n**Observing the Request**\n\nI'm focusing now on the user's input and will answer with the requested word.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      }
     },
     {
       "kind": "event",
       "role": "assistant",
       "raw_type": "antigravity_assistant",
-      "content_text": "BASELINE_WORD"
+      "content_text": "BASELINE_WORD",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      }
     }
   ]
 }

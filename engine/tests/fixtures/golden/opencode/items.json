@@ -1,0 +1,156 @@
+{
+ "comment": "OpenCode message.data and part.data shapes for canonical item facts, from the 2026-11-15 survey of ~/.local/share/opencode/opencode.db.",
+ "messages": [
+  {
+   "id": "msg_i1",
+   "time": 1779100000000,
+   "data": {
+    "role": "user"
+   }
+  },
+  {
+   "id": "msg_i2",
+   "time": 1779100001000,
+   "data": {
+    "role": "assistant",
+    "finish": "tool-calls",
+    "time": {
+     "created": 1779100001000,
+     "completed": 1779100003000
+    }
+   }
+  },
+  {
+   "id": "msg_i3",
+   "time": 1779100004000,
+   "data": {
+    "role": "assistant",
+    "finish": "stop",
+    "time": {
+     "created": 1779100004000,
+     "completed": 1779100005000
+    }
+   }
+  },
+  {
+   "id": "msg_i4",
+   "time": 1779100010000,
+   "data": {
+    "role": "user"
+   }
+  },
+  {
+   "id": "msg_i5",
+   "time": 1779100011000,
+   "data": {
+    "role": "assistant",
+    "error": {
+     "name": "MessageAbortedError",
+     "data": {
+      "message": "The operation was aborted."
+     }
+    },
+    "time": {
+     "created": 1779100011000
+    }
+   }
+  }
+ ],
+ "parts": [
+  {
+   "id": "prt_i1",
+   "message": "msg_i1",
+   "time": 1779100000000,
+   "data": {
+    "type": "text",
+    "text": "Run the tests."
+   }
+  },
+  {
+   "id": "prt_i2",
+   "message": "msg_i2",
+   "time": 1779100001100,
+   "data": {
+    "type": "reasoning",
+    "text": "The suite is the check.",
+    "time": {
+     "start": 1779100001100,
+     "end": 1779100001200
+    }
+   }
+  },
+  {
+   "id": "prt_i3",
+   "message": "msg_i2",
+   "time": 1779100001300,
+   "data": {
+    "type": "text",
+    "text": "Running the suite."
+   }
+  },
+  {
+   "id": "prt_i4",
+   "message": "msg_i2",
+   "time": 1779100001400,
+   "data": {
+    "type": "tool",
+    "tool": "bash",
+    "callID": "call_i1",
+    "state": {
+     "status": "completed",
+     "input": {
+      "command": "make test",
+      "description": "Run the test suite"
+     },
+     "output": "42 passed\n",
+     "title": "Run the test suite"
+    }
+   }
+  },
+  {
+   "id": "prt_i5",
+   "message": "msg_i2",
+   "time": 1779100002900,
+   "data": {
+    "type": "step-finish",
+    "reason": "tool-calls"
+   }
+  },
+  {
+   "id": "prt_i6",
+   "message": "msg_i3",
+   "time": 1779100004100,
+   "data": {
+    "type": "text",
+    "text": "All 42 tests pass."
+   }
+  },
+  {
+   "id": "prt_i7",
+   "message": "msg_i3",
+   "time": 1779100004900,
+   "data": {
+    "type": "step-finish",
+    "reason": "stop"
+   }
+  },
+  {
+   "id": "prt_i8",
+   "message": "msg_i4",
+   "time": 1779100010000,
+   "data": {
+    "type": "text",
+    "text": "Deploy it."
+   }
+  },
+  {
+   "id": "prt_i9",
+   "message": "msg_i5",
+   "time": 1779100011100,
+   "data": {
+    "type": "text",
+    "text": "Deploying"
+   }
+  }
+ ]
+}

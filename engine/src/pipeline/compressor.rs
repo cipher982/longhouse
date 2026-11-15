@@ -570,6 +570,7 @@ mod tests {
     fn make_test_events() -> Vec<ParsedEvent> {
         vec![
             ParsedEvent {
+                item: Default::default(),
                 uuid: "e1".to_string(),
                 parent_uuid: None,
                 session_id: "s1".to_string(),
@@ -587,6 +588,7 @@ mod tests {
                 ),
             },
             ParsedEvent {
+                item: Default::default(),
                 uuid: "e2".to_string(),
                 parent_uuid: None,
                 session_id: "s1".to_string(),
@@ -913,6 +915,7 @@ mod tests {
         let mut events = Vec::new();
         for i in 0..100 {
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("e{}", i),
                 parent_uuid: None,
                 session_id: "s1".to_string(),
@@ -962,6 +965,7 @@ mod tests {
         // raw_json must preserve the complete original source line.
         let oversized_raw = "x".repeat((32 * 1024) + 1024);
         let events = vec![ParsedEvent {
+            item: Default::default(),
             uuid: "big".to_string(),
             parent_uuid: None,
             session_id: "s1".to_string(),

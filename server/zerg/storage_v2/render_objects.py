@@ -72,6 +72,22 @@ class RenderRecord:
     # raw object; this field lets render/search consumers avoid reinterpreting
     # user-visible provider control markup.
     interaction_kind: str | None = None
+    # Canonical item facts (engine/src/pipeline/items.rs): phase and its
+    # source, reasoning visibility, tool intent, turn end. None when the parser
+    # asserts nothing, which keeps such records byte-identical.
+    item: dict[str, str] | None = None
+
+
+# The item facts a parser may assert and the values each may take.
+ITEM_FACT_VALUES: dict[str, frozenset[str] | None] = {
+    "kind": frozenset({"reasoning", "turn_end"}),
+    "phase": frozenset({"commentary", "final"}),
+    "phase_source": frozenset({"native", "derived"}),
+    "visibility": frozenset({"full", "summary", "withheld"}),
+    "end_reason": frozenset({"completed", "interrupted", "aborted", "error", "length", "hook_continued", "unknown"}),
+    "intent": None,
+}
+MAX_INTENT_BYTES = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +196,7 @@ def encode_render_object(spec: RenderObjectSpec) -> bytes:
         "ordering_revision": spec.ordering_revision,
         "parser_revision": spec.parser_revision,
         "provider": spec.provider,
-        "records": [asdict(record) for record in spec.records],
+        "records": [_record_payload(record) for record in spec.records],
         "render_generation": str(spec.render_generation),
         "session_id": str(spec.session_id),
         "source_envelope_id": spec.source_envelope_id,
@@ -190,6 +206,27 @@ def encode_render_object(spec: RenderObjectSpec) -> bytes:
     if len(encoded) > MAX_RENDER_BYTES:
         raise RenderObjectValidationError("render object exceeds 4 MiB")
     return encoded
+
+
+def _record_payload(record: RenderRecord) -> dict[str, object]:
+    payload = asdict(record)
+    if payload["item"] is None:
+        del payload["item"]
+    return payload
+
+
+def _validate_item(item: object) -> None:
+    if not isinstance(item, dict) or not item or not set(item) <= set(ITEM_FACT_VALUES):
+        raise RenderObjectValidationError("render item facts are not a known shape")
+    for field, value in item.items():
+        allowed = ITEM_FACT_VALUES[field]
+        if not isinstance(value, str) or (allowed is not None and value not in allowed):
+            raise RenderObjectValidationError(f"render item {field} is not a known value")
+    intent = item.get("intent")
+    if intent is not None and (not intent.strip() or len(intent.encode("utf-8")) > MAX_INTENT_BYTES):
+        raise RenderObjectValidationError("render item intent is blank or exceeds its bound")
+    if ("phase" in item) != ("phase_source" in item):
+        raise RenderObjectValidationError("render item phase needs its source")
 
 
 def validate_render_object_spec(spec: RenderObjectSpec) -> None:
@@ -296,6 +333,8 @@ def _validate_spec(spec: RenderObjectSpec) -> None:
             value = getattr(record, field)
             if value is not None and (not isinstance(value, str) or len(value.encode("utf-8")) > maximum):
                 raise RenderObjectValidationError(f"render {field} is invalid or exceeds its bound")
+        if record.item is not None:
+            _validate_item(record.item)
         if record.interaction_kind is not None and record.interaction_kind not in VALID_INTERACTION_KINDS:
             raise RenderObjectValidationError("render interaction_kind is not a known semantic fact")
         if record.tool_input_json is not None:

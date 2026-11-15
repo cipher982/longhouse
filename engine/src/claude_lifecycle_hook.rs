@@ -1277,6 +1277,7 @@ mod tests {
         tool_call_id: Option<&str>,
     ) -> ParsedEvent {
         ParsedEvent {
+            item: Default::default(),
             uuid: format!("uuid-{}", tool_call_id.unwrap_or("none")),
             parent_uuid: None,
             session_id: "session-transcript".to_string(),

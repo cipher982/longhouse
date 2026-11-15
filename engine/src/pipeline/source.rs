@@ -710,6 +710,68 @@ mod equivalence {
         }
     }
 
+    /// A Cursor transcript's only clock is its store's session anchor.
+    struct CursorAnchor(DateTime<Utc>);
+
+    impl Witness for CursorAnchor {
+        fn subagent_meta(&self) -> Option<String> {
+            None
+        }
+        fn cursor_transcript_timestamps(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+            Some((self.0, self.0))
+        }
+        fn workspace(&self) -> Option<WorkspaceWitness> {
+            None
+        }
+        fn git_info(&self, _cwd: &str) -> (Option<String>, Option<String>) {
+            (None, None)
+        }
+        fn blob(&self, _reference: &str, _mime_type: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn fallback_time(&self) -> DateTime<Utc> {
+            self.0
+        }
+    }
+
+    /// Cursor's agent transcript: reasoning blocks are reasoning (redacted ones
+    /// withheld), not assistant text; a Shell call's `description` is its
+    /// intent; `turn_ended` ends the turn with its status.
+    #[test]
+    fn cursor_transcript_items() {
+        use crate::pipeline::items::{EndReason, ItemFacts, Visibility};
+        use crate::pipeline::parser::Role;
+
+        let path = fixtures_root().join("golden/cursor/items.jsonl");
+        let bytes = std::fs::read(&path).unwrap();
+        let anchor = "2026-11-15T13:00:00Z".parse().unwrap();
+        let parsed = parse_source(
+            &MemorySource::new(SourceIdentity::from_path(&path), bytes),
+            &CursorAnchor(anchor),
+            0,
+            None,
+            Some("cursor"),
+        )
+        .unwrap();
+        let items: Vec<&ItemFacts> = parsed.events.iter().map(|event| &event.item).collect();
+        for expected in [
+            ItemFacts::reasoning(Visibility::Full),
+            ItemFacts::reasoning(Visibility::Withheld),
+            ItemFacts::intent(Some("List the files")),
+            ItemFacts::turn_end(EndReason::Completed),
+            ItemFacts::turn_end(EndReason::Error),
+        ] {
+            assert!(items.contains(&&expected), "missing {expected:?}");
+        }
+        assert!(!parsed
+            .events
+            .iter()
+            .any(|event| event.role == Role::Assistant
+                && event.content_text.as_deref() == Some("opaque")));
+        // Every row orders from the anchor, the turn ends included.
+        assert!(parsed.events.iter().all(|event| event.timestamp == anchor));
+    }
+
     fn second_line_offset(bytes: &[u8]) -> Option<u64> {
         let first = bytes.iter().position(|&b| b == b'\n')? as u64 + 1;
         (first < bytes.len() as u64).then_some(first)

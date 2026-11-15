@@ -4643,6 +4643,8 @@ export interface components {
              * @description Parser-owned semantic kind, e.g. provider_notification
              */
             interaction_kind?: string | null;
+            /** @description Canonical item facts: phase, reasoning visibility, tool intent, turn end */
+            item?: components["schemas"]["ItemFactsResponse"] | null;
             /**
              * Raw Content Text
              * @description Raw provider content when it differs from display content
@@ -4937,6 +4939,42 @@ export interface components {
              * @description Owner-authenticated URLs of images attached to this send, in upload order; they expire 24 h after the send
              */
             attachment_urls?: string[];
+        };
+        /**
+         * ItemFactsResponse
+         * @description Canonical item facts the host normalizer asserted for one row.
+         */
+        ItemFactsResponse: {
+            /**
+             * Kind
+             * @description reasoning or turn_end; absent for ordinary rows
+             */
+            kind?: ("reasoning" | "turn_end") | null;
+            /**
+             * Phase
+             * @description Assistant text: narration inside a turn, or its answer
+             */
+            phase?: ("commentary" | "final") | null;
+            /**
+             * Phase Source
+             * @description native when the provider labels the phase, derived from its stop reason or call structure
+             */
+            phase_source?: ("native" | "derived") | null;
+            /**
+             * Visibility
+             * @description How much reasoning the provider exposed
+             */
+            visibility?: ("full" | "summary" | "withheld") | null;
+            /**
+             * Intent
+             * @description The agent's stated purpose for a tool call
+             */
+            intent?: string | null;
+            /**
+             * End Reason
+             * @description Why the turn ended
+             */
+            end_reason?: ("completed" | "interrupted" | "aborted" | "error" | "length" | "hook_continued" | "unknown") | null;
         };
         /**
          * LastTurnResponse

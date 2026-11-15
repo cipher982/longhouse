@@ -521,6 +521,16 @@ export interface AgentToolPresentation {
   shell_summary?: AgentShellCommandSummary | null;
 }
 
+/** Canonical item facts the host normalizer asserted for one row. */
+export interface AgentEventItem {
+  kind?: "reasoning" | "turn_end" | null;
+  phase?: "commentary" | "final" | null;
+  phase_source?: "native" | "derived" | null;
+  visibility?: "full" | "summary" | "withheld" | null;
+  intent?: string | null;
+  end_reason?: "completed" | "interrupted" | "aborted" | "error" | "length" | "hook_continued" | "unknown" | null;
+}
+
 export interface AgentEvent {
   id: AgentEventId;
   cursor?: string | null;
@@ -528,6 +538,8 @@ export interface AgentEvent {
   content_text: string | null;
   /** Parser-owned semantic kind for provider-authored status rows. */
   interaction_kind?: string | null;
+  /** Canonical item facts: phase, reasoning visibility, tool intent, turn end. */
+  item?: AgentEventItem | null;
   raw_content_text?: string | null;
   input_origin?: AgentEventInputOrigin | null;
   /** Provider turn accounting stamped on the event the turn ended on. */

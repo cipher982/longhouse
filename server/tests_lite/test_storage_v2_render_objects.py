@@ -199,6 +199,35 @@ def test_render_object_preserves_claude_parent_uuid(tmp_path):
     assert decoded.spec.records[0].parent_uuid == "parent-event"
 
 
+def test_render_object_keeps_item_facts_and_omits_them_when_absent(tmp_path):
+    base = _spec()
+    item = {"phase": "commentary", "phase_source": "derived", "intent": "Run the tests"}
+    with_item = replace(base, records=(replace(base.records[0], item=item),))
+
+    sealed = seal_render_object(tmp_path, with_item)
+    decoded = read_render_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+    assert decoded.spec.records[0].item == item
+    # A record without facts encodes exactly as before the field existed.
+    assert b'"item"' not in encode_render_object(base)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {},
+        {"phase": "final"},
+        {"phase": "opening", "phase_source": "native"},
+        {"visibility": "partial"},
+        {"intent": "  "},
+        {"end_reason": "completed", "extra": "x"},
+    ],
+)
+def test_render_object_rejects_unknown_item_facts(tmp_path, item):
+    base = _spec()
+    with pytest.raises(RenderObjectValidationError):
+        encode_render_object(replace(base, records=(replace(base.records[0], item=item),)))
+
+
 def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
     raw = RawObjectSpec(
         tenant_id="tenant-a",
@@ -469,6 +498,70 @@ def test_storage_wire_preserves_non_claude_parser_semantic_kind():
 
     assert parsed is not None
     assert parsed.records[0].interaction_kind == "local_control"
+
+
+def test_storage_wire_keeps_item_facts_and_reads_reasoning_from_the_parser():
+    raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=UUID("018f0c3a-7b2d-7f10-8a11-123456789abc"),
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=200,
+        records=(
+            RawRecord(
+                source_position=0,
+                data=b'{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"s"}],"stop_reason":"tool_use"}}',
+            ),
+        ),
+    )
+    base = {
+        "order_time_us": 1,
+        "source_position": 0,
+        "raw_record_ordinal": 0,
+        "tool_name": None,
+        "tool_input_json": None,
+        "tool_output_text": None,
+        "tool_call_id": None,
+        "thread_id": None,
+        "branch_kind": None,
+    }
+    parsed = _parse_render_spec(
+        {
+            "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+            "parser_revision": "engine-parser-v3",
+            "ordering_revision": "semantic-order-v2",
+            "records": [
+                {
+                    **base,
+                    "event_id": "thinking",
+                    "event_subordinal": 0,
+                    "role": "system",
+                    "content_text": None,
+                    "item": {"kind": "reasoning", "visibility": "withheld"},
+                },
+                {
+                    **base,
+                    "event_id": "turn-end",
+                    "event_subordinal": 1,
+                    "role": "system",
+                    "content_text": None,
+                    "item": {"kind": "turn_end", "end_reason": "completed"},
+                },
+            ],
+        },
+        raw_spec=raw,
+        source_envelope_id="a" * 64,
+    )
+
+    assert parsed is not None
+    assert parsed.records[0].item == {"kind": "reasoning", "visibility": "withheld"}
+    assert parsed.records[0].interaction_kind == "provider_reasoning"
+    assert parsed.records[1].item == {"kind": "turn_end", "end_reason": "completed"}
+    assert parsed.records[1].interaction_kind != "provider_reasoning"
 
 
 def test_storage_wire_repairs_stale_codex_provider_context_from_raw():

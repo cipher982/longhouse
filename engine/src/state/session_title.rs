@@ -330,6 +330,7 @@ mod tests {
     fn parse_result(text: &str) -> ParseResult {
         ParseResult {
             events: vec![ParsedEvent {
+                item: Default::default(),
                 uuid: "event-1".to_string(),
                 parent_uuid: None,
                 session_id: "provider-session".to_string(),

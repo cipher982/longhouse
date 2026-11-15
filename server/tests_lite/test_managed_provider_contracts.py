@@ -1182,7 +1182,18 @@ def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
     claude = contract_for_provider("claude")
     assert claude is not None
     implemented = sorted(signal for signal, cell in claude.transcript_signals.items() if cell["disposition"] == "implemented")
-    assert implemented == ["context.compaction", "session.recap", "session.title", "turn.api_error", "turn.duration", "turn.usage"]
+    assert implemented == [
+        "context.compaction",
+        "message.phase",
+        "session.recap",
+        "session.title",
+        "tool.intent",
+        "turn.api_error",
+        "turn.duration",
+        "turn.end",
+        "turn.thinking",
+        "turn.usage",
+    ]
     assert claude.transcript_signals["turn.duration"]["entrypoints"] == ["cli"], "print-mode Claude never writes turn_duration"
 
 
@@ -1255,12 +1266,20 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
         ("codex", "transcript_signal:session.title"),
         ("codex", "transcript_signal:input.queue"),
         ("claude", "transcript_signal:input.queue"),
-        ("claude", "transcript_signal:turn.thinking"),
+        ("antigravity", "transcript_signal:turn.end"),
     }
     assert all(row["owner_action"] for row in rows), "every open signal names the work that closes it"
     for provider in ("claude", "codex"):
         assert not any(
-            row["provider"] == provider and row["operation"] in {"transcript_signal:turn.duration", "transcript_signal:turn.usage"}
+            row["provider"] == provider
+            and row["operation"]
+            in {
+                "transcript_signal:turn.duration",
+                "transcript_signal:turn.usage",
+                "transcript_signal:message.phase",
+                "transcript_signal:turn.thinking",
+                "transcript_signal:turn.end",
+            }
             for row in rows
         ), f"{provider} turn signals are implemented"
 

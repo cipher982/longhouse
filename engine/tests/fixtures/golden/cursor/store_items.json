@@ -1,0 +1,40 @@
+{
+ "comment": "A Cursor store.db assistant message blob (2026-11-15 survey of ~/.cursor/chats): providerOptions.cursor.openaiPhase on OpenAI models, Shell args.description.",
+ "message": {
+  "role": "assistant",
+  "content": [
+   {
+    "type": "reasoning",
+    "text": "A listing answers this."
+   },
+   {
+    "type": "redacted-reasoning",
+    "data": "opaque"
+   },
+   {
+    "type": "text",
+    "text": "Listing the files."
+   },
+   {
+    "type": "tool-call",
+    "toolName": "Shell",
+    "toolCallId": "call-1",
+    "args": {
+     "command": "ls",
+     "description": "List the files"
+    }
+   },
+   {
+    "type": "tool-result",
+    "toolName": "Shell",
+    "toolCallId": "call-1",
+    "result": "a.txt"
+   }
+  ],
+  "providerOptions": {
+   "cursor": {
+    "openaiPhase": "commentary"
+   }
+  }
+ }
+}

@@ -388,6 +388,7 @@
       "path": "engine/src/pipeline/source.rs",
       "providers": [
         "codex",
+        "cursor",
         "omp",
         "pi"
       ]
@@ -584,7 +585,9 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

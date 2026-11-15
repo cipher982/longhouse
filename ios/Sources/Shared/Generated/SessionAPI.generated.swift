@@ -605,6 +605,15 @@ struct APIInputOriginResponse: Codable, Hashable, Sendable {
     let attachmentUrls: [String]?
 }
 
+struct APIItemFactsResponse: Codable, Hashable, Sendable {
+    let kind: String?
+    let phase: String?
+    let phaseSource: String?
+    let visibility: String?
+    let intent: String?
+    let endReason: String?
+}
+
 enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
     case running = "running"
     case completed = "completed"
@@ -681,6 +690,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let role: String
     let contentText: String?
     let interactionKind: String?
+    let item: APIItemFactsResponse?
     let rawContentText: String?
     let inputOrigin: APIInputOriginResponse?
     let turnEnd: APITurnEndResponse?

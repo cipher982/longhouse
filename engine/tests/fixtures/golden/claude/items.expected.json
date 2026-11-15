@@ -1,0 +1,107 @@
+{
+  "event_count": 12,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "Run the tests and tell me if they pass."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "I'll run the test suite first.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "tool_name": "Bash",
+      "tool_input_json": {
+        "command": "make test",
+        "description": "Run the test suite"
+      },
+      "item": {
+        "intent": "Run the test suite"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "tool_result"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking",
+      "content_text": "Thinking:\nAll 42 passed, so the answer is yes.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "All 42 tests pass.",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_turn_end",
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "Now refactor the parser."
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "tool_name": "Read",
+      "tool_input_json": {
+        "file_path": "/tmp/items/parser.rs"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "[Request interrupted by user for tool use]"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_turn_end",
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      }
+    }
+  ]
+}

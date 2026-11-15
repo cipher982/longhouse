@@ -65,11 +65,11 @@ use self::render::*;
 use self::resume::*;
 pub(crate) use self::ship::*;
 
-pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
+pub(crate) const PARSER_REVISION: &str = "engine-parser-v3";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v8-turn-outcome";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v9-items";
 /// What the host normalizer reports: every parser revision a rebuild can run.
 /// A bump of either makes the host render shadow compare stored envelopes again.
 pub(crate) fn normalizer_revision() -> String {
@@ -691,6 +691,7 @@ mod tests {
     #[test]
     fn conversation_reset_boundary_precedes_the_new_source_records() {
         let mut records = vec![StorageV2RenderRecord {
+            item: Default::default(),
             event_id: "first-event".to_string(),
             order_time_us: 200,
             source_position: 0,
@@ -1595,6 +1596,54 @@ mod tests {
         assert_eq!(render.records[1].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(render.records[2].role, "tool");
         assert_eq!(render.records[2].tool_output_text.as_deref(), Some("/tmp"));
+    }
+
+    /// Cursor's store: OpenAI models label the phase on the message; reasoning
+    /// blocks are reasoning (redacted ones withheld); a Shell call's
+    /// `description` is its intent.
+    #[test]
+    fn cursor_store_records_carry_item_facts() {
+        use crate::pipeline::items::{ItemFacts, Phase, PhaseSource, Visibility};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/golden/cursor/store_items.json"
+        ))
+        .unwrap();
+        store
+            .execute(
+                "UPDATE blobs SET data = ?1 WHERE id = ?2",
+                params![
+                    serde_json::to_vec(&fixture["message"]).unwrap(),
+                    CURSOR_MESSAGE_A
+                ],
+            )
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let items: Vec<ItemFacts> = prepared
+            .envelope
+            .render
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.item)
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ItemFacts::reasoning(Visibility::Full),
+                ItemFacts::reasoning(Visibility::Withheld),
+                ItemFacts::phase(Phase::Commentary, PhaseSource::Native),
+                ItemFacts::intent(Some("List the files")),
+                ItemFacts::default(),
+            ]
+        );
     }
 
     fn cursor_visibility_fixture(
@@ -9298,7 +9347,8 @@ mod tests {
         event_ids.sort();
         event_ids.dedup();
         assert_eq!(event_ids.len(), rendered);
-        assert_eq!(rendered, 8);
+        // Eight conversation rows plus a turn end for each finished turn.
+        assert_eq!(rendered, 10);
     }
 
     #[test]
@@ -9345,9 +9395,10 @@ mod tests {
             .any(|record| record.contains("\"kind\":\"message\"") && record.contains("completed")));
         let midpoint_events: usize = at_midpoint.iter().map(|e| e.event_ids.len()).sum();
         let end_events: usize = at_end.iter().map(|e| e.event_ids.len()).sum();
-        // user text at the midpoint; tool call, tool result and answer after.
+        // user text at the midpoint; tool call, tool result, answer and the
+        // turn end after.
         assert_eq!(midpoint_events, 1);
-        assert_eq!(end_events, 3);
+        assert_eq!(end_events, 4);
     }
 
     #[test]

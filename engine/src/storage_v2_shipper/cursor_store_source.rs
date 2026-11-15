@@ -1,6 +1,7 @@
 //! The Cursor store source: prompt history, turn alignment and render records.
 
 use super::*;
+use crate::pipeline::items::{EndReason, ItemFacts, Phase, PhaseSource, Visibility};
 
 /// Cursor writes the prompts a person actually typed to `prompt_history.json`
 /// beside `store.db`. That file is the provider's own record of human
@@ -663,6 +664,7 @@ pub(crate) fn render_cursor_records(
             .and_then(Value::as_str)
             .unwrap_or("assistant");
         let blocks = cursor_message_blocks(&message);
+        let phase = cursor_message_phase(&message);
         for (subordinal, block) in blocks.iter().enumerate() {
             let kind = block
                 .get("type")
@@ -739,8 +741,10 @@ pub(crate) fn render_cursor_records(
                     None,
                 ),
             };
+            let item = cursor_block_item(kind, &event_role, block, &phase);
             let event_id_material = format!("cursor:{blob_id}:{subordinal}");
             records.push(StorageV2RenderRecord {
+                item,
                 event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes())
                     .to_string(),
                 order_time_us: started_at_us + message_order as i64 * 1_000 + subordinal as i64,
@@ -780,6 +784,32 @@ pub(crate) fn render_cursor_records(
 /// and only while nothing has superseded the failure. `event_key` is derived
 /// per render object, so appending to every page of a paged capture would put
 /// one duplicate in the timeline per page.
+/// Cursor carries OpenAI's phase label on messages from OpenAI models.
+fn cursor_message_phase(message: &Value) -> ItemFacts {
+    match message
+        .pointer("/providerOptions/cursor/openaiPhase")
+        .and_then(Value::as_str)
+    {
+        Some("commentary") => ItemFacts::phase(Phase::Commentary, PhaseSource::Native),
+        Some("final_answer") => ItemFacts::phase(Phase::Final, PhaseSource::Native),
+        _ => ItemFacts::default(),
+    }
+}
+
+/// One store block's item facts: reasoning (redacted is withheld), the
+/// message's phase on assistant text, a call's stated purpose.
+fn cursor_block_item(kind: &str, role: &str, block: &Value, phase: &ItemFacts) -> ItemFacts {
+    match kind {
+        "reasoning" => ItemFacts::reasoning(Visibility::Full),
+        "redacted-reasoning" => ItemFacts::reasoning(Visibility::Withheld),
+        "text" if role == "assistant" => phase.clone(),
+        "tool-call" => {
+            ItemFacts::intent(block.pointer("/args/description").and_then(Value::as_str))
+        }
+        _ => ItemFacts::default(),
+    }
+}
+
 pub(super) fn append_cursor_turn_failure(
     records: &mut Vec<StorageV2RenderRecord>,
     failure: Option<&CursorTurnFailureWitness>,
@@ -819,6 +849,11 @@ pub(super) fn append_cursor_turn_failure(
         }
     };
     records.push(StorageV2RenderRecord {
+        item: ItemFacts::turn_end(if failure.status == "aborted" {
+            EndReason::Aborted
+        } else {
+            EndReason::Error
+        }),
         event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes()).to_string(),
         parent_uuid: None,
         order_time_us: last_order_time_us.max(started_at_us).saturating_add(1),

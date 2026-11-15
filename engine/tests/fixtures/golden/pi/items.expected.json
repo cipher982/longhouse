@@ -1,0 +1,86 @@
+{
+  "event_count": 10,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "pi_user",
+      "content_text": "Run the tests."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "pi_thinking",
+      "content_text": "Thinking:\nStart with the suite.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "pi_assistant",
+      "content_text": "Running the suite.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "pi_tool_call",
+      "tool_name": "bash",
+      "tool_input_json": {
+        "command": "make test"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "pi_tool_result",
+      "tool_name": "bash"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "pi_assistant",
+      "content_text": "All 42 tests pass.",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "pi_turn_end",
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "pi_user",
+      "content_text": "Now deploy."
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "pi_assistant",
+      "content_text": "Deploying"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "pi_turn_end",
+      "item": {
+        "end_reason": "aborted",
+        "kind": "turn_end"
+      }
+    }
+  ]
+}

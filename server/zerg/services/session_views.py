@@ -1347,6 +1347,21 @@ class ToolPresentationResponse(UTCBaseModel):
     shell_summary: Optional[ShellCommandSummaryResponse] = None
 
 
+class ItemFactsResponse(UTCBaseModel):
+    """Canonical item facts the host normalizer asserted for one row."""
+
+    kind: Optional[Literal["reasoning", "turn_end"]] = Field(None, description="reasoning or turn_end; absent for ordinary rows")
+    phase: Optional[Literal["commentary", "final"]] = Field(None, description="Assistant text: narration inside a turn, or its answer")
+    phase_source: Optional[Literal["native", "derived"]] = Field(
+        None, description="native when the provider labels the phase, derived from its stop reason or call structure"
+    )
+    visibility: Optional[Literal["full", "summary", "withheld"]] = Field(None, description="How much reasoning the provider exposed")
+    intent: Optional[str] = Field(None, description="The agent's stated purpose for a tool call")
+    end_reason: Optional[Literal["completed", "interrupted", "aborted", "error", "length", "hook_continued", "unknown"]] = Field(
+        None, description="Why the turn ended"
+    )
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
@@ -1360,6 +1375,10 @@ class EventResponse(UTCBaseModel):
     interaction_kind: Optional[str] = Field(
         None,
         description="Parser-owned semantic kind, e.g. provider_notification",
+    )
+    item: Optional[ItemFactsResponse] = Field(
+        None,
+        description="Canonical item facts: phase, reasoning visibility, tool intent, turn end",
     )
     raw_content_text: Optional[str] = Field(
         None,

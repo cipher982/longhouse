@@ -6,14 +6,22 @@
       "role": "system",
       "raw_type": "codex_turn_interrupted",
       "action_kind": "turn_interrupted",
-      "content_text": "User interrupted the turn"
+      "content_text": "User interrupted the turn",
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      }
     },
     {
       "kind": "action",
       "role": "system",
       "raw_type": "codex_turn_interrupted_marker",
       "action_kind": "turn_interrupted",
-      "content_text": "User interrupted the turn"
+      "content_text": "User interrupted the turn",
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      }
     },
     {
       "kind": "event",

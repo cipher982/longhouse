@@ -2,7 +2,7 @@
 //!
 //! Invokes `longhouse-engine parse --dump-events` and snapshots the output
 //! as a committed `*.expected.json` file. Only stable contract fields are
-//! retained (role, raw_type, content_text, tool_name) — unstable fields like
+//! retained (role, raw_type, content_text, tool_name, item) — unstable fields like
 //! uuid and fallback-generated timestamps are stripped before comparison so
 //! that fixture evolution doesn't cause spurious failures.
 //!
@@ -36,6 +36,10 @@ struct SnapshotEvent {
     tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_input_json: Option<Value>,
+    /// Canonical item facts: phase and its source, reasoning visibility, tool
+    /// intent, turn end reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    item: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -130,6 +134,7 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
             } else {
                 Some(v["tool_input_json"].clone())
             },
+            item: v.get("item").filter(|item| !item.is_null()).cloned(),
         });
     }
 
@@ -424,8 +429,8 @@ fn golden_claude_recap_and_title_facts() {
     );
     let events = parse_to_snapshot(&base.join("recap_title.jsonl"));
     assert_eq!(
-        events.event_count, 2,
-        "only the user and assistant rows are events"
+        events.event_count, 3,
+        "only the user and assistant rows and the turn end are events"
     );
 }
 
@@ -550,4 +555,120 @@ fn golden_claude_usage_error_and_compaction_facts() {
             .any(|event| event.raw_type == "compact_boundary"),
         "the compaction boundary stays a visible system event"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Canonical item facts: message.phase, turn.thinking, turn.end, tool.intent
+// ---------------------------------------------------------------------------
+
+fn items_of(snapshot: &Snapshot) -> Vec<&Value> {
+    snapshot
+        .events
+        .iter()
+        .filter_map(|event| event.item.as_ref())
+        .collect()
+}
+
+fn has_item(snapshot: &Snapshot, expected: Value) -> bool {
+    items_of(snapshot).into_iter().any(|item| *item == expected)
+}
+
+/// Claude: the stop reason of the message carrying each text block splits
+/// commentary from the answer; a signature-only thinking block is withheld
+/// reasoning; `turn_duration` ends a turn and an interrupt marker ends one
+/// interrupted; a tool call's `description` is its intent.
+#[test]
+fn golden_claude_items() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_test(&base.join("items.jsonl"), &base.join("items.expected.json"));
+    let snapshot = parse_to_snapshot(&base.join("items.jsonl"));
+    for expected in [
+        serde_json::json!({"phase": "commentary", "phase_source": "derived"}),
+        serde_json::json!({"phase": "final", "phase_source": "derived"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "withheld"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "interrupted"}),
+        serde_json::json!({"intent": "Run the test suite"}),
+    ] {
+        assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
+    }
+}
+
+/// Codex labels the phase itself; reasoning is encrypted (withheld) unless a
+/// summary is shared; `task_complete` and `turn_aborted` end turns. Codex
+/// tool calls carry no intent.
+#[test]
+fn golden_codex_items() {
+    let base = fixtures_dir().join("golden").join("codex");
+    run_golden_test(
+        &base.join("rollout-items.jsonl"),
+        &base.join("rollout-items.expected.json"),
+    );
+    let snapshot = parse_to_snapshot(&base.join("rollout-items.jsonl"));
+    for expected in [
+        serde_json::json!({"phase": "commentary", "phase_source": "native"}),
+        serde_json::json!({"phase": "final", "phase_source": "native"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "withheld"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "summary"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "interrupted"}),
+    ] {
+        assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
+    }
+}
+
+/// Pi: `stopReason` splits commentary (`toolUse`) from the answer (`stop`) and
+/// says why a turn ended. Pi tool calls carry no intent.
+#[test]
+fn golden_pi_items() {
+    let base = fixtures_dir().join("golden").join("pi");
+    run_golden_test(&base.join("items.jsonl"), &base.join("items.expected.json"));
+    let snapshot = parse_to_snapshot(&base.join("items.jsonl"));
+    for expected in [
+        serde_json::json!({"phase": "commentary", "phase_source": "derived"}),
+        serde_json::json!({"phase": "final", "phase_source": "derived"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "aborted"}),
+    ] {
+        assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
+    }
+}
+
+/// OMP as Pi, and each call states its purpose (`intent`, or `arguments.i`).
+#[test]
+fn golden_omp_items() {
+    let base = fixtures_dir().join("golden").join("omp");
+    run_golden_test(&base.join("items.jsonl"), &base.join("items.expected.json"));
+    let snapshot = parse_to_snapshot(&base.join("items.jsonl"));
+    for expected in [
+        serde_json::json!({"phase": "commentary", "phase_source": "derived"}),
+        serde_json::json!({"phase": "final", "phase_source": "derived"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        serde_json::json!({"kind": "turn_end", "end_reason": "completed"}),
+        serde_json::json!({"intent": "Run the test suite"}),
+        serde_json::json!({"intent": "Read the notes"}),
+    ] {
+        assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
+    }
+}
+
+/// Antigravity: a planner step that calls tools is commentary and one that
+/// calls none is the answer (derived); `toolSummary` is the call's intent.
+#[test]
+fn golden_antigravity_items() {
+    let base = fixtures_dir().join("golden").join("antigravity");
+    run_golden_test(
+        &base.join("native.jsonl"),
+        &base.join("native.expected.json"),
+    );
+    let snapshot = parse_to_snapshot(&base.join("native.jsonl"));
+    for expected in [
+        serde_json::json!({"phase": "final", "phase_source": "derived"}),
+        serde_json::json!({"kind": "reasoning", "visibility": "full"}),
+        serde_json::json!({"intent": "Sleep 6 seconds"}),
+    ] {
+        assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
+    }
 }

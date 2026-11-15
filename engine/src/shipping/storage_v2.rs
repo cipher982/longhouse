@@ -4,6 +4,8 @@ use anyhow::{bail, Context, Result};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 
+use crate::pipeline::items::ItemFacts;
+
 pub const STORAGE_V2_CAPABILITIES_PATH: &str = "/api/agents/storage/v2/capabilities";
 pub const STORAGE_V2_ENVELOPES_PATH: &str = "/api/agents/storage/v2/envelopes";
 pub const STORAGE_V2_SOURCE_EPOCHS_PATH: &str = "/api/agents/storage/v2/source-epochs";
@@ -272,6 +274,10 @@ pub struct StorageV2RenderRecord {
     /// validates against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_kind: Option<String>,
+    /// Canonical item facts; omitted when empty so a record without them
+    /// keeps the field set older hosts validate.
+    #[serde(default, skip_serializing_if = "ItemFacts::is_empty")]
+    pub item: ItemFacts,
     pub raw_record_ordinal: usize,
 }
 

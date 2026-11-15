@@ -731,25 +731,24 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
-          "raw_source": "response_item/message/assistant.phase",
+          "disposition": "implemented",
+          "raw_source": "response_item/message/assistant.phase (commentary, final_answer)",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-items.jsonl",
           "canary": "codex_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "carry phase (commentary or final_answer) onto the normalized assistant event; CodexPayload has no phase field, so it survives only in raw_line"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "event_msg/task_complete (error, last_agent_message) + event_msg/turn_aborted (reason)",
+          "disposition": "implemented",
+          "raw_source": "event_msg/task_complete (completed) + event_msg/turn_aborted (reason interrupted: interrupted, else aborted)",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-items.jsonl",
           "canary": "codex_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit a turn.end fact with its reason (completed, aborted with reason, error); turn.duration reads the same records but keeps no reason"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none: no per-call purpose field on function_call (21,055) or custom_tool_call (75,736) across 186 sessions (2026-11-15); explanation exists only on update_plan",
           "canary": "codex_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a per-call purpose field on function_call or custom_tool_call and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "not_implemented",
@@ -846,12 +845,12 @@
           "owner_action": "read queued items from the Codex queue store"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
-          "raw_source": "response_item/reasoning",
+          "disposition": "implemented",
+          "raw_source": "response_item/reasoning (summary text: summary; encrypted_content only: withheld)",
           "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-items.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit response_item/reasoning as provider_reasoning instead of skipping it (engine/src/pipeline/parser.rs extract_codex_events): summary text when present, a withheld-reasoning marker when only encrypted_content is written"
+          "trigger": "turn_end"
         }
       }
     },
@@ -1733,36 +1732,36 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "assistant.message.stop_reason (tool_use: commentary, end_turn: final)",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/items.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "derive phase from the stop_reason of the message that carries each text block; Claude has no explicit marker, and the stop reason is the protocol's own distinction"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "system/turn_duration + system/stop_hook_summary + assistant.message.stop_reason",
+          "disposition": "implemented",
+          "raw_source": "system/turn_duration (completed) + user [Request interrupted by user] marker (interrupted); an interrupted turn writes no turn_duration",
           "entrypoints": [
             "cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/items.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit a turn.end fact with its reason (completed, interrupted, error, stop hook continued); end_turn messages and turn_duration records do not pair one to one, because stop hooks and background work resume a turn"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "assistant.content.tool_use.input.description",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/items.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "normalize the description into the tool presentation so Web and iOS stop reading provider input fields (Web reads it only on shell tools today)"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "not_implemented",
@@ -1899,16 +1898,16 @@
           "owner_action": "project absorbed_mid_turn beside the receipt-based send reconciliation"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
-          "raw_source": "assistant.content.thinking",
+          "disposition": "implemented",
+          "raw_source": "assistant.content.thinking (text: full; signature only or redacted_thinking: withheld)",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
           "first_seen_version": "2.1.121",
+          "fixture": "engine/tests/fixtures/golden/claude/items.jsonl",
           "canary": "claude_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit thinking blocks as provider_reasoning instead of dropping them (engine/src/pipeline/parser.rs extract_assistant_events). Most blocks carry only a signature with empty text (the API defaults Opus 5.5 and newer to display: omitted), so a signature-only block becomes a withheld-reasoning marker, not nothing"
+          "trigger": "turn_end"
         }
       }
     },
@@ -2539,25 +2538,25 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "sidecar:opencode.db/message.data.finish (tool-calls: commentary, stop: final)",
+          "fixture": "engine/tests/fixtures/golden/opencode/items.json",
           "canary": "opencode_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "sidecar:opencode.db/part.data step-finish reason (stop: completed, length) + message.data.error (MessageAbortedError: interrupted, else error)",
+          "fixture": "engine/tests/fixtures/golden/opencode/items.json",
           "canary": "opencode_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "sidecar:opencode.db/part.data.state.input.description (bash only, 65% of calls)",
+          "fixture": "engine/tests/fixtures/golden/opencode/items.json",
           "canary": "opencode_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "not_implemented",
@@ -2642,11 +2641,11 @@
           "trigger": "send_while_working"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
-          "raw_source": "sidecar:opencode.db/message.data.reasoning",
+          "disposition": "implemented",
+          "raw_source": "sidecar:opencode.db/part.data type reasoning .text",
+          "fixture": "engine/tests/fixtures/golden/opencode/items.json",
           "canary": "opencode_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "render reasoning parts as collapsed thinking records"
+          "trigger": "turn_end"
         }
       }
     },
@@ -3072,25 +3071,25 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "PLANNER_RESPONSE.tool_calls (present: in-turn step, absent: the final answer); no explicit phase field",
+          "fixture": "engine/tests/fixtures/golden/antigravity/native.jsonl",
           "canary": "antigravity_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "derive phase from whether the planner record carries tool_calls; there is no marker upstream, so the derivation is ours"
+          "trigger": "turn_end"
         },
         "turn.end": {
           "disposition": "not_implemented",
-          "raw_source": "no transcript record; Helm Stop hook terminationReason and fullyIdle, Console ACP prompt stopReason",
+          "raw_source": "no transcript record; Helm Stop hook terminationReason and Console ACP prompt stopReason are live control signals, not stored raw",
           "canary": "antigravity_orchestration_signals",
           "trigger": "turn_end",
-          "owner_action": "carry the Stop hook's terminationReason (Helm) and the ACP stopReason (Console) onto a turn.end fact; the transcript itself never says a turn ended"
+          "owner_action": "capture the Stop hook terminationReason (Helm) and the ACP stopReason (Console) into the raw stream as a witnessed record so the host normalizer can emit the turn end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "PLANNER_RESPONSE.tool_calls[].args.toolSummary",
+          "fixture": "engine/tests/fixtures/golden/antigravity/native.jsonl",
           "canary": "antigravity_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "normalize toolSummary into the tool presentation so Web and iOS stop reading provider input fields"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "implemented",
@@ -3790,25 +3789,25 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "store:assistant blob providerOptions.cursor.openaiPhase (commentary, final_answer; OpenAI models only)",
+          "fixture": "engine/tests/fixtures/golden/cursor/store_items.json",
           "canary": "cursor_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "agent-transcripts turn_ended.status (success: completed, error, aborted); store turn failure from the capture witness",
+          "fixture": "engine/tests/fixtures/golden/cursor/items.jsonl",
           "canary": "cursor_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "tool-call args.description (Shell: 1,885 of 2,022 calls; none on Grep, Read, Glob)",
+          "fixture": "engine/tests/fixtures/golden/cursor/store_items.json",
           "canary": "cursor_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "not_implemented",
@@ -3846,60 +3845,56 @@
           "owner_action": "no agent-to-agent message record observed"
         },
         "turn.duration": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none: no turn timing in store JSON blobs or meta across 260 stores (2026-11-15); durationMs exists only on tool results",
           "canary": "cursor_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "trigger": "census"
         },
         "session.recap": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none: no recap field in store meta or blobs across 260 stores (2026-11-15); the compaction summary is not a recap",
           "canary": "cursor_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "trigger": "census"
         },
         "session.title": {
           "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "raw_source": "store:meta[0].name (hex-encoded JSON), also meta.json title",
           "canary": "cursor_transcript_signals",
           "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "owner_action": "read the store meta name as the provider title fact"
         },
         "turn.usage": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none: no usage or tokens key in store JSON blobs or meta across 260 stores (2026-11-15)",
           "canary": "cursor_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "trigger": "census"
         },
         "turn.api_error": {
           "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "raw_source": "agent-transcripts turn_ended.error with status error (35 of 384 turns in 400 transcripts, 2026-11-15)",
           "canary": "cursor_transcript_signals",
           "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "owner_action": "emit turn.api_error from turn_ended.error"
         },
         "context.compaction": {
           "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "raw_source": "store:user blob providerOptions.cursor.isSummary == true (7 in 260 stores, 2026-11-15)",
           "canary": "cursor_transcript_signals",
           "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "owner_action": "mark the summary user blob as a compaction boundary"
         },
         "input.queue": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none: no queue or queued-input record in store JSON blobs or meta across 260 stores (2026-11-15)",
           "canary": "cursor_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for cursor and name the raw source"
+          "trigger": "census"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
-          "raw_source": "store/assistant/reasoning",
+          "disposition": "implemented",
+          "raw_source": "store/assistant/reasoning and redacted-reasoning (withheld); transcript reasoning blocks",
+          "fixture": "engine/tests/fixtures/golden/cursor/store_items.json",
           "canary": "cursor_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "stop emitting reasoning and redacted-reasoning blocks as assistant text (engine/src/pipeline/parser.rs extract_cursor_events), emit them as provider_reasoning, and reclassify the store/assistant/reasoning+text shape away from transcript:assistant"
+          "trigger": "turn_end"
         }
       }
     },
@@ -4594,18 +4589,18 @@
       ],
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "message/message.stopReason (toolUse: commentary, stop: final)",
+          "fixture": "engine/tests/fixtures/golden/pi/items.jsonl",
           "canary": "pi_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "derive phase from the stopReason of the message that carries each text block"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "message/message.stopReason (stop, aborted, error, length)",
+          "disposition": "implemented",
+          "raw_source": "message/message.stopReason on the final assistant message (stop: completed, aborted, error, length)",
+          "fixture": "engine/tests/fixtures/golden/pi/items.jsonl",
           "canary": "pi_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit a turn.end fact from the final assistant message's stopReason; only error is read today (turn.api_error)"
+          "trigger": "turn_end"
         },
         "tool.intent": {
           "disposition": "upstream_absent",
@@ -5446,25 +5441,25 @@
       },
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "message/message.stopReason (toolUse: commentary, stop: final)",
+          "fixture": "engine/tests/fixtures/golden/omp/items.jsonl",
           "canary": "omp_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "derive phase from the stopReason of the message that carries each text block"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
-          "raw_source": "message/message.stopReason (stop, aborted, error, length)",
+          "disposition": "implemented",
+          "raw_source": "message/message.stopReason on the final assistant message (stop: completed, aborted, error, length)",
+          "fixture": "engine/tests/fixtures/golden/omp/items.jsonl",
           "canary": "omp_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit a turn.end fact from the final assistant message's stopReason; only error is read today (turn.api_error)"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "message/message.content.toolCall.intent + toolCall.arguments.i",
+          "fixture": "engine/tests/fixtures/golden/omp/items.jsonl",
           "canary": "omp_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "normalize intent into the tool presentation; Web reads arguments.i directly today"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
           "disposition": "not_implemented",

@@ -1682,7 +1682,11 @@
     "type",
     "uuid"
    ],
-   "required_keys": ["type", "origin.kind", "message"]
+   "required_keys": [
+    "type",
+    "origin.kind",
+    "message"
+   ]
   },
   "user/string": {
    "classification": "transcript",
@@ -1832,12 +1836,16 @@
       "classification": "transcript",
       "keys": []
      },
+     "redacted_thinking": {
+      "classification": "transcript",
+      "keys": []
+     },
      "text": {
       "classification": "transcript",
       "keys": []
      },
      "thinking": {
-      "classification": "signal:turn.thinking",
+      "classification": "transcript",
       "keys": []
      },
      "tool_use": {
@@ -1893,7 +1901,10 @@
     "uuid",
     "version"
    ],
-   "required_keys": ["usage.input_tokens", "usage.output_tokens"]
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
+   ]
   }
  ]
 }

@@ -18,6 +18,7 @@ from uuid import UUID
 
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_REASONING
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
@@ -104,12 +105,8 @@ _LEGACY_RENDER_RECORD_FIELDS = {
 }
 
 
-_EXPECTED_RENDER_RECORD_FIELDS = (
-    _LEGACY_RENDER_RECORD_FIELDS,
-    _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind"},
-    _LEGACY_RENDER_RECORD_FIELDS | {"parent_uuid"},
-    _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind", "parent_uuid"},
-)
+# Fields a parser sends only when it has something to assert.
+_OPTIONAL_RENDER_RECORD_FIELDS = frozenset({"interaction_kind", "parent_uuid", "item"})
 
 
 _MAX_MEDIA_REFS = 1_000
@@ -181,7 +178,10 @@ def parse_render_spec(
     record_payloads: list[dict[str, Any]] = []
     records_by_raw_ordinal: dict[int, list[int]] = {}
     for item in wire_records:
-        if not isinstance(item, dict) or set(item) not in _EXPECTED_RENDER_RECORD_FIELDS:
+        if (
+            not isinstance(item, dict)
+            or not _LEGACY_RENDER_RECORD_FIELDS <= set(item) <= _LEGACY_RENDER_RECORD_FIELDS | _OPTIONAL_RENDER_RECORD_FIELDS
+        ):
             raise ValueError("each render record has invalid fields")
         for field in ("order_time_us", "source_position", "event_subordinal", "raw_record_ordinal"):
             if type(item[field]) is not int:
@@ -251,6 +251,10 @@ def parse_render_spec(
                         raw_ordinal,
                     )
                 record_payload["interaction_kind"] = computed_kind
+                if (record_payload.get("item") or {}).get("kind") == "reasoning":
+                    # The parser asserts reasoning from the raw record it
+                    # parsed; no read-time recovery is needed to find it.
+                    record_payload["interaction_kind"] = INTERACTION_PROVIDER_REASONING
             continue
         raw_role = _raw_record_role(raw_json)
         if raw_role is not None:

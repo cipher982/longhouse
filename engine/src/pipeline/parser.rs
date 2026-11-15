@@ -19,6 +19,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+
+pub use crate::pipeline::items::ItemFacts;
+use crate::pipeline::items::{phase_from_stop_reason, EndReason, Phase, PhaseSource, Visibility};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -74,6 +77,10 @@ pub struct ParsedEvent {
     pub tool_call_id: Option<String>,
     pub source_offset: u64,
     pub raw_type: String,
+    /// Canonical item facts the parser asserts (phase, reasoning visibility,
+    /// tool intent, turn end); empty for most rows.
+    #[serde(skip_serializing_if = "ItemFacts::is_empty")]
+    pub item: ItemFacts,
     /// Only the first event per source line carries raw_line (dedup).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_line: Option<String>,
@@ -315,6 +322,9 @@ struct RawLine {
     cache_read_tokens: Option<Value>,
     output_tokens: Option<Value>,
     /// Antigravity `SYSTEM/ERROR_MESSAGE`: `API error (attempt N): ...`.
+    /// Cursor transcript `turn_ended`: `success`, `error` or `aborted`.
+    /// Raw, because Antigravity uses the same name for its step status.
+    status: Option<Value>,
     error: Option<Value>,
 }
 
@@ -407,6 +417,13 @@ struct CodexPayload {
     /// compacted / event_msg: optional compaction notice string (kept raw so
     /// non-string payload.message fields on other event types never fail).
     message: Option<Box<RawValue>>,
+    /// message (assistant): `commentary` or `final_answer`. Raw, like the other
+    /// shared names, so another payload type's field never fails the line.
+    phase: Option<Box<RawValue>>,
+    /// reasoning: `[{type: summary_text, text}]` when the model shared a summary.
+    summary: Option<Box<RawValue>>,
+    /// reasoning: the withheld reasoning, encrypted.
+    encrypted_content: Option<Box<RawValue>>,
     /// function_call_output: result. Codex emits a plain string for text tool
     /// results, but an array of content items for image-bearing results (e.g.
     /// `view_image` -> [{type: input_image, image_url: data:...}]). Accept both
@@ -733,6 +750,9 @@ struct ContentItem {
     result_content: Option<Box<RawValue>>,
     /// Error flag on tool_result items (true = tool call failed/rejected)
     is_error: Option<bool>,
+    /// Reasoning text (for "thinking" items); empty when only a signature
+    /// was kept.
+    thinking: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,6 +1535,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                     .and_then(extract_gemini_text);
                 if let Some(text) = text {
                     events.push(ParsedEvent {
+                        item: Default::default(),
                         uuid: msg_id.clone(),
                         parent_uuid: None,
                         session_id: canonical_session_id.clone(),
@@ -1541,6 +1562,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                     .and_then(extract_gemini_text);
                 if let Some(text) = text {
                     events.push(ParsedEvent {
+                        item: Default::default(),
                         uuid: msg_id.clone(),
                         parent_uuid: None,
                         session_id: canonical_session_id.clone(),
@@ -1596,6 +1618,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string());
                     events.push(ParsedEvent {
+                        item: Default::default(),
                         uuid: format!("{}-tool-{}", msg_id, tc_id),
                         parent_uuid: None,
                         session_id: canonical_session_id.clone(),
@@ -1613,6 +1636,7 @@ fn parse_gemini_json(source: &dyn SourceBytes, session_id: &str) -> Result<Parse
 
                     if let Some(output_text) = tool_output_text {
                         events.push(ParsedEvent {
+                            item: Default::default(),
                             uuid: format!("{}-result-{}", msg_id, tc_id),
                             parent_uuid: None,
                             session_id: canonical_session_id.clone(),
@@ -2950,6 +2974,7 @@ fn push_pi_event(
         format!("{base_id}-{suffix}")
     };
     events.push(ParsedEvent {
+        item: Default::default(),
         uuid,
         parent_uuid: obj.parent_id.clone(),
         session_id: session_id.to_string(),
@@ -3314,7 +3339,18 @@ fn extract_pi_events(
     match obj.r#type.as_deref() {
         Some("message") => {
             if let Some(message) = obj.message.as_ref() {
+                let start = events.len();
                 extract_pi_message_events(obj, message, session_id, line_offset, raw_line, events);
+                if message.role.as_deref() == Some("assistant") {
+                    assert_pi_assistant_items(
+                        message,
+                        session_id,
+                        timestamp,
+                        line_offset,
+                        start,
+                        events,
+                    );
+                }
             }
         }
         Some("session") => {}
@@ -3449,6 +3485,72 @@ fn extract_pi_events(
     }
 }
 
+/// Pi and OMP item facts, read from the assistant message the rows came from:
+/// its `stopReason` splits commentary (`toolUse`) from the answer (`stop`) and
+/// says whether and why the turn ended; OMP states each call's purpose.
+fn assert_pi_assistant_items(
+    message: &RawMessage,
+    session_id: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    start: usize,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let stop_reason = message.stop_reason.as_deref();
+    let phase = phase_from_stop_reason(stop_reason);
+    let intents: std::collections::HashMap<String, String> =
+        serde_json::from_str::<Vec<Value>>(message.content.get())
+            .unwrap_or_default()
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("toolCall"))
+            .filter_map(|block| {
+                let id = block.get("id").and_then(Value::as_str)?;
+                let intent = block
+                    .get("intent")
+                    .and_then(Value::as_str)
+                    .or_else(|| block.pointer("/arguments/i").and_then(Value::as_str))?;
+                Some((id.to_string(), intent.to_string()))
+            })
+            .collect();
+    for event in &mut events[start..] {
+        if event.raw_type.ends_with("_thinking") {
+            event.item = ItemFacts::reasoning(Visibility::Full);
+        } else if event.role == Role::Assistant && event.tool_name.is_none() {
+            if let Some(phase) = &phase {
+                event.item = phase.clone();
+            }
+        } else if let Some(intent) = event
+            .tool_call_id
+            .as_ref()
+            .filter(|_| event.role == Role::Assistant)
+            .and_then(|id| intents.get(id))
+        {
+            event.item = ItemFacts::intent(Some(intent));
+        }
+    }
+    let reason = match stop_reason {
+        Some("stop") => EndReason::Completed,
+        Some("aborted") => EndReason::Aborted,
+        Some("error") => EndReason::Error,
+        Some("length") => EndReason::Length,
+        _ => return,
+    };
+    let uuid = events[start..]
+        .first()
+        .map(|event| format!("{}-turn-end", event.uuid))
+        .unwrap_or_else(|| format!("line-{line_offset}-turn-end"));
+    events.push(turn_end_event(
+        uuid,
+        None,
+        session_id,
+        timestamp,
+        line_offset,
+        None,
+        reason,
+        "pi_turn_end",
+    ));
+}
+
 fn extract_omp_events(
     obj: &RawLine,
     session_id: &str,
@@ -3561,6 +3663,7 @@ fn push_omp_record_event(
         format!("omp_{token}")
     };
     events.push(ParsedEvent {
+        item: Default::default(),
         uuid: obj
             .id
             .as_deref()
@@ -3589,6 +3692,7 @@ fn push_omp_malformed_event(
     events: &mut Vec<ParsedEvent>,
 ) {
     events.push(ParsedEvent {
+        item: Default::default(),
         uuid: format!("omp-offset-{line_offset}"),
         parent_uuid: None,
         session_id: session_id.to_string(),
@@ -3864,8 +3968,51 @@ fn extract_events(
     // Claude's background-task completion envelope is a provider-authored
     // status row, not a user prompt. Keep the source line archived verbatim,
     // but project the row as a compact system notification for clients.
+    // Cursor's agent transcript closes every turn with its outcome.
+    if event_type == "turn_ended" {
+        // Like Cursor's message lines, it has no clock of its own: it orders
+        // by position from the session anchor, or is kept raw-only.
+        let Some(timestamp) = cursor_order_anchor else {
+            return;
+        };
+        let reason = match obj.status.as_ref().and_then(Value::as_str) {
+            Some("success") => EndReason::Completed,
+            Some("error") => EndReason::Error,
+            Some("aborted") => EndReason::Aborted,
+            _ => EndReason::Unknown,
+        };
+        events.push(turn_end_event(
+            format!("{msg_uuid}-turn-end"),
+            None,
+            session_id,
+            timestamp,
+            line_offset,
+            Some(raw_line.to_string()),
+            reason,
+            "cursor_turn_end",
+        ));
+        return;
+    }
+
+    // Claude writes `turn_duration` when a turn finishes on its own; an
+    // interrupted turn writes none (it ends at the interrupt marker instead).
+    if event_type == "system" && obj.subtype.as_deref() == Some("turn_duration") {
+        events.push(turn_end_event(
+            format!("{msg_uuid}-turn-end"),
+            obj.parent_uuid.clone(),
+            session_id,
+            timestamp,
+            line_offset,
+            Some(raw_line.to_string()),
+            EndReason::Completed,
+            "claude_turn_end",
+        ));
+        return;
+    }
+
     if let Some(display_text) = claude_task_notification_display(obj) {
         events.push(ParsedEvent {
+            item: Default::default(),
             uuid: msg_uuid,
             parent_uuid: obj.parent_uuid.clone(),
             session_id: session_id.to_string(),
@@ -3947,6 +4094,7 @@ fn extract_events(
         if let Some(content) = extract_text_from_raw_content(content_str) {
             if !content.trim().is_empty() {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: msg_uuid,
                     parent_uuid: obj.parent_uuid.clone(),
                     session_id: session_id.to_string(),
@@ -3985,11 +4133,27 @@ fn extract_events(
             for event in &mut events[event_start..] {
                 event.parent_uuid = obj.parent_uuid.clone();
             }
+            if event_type == "user"
+                && extract_text_from_raw_content(content_str)
+                    .is_some_and(|text| text.trim_start().starts_with("[Request interrupted"))
+            {
+                events.push(turn_end_event(
+                    format!("{msg_uuid}-turn-end"),
+                    obj.parent_uuid.clone(),
+                    session_id,
+                    timestamp,
+                    line_offset,
+                    None,
+                    EndReason::Interrupted,
+                    "claude_turn_end",
+                ));
+            }
         }
         "assistant" => {
             let event_start = events.len();
             extract_assistant_events(
                 content_str,
+                obj.message.as_ref().and_then(|m| m.stop_reason.as_deref()),
                 session_id,
                 &msg_uuid,
                 timestamp,
@@ -4137,6 +4301,7 @@ fn cursor_event(
     raw_line: &str,
 ) -> ParsedEvent {
     ParsedEvent {
+        item: Default::default(),
         uuid,
         parent_uuid: None,
         session_id: session_id.to_string(),
@@ -4198,20 +4363,37 @@ fn extract_cursor_events(
                         },
                     )
                 };
-                events.push(cursor_event(
+                let reasoning = kind != "text" && role == Role::Assistant;
+                let mut event = cursor_event(
                     event_uuid,
                     session_id,
                     timestamp,
-                    role,
-                    Some(text),
+                    if reasoning { Role::System } else { role },
+                    Some(if reasoning {
+                        format!("Thinking:\n{text}")
+                    } else {
+                        text
+                    }),
                     None,
                     None,
                     None,
                     None,
                     line_offset,
-                    "cursor_text",
+                    if reasoning {
+                        "cursor_reasoning"
+                    } else {
+                        "cursor_text"
+                    },
                     raw_line,
-                ));
+                );
+                if reasoning {
+                    event.item = ItemFacts::reasoning(if kind == "reasoning" {
+                        Visibility::Full
+                    } else {
+                        Visibility::Withheld
+                    });
+                }
+                events.push(event);
                 emitted = true;
             }
             "tool-call" | "tool_call" | "tool-use" | "tool_use" => {
@@ -4231,7 +4413,7 @@ fn extract_cursor_events(
                     .or_else(|| block.get("input"))
                     .or_else(|| block.get("arguments"))
                     .and_then(|value| RawValue::from_string(value.to_string()).ok());
-                events.push(cursor_event(
+                let mut event = cursor_event(
                     event_uuid,
                     session_id,
                     timestamp,
@@ -4244,7 +4426,10 @@ fn extract_cursor_events(
                     line_offset,
                     "cursor_tool_call",
                     raw_line,
-                ));
+                );
+                event.item =
+                    ItemFacts::intent(block.pointer("/args/description").and_then(Value::as_str));
+                events.push(event);
                 emitted = true;
             }
             "tool-result" | "tool_result" => {
@@ -4480,6 +4665,7 @@ fn extract_antigravity_events(
             let text = antigravity_user_text(content);
             if !text.is_empty() {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: antigravity_uuid(obj, line_offset, "user"),
                     parent_uuid: None,
                     session_id: session_id.to_string(),
@@ -4561,6 +4747,7 @@ fn extract_antigravity_events(
             .filter(|text| !text.is_empty())
         {
             events.push(ParsedEvent {
+                item: ItemFacts::reasoning(Visibility::Full),
                 uuid: antigravity_uuid(obj, line_offset, "thinking"),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -4620,7 +4807,17 @@ fn extract_antigravity_events(
                 id: call_id.clone(),
                 name: tool_name.to_string(),
             });
+            let intent = call
+                .args
+                .as_ref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                .and_then(|args| {
+                    args.get("toolSummary")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
             events.push(ParsedEvent {
+                item: ItemFacts::intent(intent.as_deref()),
                 uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -4732,7 +4929,26 @@ fn extract_antigravity_events(
             Role::System => (Some(text.to_string()), None, None, "antigravity_system"),
             _ => (Some(text.to_string()), None, None, "antigravity_assistant"),
         };
+        // Antigravity names no phase: a planner step that calls tools narrates
+        // the work, and one that calls none is the answer.
+        let item = if raw_type == "antigravity_assistant" && event_type == "PLANNER_RESPONSE" {
+            let calls_tools = obj
+                .tool_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty());
+            ItemFacts::phase(
+                if calls_tools {
+                    Phase::Commentary
+                } else {
+                    Phase::Final
+                },
+                PhaseSource::Derived,
+            )
+        } else {
+            ItemFacts::default()
+        };
         events.push(ParsedEvent {
+            item,
             parent_uuid: None,
             uuid: antigravity_uuid(
                 obj,
@@ -4786,6 +5002,7 @@ fn extract_compaction_metadata_event(
                 content = "Conversation compacted".to_string();
             }
             Some(ParsedEvent {
+                item: Default::default(),
                 parent_uuid: None,
                 uuid: obj
                     .uuid
@@ -4812,6 +5029,7 @@ fn extract_compaction_metadata_event(
                 }
             }
             Some(ParsedEvent {
+                item: Default::default(),
                 parent_uuid: None,
                 uuid: obj
                     .uuid
@@ -4858,6 +5076,7 @@ fn extract_compaction_metadata_event(
             }
 
             Some(ParsedEvent {
+                item: Default::default(),
                 parent_uuid: None,
                 uuid: obj
                     .uuid
@@ -4886,6 +5105,7 @@ fn extract_compaction_metadata_event(
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| "Conversation compacted".to_string());
             Some(ParsedEvent {
+                item: Default::default(),
                 parent_uuid: None,
                 uuid: obj
                     .uuid
@@ -4935,6 +5155,7 @@ fn longhouse_steer_event(
         .into_iter()
         .find_map(crate::claude_channel_control::steer_text_from_context)?;
     Some(ParsedEvent {
+        item: Default::default(),
         parent_uuid: obj.parent_uuid.clone(),
         uuid: obj
             .uuid
@@ -5624,16 +5845,42 @@ fn extract_codex_event_msg(
     pending: &mut CodexPending,
 ) {
     let payload_type = payload.r#type.as_deref().unwrap_or("");
+    if payload_type == "task_complete" {
+        events.push(turn_end_event(
+            format!("{msg_uuid}-turn-end"),
+            None,
+            session_id,
+            timestamp,
+            line_offset,
+            Some(raw_line.to_string()),
+            EndReason::Completed,
+            "codex_turn_end",
+        ));
+        return;
+    }
     if payload_type != "turn_aborted" {
         return;
     }
 
     let reason = payload.reason.as_deref().unwrap_or("");
     if reason != "interrupted" {
+        // Codex aborts a turn for other reasons too (a replaced turn, a
+        // finished review); the turn ended without an answer.
+        events.push(turn_end_event(
+            format!("{msg_uuid}-turn-end"),
+            None,
+            session_id,
+            timestamp,
+            line_offset,
+            Some(raw_line.to_string()),
+            EndReason::Aborted,
+            "codex_turn_end",
+        ));
         return;
     }
 
     events.push(ParsedEvent {
+        item: ItemFacts::turn_end(EndReason::Interrupted),
         uuid: format!("{}-action-turn-interrupted", msg_uuid),
         parent_uuid: None,
         session_id: session_id.to_string(),
@@ -5649,6 +5896,11 @@ fn extract_codex_event_msg(
         raw_line: Some(raw_line.to_string()),
     });
     pending.suppress_next_turn_aborted_marker = true;
+}
+
+/// A raw JSON string field as text; any other shape is absent.
+fn codex_raw_str(raw: Option<&RawValue>) -> Option<String> {
+    raw.and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
 }
 
 fn codex_text_is_turn_aborted_marker(text: &str) -> bool {
@@ -5710,6 +5962,7 @@ fn extract_codex_events(
                         pending.suppress_next_turn_aborted_marker = false;
                     } else {
                         events.push(ParsedEvent {
+                            item: ItemFacts::turn_end(EndReason::Interrupted),
                             uuid: format!("{}-action-turn-interrupted-marker", msg_uuid),
                             parent_uuid: None,
                             session_id: session_id.to_string(),
@@ -5780,7 +6033,18 @@ fn extract_codex_events(
                 return;
             }
 
+            // Codex labels the phase itself on assistant messages.
+            let item = match codex_raw_str(payload.phase.as_deref()).as_deref() {
+                Some("commentary") if role == Role::Assistant => {
+                    ItemFacts::phase(Phase::Commentary, PhaseSource::Native)
+                }
+                Some("final_answer") if role == Role::Assistant => {
+                    ItemFacts::phase(Phase::Final, PhaseSource::Native)
+                }
+                _ => ItemFacts::default(),
+            };
             events.push(ParsedEvent {
+                item,
                 uuid: msg_uuid.to_string(),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -5817,6 +6081,7 @@ fn extract_codex_events(
             };
 
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -5883,6 +6148,7 @@ fn extract_codex_events(
             };
 
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -5929,6 +6195,7 @@ fn extract_codex_events(
             };
             let tool_call_id = (!call_id.is_empty()).then(|| call_id.to_string());
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -5945,6 +6212,7 @@ fn extract_codex_events(
             });
             if is_web {
                 events.push(ParsedEvent {
+                    item: Default::default(),
                     uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
                     parent_uuid: None,
                     session_id: session_id.to_string(),
@@ -5982,6 +6250,7 @@ fn extract_codex_events(
                 .filter_map(|tool| tool.get("name").and_then(Value::as_str))
                 .collect();
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -6002,7 +6271,48 @@ fn extract_codex_events(
             });
         }
         "reasoning" => {
-            // Skip reasoning blocks (internal model thinking)
+            // Codex keeps its reasoning encrypted; a summary is shared rarely.
+            let summary = payload
+                .summary
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Vec<Value>>(raw.get()).ok())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
+                .filter(|text| !text.is_empty());
+            let withheld = payload
+                .encrypted_content
+                .as_deref()
+                .is_some_and(|raw| raw.get() != "null");
+            if summary.is_none() && !withheld {
+                return;
+            }
+            events.push(ParsedEvent {
+                item: ItemFacts::reasoning(if summary.is_some() {
+                    Visibility::Summary
+                } else {
+                    Visibility::Withheld
+                }),
+                uuid: format!("{msg_uuid}-reasoning"),
+                parent_uuid: None,
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::System,
+                content_text: summary.map(|text| format!("Thinking:\n{text}")),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: "codex_reasoning".to_string(),
+                raw_line: Some(raw_line.to_string()),
+            });
         }
         _ => {
             // Unknown Codex payload type — skip
@@ -6046,6 +6356,7 @@ fn extract_user_events(
             if let Some(text) = text {
                 if !text.trim().is_empty() {
                     events.push(ParsedEvent {
+                        item: Default::default(),
                         uuid: msg_uuid.to_string(),
                         parent_uuid: None,
                         session_id: session_id.to_string(),
@@ -6067,6 +6378,7 @@ fn extract_user_events(
         // Plain string content
         if !text.trim().is_empty() {
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: msg_uuid.to_string(),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -6087,6 +6399,7 @@ fn extract_user_events(
 
 fn extract_assistant_events(
     content_str: &str,
+    stop_reason: Option<&str>,
     session_id: &str,
     msg_uuid: &str,
     timestamp: DateTime<Utc>,
@@ -6108,6 +6421,9 @@ fn extract_assistant_events(
                 let text = item.text.as_deref().unwrap_or("");
                 if !text.trim().is_empty() {
                     events.push(ParsedEvent {
+                        // Claude has no phase marker; the stop reason of the
+                        // message carrying the text is the protocol's own split.
+                        item: phase_from_stop_reason(stop_reason).unwrap_or_default(),
                         uuid: format!("{}-text-{}", msg_uuid, idx),
                         parent_uuid: None,
                         session_id: session_id.to_string(),
@@ -6150,7 +6466,17 @@ fn extract_assistant_events(
                     }
                 });
 
+                let intent = tool_input
+                    .as_ref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                    .and_then(|input| {
+                        input
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    });
                 events.push(ParsedEvent {
+                    item: ItemFacts::intent(intent.as_deref()),
                     uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
                     parent_uuid: None,
                     session_id: session_id.to_string(),
@@ -6175,10 +6501,75 @@ fn extract_assistant_events(
                     },
                 });
             }
+            "thinking" | "redacted_thinking" => {
+                // Most Claude thinking blocks keep only a signature: the model
+                // reasoned, and the text was withheld.
+                let text = item
+                    .thinking
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty() && item_type == "thinking");
+                let visibility = if text.is_some() {
+                    Visibility::Full
+                } else {
+                    Visibility::Withheld
+                };
+                events.push(ParsedEvent {
+                    item: ItemFacts::reasoning(visibility),
+                    uuid: format!("{}-thinking-{}", msg_uuid, idx),
+                    parent_uuid: None,
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::System,
+                    content_text: text.map(|text| format!("Thinking:\n{text}")),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset: line_offset,
+                    raw_type: "claude_thinking".to_string(),
+                    raw_line: if first {
+                        first = false;
+                        Some(raw_line.to_string())
+                    } else {
+                        None
+                    },
+                });
+            }
             _ => {
-                // thinking, etc. — skip
+                // Any other block (server tool use, a future type) is passed over.
             }
         }
+    }
+}
+
+/// A row that ends a turn and says why.
+#[allow(clippy::too_many_arguments)]
+fn turn_end_event(
+    uuid: String,
+    parent_uuid: Option<String>,
+    session_id: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    raw_line: Option<String>,
+    reason: EndReason,
+    raw_type: &str,
+) -> ParsedEvent {
+    ParsedEvent {
+        item: ItemFacts::turn_end(reason),
+        uuid,
+        parent_uuid,
+        session_id: session_id.to_string(),
+        timestamp,
+        role: Role::System,
+        content_text: None,
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        source_offset: line_offset,
+        raw_type: raw_type.to_string(),
+        raw_line,
     }
 }
 
@@ -6219,6 +6610,7 @@ fn extract_tool_results_from_items(
 
         if let Some(text) = output_text {
             events.push(ParsedEvent {
+                item: Default::default(),
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
@@ -7258,7 +7650,8 @@ mod tests {
                 "pi_user",
                 "pi_tool_call",
                 "pi_tool_result",
-                "pi_assistant"
+                "pi_assistant",
+                "pi_turn_end",
             ]
         );
         // Nothing of the system prompt or the tool definitions is served.
@@ -8169,7 +8562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_turn_aborted_non_interrupted_reason_is_ignored() {
+    fn test_codex_turn_aborted_for_another_reason_ends_the_turn_as_aborted() {
         let dir = tempfile::tempdir().unwrap();
         let path = make_jsonl_file(
             dir.path(),
@@ -8181,10 +8574,15 @@ mod tests {
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events.len(), 2);
         assert_eq!(
-            result.events[0].content_text.as_deref(),
+            result.events[0].item,
+            ItemFacts::turn_end(EndReason::Aborted)
+        );
+        assert_eq!(result.events[0].content_text, None);
+        assert_eq!(result.events[1].role, Role::User);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
             Some("real prompt")
         );
     }
