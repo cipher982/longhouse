@@ -46,7 +46,9 @@ def outcome_of(row: dict) -> str | None:
 
 
 def model_requests(row: dict) -> int:
-    return ((row.get("stages") or {}).get("preflight", {}).get("evidence") or {}).get("model_requests_served", 0)
+    return ((row.get("stages") or {}).get("preflight", {}).get("evidence") or {}).get(
+        "model_requests_served", 0
+    )
 
 
 def live_median(row: dict) -> float | None:
@@ -68,17 +70,23 @@ def one_line(text: Any, limit: int = 240) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("directory", type=Path)
     parser.add_argument("--repeats", type=int, default=1)
-    parser.add_argument("--gate-profile", action="store_true", help="fail a run that was narrowed")
+    parser.add_argument(
+        "--gate-profile", action="store_true", help="fail a run that was narrowed"
+    )
     parser.add_argument("--previous", type=Path)
     args = parser.parse_args(argv)
     directory: Path = args.directory
 
     problems: list[str] = []
     failing: dict[str, str] = {}  # "cell [scenario]" -> reason
-    medians: dict[str, list[float | None]] = {}  # "cell [scenario]" -> one median per pass
+    medians: dict[
+        str, list[float | None]
+    ] = {}  # "cell [scenario]" -> one median per pass
     findings: list[str] = []
     passed_on_rerun: list[dict] = []
     mutation_misses: list[str] = []
@@ -93,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     if fleet and not planned_cells:
         problems.append("the run planned no cell")
     if args.gate_profile and fleet and fleet.get("narrowed") is not False:
-        problems.append("the run was narrowed: the gate is every scenario, provider and mode and every mutation check")
+        problems.append(
+            "the run was narrowed: the gate is every scenario, provider and mode and every mutation check"
+        )
 
     # Every planned cell needs a good verdict.
     verdicts = {str(cell.get("id")): cell for cell in fleet.get("cells") or []}
@@ -112,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Every planned mutation check needs an ok row.
     table = read_json(directory / "mutations.json") if planned_mutations else []
-    rows_by_name = {str(row.get("name")): row for row in table or [] if isinstance(row, dict)}
+    rows_by_name = {
+        str(row.get("name")): row for row in table or [] if isinstance(row, dict)
+    }
     for name in planned_mutations:
         row = rows_by_name.get(name)
         if row is None:
@@ -129,7 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     problems += mutation_misses
 
     # The reply cells' own rows: the fail-closed checks that do not read the run's verdicts.
-    scenarios = [s for s in REPLY_SCENARIOS if any(cell_id.startswith(f"{s}:") for cell_id in planned_cells)]
+    scenarios = [
+        s
+        for s in REPLY_SCENARIOS
+        if any(cell_id.startswith(f"{s}:") for cell_id in planned_cells)
+    ]
     served_none: list[str] = []
     expected_rows: dict[str, int] = {}
     for scenario in scenarios:
@@ -141,14 +157,19 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             expected_rows.setdefault(scenario, len(rows))
             if len(rows) < expected_rows[scenario]:
-                problems.append(f"pass {i} ({scenario}): {len(rows)} rows, the first pass had {expected_rows[scenario]}")
+                problems.append(
+                    f"pass {i} ({scenario}): {len(rows)} rows, the first pass had {expected_rows[scenario]}"
+                )
             for row in rows:
                 cell = row.get("cell") or row["provider"] + "/" + row["mode"]
                 key = f"{cell} [{scenario}]"
                 medians.setdefault(key, []).append(live_median(row))
                 outcome = outcome_of(row)
                 if outcome not in GOOD:
-                    failing.setdefault(key, f"pass {i}: {outcome} at {row.get('first_failed_stage')}: {one_line(row.get('reason'), 200)}")
+                    failing.setdefault(
+                        key,
+                        f"pass {i}: {outcome} at {row.get('first_failed_stage')}: {one_line(row.get('reason'), 200)}",
+                    )
                 if row.get("status") == "measured" and model_requests(row) < 1:
                     served_none.append(f"{key} pass {i}")
     for item in served_none:
@@ -159,19 +180,30 @@ def main(argv: list[str] | None = None) -> int:
     for item in fleet.get("reruns") or []:
         scenario, _, cell = str(item.get("id", "")).partition(":")
         passed_on_rerun.append(
-            {"id": item.get("id"), "cell": f"{cell} [{scenario}]", "first": item.get("first"), "again": item.get("again")}
+            {
+                "id": item.get("id"),
+                "cell": f"{cell} [{scenario}]",
+                "first": item.get("first"),
+                "again": item.get("again"),
+            }
         )
 
     notes: list[str] = []
     lane = fleet.get("embedding_lane")
     if isinstance(lane, dict) and lane.get("loaded") is not True:
-        notes.append(f"the embedding model did not load in {lane.get('shard')}, so no cell ran beside the embedding lane")
+        notes.append(
+            f"the embedding model did not load in {lane.get('shard')}, so no cell ran beside the embedding lane"
+        )
     if fleet.get("jobs_asked") not in (None, fleet.get("jobs")):
-        notes.append(f"{fleet.get('jobs')} shards ran at a time, not the {fleet.get('jobs_asked')} asked for: memory held no more")
+        notes.append(
+            f"{fleet.get('jobs')} shards ran at a time, not the {fleet.get('jobs_asked')} asked for: memory held no more"
+        )
 
     previous_failing: set[str] = set()
     if args.previous and (args.previous / "gate.json").is_file():
-        previous_failing = set((read_json(args.previous / "gate.json") or {}).get("failing_cells", []))
+        previous_failing = set(
+            (read_json(args.previous / "gate.json") or {}).get("failing_cells", [])
+        )
     new = sorted(set(failing) - previous_failing) if args.previous else sorted(failing)
 
     state = "failure" if problems else "success"
@@ -189,30 +221,54 @@ def main(argv: list[str] | None = None) -> int:
         by_scenario.setdefault(cell_id.partition(":")[0], []).append(cell_id)
     lines = [f"## Terminal truth: {state}", ""]
     memory = fleet.get("memory") or {}
-    peak = f" Memory in use went from {memory.get('before_gib')} to {memory.get('peak_gib')} GiB." if memory.get("peak_gib") else ""
+    peak = (
+        f" Memory in use went from {memory.get('before_gib')} to {memory.get('peak_gib')} GiB."
+        if memory.get("peak_gib")
+        else ""
+    )
     lines += [
         f"{len(planned_cells)} cells and {len(planned_mutations)} mutation checks{took}, {fleet.get('jobs', '?')} shards at a time.{peak}"
     ]
-    builds = fleet.get("mutated_engine_builds") or {}
-    if builds:
-        lines += [f"Mutated engines: {builds.get('hits')} from the cache, {builds.get('built')} built ({builds.get('seconds')} s)."]
     lines += ["", "| scenario | cells | not good |", "|---|---|---|"]
     for scenario, ids in by_scenario.items():
-        bad = [i.partition(":")[2] for i in ids if (verdicts.get(i) or {}).get("outcome") not in GOOD_CELL]
+        bad = [
+            i.partition(":")[2]
+            for i in ids
+            if (verdicts.get(i) or {}).get("outcome") not in GOOD_CELL
+        ]
         lines.append(f"| {scenario} | {len(ids)} | {', '.join(bad) or '-'} |")
     if planned_mutations:
-        lines.append(f"| mutation checks | {len(planned_mutations)} | {len(mutation_misses) or '-'} |")
+        lines.append(
+            f"| mutation checks | {len(planned_mutations)} | {len(mutation_misses) or '-'} |"
+        )
     if medians:
-        lines += ["", "| reply cell | live median per pass (s): min / median / max | passes |", "|---|---|---|"]
+        lines += [
+            "",
+            "| reply cell | live median per pass (s): min / median / max | passes |",
+            "|---|---|---|",
+        ]
         for key, values in sorted(medians.items()):
             have = [v for v in values if v is not None]
-            stats = f"{min(have):.2f} / {statistics.median(have):.2f} / {max(have):.2f}" if have else "none"
+            stats = (
+                f"{min(have):.2f} / {statistics.median(have):.2f} / {max(have):.2f}"
+                if have
+                else "none"
+            )
             lines.append(f"| {key} | {stats} | {len(values)} |")
     if passed_on_rerun:
-        lines += ["", "Came out wrong beside the others and right when run again alone:"]
-        lines += [f"- {item['id']}: first {one_line(item['first'])}; alone {one_line(item['again'])}" for item in passed_on_rerun]
+        lines += [
+            "",
+            "Came out wrong beside the others and right when run again alone:",
+        ]
+        lines += [
+            f"- {item['id']}: first {one_line(item['first'])}; alone {one_line(item['again'])}"
+            for item in passed_on_rerun
+        ]
     if findings:
-        lines += ["", "Findings (a state shown late on a cell where that is declared known; reported, not failed):"]
+        lines += [
+            "",
+            "Findings (a state shown late on a cell where that is declared known; reported, not failed):",
+        ]
         lines += [f"- {item}" for item in findings]
     if notes:
         lines += ["", "Notes:"] + [f"- {note}" for note in notes]
@@ -240,7 +296,9 @@ def main(argv: list[str] | None = None) -> int:
     (directory / "gate.json").write_text(json.dumps(gate, indent=2) + "\n")
     print(text)
     for item in passed_on_rerun:
-        print(f"::warning::terminal truth {item['id']} passed only when run again alone: first {one_line(item['first'], 160)}")
+        print(
+            f"::warning::terminal truth {item['id']} passed only when run again alone: first {one_line(item['first'], 160)}"
+        )
     for item in findings:
         print(f"::warning::terminal truth finding {one_line(item, 200)}")
     for note in notes:

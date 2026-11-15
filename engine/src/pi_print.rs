@@ -1175,7 +1175,9 @@ async fn publish_stdout_growth(
             sink.session_file = event_sink.session_file.clone();
         }
         projection.apply(&sink.provider_thread_id, &event)?;
-        projection.thinking.observe(*seq, &event);
+        if !crate::qa_fault::mutant("pi-console-thinking-forward") {
+            projection.thinking.observe(*seq, &event);
+        }
         if let Some((phase, tool_name)) = pi_phase_from_event(&event) {
             event_sink.post_phase(phase, tool_name, *seq).await;
         }

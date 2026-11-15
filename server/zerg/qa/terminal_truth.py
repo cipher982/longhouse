@@ -237,6 +237,13 @@ def main(argv: list[str] | None = None) -> int:
         help="repeatable; added to the scratch Runtime Host's environment only (a mutation test shadows the server package this way)",
     )
     run.add_argument(
+        "--engine-env",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="repeatable; added to the Machine Agent's and every provider launch's environment (a mutation check switches a QA-engine defect on this way)",
+    )
+    run.add_argument(
         "--ready-text",
         action="append",
         default=[],
@@ -305,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--cell names undeclared cells: {unknown}" if unknown else "--cell replaces --provider and --mode")
         declared = [CellSpec(provider, mode, args.scenario) for provider, mode in named]
     host_environment = dict(item.split("=", 1) for item in args.host_env) or None
+    engine_environment = dict(item.split("=", 1) for item in args.engine_env) or None
     drivers = dict(PROVIDERS)
     for item in args.ready_text:
         provider, _, text = item.partition("=")
@@ -318,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
             ready_timeout=args.ready_timeout,
             drivers=drivers,
             host_environment=host_environment,
+            engine_environment=engine_environment,
             mutation=args.kinds_mutation,
             old_client=args.old_client,
             warm_session=args.warm_session,
@@ -345,6 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         ready_timeout=args.ready_timeout,
         drivers=drivers,
         host_environment=host_environment,
+        engine_environment=engine_environment,
         log=lambda message: print(message, file=sys.stderr, flush=True),
     )
     code = exit_code(results, declared)

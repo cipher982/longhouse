@@ -628,9 +628,15 @@ impl PiHelmServer {
                     .expect("Pi Helm discrete mutex poisoned")
                     .reset_thinking();
             }
-            "tool_call" => self.publish_tool_call(&frame),
+            "tool_call" => {
+                if !crate::qa_fault::mutant("pi-helm-tool-forward") {
+                    self.publish_tool_call(&frame)
+                }
+            }
             "message_update" => {
-                if let Some(delta) = pi_thinking_delta(&frame) {
+                if let Some(delta) = pi_thinking_delta(&frame)
+                    .filter(|_| !crate::qa_fault::mutant("pi-helm-thinking-forward"))
+                {
                     self.publish_thinking(delta);
                 } else if let Some(delta) = pi_live_text_delta(&frame) {
                     self.shared
@@ -673,7 +679,11 @@ impl PiHelmServer {
             live_text: text,
             progress_kind: "pi_helm_stream".into(),
             provider_session_id,
-            kind: Some("thinking".into()),
+            kind: if crate::qa_fault::mutant("pi-helm-thinking-as-reply") {
+                None
+            } else {
+                Some("thinking".into())
+            },
             ..Default::default()
         };
         self.status.publish(
@@ -1364,7 +1374,10 @@ fn write_extension_file(dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(dir)?;
     set_private_dir(dir)?;
     let path = dir.join(EXTENSION_FILE_NAME);
-    fs::write(&path, EXTENSION_ASSET)?;
+    fs::write(
+        &path,
+        crate::qa_fault::patch_asset(EXTENSION_FILE_NAME, EXTENSION_ASSET).as_ref(),
+    )?;
     set_private_file(&path)?;
     Ok(path)
 }

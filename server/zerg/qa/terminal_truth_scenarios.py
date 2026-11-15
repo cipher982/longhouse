@@ -182,6 +182,7 @@ def build_pass(
     engine: Path,
     cli: Path | None,
     host_environment: dict[str, str] | None = None,
+    engine_environment: dict[str, str] | None = None,
     log: Callable[[str], None] = lambda _m: None,
     log_all_frames: bool = False,
 ) -> Pass:
@@ -239,6 +240,12 @@ def build_pass(
                     log(f"environment conflict on {key} between providers; keeping the first value")
                     continue
                 environment[key] = value
+        # What a mutation check sets to switch one defect on in the QA engine (terminal_truth_mutations.engine_environment):
+        # the Machine Agent and every provider launch carry it, because the defects sit in both.
+        for key, value in (engine_environment or {}).items():
+            environment[key] = value
+            for penv in per_provider.values():
+                penv[key] = value
         t0 = time.monotonic()
         host.start()
         host_s = time.monotonic() - t0
@@ -648,6 +655,7 @@ def run_suite(
     ready_timeout: float = 120.0,
     drivers: dict[str, ProviderDriver] | None = None,
     host_environment: dict[str, str] | None = None,
+    engine_environment: dict[str, str] | None = None,
     log: Callable[[str], None] = lambda _m: None,
 ) -> list[CellResult]:
     """Run ``specs``: the cold cell alone in a pass of its own (own host, engine and HOME), the rest in one shared pass.
@@ -696,7 +704,9 @@ def run_suite(
     for group, shape in groups:
         plans = {s.key: plan_cell(s, pace) for s in group}
         try:
-            pas = build_pass(group, plans, engine=engine, cli=cli, host_environment=host_environment, log=log)
+            pas = build_pass(
+                group, plans, engine=engine, cli=cli, host_environment=host_environment, engine_environment=engine_environment, log=log
+            )
         except Exception as exc:  # noqa: BLE001
             for spec in group:
                 reason = f"pass setup failed: {type(exc).__name__}: {exc}"

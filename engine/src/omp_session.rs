@@ -216,7 +216,17 @@ pub fn session_dir_for_launch(cwd: &Path, profile: Option<&str>) -> Result<PathB
     // a `~/.local/share/omp` that something else created would otherwise name a
     // root OMP does not write to, and the launch would wait for a transcript
     // that never appears there.
-    if let Some(xdg_data_home) = nonempty_env_path("XDG_DATA_HOME") {
+    let xdg_data_home = if crate::qa_fault::mutant("omp-session-dir-rule") {
+        Some(
+            std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .filter(|value| !value.as_os_str().is_empty())
+                .unwrap_or_else(|| home_dir().join(".local").join("share")),
+        )
+    } else {
+        nonempty_env_path("XDG_DATA_HOME")
+    };
+    if let Some(xdg_data_home) = xdg_data_home {
         let upstream_root = xdg_data_home.join(OMP_DATA_DIR_NAME);
         let candidate = match profile.as_deref().and_then(safe_profile_name) {
             Some(profile) => upstream_root

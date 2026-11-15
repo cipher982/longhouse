@@ -24,6 +24,7 @@ from zerg.qa.terminal_truth_verdicts import declared_cells
 from zerg.qa.terminal_truth_verdicts import load_expectations
 
 ENGINE, CLI = Path("/e/longhouse-engine"), Path("/e/longhouse")
+FAULT_ENGINE, FAULT_CLI = Path("/e/fault/longhouse-engine"), Path("/e/fault/longhouse")
 
 
 def full_plan(**overrides) -> parallel.Plan:
@@ -32,10 +33,10 @@ def full_plan(**overrides) -> parallel.Plan:
 
 
 def shards_of(plan: parallel.Plan, providers_per_shard: int = 1) -> list[parallel.Shard]:
-    engines = {m.name: (Path(f"/m/{m.name}/longhouse-engine"), Path(f"/m/{m.name}/longhouse")) for m in plan.selected if m.side == "engine"}
     copies = {m.name: Path(f"/c/{m.name}/server") for m in plan.selected if m.side == "server"}
     return parallel.make_shards(
-        plan, engine=ENGINE, cli=CLI, providers_per_shard=providers_per_shard, tokens=100, rate=20.0, mutated_engines=engines, server_copies=copies
+        plan, engine=ENGINE, cli=CLI, providers_per_shard=providers_per_shard, tokens=100, rate=20.0, fault_engine=FAULT_ENGINE,
+        fault_cli=FAULT_CLI, server_copies=copies,
     )  # fmt: skip
 
 
@@ -104,7 +105,7 @@ def test_one_provider_per_shard_never_puts_two_providers_on_one_host_and_omp_nev
         assert not {"omp", "pi"} <= {u.cell.split("/")[0] for u in shard.units}, shard.name
 
 
-def test_a_mutated_run_gets_its_own_shard_with_the_mutated_engine_or_the_patched_server() -> None:
+def test_a_mutated_run_gets_its_own_shard_with_the_qa_engine_switched_or_the_patched_server() -> None:
     plan = full_plan()
     by_unit = {s.units[0].id: s for s in shards_of(plan) if len(s.units) == 1}
     for m in mutations.MUTATIONS:
@@ -113,8 +114,10 @@ def test_a_mutated_run_gets_its_own_shard_with_the_mutated_engine_or_the_patched
             assert (shard.engine, shard.cli) == (ENGINE, CLI)
             assert shard.flags[-2:] == ["--host-env", f"PYTHONPATH=/c/{m.name}/server"]
         else:
-            assert shard.engine == Path(f"/m/{m.name}/longhouse-engine") and shard.cli == Path(f"/m/{m.name}/longhouse")
+            assert (shard.engine, shard.cli) == (FAULT_ENGINE, FAULT_CLI)  # one QA engine for every engine defect
             assert "--host-env" not in shard.flags
+            switched = [shard.flags[i + 1] for i, flag in enumerate(shard.flags) if flag == "--engine-env"]
+            assert f"LONGHOUSE_QA_MUTANT={m.engine_switch}" in switched
         base_shard = next(s for s in shards_of(plan) if plan.baseline_of[m.name] in [u.id for u in s.units])
         assert (base_shard.engine, base_shard.cli) == (ENGINE, CLI)
 
@@ -279,11 +282,6 @@ def run_with(monkeypatch, tmp_path, script, *extra: str) -> tuple[int, dict, Fak
     monkeypatch.setattr(parallel, "SCRATCH_ROOT", tmp_path / "scratch")
     monkeypatch.setattr(parallel, "memory_limit", lambda: None)
     monkeypatch.setattr(parallel, "short_scratch", lambda root: (root, None))
-    built = {"hits": 0, "built": 0, "seconds": 0.0, "inputs_digest": "x"}
-    engines = {m.name: (ENGINE, CLI) for m in mutations.MUTATIONS if m.side == "engine"}
-    monkeypatch.setattr(
-        mutations, "build_mutated_engines", lambda selected, **k: ({m.name: engines[m.name] for m in selected if m.side == "engine"}, built)
-    )
     monkeypatch.setattr(mutations, "prepare_server_copy", lambda m, copy: copy / "server")
     tmp_path.mkdir(parents=True, exist_ok=True)
     engine = tmp_path / "longhouse-engine"
@@ -378,10 +376,9 @@ def test_exactly_one_shard_runs_the_embedding_lane_and_it_is_the_unmutated_long_
         at = shard.flags.index(parallel.EMBEDDING_ON)
         assert shard.flags[at - 1] == "--host-env"
         assert not any(parallel.EMBEDDING_ON in s.flags for s in shards if s is not shard)
-    engines = {m.name: (ENGINE, CLI) for m in plan.selected if m.side == "engine"}
     copies = {m.name: tmp_path / m.name for m in plan.selected if m.side == "server"}
     cached = parallel.make_shards(
-        plan, engine=ENGINE, cli=CLI, providers_per_shard=2, tokens=100, rate=20.0, mutated_engines=engines, server_copies=copies,
+        plan, engine=ENGINE, cli=CLI, providers_per_shard=2, tokens=100, rate=20.0, fault_engine=FAULT_ENGINE, fault_cli=FAULT_CLI, server_copies=copies,
         embed_model_dir=tmp_path / "model",
     )  # fmt: skip
     (shard,) = [s for s in cached if s.embedding]
@@ -576,105 +573,7 @@ def test_a_run_that_was_given_less_memory_says_so_and_records_both_numbers(monke
     assert "2 shards at a time, not 8: a limit of 5.0 GiB" in capsys.readouterr().err
 
 
-# ----- the mutated engine cache
-
-
-def test_the_cache_key_changes_with_the_engine_inputs_and_with_the_edit_and_not_with_the_name() -> None:
-    m = mutations.MUTATIONS[0]
-    key = mutations.mutated_engine_key(m, "a" * 64)
-    assert re.fullmatch(r"[0-9a-f]{24}", key)
-    assert mutations.mutated_engine_key(m, "b" * 64) != key
-    assert mutations.mutated_engine_key(mutations.dataclasses.replace(m, new=m.new + " "), "a" * 64) != key
-    assert mutations.mutated_engine_key(mutations.dataclasses.replace(m, name="renamed"), "a" * 64) == key
-
-
-def test_cached_engines_are_not_rebuilt_and_a_full_run_drops_entries_of_another_engine_version(monkeypatch, tmp_path) -> None:
-    cache = tmp_path / "cache"
-    monkeypatch.setattr(mutations, "engine_inputs_digest", lambda: "d" * 64)
-    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
-    monkeypatch.setattr(mutations, "_run", lambda *a, **k: pytest.fail("a cached engine was rebuilt"))
-    engine_side = [m for m in mutations.MUTATIONS if m.side == "engine"]
-    for m in engine_side:
-        entry = cache / mutations.mutated_engine_key(m, "d" * 64)
-        entry.mkdir(parents=True, exist_ok=True)  # two mutations that are one edit on two cells share one binary
-        for binary in mutations.BINARIES:
-            (entry / binary).write_text("")
-    stale = cache / ("0" * 24)
-    stale.mkdir()
-    unrelated = cache / "README"
-    unrelated.write_text("not ours")
-
-    narrowed, stats = mutations.build_mutated_engines(engine_side[:1], cache=cache, cargo_target=tmp_path / "t")
-    assert stats["hits"] == 1 and stats["built"] == 0 and stale.exists()  # a narrowed run empties nothing
-
-    engines, stats = mutations.build_mutated_engines(list(mutations.MUTATIONS), cache=cache, cargo_target=tmp_path / "t")
-    assert stats["hits"] == len({mutations.mutated_engine_key(m, "d" * 64) for m in engine_side}) and stats["built"] == 0
-    assert set(engines) == {m.name for m in engine_side} and all(e.is_file() and c.is_file() for e, c in engines.values())
-    assert not stale.exists() and unrelated.exists()
-
-
-def _fake_builds(monkeypatch, tmp_path, fail_on: str | None = None) -> list[tuple[str, str, bool]]:
-    """Replace git, the target copy and cargo; returns the list each build is recorded in as (slot, edited file, incremental)."""
-
-    engine_side = [m for m in mutations.MUTATIONS if m.side == "engine"]
-    monkeypatch.setattr(mutations, "engine_inputs_digest", lambda: "d" * 64)
-    monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
-    monkeypatch.setattr(mutations.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(mutations, "_clone_dir", lambda _source, destination: destination.mkdir(parents=True))
-    builds: list[tuple[str, str, bool]] = []
-
-    def fake_run(command, *, cwd, env=None, timeout=0):
-        if command[:3] == ["git", "worktree", "add"]:
-            for m in engine_side:  # a checkout of HEAD: the files the mutations edit
-                target = Path(command[4]) / m.file
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text((mutations.REPO_ROOT / m.file).read_text())
-        elif command[:2] == ["git", "checkout"]:
-            for m in engine_side:
-                (Path(cwd) / m.file).write_text((mutations.REPO_ROOT / m.file).read_text())
-
-    def fake_build(worktree: Path, target: Path, out: Path, *, incremental: bool = False):
-        assert target == worktree.parent / "target" and target.is_dir()
-        edited = [m.file for m in engine_side if (worktree / m.file).read_text() != (mutations.REPO_ROOT / m.file).read_text()]
-        assert len(set(edited)) == 1, "a build saw another build's edit, or none"
-        builds.append((worktree.parent.name, edited[0], incremental))
-        if fail_on and fail_on == worktree.parent.name:
-            raise RuntimeError("cargo failed")
-        out.mkdir(parents=True)
-        for binary in mutations.BINARIES:
-            (out / binary).write_text("")
-        return out / mutations.BINARIES[0], out / mutations.BINARIES[1]
-
-    monkeypatch.setattr(mutations, "_run", fake_run)
-    monkeypatch.setattr(mutations, "_build_engine", fake_build)
-    return builds
-
-
-def test_missing_engines_are_built_once_per_edit_by_several_workers_each_in_its_own_worktree_and_target(monkeypatch, tmp_path) -> None:
-    builds = _fake_builds(monkeypatch, tmp_path)
-    engine_side = [m for m in mutations.MUTATIONS if m.side == "engine"]
-    distinct = {mutations.mutated_engine_key(m, "d" * 64) for m in engine_side}
-    logged: list[str] = []
-    engines, stats = mutations.build_mutated_engines(
-        list(mutations.MUTATIONS), cache=tmp_path / "cache", cargo_target=tmp_path / "t", log=logged.append
-    )
-    assert stats["built"] == len(builds) == len(distinct) < len(engine_side) and stats["hits"] == 0
-    assert {slot for slot, _file, _incremental in builds} <= {"w0", "w1", "w2"} and all(incremental for *_rest, incremental in builds)
-    assert set(engines) == {m.name for m in engine_side} and all(e.is_file() and c.is_file() for e, c in engines.values())
-    assert sorted(p.name for p in (tmp_path / "cache").iterdir()) == sorted(distinct)  # no staging directory is left
-    assert not (tmp_path / "tt-mut").exists()
-    assert f"{len(distinct)} mutated engines to build, 3 at a time" in logged
-
-    one, stats = mutations.build_mutated_engines(engine_side[:1], cache=tmp_path / "cache-2", cargo_target=tmp_path / "t")
-    assert stats["built"] == 1 and {slot for slot, *_rest in builds[len(distinct) :]} == {"w0"}  # one build, one worker
-
-
-def test_a_build_that_fails_stops_the_others_and_fails_the_run(monkeypatch, tmp_path) -> None:
-    builds = _fake_builds(monkeypatch, tmp_path, fail_on="w0")
-    with pytest.raises(RuntimeError, match="cargo failed"):
-        mutations.build_mutated_engines(list(mutations.MUTATIONS), cache=tmp_path / "cache", cargo_target=tmp_path / "t", workers=1)
-    assert len(builds) == 1 and not (tmp_path / "tt-mut").exists()
-    assert not any((tmp_path / "cache").iterdir())
+# ----- what the engine is built from
 
 
 def test_everything_the_engine_embeds_at_build_time_is_inside_the_directories_the_cache_key_hashes() -> None:
@@ -717,13 +616,13 @@ def test_options_name_only_what_differs_from_how_the_gate_runs_the_cell() -> Non
 # ----- the engine the run measures
 
 
-def test_the_engine_is_built_once_per_set_of_inputs_and_copied_from_the_cache_after(monkeypatch, tmp_path) -> None:
+def test_the_engine_and_the_qa_engine_are_built_once_per_set_of_inputs_and_copied_from_the_cache_after(monkeypatch, tmp_path) -> None:
     from zerg.qa import terminal_truth_engine as engine
 
-    builds: list[int] = []
+    builds: list[str] = []
 
-    def fake_build() -> dict[str, Path]:
-        builds.append(1)
+    def fake_build(flags: str = engine.FLAGS) -> dict[str, Path]:
+        builds.append(flags)
         made = tmp_path / "target"
         made.mkdir(exist_ok=True)
         for name in mutations.BINARIES:
@@ -737,16 +636,20 @@ def test_the_engine_is_built_once_per_set_of_inputs_and_copied_from_the_cache_af
     cache = tmp_path / "cache"
 
     assert engine.provide(tmp_path / "one", cache) == "miss"
-    assert engine.provide(tmp_path / "two", cache) == "hit" and len(builds) == 1
-    assert (tmp_path / "two" / "longhouse-engine").read_text() == "longhouse-engine build 1"
-    assert engine.provide(tmp_path / "three", None) == "off" and len(builds) == 2
+    assert builds == [engine.FLAGS, engine.FAULT_FLAGS]  # the engine, then the same engine with the fault seams
+    assert "qa-fault-injection" in engine.FAULT_FLAGS and "qa-fault-injection" not in engine.FLAGS
+    assert (tmp_path / "one" / "longhouse-engine").read_text() == "longhouse-engine build 1"
+    assert (tmp_path / "one" / "fault" / "longhouse-engine").read_text() == "longhouse-engine build 2"
+    assert engine.provide(tmp_path / "two", cache) == "hit" and len(builds) == 2
+    assert (tmp_path / "two" / "fault" / "longhouse").read_text() == "longhouse build 2"
+    assert engine.provide(tmp_path / "three", None) == "off" and len(builds) == 4
 
     digest[0] = "b" * 64  # the engine sources changed
-    assert engine.provide(tmp_path / "four", cache) == "miss" and len(builds) == 3
+    assert engine.provide(tmp_path / "four", cache) == "miss" and len(builds) == 6
     assert [entry.name for entry in cache.iterdir()] == ["b" * 24]  # one build is kept
 
 
-def test_the_engine_and_the_mutated_engines_are_keyed_by_different_flags_over_the_same_inputs(monkeypatch) -> None:
+def test_the_engine_and_the_qa_engine_are_keyed_by_different_flags_over_the_same_inputs(monkeypatch) -> None:
     from zerg.qa import terminal_truth_engine as engine
 
     seen: list[list[str]] = []
@@ -756,8 +659,8 @@ def test_the_engine_and_the_mutated_engines_are_keyed_by_different_flags_over_th
         return subprocess.CompletedProcess(command, 0, stdout="tree-or-rustc\n", stderr="")
 
     monkeypatch.setattr(mutations.subprocess, "run", fake_run)
-    mutated, measured = mutations.engine_inputs_digest(), mutations.engine_inputs_digest(flags=engine.FLAGS)
-    assert mutated != measured
+    qa, measured = mutations.engine_inputs_digest(), mutations.engine_inputs_digest(flags=engine.FLAGS)
+    assert qa != measured
     listing = next(command for command in seen if command[:2] == ["git", "ls-tree"])
     assert [*mutations.ENGINE_INPUT_DIRS, "scripts/build"] == listing[-4:]
 
@@ -816,9 +719,11 @@ def test_a_run_with_a_long_scratch_root_gives_shards_the_link_and_records_and_re
     monkeypatch.setattr(
         parallel,
         "verdict_of",
-        lambda unit, row: tuple(row["verdict"])
-        if row.get("verdict")
-        else (("fail", plan_names[unit.mutation].stages[0], "x") if unit.mutation else ("pass", None, "")),
+        lambda unit, row: (
+            tuple(row["verdict"])
+            if row.get("verdict")
+            else (("fail", plan_names[unit.mutation].stages[0], "x") if unit.mutation else ("pass", None, ""))
+        ),
     )
     root = tmp_path / "scratch"
     root.mkdir()

@@ -2301,6 +2301,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_terminal_truth_mutations.py",
+      "providers": [
+        "codex",
+        "omp"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_terminal_truth_parallel.py",
       "providers": [
         "claude",

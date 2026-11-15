@@ -2092,7 +2092,9 @@ impl OmpHelmServer {
             discrete.thinking.clear();
             discrete.thinking_seq = 0;
         }
-        if let Some(delta) = omp_thinking_delta(event) {
+        if let Some(delta) = omp_thinking_delta(event)
+            .filter(|_| !crate::qa_fault::mutant("omp-helm-thinking-forward"))
+        {
             let (text, seq) = {
                 let mut discrete = self.discrete.lock();
                 Self::append_live_text(&mut discrete.thinking, delta);
@@ -2105,7 +2107,11 @@ impl OmpHelmServer {
                 live_text: text,
                 progress_kind: "omp_helm_stream".into(),
                 provider_session_id,
-                kind: Some("thinking".into()),
+                kind: if crate::qa_fault::mutant("omp-helm-thinking-as-reply") {
+                    None
+                } else {
+                    Some("thinking".into())
+                },
                 ..Default::default()
             };
             let (phase, tool) = {
@@ -2130,7 +2136,10 @@ impl OmpHelmServer {
         ) {
             return;
         }
-        let Some(event) = event else { return };
+        let Some(event) = event.filter(|_| !crate::qa_fault::mutant("omp-helm-tool-forward"))
+        else {
+            return;
+        };
         let (Some(name), Some(call_id)) = (
             event.get("toolName").and_then(Value::as_str),
             event.get("toolCallId").and_then(Value::as_str),

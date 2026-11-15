@@ -195,3 +195,62 @@ pub fn hot_recheck_off() -> bool {
 pub fn hot_recheck_off() -> bool {
     false
 }
+
+/// Terminal-truth mutation checks: one engine binary carries every known live-text defect, and a check switches one on.
+///
+/// `LONGHOUSE_QA_MUTANT` names the defect (comma separated). Each call site keeps the shipped behavior in its `else`
+/// branch and puts the defect, the edit the check used to compile into a binary of its own, in the branch `mutant`
+/// guards. The unmutated cell and the mutated cell of a check therefore run the same binary and differ in this one
+/// variable. `server/zerg/qa/terminal_truth_mutations.py` owns the names and what each is expected to break.
+#[cfg(feature = "qa-fault-injection")]
+pub fn mutant(name: &str) -> bool {
+    static ACTIVE: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        std::env::var("LONGHOUSE_QA_MUTANT")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    ACTIVE.iter().any(|active| active == name)
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn mutant(_name: &str) -> bool {
+    false
+}
+
+/// An embedded asset (a JS or TS file the engine writes for a provider to load) with the one text edit a mutation check
+/// names in `LONGHOUSE_QA_ASSET_PATCH`, a JSON list of `{"asset", "old", "new"}`. The edit must land in exactly one
+/// place, as the source edit it replaces had to; a patch that does not stops the engine, so a check never runs a defect
+/// that was not put back.
+#[cfg(feature = "qa-fault-injection")]
+pub fn patch_asset<'a>(asset: &str, text: &'a str) -> std::borrow::Cow<'a, str> {
+    let Ok(raw) = std::env::var("LONGHOUSE_QA_ASSET_PATCH") else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let patches: Vec<serde_json::Value> =
+        serde_json::from_str(&raw).expect("LONGHOUSE_QA_ASSET_PATCH is not a JSON list");
+    let mut patched = std::borrow::Cow::Borrowed(text);
+    for patch in patches {
+        if patch["asset"].as_str() != Some(asset) {
+            continue;
+        }
+        let old = patch["old"].as_str().expect("asset patch has no `old`");
+        let new = patch["new"].as_str().expect("asset patch has no `new`");
+        let count = patched.matches(old).count();
+        assert_eq!(
+            count, 1,
+            "asset patch for {asset}: the text to edit occurs {count} times"
+        );
+        patched = std::borrow::Cow::Owned(patched.replacen(old, new, 1));
+    }
+    patched
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn patch_asset<'a>(_asset: &str, text: &'a str) -> std::borrow::Cow<'a, str> {
+    std::borrow::Cow::Borrowed(text)
+}

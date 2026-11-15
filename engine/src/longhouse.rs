@@ -13,6 +13,9 @@ mod build_identity;
 mod claude_owner_input;
 #[path = "codex_config.rs"]
 mod codex_config;
+#[allow(dead_code)]
+#[path = "qa_fault.rs"]
+mod qa_fault;
 // The import scope reads compressed Codex rollouts through it; the rest is
 // the engine's.
 #[allow(dead_code)]
@@ -3258,8 +3261,10 @@ const CLAUDE_MOD_MODULE: &str = include_str!("../assets/claude-mod/hooks/registe
 /// under it: Claude Code reloads a `--plugin-dir` mod when its files change.
 fn install_claude_mod() -> anyhow::Result<PathBuf> {
     use sha2::{Digest, Sha256};
+    // A terminal-truth mutation check may edit the module (a QA engine only); the digest then names the edited content.
+    let module = qa_fault::patch_asset("claude-mod/hooks/register.js", CLAUDE_MOD_MODULE);
     let mut hasher = Sha256::new();
-    for part in [CLAUDE_MOD_MANIFEST, CLAUDE_MOD_HOOKS, CLAUDE_MOD_MODULE] {
+    for part in [CLAUDE_MOD_MANIFEST, CLAUDE_MOD_HOOKS, module.as_ref()] {
         hasher.update(part.as_bytes());
         hasher.update([0]);
     }
@@ -3277,7 +3282,7 @@ fn install_claude_mod() -> anyhow::Result<PathBuf> {
         CLAUDE_MOD_MANIFEST,
     )?;
     std::fs::write(staging.join("hooks/hooks.json"), CLAUDE_MOD_HOOKS)?;
-    std::fs::write(staging.join("hooks/register.js"), CLAUDE_MOD_MODULE)?;
+    std::fs::write(staging.join("hooks/register.js"), module.as_ref())?;
     match std::fs::rename(&staging, &dir) {
         Ok(()) => Ok(dir),
         // Another launch installed the same content first.

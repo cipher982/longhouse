@@ -641,9 +641,10 @@ impl Projector {
                             return vec![Self::stream_event("tool_use", part)];
                         }
                         // A running tool restates its output so far, as often as reply text is restated.
-                        let Some(output) =
-                            running_tool_output(part).filter(|_| status == "running")
-                        else {
+                        let Some(output) = running_tool_output(part).filter(|_| {
+                            status == "running"
+                                && !crate::qa_fault::mutant("opencode-console-tool-output-forward")
+                        }) else {
                             return Vec::new();
                         };
                         if self.tool_output_len.get(part_id) == Some(&output.len())
@@ -691,9 +692,16 @@ impl Projector {
                 // part is known to be text.
                 let known_text = match self.part_types.get(part_id).map(String::as_str) {
                     Some("text") => true,
+                    Some("reasoning")
+                        if crate::qa_fault::mutant("opencode-console-thinking-as-reply") =>
+                    {
+                        true
+                    }
                     Some("reasoning") => {
                         let text = self.reasoning.entry(part_id.to_string()).or_default();
-                        crate::status_slot::append_live_text(text, delta);
+                        if !crate::qa_fault::mutant("opencode-console-thinking-forward") {
+                            crate::status_slot::append_live_text(text, delta);
+                        }
                         let due = self
                             .last_text_emit
                             .get(part_id)

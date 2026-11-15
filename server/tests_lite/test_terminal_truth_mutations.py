@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from zerg.qa import terminal_truth_kinds as kinds
@@ -10,8 +13,10 @@ from zerg.qa.terminal_truth_kinds import WOKEN_STATE_CHECK
 from zerg.qa.terminal_truth_mutations import MUTATIONS
 
 
-@pytest.mark.parametrize("mutation", MUTATIONS, ids=lambda m: m.name)
-def test_each_mutation_applies_exactly_once_and_changes_the_file(mutation) -> None:
+@pytest.mark.parametrize("mutation", [m for m in MUTATIONS if m.side == "server" or m.asset is not None], ids=lambda m: m.name)
+def test_each_source_edit_mutation_applies_exactly_once_and_changes_the_file(mutation) -> None:
+    """The server edits and the embedded asset edits. A Rust engine defect is a switch in the source instead (below)."""
+
     path = mutations.REPO_ROOT / mutation.file
     original = path.read_text()
     mutated = mutations.mutated_text(mutation, original)
@@ -66,24 +71,6 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
     assert all(m.stages and m.cell.count("/") == 1 for m in MUTATIONS)
 
 
-def test_every_process_the_mutation_runner_starts_gets_a_scrubbed_environment(monkeypatch, tmp_path) -> None:
-    """The runner's git, cp and cargo children must not inherit the caller's hook URL or token."""
-
-    import subprocess
-
-    from zerg.qa import terminal_truth_mutations as mutations
-
-    for name, value in {"LONGHOUSE_HOOK_URL": "http://127.0.0.1:9/real", "LONGHOUSE_HOOK_TOKEN": "real", "INFISICAL_TOKEN": "real"}.items():
-        monkeypatch.setenv(name, value)
-    seen: list[dict[str, str]] = []
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: seen.append(k.get("env")))
-    mutations._run(["git", "status"], cwd=tmp_path)
-    mutations._clone_dir(tmp_path, tmp_path / "clone")
-    assert len(seen) == 2
-    for environment in seen:
-        assert environment is not None and not {"LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN", "INFISICAL_TOKEN"} & set(environment)
-
-
 def test_a_row_that_is_not_ok_says_which_cell_went_wrong_and_why() -> None:
     baseline = {"check": "mutation x", "expected_stage": "kind", "baseline": "fail", "baseline_stage": "preflight",
                 "baseline_reason": "the provider\nnever became ready", "observed": "not run", "ok": False}  # fmt: skip
@@ -107,8 +94,6 @@ def test_a_reply_cell_that_fails_unmutated_keeps_where_each_marker_was_late(monk
 
     reply_mutation = next(m for m in MUTATIONS if m.name == "omp-session-dir-rule")
     monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
-    monkeypatch.setattr(mutations, "_run", lambda *a, **k: None)
-    monkeypatch.setattr(mutations, "_clone_dir", lambda *a, **k: None)
     monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
     late = CellResult(
         provider="omp", mode="helm", status="measured", outcome="fail", first_failed_stage="stream_delivered",
@@ -119,8 +104,8 @@ def test_a_reply_cell_that_fails_unmutated_keeps_where_each_marker_was_late(monk
     monkeypatch.setattr(mutations.tt, "run_suite", lambda *a, **k: [late])
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
-        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[reply_mutation.name],
-        skip_engine=False, tokens=100, rate=20.0, out=out,
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", fault_engine=tmp_path / "engine", fault_longhouse_cli=tmp_path / "cli", only=[reply_mutation.name],
+        tokens=100, rate=20.0, out=out,
     )  # fmt: skip
 
     assert mutations.run_mutations(args) == 1
@@ -131,30 +116,26 @@ def test_a_reply_cell_that_fails_unmutated_keeps_where_each_marker_was_late(monk
     assert row["evidence"]["stage_reasons"] == {"stream_delivered": "median 1.861 s, budget 1.0 s"}
 
 
-def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_is_not_built(monkeypatch, tmp_path, capsys) -> None:
+def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_is_not_run(monkeypatch, tmp_path, capsys) -> None:
     """On the Linux runner 7 unmutated cells failed (2026-11-12) and the log said only "fail": 14 minutes of rebuilds, no reason."""
 
     import json
 
     engine_mutation = next(m for m in MUTATIONS if m.side == "engine" and m.scenario)
     monkeypatch.setattr(mutations, "SCRATCH", tmp_path / "tt-mut")
-    monkeypatch.setattr(mutations, "_run", lambda *a, **k: None)
-    monkeypatch.setattr(mutations, "_clone_dir", lambda *a, **k: None)
     monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
 
-    def no_build(*_a, **_k):
-        raise AssertionError("the engine was rebuilt for a row that had already failed")
-
-    monkeypatch.setattr(mutations, "_build_engine", no_build)
     failed = {"outcome": "fail", "reason": "preflight: the provider never became ready", "checks": [{"name": "preflight", "ok": False}]}
-    monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [failed])
+    calls: list[dict] = []
+    monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: calls.append(k) or [failed])
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
-        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[engine_mutation.name],
-        skip_engine=False, tokens=100, rate=20.0, out=out,
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", fault_engine=tmp_path / "engine", fault_longhouse_cli=tmp_path / "cli", only=[engine_mutation.name],
+        tokens=100, rate=20.0, out=out,
     )  # fmt: skip
 
     assert mutations.run_mutations(args) == 1
+    assert len(calls) == 2, "the mutated cell ran for a row that had already failed"  # the unmutated cell and its one more try
 
     (row,) = json.loads(out.read_text())
     assert row["baseline"] == "fail" and row["observed"] == "not run" and row["ok"] is False
@@ -167,28 +148,21 @@ def test_a_failing_unmutated_cell_is_reported_with_its_reason_and_its_mutation_i
 
 
 def _run_one_engine_mutation(monkeypatch, tmp_path, results, expectation):
-    """Run one live-kinds engine mutation with the cells, the build and git replaced; returns (exit status, rows, calls made)."""
+    """Run one live-kinds engine mutation with the cells replaced; returns (exit status, rows, calls made)."""
 
     import json
 
     mutation = next(m for m in MUTATIONS if m.name == "codex-helm-thinking-as-reply")
     scratch = tmp_path / "tt-mut"
-    source = scratch / "worktree" / mutation.file
-    source.parent.mkdir(parents=True)
-    source.write_text((mutations.REPO_ROOT / mutation.file).read_text())
     monkeypatch.setattr(mutations, "SCRATCH", scratch)
-    monkeypatch.setattr(mutations, "_run", lambda *a, **k: None)
-    monkeypatch.setattr(mutations, "_clone_dir", lambda *a, **k: None)
-    monkeypatch.setattr(mutations.subprocess, "run", lambda *a, **k: None)
     monkeypatch.setattr(mutations.tt, "load_expectations", lambda: {})
-    monkeypatch.setattr(mutations, "_build_engine", lambda *a, **k: (tmp_path / "engine", tmp_path / "cli"))
     queue = list(results)
     monkeypatch.setattr(mutations, "run_kinds_suite", lambda *a, **k: [queue.pop(0)])
     monkeypatch.setattr(kinds, "kinds_expectation", expectation)
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
-        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[mutation.name],
-        skip_engine=False, tokens=100, rate=20.0, out=out,
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", fault_engine=tmp_path / "engine", fault_longhouse_cli=tmp_path / "cli", only=[mutation.name],
+        tokens=100, rate=20.0, out=out,
     )  # fmt: skip
     status = mutations.run_mutations(args)
     return status, json.loads(out.read_text()), len(results) - len(queue)
@@ -278,8 +252,8 @@ def test_a_late_state_stops_the_one_mutation_that_is_about_that_stage(monkeypatc
     monkeypatch.setattr(kinds, "kinds_expectation", lambda _r: {"ok": True, "stage": "-", "engine_posted": "live", "stream": "live"})
     out = tmp_path / "rows.json"
     args = mutations.argparse.Namespace(
-        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", cargo_target=tmp_path / "target", only=[mutation.name],
-        skip_engine=False, tokens=100, rate=20.0, out=out,
+        engine=tmp_path / "engine", longhouse_cli=tmp_path / "cli", fault_engine=tmp_path / "engine", fault_longhouse_cli=tmp_path / "cli", only=[mutation.name],
+        tokens=100, rate=20.0, out=out,
     )  # fmt: skip
 
     assert mutations.run_mutations(args) == 1
@@ -287,3 +261,64 @@ def test_a_late_state_stops_the_one_mutation_that_is_about_that_stage(monkeypatc
     (row,) = json.loads(out.read_text())
     assert (row["baseline"], row["baseline_stage"], row["observed"], row["ok"]) == ("fail", "state_shown", "not run", False)
     assert "state_finding" not in row and len(calls) == 2  # one retry, then a miss
+
+
+# ----- an engine mutation is a runtime switch in the QA engine
+
+
+ENGINE_SOURCES = sorted((mutations.REPO_ROOT / "engine" / "src").glob("**/*.rs"))
+SWITCH_CALL = re.compile(r'qa_fault::mutant\(\s*"([a-z0-9-]+)"\s*\)')
+
+
+def _switches_in_engine_source() -> dict[str, int]:
+    found: dict[str, int] = {}
+    for path in ENGINE_SOURCES:
+        for name in SWITCH_CALL.findall(path.read_text(errors="replace")):
+            found[name] = found.get(name, 0) + 1
+    return found
+
+
+def test_every_rust_engine_defect_has_its_switch_in_the_engine_source_and_every_switch_has_a_check() -> None:
+    """A check whose switch is not in the engine would run the unmutated engine and be reported as a miss; a switch no check
+    names is a defect nobody tests. Both directions fail here, before a 15 minute run does."""
+
+    in_source = _switches_in_engine_source()
+    rust = {m.engine_switch for m in MUTATIONS if m.side == "engine" and m.asset is None}
+    assert rust - set(in_source) == set(), "a mutation names a switch the engine source does not read"
+    assert set(in_source) - rust == set(), "the engine source has a switch no mutation turns on"
+
+
+def test_an_embedded_asset_defect_is_one_edit_of_a_file_the_engine_embeds_and_writes_out_through_the_patch_hook() -> None:
+    engine_text = "\n".join(path.read_text(errors="replace") for path in ENGINE_SOURCES)
+    assets = {m.asset for m in MUTATIONS if m.asset is not None}
+    assert assets == {"longhouse-pi-helm.ts", "claude-mod/hooks/register.js"}
+    for asset in assets:
+        assert f'include_str!("../assets/{asset}")' in engine_text  # the engine embeds it
+        assert f'patch_asset("{asset}"' in engine_text or "patch_asset(EXTENSION_FILE_NAME" in engine_text  # and writes it through the hook
+
+
+def test_the_environment_of_an_engine_defect_names_its_switch_and_an_asset_defect_carries_its_edit() -> None:
+    import json
+
+    rust = next(m for m in MUTATIONS if m.name == "pi-helm-tool-forward")
+    assert mutations.engine_environment(rust) == {"LONGHOUSE_QA_MUTANT": "pi-helm-tool-forward"}
+    shared = {
+        m.name: mutations.engine_environment(m) for m in MUTATIONS if m.name.endswith("subagent-forward") and m.name.startswith("codex")
+    }
+    assert {env["LONGHOUSE_QA_MUTANT"] for env in shared.values()} == {"codex-subagent-forward"}  # one defect, two cells
+    asset = next(m for m in MUTATIONS if m.name == "claude-helm-text-forward")
+    env = mutations.engine_environment(asset)
+    (patch,) = json.loads(env["LONGHOUSE_QA_ASSET_PATCH"])
+    assert patch == {"asset": "claude-mod/hooks/register.js", "old": asset.old, "new": asset.new}
+    server = next(m for m in MUTATIONS if m.side == "server")
+    assert mutations.engine_environment(server) == {}
+
+
+def test_the_qa_engine_environment_reaches_the_machine_agent_and_every_providers_launch() -> None:
+    """The defects sit in the Machine Agent (console sinks, bridges) and in the Helm launchers a provider's terminal starts."""
+
+    from zerg.qa import terminal_truth_scenarios as scenarios
+
+    source = Path(scenarios.__file__).read_text()
+    assert "for key, value in (engine_environment or {}).items():" in source
+    assert "penv[key] = value" in source and "environment[key] = value" in source

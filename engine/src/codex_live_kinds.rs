@@ -79,9 +79,16 @@ pub fn live_tool_item(item: &Value) -> Option<LiveToolItem> {
                 .unwrap_or_default(),
         ),
         "collabAgentToolCall" => {
+            if crate::qa_fault::mutant("codex-subagent-forward") {
+                return None;
+            }
             let tool = string_field(item, "tool")?;
             (
-                snake_case_tool_name(&tool),
+                if crate::qa_fault::mutant("codex-helm-subagent-as-tool") {
+                    tool.clone()
+                } else {
+                    snake_case_tool_name(&tool)
+                },
                 clip(
                     &string_field(item, "prompt").unwrap_or_else(|| tool.clone()),
                     120,

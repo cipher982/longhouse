@@ -4851,7 +4851,9 @@ async fn process_notification(
                 }
             }
             if matches!(method, "item/started" | "item/completed") {
-                post_live_tool_item(context, method, &params);
+                if !crate::qa_fault::mutant("codex-helm-tool-forward") {
+                    post_live_tool_item(context, method, &params);
+                }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(config, context, updates).await;
@@ -4870,7 +4872,27 @@ async fn process_notification(
             if different_notification_thread_id(&params, context).is_some() {
                 return Ok(None);
             }
-            post_live_thinking(context, method, &params);
+            if crate::qa_fault::mutant("codex-helm-thinking-as-reply") {
+                if let Some(delta) = params.get("delta").and_then(Value::as_str) {
+                    let item = "mutation-thinking".to_string();
+                    context.live_transcript_seq += 1;
+                    context.live_transcript_text.push_str(delta);
+                    context
+                        .runtime
+                        .post_live_transcript_delta(
+                            method,
+                            delta,
+                            context.state.active_turn_id.as_deref(),
+                            &item,
+                            context.live_transcript_seq,
+                            1,
+                            &context.live_transcript_text,
+                        )
+                        .await;
+                }
+            } else if !crate::qa_fault::mutant("codex-helm-thinking-forward") {
+                post_live_thinking(context, method, &params);
+            }
         }
         "item/agentMessage/delta"
         | "item/commandExecution/outputDelta"

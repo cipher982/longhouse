@@ -8,8 +8,8 @@ needs another cell to have finished, so this command runs them at the same time:
 - A **shard** is one ordinary ``terminal_truth run`` process on a few cells: its own Runtime Host, Machine Agent, scripted
   model and HOME under its own scratch root. The cell code and its verdict are the ones the serial command runs.
 - Every unmutated cell runs once. A mutation test reads its unmutated half from that run (same cell, scenario and
-  options) and runs only its mutated half, with a mutated engine from the build cache
-  (``terminal_truth_mutations.build_mutated_engines``) or a patched copy of the server package.
+  options) and runs only its mutated half, on the QA engine with one defect switched on
+  (``terminal_truth_mutations.engine_environment``) or with a patched copy of the server package.
 - Anything that did not come out as wanted is then run once more **alone**, with nothing else running. A defect fails
   both times; a cell that was slow only because eleven others were starting passes the second, and the row says so
   (``reruns`` in fleet.json, a warning in CI). More than ``MAX_RERUNS`` such rows is not noise and nothing is rerun.
@@ -244,7 +244,8 @@ def make_shards(
     providers_per_shard: int,
     tokens: int,
     rate: float,
-    mutated_engines: dict[str, tuple[Path, Path]],
+    fault_engine: Path,
+    fault_cli: Path,
     server_copies: dict[str, Path],
     embed_model_dir: Path | None = None,
 ) -> list[Shard]:
@@ -278,8 +279,8 @@ def make_shards(
             flags = [*flags, "--host-env", f"PYTHONPATH={server_copies[name]}"]
             shards.append(Shard(_safe(unit.id), unit.scenario, [unit], engine, cli, flags))
         else:
-            mutated_engine, mutated_cli = mutated_engines[name]
-            shards.append(Shard(_safe(unit.id), unit.scenario, [unit], mutated_engine, mutated_cli, list(flags)))
+            switched = [arg for key, value in mutations.engine_environment(mutation).items() for arg in ("--engine-env", f"{key}={value}")]
+            shards.append(Shard(_safe(unit.id), unit.scenario, [unit], fault_engine, fault_cli, [*flags, *switched]))
     for name, unit in plan.extras.items():
         _label, _cell, flags, _want = EXTRA_CHECKS[name]
         pace = ["--tokens", str(tokens), "--rate", str(rate / 2 if name == "half-speed" else rate)]
@@ -844,21 +845,17 @@ def run_all(args: argparse.Namespace) -> int:
     scenarios = args.scenario or list(ALL_SCENARIOS)
     plan = make_plan(scenarios=scenarios, providers=args.provider, modes=args.mode, with_mutations=args.mutations, only=args.only)
     engine, cli = args.engine.resolve(), args.longhouse_cli.resolve()
-    builds: dict[str, Any] = {}
-    mutated_engines: dict[str, tuple[Path, Path]] = {}
+    fault_engine = (args.fault_engine or args.engine).resolve()
+    fault_cli = (args.fault_longhouse_cli or args.longhouse_cli).resolve()
     server_copies: dict[str, Path] = {}
     copies_root = SCRATCH_ROOT / "server-copies"
     if plan.selected:
-        mutated_engines, builds = mutations.build_mutated_engines(
-            plan.selected, cache=args.mutation_cache, cargo_target=args.cargo_target, log=log
-        )
-        log(f"mutated engines: {builds['hits']} from the cache, {builds['built']} built, {builds['seconds']} s")
         for m in plan.selected:
             if m.side == "server":
                 server_copies[m.name] = mutations.prepare_server_copy(m, copies_root / m.name)
     shards = make_shards(
         plan, engine=engine, cli=cli, providers_per_shard=args.providers_per_shard, tokens=args.tokens, rate=args.rate,
-        mutated_engines=mutated_engines, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
+        fault_engine=fault_engine, fault_cli=fault_cli, server_copies=server_copies, embed_model_dir=args.embed_model_cache,
     )  # fmt: skip
     args.jobs_asked = args.jobs
     scratch_root, alias = short_scratch(SCRATCH_ROOT)
@@ -945,7 +942,7 @@ def run_all(args: argparse.Namespace) -> int:
     for h in died:
         log(f"{h['name']} exited before the run ended (status {h['exited']}{', ' + h['error'] if h['error'] else ''}): the run fails")
     args.ok = judged.ok and not died
-    kept = _write(args, plan, judged, rows, runs, reruns, builds, shards, parallel_s, time.monotonic() - started)
+    kept = _write(args, plan, judged, rows, runs, reruns, shards, parallel_s, time.monotonic() - started)
     for h in args.hosts:
         if h["root"] not in kept:
             shutil.rmtree(h["root"], ignore_errors=True)
@@ -1021,7 +1018,6 @@ def _write(
     rows: dict[str, dict[str, Any]],
     runs: Sequence[ShardRun],
     reruns: Sequence[dict[str, Any]],
-    builds: dict[str, Any],
     shards: Sequence[Shard],
     parallel_s: float,
     wall_s: float,
@@ -1094,7 +1090,6 @@ def _write(
         },
         "cells": list(judged.cells.values()),
         "reruns": list(reruns),
-        "mutated_engine_builds": builds,
         "kept_scratch": kept,
         "shards": [
             {
@@ -1136,8 +1131,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-mutations", dest="mutations", action="store_false", help="unmutated cells only")
     parser.add_argument("--only", action="append", help="mutation name, 'reworded-ready-string' or 'half-speed'; repeatable")
     parser.add_argument("--no-rerun", dest="rerun", action="store_false", help="judge the first try only (the nightly's raw rate)")
-    parser.add_argument("--mutation-cache", type=Path, default=SCRATCH_ROOT.parent / "tt-mutants", help="mutated engine binaries")
-    parser.add_argument("--cargo-target", type=Path, default=REPO_ROOT / ".build" / "cargo-target", help="warm cargo target to clone")
+    parser.add_argument(
+        "--fault-engine",
+        type=Path,
+        help="the QA engine (built with qa-fault-injection) that engine defects are switched on in; default --engine",
+    )
+    parser.add_argument("--fault-longhouse-cli", type=Path, help="its longhouse CLI; default --longhouse-cli")
     parser.add_argument(
         "--embed-model-cache",
         type=Path,

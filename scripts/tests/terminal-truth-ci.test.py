@@ -110,7 +110,7 @@ class WorkflowTests(unittest.TestCase):
         block = text.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
         paths = re.findall(r'^\s+- "([^"]+)"$', block, re.M)
         for needed in (
-            # The engine and what it embeds (the mutated-engine cache key hashes exactly these three), the host and harness.
+            # The engine and what it embeds (the engine cache key hashes exactly these three), the host and harness.
             "engine/**", "config/**", "schemas/**", "server/zerg/**", "server/uv.lock", "scripts/build/**",
             "scripts/ci/terminal-truth-*", "scripts/ci/terminal_truth_*.py", ".github/workflows/terminal-truth.yml",
             "web/src/features/session/useSessionWorkspace.ts", "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift",
@@ -131,7 +131,7 @@ class WorkflowTests(unittest.TestCase):
         runs = [line for line in text.splitlines() if "make -s terminal-truth-all" in line]
         self.assertEqual(len(runs), 2, runs)  # the run, and the extra reply passes of a hand-started run
         gate, extra = runs
-        for part in ("--engine $TT_ENGINE", "--longhouse-cli $TT_CLI", "--out-dir $TT_OUT ", "--jobs $TT_JOBS", "--mutation-cache $TT_CACHE/mutants",
+        for part in ("--engine $TT_ENGINE", "--longhouse-cli $TT_CLI", "--out-dir $TT_OUT ", "--jobs $TT_JOBS", "--fault-engine $TT_FAULT_ENGINE", "--fault-longhouse-cli $TT_FAULT_CLI",
                      "--embed-model-cache $TT_CACHE/embedding-model"):
             self.assertIn(part, gate)
         self.assertTrue(gate.rstrip().endswith('$TT_NARROW_ARGS$TT_CHECK_ARGS$TT_RERUN_ARGS" \\'), gate)

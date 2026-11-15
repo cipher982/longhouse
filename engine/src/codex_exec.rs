@@ -3712,7 +3712,7 @@ impl CodexExecRuntimeSink {
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "item_id": item_id,
-                "tool_name": tool_name,
+                "tool_name": (if crate::qa_fault::mutant("codex-console-tool-name") { Value::Null } else { json!(tool_name) }),
                 "command": command,
                 "output": output,
                 "status": status,

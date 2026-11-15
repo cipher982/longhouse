@@ -1051,6 +1051,9 @@ impl LiveTextTracker {
         now: std::time::Instant,
         force: bool,
     ) -> Option<LiveKind> {
+        if crate::qa_fault::mutant("opencode-helm-thinking-forward") {
+            return None;
+        }
         let key = format!("{part_id}:thinking");
         let due = self
             .last_emit
@@ -1066,7 +1069,11 @@ impl LiveTextTracker {
             message_id: message_id.to_string(),
             seq: self.seq,
             text: self.thinking.get(part_id)?.clone(),
-            kind: Some("thinking"),
+            kind: if crate::qa_fault::mutant("opencode-helm-thinking-as-reply") {
+                None
+            } else {
+                Some("thinking")
+            },
         }))
     }
 }
@@ -1168,13 +1175,23 @@ fn publish_live_tool(
         turn_completed: tool.state != "running",
         progress_kind: "opencode_helm_stream".into(),
         provider_session_id: Some(tool.provider_session_id.clone()),
-        kind: Some(crate::status_slot::tool_preview_kind(&tool.name).into()),
+        kind: Some(
+            if crate::qa_fault::mutant("opencode-helm-subagent-as-tool") {
+                "tool"
+            } else {
+                crate::status_slot::tool_preview_kind(&tool.name)
+            }
+            .into(),
+        ),
         tool_name: Some(tool.name.clone()),
         tool_call_id: Some(tool.call_id.clone()),
         tool_input: tool.input.clone(),
         tool_output: output,
         tool_state: Some(tool.state.into()),
     };
+    if crate::qa_fault::mutant("opencode-helm-tool-forward") {
+        return Ok(());
+    }
     let outbox = crate::config::get_agent_runtime_events_outbox_dir()?;
     crate::status_slot::enqueue_preview_event(
         &outbox,

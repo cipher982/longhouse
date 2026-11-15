@@ -876,6 +876,9 @@ impl AcpStream {
     fn apply_update(&mut self, update: &Value, signals: &mut Vec<LiveSignal>) {
         match update.get("sessionUpdate").and_then(Value::as_str) {
             Some("agent_message_chunk") => {
+                if crate::qa_fault::mutant("antigravity-message-chunk-arm") {
+                    return;
+                }
                 let text = update
                     .pointer("/content/text")
                     .and_then(Value::as_str)

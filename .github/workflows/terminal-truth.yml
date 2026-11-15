@@ -18,9 +18,10 @@ name: Terminal Truth
 #     text for seconds (three red push runs on 2026-11-12 and 13, and three of twelve cells on a bench with six hosts
 #     writing to one NVMe); with scratch in memory the same twelve passed with medians under a quarter second.
 #   - A mutation test reads its unmutated half from the gate's own run of that cell and runs only the mutated half.
-#   - Mutated engines, the engine itself and the provider installs are kept under /ci-cache by a hash of what they are
-#     built from. A push that does not touch engine/, config/ or schemas/ builds nothing. One that does builds the 33
-#     mutated engines three at a time with incremental compilation (they were 18 minutes one after another).
+#   - The engine, the QA engine and the provider installs are kept under /ci-cache by a hash of what they are built from.
+#     A push that does not touch engine/, config/ or schemas/ builds nothing. One that does builds the engine and one QA
+#     engine (the same build with the qa-fault-injection feature); every engine mutation is a runtime switch in that one
+#     binary. Until 2026-11-15 each was a binary of its own: 33 builds, 1300 s of compiling a run, 6 GiB of cache.
 #   - A row that came out wrong beside the others is run once more alone; the first result stays in the record.
 #
 # Triggers
@@ -298,8 +299,14 @@ jobs:
           cli="$(sed -n 's/^cli=//p' "$TT_OUT/engine.txt")"
           test -x "$engine"
           test -x "$cli"
+          fault_engine="$(sed -n 's/^fault_engine=//p' "$TT_OUT/engine.txt")"
+          fault_cli="$(sed -n 's/^fault_cli=//p' "$TT_OUT/engine.txt")"
+          test -x "$fault_engine"
+          test -x "$fault_cli"
           echo "TT_ENGINE=$engine" >> "$GITHUB_ENV"
           echo "TT_CLI=$cli" >> "$GITHUB_ENV"
+          echo "TT_FAULT_ENGINE=$fault_engine" >> "$GITHUB_ENV"
+          echo "TT_FAULT_CLI=$fault_cli" >> "$GITHUB_ENV"
 
       # Exactly the versions in scripts/ci/terminal-truth-providers.toml, in job-owned paths, installed with an
       # empty credential environment and a disposable HOME, or unpacked from the archive of that same install.
@@ -346,8 +353,8 @@ jobs:
           exit 1
 
       # One command runs everything and judges it: every unmutated cell of all five scenarios side by side, each
-      # group on its own scratch host, then per mutation the mutated half only. It builds the mutated engines that
-      # are not in the cache, runs a row that came out wrong once more alone (never on the nightly), keeps the
+      # group on its own scratch host, then per mutation the mutated half only (the QA engine with one defect switched on).
+      # It runs a row that came out wrong once more alone (never on the nightly), keeps the
       # scratch of every shard with a wrong row, and exits non-zero unless every planned item has a good verdict.
       # Its tables go to the job summary; its exit status is not trusted alone (Verdict reads the files).
       - name: Run every check
@@ -357,11 +364,11 @@ jobs:
           vmstat -t 1 > "$TT_OUT/vmstat.log" 2>&1 &
           sampler=$!
           start="$(date +%s)"
-          make -s terminal-truth-all ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI --out-dir $TT_OUT --jobs $TT_JOBS --mutation-cache $TT_CACHE/mutants --embed-model-cache $TT_CACHE/embedding-model$TT_NARROW_ARGS$TT_CHECK_ARGS$TT_RERUN_ARGS" \
+          make -s terminal-truth-all ARGS="--engine $TT_ENGINE --longhouse-cli $TT_CLI --out-dir $TT_OUT --jobs $TT_JOBS --fault-engine $TT_FAULT_ENGINE --fault-longhouse-cli $TT_FAULT_CLI --embed-model-cache $TT_CACHE/embedding-model$TT_NARROW_ARGS$TT_CHECK_ARGS$TT_RERUN_ARGS" \
             < /dev/null 2> "$TT_OUT/run.log" | tee "$TT_OUT/tables.md"
           rc="${PIPESTATUS[0]}"
           # The run's own log without the compiler's warnings: what was built, each shard's exit and time, what ran again.
-          grep -aE '^(built |mutated engines|[0-9]+ cell runs|running |[0-9]+ rows|.*: exit )' "$TT_OUT/run.log"
+          grep -aE '^([0-9]+ cell runs|running |[0-9]+ rows|.*: exit )' "$TT_OUT/run.log"
           echo "the run exited $rc after $(( $(date +%s) - start )) s"
           # More passes of the reply cells, for the budget record: no other check and no rerun. Each writes its own
           # pass-<i>-<scenario>.json, which Verdict requires.
@@ -449,7 +456,7 @@ jobs:
           # cell can leave its bridge (and the codex and channel processes under it) running; the run stops what each
           # shard left, and this stops whatever is left of this job's own binaries, scratch and fixture.
           if [[ -n "${TT_ENGINE:-}" ]]; then pkill -f "$TT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null || true; fi
-          if [[ -n "${TT_CACHE:-}" ]]; then pkill -f "$TT_CACHE/mutants/" 2>/dev/null || true; fi
+          if [[ -n "${TT_FAULT_ENGINE:-}" ]]; then pkill -f "$TT_FAULT_ENGINE (codex-bridge|claude-channel|omp-helm|pi-helm)" 2>/dev/null || true; fi
           pkill -f "$TT_SCRATCH_ROOT/" 2>/dev/null || true
           # The run gives its shards a short link to the scratch root (/tmp/tt<4 hex>: Codex's socket path has to fit
           # in 107 bytes) and removes it at its end; a run that was killed leaves the link and processes named by it.

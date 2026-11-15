@@ -1805,7 +1805,9 @@ async fn monitor_omp_print(
                 .await;
                 return;
             }
-            projection.thinking.observe(seq, &event);
+            if !crate::qa_fault::mutant("omp-console-thinking-forward") {
+                projection.thinking.observe(seq, &event);
+            }
             if let Some(provider_thread_id) = projection.provider_thread_id.as_deref() {
                 sink.provider_thread_id = Some(provider_thread_id.to_string());
             }

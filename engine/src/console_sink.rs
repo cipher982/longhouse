@@ -211,7 +211,13 @@ impl ConsoleRun {
             live_text: text.to_string(),
             progress_kind: progress_kind.to_string(),
             provider_session_id: provider_thread_id.map(str::to_string),
-            kind: Some("thinking".into()),
+            kind: if crate::qa_fault::mutant("omp-console-thinking-as-reply")
+                || crate::qa_fault::mutant("pi-console-thinking-as-reply")
+            {
+                None
+            } else {
+                Some("thinking".into())
+            },
             ..Default::default()
         };
         let payload = json!({

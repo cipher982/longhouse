@@ -14,9 +14,12 @@ after each one, with what the failing live-kinds cell saw (checks, states served
 
     make terminal-truth-mutations ARGS="--engine <engine> --longhouse-cli <longhouse>"
 
-Server-side mutations shadow ``zerg`` with a patched copy for the scratch Runtime Host only. Engine mutations are applied in
-a scratch git worktree and rebuilt (the build reuses a clone of this checkout's cargo target, so only the engine crates
-recompile). Two further checks need no source edit: a reworded ready string must fail preflight, and a fake model
+Server-side mutations shadow ``zerg`` with a patched copy for the scratch Runtime Host only. Engine mutations are runtime
+switches in one QA engine (``--features qa-fault-injection``): each defect is written into the engine's own source behind
+``qa_fault::mutant("<switch>")``, and the check turns it on with ``LONGHOUSE_QA_MUTANT=<switch>`` for the mutated cell only.
+A defect in an embedded JS or TS asset is the same edit this table lists (``old`` -> ``new``), applied when the engine writes
+the asset out (``LONGHOUSE_QA_ASSET_PATCH``). Until 2026-11-15 each engine defect was a source edit and a build of its own: 33
+binaries, 1300 s of compiling per Terminal Truth run, and about 6 GiB of cache on the runner. Two further checks need no source edit: a reworded ready string must fail preflight, and a fake model
 streaming at half speed must still pass.
 """
 
@@ -31,9 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
-from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,18 @@ class Mutation:
     warm: bool = False  # live-kinds scenarios on a Helm cell: open the session and its stream before the scenario prompt (--warm-session)
     text_before_tool: bool = False  # tool scenario: reply text is streamed right before the tool call (--text-before-tool)
     engine_delay_ms: int = 0  # hold engine<->host bytes this long each way, as a hosted tenant's network does (--engine-delay-ms)
+    switch: str = ""  # the engine's `qa_fault::mutant` name when it is not this check's own (two checks of one defect share one)
+
+    @property
+    def engine_switch(self) -> str:
+        return self.switch or self.name
+
+    @property
+    def asset(self) -> str | None:
+        """The embedded asset an engine defect edits (relative to engine/assets), or None when it edits Rust source."""
+
+        prefix = "engine/assets/"
+        return self.file[len(prefix) :] if self.side == "engine" and self.file.startswith(prefix) else None
 
     @property
     def run_options(self) -> dict[str, Any]:
@@ -357,6 +370,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         '"collabAgentToolCall" => {\n            return None;',
         "codex/helm",
         ("engine_posted",),
+        switch="codex-subagent-forward",
         scenario="subagent",
         warm=True,
     ),
@@ -381,6 +395,7 @@ MUTATIONS: tuple[Mutation, ...] = (
         '"collabAgentToolCall" => {\n            return None;',
         "codex/console",
         ("host_published",),  # Console also posts the raw app-server notification, so the post lane still sees the spawn text
+        switch="codex-subagent-forward",
         scenario="subagent",
     ),
     Mutation(
@@ -576,18 +591,6 @@ def mutated_text(mutation: Mutation, text: str) -> str:
     return text.replace(mutation.old, mutation.new)
 
 
-def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: float = 1800) -> None:
-    subprocess.run(
-        command,
-        cwd=cwd,
-        env=env if env is not None else tt.clean_environ(),
-        check=True,
-        timeout=timeout,
-        stdout=sys.stderr,
-        stderr=sys.stderr,
-    )
-
-
 BINARIES = ("longhouse-engine", "longhouse")
 
 
@@ -598,42 +601,12 @@ def _build_env(**extra: str) -> dict[str, str]:
     return tt.clean_environ(PATH=f"{rust}{os.pathsep}{os.environ['PATH']}", **extra)
 
 
-def _build_engine(worktree: Path, target: Path, out: Path, *, incremental: bool = False) -> tuple[Path, Path]:
-    """Build the engine and CLI of ``worktree`` into ``target`` (a clone of a warm cargo target) and copy both binaries to ``out``.
-
-    ``incremental`` keeps the compiler's incremental state in ``target``, so the next build there recompiles only what
-    changed since this one.
-    """
-
-    env = _build_env(LONGHOUSE_CARGO_TARGET_DIR=str(target), **({"CARGO_INCREMENTAL": "1"} if incremental else {}))
-    _run([sys.executable, "scripts/build/generate_build_identity.py"], cwd=worktree, env=env)
-    build = [
-        sys.executable, "scripts/build/cargo.py", "exec", "--", "build", "--manifest-path", "engine/Cargo.toml",
-        "--profile", "ci-test", "--features", "qa-fault-injection", "--bin", "longhouse-engine", "--bin", "longhouse",
-    ]  # fmt: skip
-    lock = shutil.which("lockf")
-    _run([lock, "/tmp/agents/longhouse-heavy-build.lock", *build] if lock else build, cwd=worktree, env=env)
-    out.mkdir(parents=True, exist_ok=True)
-    for name in BINARIES:
-        shutil.copy2(target / "ci-test" / name, out / name)
-    return out / BINARIES[0], out / BINARIES[1]
-
-
-def _clone_dir(source: Path, destination: Path) -> None:
-    if destination.exists():
-        return
-    flag = ["-c"] if sys.platform == "darwin" else ["--reflink=auto"]
-    if source.exists():
-        subprocess.run(["cp", "-R", *flag, str(source), str(destination)], check=True, env=tt.clean_environ())
-        (destination / ".longhouse-target.json").unlink(missing_ok=True)  # the clone belongs to the scratch worktree now
-    else:
-        destination.mkdir(parents=True)
-
-
 # What a mutated engine binary is made from: the engine sources and the two directories its `include_str!` reaches
 # (server/tests_lite/test_terminal_truth_mutations.py fails when an include leaves these), the compiler and the build flags.
 ENGINE_INPUT_DIRS = ("engine", "config", "schemas")
-BUILD_FLAGS = "--profile ci-test --features qa-fault-injection --bin longhouse-engine --bin longhouse"
+BUILD_FLAGS = (
+    "--profile ci --features qa-fault-injection --bin longhouse-engine --bin longhouse"  # the QA engine the checks switch defects on in
+)
 
 
 def engine_inputs_digest(repo_root: Path = REPO_ROOT, flags: str = BUILD_FLAGS) -> str:
@@ -661,114 +634,20 @@ def mutated_engine_key(mutation: Mutation, inputs_digest: str) -> str:
     return hashlib.sha256(edit.encode()).hexdigest()[:24]
 
 
-# Mutated engines are built this many at a time, each worker in its own worktree and its own copy of the cargo target,
-# with the compiler's incremental state kept in that copy: a worker's first build compiles the whole engine crate and
-# each one after it only what the next edit reaches. Measured 2026-11-13 on a Linux bench: 29 s for a plain rebuild,
-# 8 to 14 s for an incremental one. 33 plain rebuilds one after another were 18 minutes on the CI runner.
-BUILD_WORKERS = 3
+def engine_environment(mutation: Mutation) -> dict[str, str]:
+    """What switches one engine defect on in the QA engine: the Machine Agent's and every provider launch's environment.
 
-
-def _build_missing(todo: dict[str, Mutation], *, cache: Path, cargo_target: Path, workers: int | None, log: Callable[[str], None]) -> None:
-    """Build every entry of ``todo`` (cache key -> mutation) into ``cache``. The first failure stops the rest and is raised."""
-
-    count = max(1, min(workers or BUILD_WORKERS, len(todo)))
-    slots = [SCRATCH / f"w{i}" for i in range(count)]
-    queue = list(todo.items())
-    lock = threading.Lock()
-    failures: list[BaseException] = []
-
-    def build_all(slot: Path) -> None:
-        worktree = slot / "worktree"
-        while True:
-            with lock:
-                if failures or not queue:
-                    return
-                key, m = queue.pop(0)
-            t0 = time.monotonic()
-            path = worktree / m.file
-            staging = cache / f".{key}.{os.getpid()}"
-            shutil.rmtree(staging, ignore_errors=True)
-            try:
-                path.write_text(mutated_text(m, path.read_text()))
-                try:
-                    _build_engine(worktree, slot / "target", staging, incremental=True)
-                finally:
-                    _run(["git", "checkout", "--", "."], cwd=worktree)
-                shutil.rmtree(cache / key, ignore_errors=True)
-                staging.rename(cache / key)  # a reader sees a whole entry or none
-            except BaseException as exc:  # noqa: BLE001 - reported by the caller's thread
-                with lock:
-                    failures.append(exc)
-                return
-            log(f"built {m.name} in {time.monotonic() - t0:.0f} s")
-
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    try:
-        for slot in slots:
-            slot.mkdir(parents=True, exist_ok=True)
-            if not (slot / "worktree").exists():
-                _run(["git", "worktree", "add", "--detach", str(slot / "worktree"), "HEAD"], cwd=REPO_ROOT)
-            _clone_dir(cargo_target.resolve(), slot / "target")
-        log(f"{len(todo)} mutated engines to build, {count} at a time")
-        threads = [threading.Thread(target=build_all, args=(slot,), name=f"build-{slot.name}") for slot in slots]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        if failures:
-            raise failures[0]
-    finally:
-        for slot in slots:
-            if (slot / "worktree").exists():
-                subprocess.run(
-                    ["git", "worktree", "remove", "--force", str(slot / "worktree")], cwd=REPO_ROOT, check=False, env=tt.clean_environ()
-                )
-        shutil.rmtree(SCRATCH, ignore_errors=True)
-
-
-def build_mutated_engines(
-    selected: Sequence[Mutation],
-    *,
-    cache: Path,
-    cargo_target: Path,
-    log: Callable[[str], None] = lambda _m: None,
-    workers: int | None = None,
-) -> tuple[dict[str, tuple[Path, Path]], dict[str, Any]]:
-    """Every engine mutation's binaries, from ``cache`` when the engine's inputs and the edit are unchanged, built otherwise.
-
-    A mutated binary depends on the engine sources at HEAD and on its one edit, so a push that does not touch the engine
-    rebuilds nothing. Returns (name -> (engine, cli), {"hits", "built", "seconds", "inputs_digest"}). Entries of other
-    input digests are deleted: the cache holds one engine version.
+    The defect is a ``qa_fault::mutant`` switch in the engine, or, for an embedded JS or TS asset, the table's own edit applied
+    when the engine writes the asset out. The edit must land once in the file as checked in, as the source edit it replaces had to.
     """
 
-    started = time.monotonic()
-    digest = engine_inputs_digest()
-    cache.mkdir(parents=True, exist_ok=True)
-    engines: dict[str, tuple[Path, Path]] = {}
-    keys = {m.name: mutated_engine_key(m, digest) for m in selected if m.side == "engine"}
-    missing = [m for m in selected if m.side == "engine" and not all((cache / keys[m.name] / b).is_file() for b in BINARIES)]
-    todo: dict[str, Mutation] = {}  # one build per edit: one defect tested on two cells is one binary
-    for m in missing:
-        todo.setdefault(keys[m.name], m)
-    if todo:
-        _build_missing(todo, cache=cache, cargo_target=cargo_target, workers=workers, log=log)
-    for name, key in keys.items():
-        engines[name] = (cache / key / BINARIES[0], cache / key / BINARIES[1])
-    keep = set(keys.values())
-    # Only names this function writes (24 hex digits, or a dot-prefixed staging name) are ever removed, and only when
-    # every selected mutation is present: a narrowed run (--only) must not empty the cache of the rest.
-    if len(selected) == len(MUTATIONS):
-        for entry in cache.iterdir():
-            if entry.is_dir() and re.fullmatch(r"\.?[0-9a-f]{24}(\.\d+)?", entry.name) and entry.name not in keep:
-                shutil.rmtree(entry, ignore_errors=True)
-    built = len(todo)
-    stats = {
-        "hits": len(set(keys.values())) - built,
-        "built": built,
-        "seconds": round(time.monotonic() - started, 1),
-        "inputs_digest": digest,
-    }
-    return engines, stats
+    if mutation.side != "engine":
+        return {}
+    environment = {"LONGHOUSE_QA_MUTANT": mutation.engine_switch}
+    if mutation.asset is not None:
+        mutated_text(mutation, (REPO_ROOT / mutation.file).read_text())  # refuses unless the edit lands in exactly one place
+        environment["LONGHOUSE_QA_ASSET_PATCH"] = json.dumps([{"asset": mutation.asset, "old": mutation.old, "new": mutation.new}])
+    return environment
 
 
 def prepare_server_copy(mutation: Mutation, copy: Path) -> Path:
@@ -868,8 +747,7 @@ def run_mutations(args: argparse.Namespace) -> int:
 
     selected = [m for m in MUTATIONS if not args.only or m.name in args.only]
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    worktree = SCRATCH / "worktree"
-    engine_built: dict[str, tuple[Path, Path]] = {}
+    fault_engine, fault_cli = args.fault_engine.resolve(), args.fault_longhouse_cli.resolve()
 
     def kinds_cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tuple[str, str | None, str]:
         """(outcome, first failed stage, reason) of one live-kinds cell judged by its published-kind check."""
@@ -896,10 +774,6 @@ def run_mutations(args: argparse.Namespace) -> int:
         return result
 
     try:
-        if any(m.side == "engine" for m in selected) and not args.skip_engine:
-            if not worktree.exists():
-                _run(["git", "worktree", "add", "--detach", str(worktree), "HEAD"], cwd=REPO_ROOT)
-            _clone_dir(Path(args.cargo_target).resolve(), SCRATCH / "target")
         for m in selected:
             spec = tt.CellSpec(*m.cell.split("/"), m.scenario) if m.scenario else tt.CellSpec(*m.cell.split("/"))
 
@@ -935,7 +809,7 @@ def run_mutations(args: argparse.Namespace) -> int:
             if state_finding:
                 row.update(state_finding=state_finding["reason"], state_finding_evidence=state_finding["evidence"])
             if baseline_outcome != "pass":
-                # The row is a miss whatever the mutated cell does, and an engine mutation costs a rebuild: keep the reason, skip it.
+                # The row is a miss whatever the mutated cell does: keep the reason, skip it.
                 row.update(baseline_stage=baseline_stage, baseline_reason=baseline_reason, observed="not run", ok=False)
                 record(row)
                 continue
@@ -946,21 +820,12 @@ def run_mutations(args: argparse.Namespace) -> int:
                     mutated_kinds = kinds_cell(spec, base_engine, base_cli, host_environment=shadow, **m.run_options)
                 else:
                     mutated = cell(spec, base_engine, base_cli, host_environment=shadow)
-            elif args.skip_engine:
-                row.update(observed="skipped", ok=False, note="--skip-engine")
-                record(row)
-                continue
             else:
-                path = worktree / m.file
-                path.write_text(mutated_text(m, path.read_text()))
-                try:
-                    engine_built[m.name] = _build_engine(worktree, SCRATCH / "target", SCRATCH / f"bin-{m.name}")
-                finally:
-                    _run(["git", "checkout", "--", "."], cwd=worktree)
+                switched = engine_environment(m)
                 if m.scenario:
-                    mutated_kinds = kinds_cell(spec, *engine_built[m.name], **m.run_options)
+                    mutated_kinds = kinds_cell(spec, fault_engine, fault_cli, engine_environment=switched, **m.run_options)
                 else:
-                    mutated = cell(spec, *engine_built[m.name])
+                    mutated = cell(spec, fault_engine, fault_cli, engine_environment=switched)
             outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])
             row.update(observed_outcome=outcome, observed_stage=stage, reason=reason, seconds=round(time.monotonic() - started))
             row["ok"] = outcome == "fail" and stage in m.stages
@@ -984,8 +849,6 @@ def run_mutations(args: argparse.Namespace) -> int:
                  "observed_stage": stage, "reason": reason, "ok": outcome == "pass"}
             )  # fmt: skip
     finally:
-        if worktree.exists():
-            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, check=False, env=tt.clean_environ())
         shutil.rmtree(SCRATCH, ignore_errors=True)
     print("\n".join(render_rows(rows)))
     return 0 if rows and all(row["ok"] for row in rows) else 1
@@ -998,16 +861,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--longhouse-cli", type=Path, default=Path(shutil.which("longhouse") or ""))
     parser.add_argument(
-        "--cargo-target", type=Path, default=REPO_ROOT / ".build" / "cargo-target", help="warm cargo target to clone for engine rebuilds"
+        "--fault-engine",
+        type=Path,
+        help="the QA engine (built with qa-fault-injection) that engine defects are switched on in; default --engine",
     )
+    parser.add_argument("--fault-longhouse-cli", type=Path, help="its longhouse CLI; default --longhouse-cli")
     parser.add_argument("--only", action="append", help="mutation name, 'reworded-ready-string' or 'half-speed'; repeatable")
-    parser.add_argument("--skip-engine", action="store_true", help="skip mutations that need an engine rebuild")
     parser.add_argument("--tokens", type=int, default=100)
     parser.add_argument("--rate", type=float, default=20.0)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    if not args.engine.is_file() or not args.longhouse_cli.is_file():
-        parser.error("pass --engine and --longhouse-cli (built from this checkout)")
+    args.fault_engine = args.fault_engine or args.engine
+    args.fault_longhouse_cli = args.fault_longhouse_cli or args.longhouse_cli
+    for binary in (args.engine, args.longhouse_cli, args.fault_engine, args.fault_longhouse_cli):
+        if not binary.is_file():
+            parser.error("pass --engine and --longhouse-cli (built from this checkout)")
     return run_mutations(args)
 
 

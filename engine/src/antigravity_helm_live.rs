@@ -59,7 +59,9 @@ use serde_json::{json, Value};
 
 /// Master switch. The terminal-truth mutation test flips this to prove the
 /// gate notices when the reader is gone.
-const READER_ENABLED: bool = true;
+fn reader_enabled() -> bool {
+    !crate::qa_fault::mutant("antigravity-helm-reader")
+}
 
 pub const SOURCE: &str = "antigravity_helm_db";
 pub const PROGRESS_KIND: &str = "antigravity_helm_stream";
@@ -135,7 +137,7 @@ impl Drop for HelmLive {
 /// Start following every Helm session on this machine. One thread serves them
 /// all. `None` when disabled or when the thread cannot start.
 pub fn spawn(config: HelmLiveConfig) -> Option<HelmLive> {
-    if !READER_ENABLED {
+    if !reader_enabled() {
         return None;
     }
     let stop = Arc::new(AtomicBool::new(false));
@@ -756,8 +758,16 @@ impl Session {
             let (reply, thinking) =
                 response_texts(&payload).map_err(|Surprise(message)| Tick::StandDown(message))?;
             // Thinking first: within a step it comes before the reply.
-            if let Some(mut preview) = current.thinking.observe(idx, status, thinking) {
-                preview.kind = Some("thinking");
+            if let Some(mut preview) = current.thinking.observe(
+                idx,
+                status,
+                thinking.filter(|_| !crate::qa_fault::mutant("antigravity-helm-thinking-forward")),
+            ) {
+                preview.kind = if crate::qa_fault::mutant("antigravity-helm-thinking-as-reply") {
+                    None
+                } else {
+                    Some("thinking")
+                };
                 preview.completed = false;
                 previews.push(preview);
             }
@@ -765,7 +775,14 @@ impl Session {
         }
         match tool_row {
             Some((idx, status, payload)) => {
-                previews.extend(current.tools.observe(idx, status, tool_call(&payload)));
+                previews.extend(
+                    current.tools.observe(
+                        idx,
+                        status,
+                        tool_call(&payload)
+                            .filter(|_| !crate::qa_fault::mutant("antigravity-helm-tool-forward")),
+                    ),
+                );
             }
             None => current.tools.nothing_yet(),
         }

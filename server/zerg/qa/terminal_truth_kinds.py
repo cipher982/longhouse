@@ -1235,6 +1235,7 @@ def run_kinds_suite(
     expand_key: bool = True,
     mutation: str | None = None,
     host_environment: dict[str, str] | None = None,
+    engine_environment: dict[str, str] | None = None,
     old_client: bool = False,
     warm_session: bool = False,
     observer_factory: Callable[[CellSpec], Any] | None = None,
@@ -1277,7 +1278,16 @@ def run_kinds_suite(
             part = [s for s in group if s.scenario == scenario]
             keyed = {s.key: plans[(s.key, s.scenario)] for s in part}
             try:
-                pas = build_pass(part, keyed, engine=engine, cli=cli, host_environment=host_environment, log=log, log_all_frames=True)  # type: ignore[arg-type]
+                pas = build_pass(
+                    part,
+                    keyed,
+                    engine=engine,
+                    cli=cli,
+                    host_environment=host_environment,
+                    engine_environment=engine_environment,
+                    log=log,
+                    log_all_frames=True,
+                )  # type: ignore[arg-type]
             except Exception as exc:  # noqa: BLE001
                 for s in part:
                     results.append(

@@ -129,7 +129,11 @@ impl LiveText {
                     seq: self.thinking_seq,
                     text: self.thinking.clone(),
                     completed: false,
-                    kind: Some("thinking"),
+                    kind: if crate::qa_fault::mutant("claude-helm-thinking-as-reply") {
+                        None
+                    } else {
+                        Some("thinking")
+                    },
                     tool_name: None,
                     tool_call_id: None,
                     tool_input: None,
