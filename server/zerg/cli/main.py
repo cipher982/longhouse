@@ -488,12 +488,19 @@ def db_classify_automation(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Report Hatch-shaped rows and optionally hide reviewed hidden ids."""
+    from sqlalchemy import inspect
+
     from zerg.database import make_sessionmaker
     from zerg.services.agents.automation_backfill import REVIEWABLE_HIDDEN_ORIGIN_KINDS
+    from zerg.services.agents.automation_backfill import AutomationBackfillResult
+    from zerg.services.agents.automation_backfill import _normalize_session_id
     from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
     from zerg.services.agents.automation_backfill import find_benchmark_candidates
+    from zerg.services.agents.automation_backfill import find_catalogd_hatch_automation_candidates
+    from zerg.services.agents.automation_backfill import find_existing_catalogd_session_ids
     from zerg.services.agents.automation_backfill import find_test_or_canary_candidates
     from zerg.services.agents.automation_backfill import reclassify_catalogd_origins
+    from zerg.services.catalogd_supervisor import catalogd_paths
 
     if apply_changes and not session_ids:
         typer.echo("--apply requires at least one reviewed --session-id.", err=True)
@@ -503,24 +510,98 @@ def db_classify_automation(
         typer.echo("--origin-kind must be hatch_automation or test_or_canary.", err=True)
         raise typer.Exit(code=2)
 
-    engine, resolved_database_url = _resolve_db_engine(database_url)
-    SessionLocal = make_sessionmaker(engine)
-    db = SessionLocal()
-    catalogd_result = None
+    normalized_ids: list[str] = []
+    for raw_id in session_ids or []:
+        try:
+            normalized_ids.append(str(_normalize_session_id(raw_id)))
+        except ValueError as exc:
+            typer.echo(f"Invalid --session-id {raw_id!r}: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+
+    catalog_db_path = None
     try:
-        result = classify_reviewed_hatch_automation_sessions(
-            db,
-            session_ids=session_ids or [],
-            apply=apply_changes,
-            origin_kind=normalized_origin_kind,
-            candidate_limit=candidate_limit,
+        candidate_catalog_db, _ = catalogd_paths()
+        if candidate_catalog_db.exists():
+            catalog_db_path = candidate_catalog_db
+    except (RuntimeError, OSError):
+        catalog_db_path = None
+
+    engine = None
+    resolved_database_url = "catalogd"
+    if database_url:
+        engine, resolved_database_url = _resolve_db_engine(database_url)
+    else:
+        from zerg.database import default_engine
+
+        if default_engine is None:
+            if catalog_db_path is None:
+                _resolve_db_engine(None)
+        else:
+            candidate_engine, candidate_url = _resolve_db_engine(None)
+            if inspect(candidate_engine).has_table("sessions"):
+                engine = candidate_engine
+                resolved_database_url = candidate_url
+            elif catalog_db_path is None:
+                typer.secho(_NO_DEFAULT_ENGINE_MESSAGE, fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=2)
+
+    catalogd_result = None
+    if engine is not None:
+        SessionLocal = make_sessionmaker(engine)
+        db = SessionLocal()
+        try:
+            result = classify_reviewed_hatch_automation_sessions(
+                db,
+                session_ids=normalized_ids,
+                apply=apply_changes,
+                origin_kind=normalized_origin_kind,
+                candidate_limit=candidate_limit,
+            )
+            qa_candidates = find_test_or_canary_candidates(db, limit=candidate_limit)
+            benchmark_candidates = find_benchmark_candidates(db, limit=candidate_limit)
+        finally:
+            db.close()
+    else:
+        existing_catalogd_ids = find_existing_catalogd_session_ids(normalized_ids, catalog_db_path)
+        result = AutomationBackfillResult(
+            applied_session_ids=[],
+            missing_session_ids=[sid for sid in normalized_ids if sid not in existing_catalogd_ids],
+            already_marked_session_ids=[],
+            heuristic_candidates=[],
         )
-        qa_candidates = find_test_or_canary_candidates(db, limit=candidate_limit)
-        benchmark_candidates = find_benchmark_candidates(db, limit=candidate_limit)
-        if apply_changes and result.applied_session_ids:
-            catalogd_result = reclassify_catalogd_origins(result.applied_session_ids, normalized_origin_kind)
-    finally:
-        db.close()
+        qa_candidates = []
+        benchmark_candidates = []
+
+    seen_candidate_ids = {str(item.get("session_id")) for item in result.heuristic_candidates}
+    merged_candidates = list(result.heuristic_candidates)
+    for item in find_catalogd_hatch_automation_candidates(catalog_db_path, limit=candidate_limit):
+        sid = str(item.get("session_id") or "")
+        if sid and sid not in seen_candidate_ids:
+            seen_candidate_ids.add(sid)
+            merged_candidates.append(item)
+    merged_candidates = merged_candidates[: max(1, min(candidate_limit, 500))]
+
+    applied_ids = list(result.applied_session_ids)
+    missing_ids = list(result.missing_session_ids)
+    already_marked_ids = list(result.already_marked_session_ids)
+    if apply_changes and normalized_ids and (catalog_db_path is not None or applied_ids):
+        catalogd_result = reclassify_catalogd_origins(normalized_ids, normalized_origin_kind)
+        catalogd_applied_ids = list((catalogd_result or {}).get("applied_catalogd_session_ids", []))
+        catalogd_applied_set = set(catalogd_applied_ids)
+        missing_ids = [sid for sid in missing_ids if sid not in catalogd_applied_set]
+        applied_set = set(applied_ids)
+        already_set = set(already_marked_ids)
+        for sid in catalogd_applied_ids:
+            if sid not in applied_set and sid not in already_set:
+                applied_ids.append(sid)
+                applied_set.add(sid)
+
+    result = AutomationBackfillResult(
+        applied_session_ids=applied_ids,
+        missing_session_ids=missing_ids,
+        already_marked_session_ids=already_marked_ids,
+        heuristic_candidates=merged_candidates,
+    )
 
     payload = {
         "status": "ok",

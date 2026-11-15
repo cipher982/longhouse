@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,8 @@ from zerg.services.session_visibility_policy import visible_in_test_scope
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
 REVIEWABLE_HIDDEN_ORIGIN_KINDS = frozenset({HATCH_AUTOMATION_ORIGIN_KIND, TEST_OR_CANARY_ORIGIN_KIND})
-_HATCH_BACKED_PROVIDERS = {"opencode", "claude", "codex", "cursor"}
+_HATCH_BACKED_PROVIDERS = {"opencode", "claude", "codex", "cursor", "antigravity", "pi", "omp"}
+_HATCH_CONTRACT_PREFIX = "Hatch execution contract:\nThis is a single bounded, non-interactive run"
 _HATCH_PROMPT_HINTS = (
     "code review",
     "review this branch",
@@ -31,6 +33,13 @@ _HATCH_PROMPT_HINTS = (
     "phase review",
     "drill down",
 )
+
+
+def _is_exact_hatch_contract_prompt(text: str | None) -> bool:
+    prompt = str(text or "").lstrip()
+    if prompt.startswith("/plan "):
+        prompt = prompt[len("/plan ") :].lstrip()
+    return prompt.startswith(_HATCH_CONTRACT_PREFIX)
 
 
 @dataclass(frozen=True)
@@ -219,7 +228,7 @@ def find_hatch_automation_candidates(db: Session, *, limit: int = 100) -> list[d
     candidates: list[dict[str, Any]] = []
     for session, thread in rows:
         prompt_text = session.first_user_message_preview or _event_preview(db, session.id) or ""
-        if prompt_text.startswith("Hatch execution contract:\nThis is a single bounded, non-interactive run"):
+        if _is_exact_hatch_contract_prompt(prompt_text):
             candidate = _candidate_dict(db, session, thread)
             candidate["confidence"] = "high"
             candidate["reason"] = "exact Hatch execution contract; safe to classify"
@@ -229,6 +238,114 @@ def find_hatch_automation_candidates(db: Session, *, limit: int = 100) -> list[d
         if not any(hint in prompt for hint in _HATCH_PROMPT_HINTS):
             continue
         candidates.append(_candidate_dict(db, session, thread))
+    return candidates
+
+
+def _open_catalogd_readonly(db_path: Path | None) -> sqlite3.Connection | None:
+    if db_path is None:
+        from zerg.services.catalogd_supervisor import catalogd_paths
+
+        try:
+            db_path, _ = catalogd_paths()
+        except (RuntimeError, OSError):
+            return None
+    if not db_path.exists():
+        return None
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    table_exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").fetchone()
+    if table_exists is None:
+        conn.close()
+        return None
+    return conn
+
+
+def find_existing_catalogd_session_ids(
+    session_ids: list[str],
+    db_path: Path | None = None,
+) -> set[str]:
+    """Return the subset of ``session_ids`` present in catalogd's ``sessions`` table."""
+
+    normalized = [str(value).strip() for value in session_ids if str(value).strip()]
+    if not normalized:
+        return set()
+    conn = _open_catalogd_readonly(db_path)
+    if conn is None:
+        return set()
+    found: set[str] = set()
+    try:
+        for idx in range(0, len(normalized), 500):
+            batch = normalized[idx : idx + 500]
+            placeholders = ", ".join("?" for _ in batch)
+            rows = conn.execute(
+                f"SELECT session_id FROM sessions WHERE session_id IN ({placeholders})",
+                tuple(batch),
+            ).fetchall()
+            found.update(str(row["session_id"]) for row in rows if row["session_id"])
+    finally:
+        conn.close()
+    return found
+
+
+def find_catalogd_hatch_automation_candidates(
+    db_path: Path | None = None,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Report Hatch-shaped rows from catalogd's ``sessions`` table without mutating them."""
+
+    conn = _open_catalogd_readonly(db_path)
+    if conn is None:
+        return []
+    bounded_limit = max(1, min(limit, 500))
+    scan_limit = max(1, min(limit * 5, 2000))
+    providers = tuple(sorted(_HATCH_BACKED_PROVIDERS))
+    placeholders = ", ".join("?" for _ in providers)
+    candidates: list[dict[str, Any]] = []
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT session_id, provider, project, started_at, user_messages, first_user_message_preview
+            FROM sessions
+            WHERE provider IN ({placeholders})
+              AND (origin_kind IS NULL OR origin_kind = '')
+              AND COALESCE(hidden_from_default_timeline, 0) = 0
+              AND COALESCE(is_subagent, 0) = 0
+              AND COALESCE(user_messages, 0) <= 2
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (*providers, scan_limit),
+        ).fetchall()
+        for row in rows:
+            prompt_text = str(row["first_user_message_preview"] or "")
+            is_exact = _is_exact_hatch_contract_prompt(prompt_text)
+            if not is_exact and not any(hint in prompt_text.lower() for hint in _HATCH_PROMPT_HINTS):
+                continue
+            started_at = row["started_at"]
+            candidates.append(
+                {
+                    "session_id": str(row["session_id"]),
+                    "thread_id": None,
+                    "provider": row["provider"],
+                    "project": row["project"],
+                    "started_at": str(started_at) if started_at is not None else None,
+                    "user_messages": int(row["user_messages"] or 0),
+                    "branch_kind": "root",
+                    "confidence": "high" if is_exact else "medium",
+                    "reason": (
+                        "exact Hatch execution contract; safe to classify"
+                        if is_exact
+                        else "hatch-shaped prompt/provider/root-thread; report-only until reviewed"
+                    ),
+                    "prompt_preview": prompt_text[:500],
+                    "source_path_preview": "",
+                }
+            )
+            if len(candidates) >= bounded_limit:
+                break
+    finally:
+        conn.close()
     return candidates
 
 

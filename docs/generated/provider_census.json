@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 358,
+  "file_count": 359,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1165,6 +1165,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_automation_backfill.py",
+      "providers": [
+        "antigravity",
+        "omp",
+        "pi"
       ]
     },
     {
@@ -2749,10 +2757,13 @@
     {
       "path": "server/zerg/services/agents/automation_backfill.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
