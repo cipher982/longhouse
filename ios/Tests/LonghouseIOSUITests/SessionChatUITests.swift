@@ -1007,7 +1007,7 @@ final class SessionChatUITests: XCTestCase {
         let summary = app.buttons["session-runtime-background-summary"]
         XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitForExistence(timeout: Self.patient(5)))
-        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitForExistence(timeout: Self.patient(5)))
 
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "claude-fidelity-session"

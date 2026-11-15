@@ -1137,6 +1137,7 @@ struct SessionUsageChip: View {
                         .rotationEffect(.degrees(-90))
                 }
                 .frame(width: 11, height: 11)
+                .accessibilityElement(children: .ignore)
                 .accessibilityIdentifier("session-context-ring")
                 .accessibilityLabel("Context \(Int(pct.rounded())) percent used")
             }
@@ -1148,6 +1149,7 @@ struct SessionUsageChip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Capsule().fill(.quaternary))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session-usage-chip")
     }
 
