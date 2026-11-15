@@ -97,7 +97,9 @@ A commit that spans lanes needs each lane run and verified on its own.
    runs locally in a second. It prints lane times and the log tail of every failed
    lane, and exits 1 so the push does not happen. It cannot run the real-provider
    Terminal Truth cells (no provider CLI runs on the laptop or the guest); the
-   post-push run and the repair bot cover those. `make affected-check GATE=1` shows
+   post-push run and the repair bot cover those, and `make prove CELLS="claude/helm:tool"
+   SHA=<sha>` runs any of them against your commit on cube-bench in about a minute
+   (`zerg-testing` skill). `make affected-check GATE=1` shows
    the plan without running it. Once per clone: `make install-precommit-autofix`
    installs the pre-push hook for every worktree, so a plain `git push origin
    HEAD:main` is gated too. `LONGHOUSE_PREPUSH_GATE=skip` (or `ARGS=--no-gate`)
