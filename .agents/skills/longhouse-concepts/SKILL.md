@@ -1,6 +1,6 @@
 ---
 name: longhouse-concepts
-description: Find the Longhouse system that already exists before proposing or building a census, matrix, gate, tracker, dashboard, harness, ledger or similar. Use when a plan adds a new checker, coverage table, QA producer, promotion or perf proof, so you extend what is there instead of duplicating it.
+description: Where an existing Longhouse check, matrix, gate or proof lives, and whether one exists before you build another. Covers the provider signal parity matrix and transcript census, session-state facts, tool tiers, terminal truth gate, release rings and ring lock, released-engine compatibility (engine-compat), perf proofs, live QA producers and the recall eval. Use when asked how to check, measure or find something in Longhouse, and before proposing a new census, matrix, gate, tracker, dashboard or harness.
 ---
 
 # Longhouse concepts
