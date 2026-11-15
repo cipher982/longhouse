@@ -211,6 +211,23 @@ def _first_difference(laptop: list[dict[str, Any]], host: list[dict[str, Any]]) 
     return None
 
 
+def lossy_difference(laptop: list[dict[str, Any]], host: list[dict[str, Any]]) -> bool:
+    """Whether the host render loses or changes what the served render shows.
+
+    A new normalizer revision may add rows (a turn end, withheld reasoning) and
+    item facts; those are what a rebuild is for. Dropping a served row, or
+    changing any other field of one, is a loss."""
+
+    by_id = {row["event_id"]: row for row in host}
+    for left in laptop:
+        right = by_id.get(left["event_id"])
+        if right is None:
+            return True
+        if any(left.get(field) != right.get(field) for field in RENDER_FIELDS if field != "item"):
+            return True
+    return False
+
+
 async def _ingested_rows(
     *,
     catalog: CatalogClient,

@@ -254,6 +254,12 @@ for mode in compare --apply compare; do
   echo "host rebuild from raw: ${mode}" >&2
   # The device id expands here, on this side, by design.
   # shellcheck disable=SC2029
-  ssh "$SSH_TARGET" "docker exec ${CONTAINER} longhouse-server db host-rebuild --machine ${DEVICE_ID} ${flag}" \
-    || { echo "host rebuild (${mode}) did not match what is served" >&2; exit 1; }
+  out="$(ssh "$SSH_TARGET" "docker exec ${CONTAINER} longhouse-server db host-rebuild --machine ${DEVICE_ID} ${flag}")" \
+    || { echo "$out"; echo "host rebuild (${mode}) did not match what is served" >&2; exit 1; }
+  echo "$out"
+  # Same normalizer revision on both sides: every row must match, additions included.
+  if [[ "$mode" == "compare" ]]; then
+    python3 -c 'import json,sys; t=json.loads(sys.argv[1][sys.argv[1].rindex("\n{"):]); sys.exit(0 if t["compared"] == t["equal"] else 1)' $'\n'"$out" \
+      || { echo "host rebuild (${mode}) differs from what is served" >&2; exit 1; }
+  fi
 done

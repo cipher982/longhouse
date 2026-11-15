@@ -734,3 +734,17 @@ async def test_a_missing_only_rebuild_replaces_laptop_renders_in_the_host_genera
         assert (first["written"], second["written"]) == (1, 0)
         page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
         assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
+
+
+def test_a_rebuild_may_add_rows_and_item_facts_but_not_lose_or_change_one():
+    from zerg.services.render_shadow import RENDER_FIELDS
+    from zerg.services.render_shadow import lossy_difference
+
+    def row(event_id, text="x", item=None):
+        base = dict.fromkeys(RENDER_FIELDS)
+        return {**base, "event_id": event_id, "content_text": text, "item": item}
+
+    served = [row("a"), row("b")]
+    assert not lossy_difference(served, [row("a"), row("b", item={"phase": "final", "phase_source": "derived"}), row("c-turn-end")])
+    assert lossy_difference(served, [row("a")])
+    assert lossy_difference(served, [row("a"), row("b", text="changed")])

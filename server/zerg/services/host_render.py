@@ -32,6 +32,7 @@ from zerg.services.render_shadow import NormalizerUnavailable
 from zerg.services.render_shadow import NormalizerWorker
 from zerg.services.render_shadow import _epoch_request
 from zerg.services.render_shadow import host_render_spec
+from zerg.services.render_shadow import lossy_difference
 from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 
 logger = logging.getLogger(__name__)
@@ -149,7 +150,7 @@ async def host_rebuild_session(
     target = (await _name_generation(worker, inputs, session_id) or {}).get("generation_id") if only_missing else None
     host_rendered = {(envelope_id, generation_id) for envelope_id, generation_id in inputs.get("host_rendered") or []}
     objects: list[dict[str, Any]] = []
-    compared: dict[str, Any] = {"compared": 0, "equal": 0, "differences": [], "unrebuilt_epochs": 0}
+    compared: dict[str, Any] = {"compared": 0, "equal": 0, "lossy": 0, "differences": [], "unrebuilt_epochs": 0}
     host_envelopes: list[str] = []
     for (_machine, provider, _source, epoch), rows in epochs.items():
         rows.sort(key=lambda row: row["range_start"])
@@ -208,12 +209,17 @@ async def host_rebuild_session(
             host_envelopes.append(row["envelope_id"])
             if not commit:
                 host = sorted((_render_row(asdict(record)) for record in spec.records), key=_sort_key)
-                difference = _first_difference(await served_rows(row["envelope_id"]), host)
+                served = await served_rows(row["envelope_id"])
+                difference = _first_difference(served, host)
                 compared["compared"] += 1
                 if difference is None:
                     compared["equal"] += 1
-                elif len(compared["differences"]) < 5:
-                    compared["differences"].append({"envelope_id": row["envelope_id"], "difference": difference})
+                    continue
+                lossy = lossy_difference(served, host)
+                compared["lossy"] += int(lossy)
+                # Losses are listed first; an addition only fills spare room.
+                if lossy or len(compared["differences"]) < 5:
+                    compared["differences"].append({"envelope_id": row["envelope_id"], "lossy": lossy, "difference": difference})
                 continue
             sealed = await render_workers.seal(spec, lane="repair")
             objects.append(
