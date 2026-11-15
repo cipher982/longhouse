@@ -108,6 +108,10 @@ class SemanticV2Projector:
             raise RuntimeError("catalog omitted storage session facts")
         if str(session.get("provider") or "").lower() != "claude":
             return
+        # A retired session's generations are superseded on purpose; it has
+        # nothing left to project, like a deleted one.
+        if session.get("render_state") == "retired":
+            return
         if int(session.get("semantic_projection_version") or 0) >= 1:
             return
         owner_id = session.get("owner_id")

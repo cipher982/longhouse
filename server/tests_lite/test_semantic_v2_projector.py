@@ -12,7 +12,10 @@ import zerg.services.semantic_v2_projector as semantic_projector
 
 
 @pytest.mark.asyncio
-async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch):
+@pytest.mark.parametrize("render_state", ["ready", "retired"])
+async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch, render_state):
+    # A retired session (its generations superseded on purpose) completes
+    # without a repair instead of failing on its missing current generation.
     session_id = str(uuid4())
     generation_id = str(uuid4())
     calls: list[tuple[str, dict]] = []
@@ -40,6 +43,7 @@ async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch)
                         "owner_id": "42",
                         "semantic_projection_version": 0,
                         "current_render_generation": generation_id,
+                        "render_state": render_state,
                     },
                 }
             if method == "projector.state.complete.v2":
@@ -64,9 +68,12 @@ async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch)
     claimed = await projector.run_once(limit=1, now=datetime(2026, 8, 20, tzinfo=UTC))
 
     assert claimed == 1
-    assert len(repairs) == 1
-    assert repairs[0]["session_id"] == session_id
-    assert repairs[0]["generation_id"] == generation_id
+    if render_state == "retired":
+        assert repairs == []
+    else:
+        assert len(repairs) == 1
+        assert repairs[0]["session_id"] == session_id
+        assert repairs[0]["generation_id"] == generation_id
     assert [method for method, _params in calls] == [
         "projector.state.claim.v2",
         "storage.session.projector.read.v2",
