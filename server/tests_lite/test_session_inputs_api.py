@@ -2543,7 +2543,7 @@ def test_intent_auto_locked_queues_the_live_receipt(live_catalog, live_catalog_c
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_antigravity_steer_intent_is_rejected_before_machine_control(live_catalog, live_catalog_client):  # noqa: F811
+def test_antigravity_steer_intent_routes_to_the_hook_inbox_command(live_catalog, live_catalog_client):  # noqa: F811
     email = "live-agy-steer@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
@@ -2552,6 +2552,51 @@ def test_antigravity_steer_intent_is_rejected_before_machine_control(live_catalo
         owner_id=owner_id,
         provider="antigravity",
         device_id="antigravity-machine-control",
+        activity_kind="running",
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["antigravity.send", "antigravity.steer"],
+            device_id="antigravity-machine-control",
+        )
+    )
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "mid-turn change", "intent": "steer", "client_request_id": "agy-steer-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.steer_text"
+        assert frame["payload"]["provider"] == "antigravity"
+        assert frame["payload"]["text"] == "mid-turn change"
+        assert frame["payload"]["intent"] == "steer"
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="agy-steer-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_antigravity_steer_is_refused_when_the_machine_does_not_advertise_it(live_catalog, live_catalog_client):  # noqa: F811
+    """Per-session grant gating stays: a machine without `antigravity.steer` gets nothing."""
+    email = "live-agy-steer-gate@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="antigravity",
+        device_id="antigravity-machine-control",
+        activity_kind="running",
     )
     websocket = asyncio.run(
         _register_fake_machine_control(
@@ -2564,21 +2609,11 @@ def test_antigravity_steer_intent_is_rejected_before_machine_control(live_catalo
     try:
         resp = live_catalog_client.post(
             f"/sessions/{session_id}/input",
-            json={"text": "mid-turn change", "intent": "steer", "client_request_id": "agy-steer-1"},
+            json={"text": "mid-turn change", "intent": "steer", "client_request_id": "agy-steer-2"},
             cookies=cookies,
         )
-        # The durable invariant is that nothing reaches machine control:
-        # `steer_active_turn` is false for antigravity, so the provider
-        # contract refuses the intent before a command is ever built.
         assert resp.status_code == 409, resp.text
         assert websocket.sent == []
-        receipt = _live_catalog_receipt(
-            live_catalog,
-            owner_id=owner_id,
-            session_id=session_id,
-            client_request_id="agy-steer-1",
-        )
-        assert receipt["status"] == INPUT_STATUS_FAILED
     finally:
         asyncio.run(_clear_machine_control_registry())
 

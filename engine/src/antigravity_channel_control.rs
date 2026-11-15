@@ -123,7 +123,7 @@ fn read_claimed_at(claim_path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn enqueue(session_id: &str, text: &str) -> Result<EnqueuedMessage> {
+fn enqueue(session_id: &str, text: &str, intent: &str) -> Result<EnqueuedMessage> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return Err(anyhow!("session_id is required"));
@@ -143,7 +143,7 @@ fn enqueue(session_id: &str, text: &str) -> Result<EnqueuedMessage> {
         "id": message_id,
         "session_id": session_id,
         "text": text,
-        "intent": "send",
+        "intent": intent,
         "created_at": created_at,
         "expires_at": expires_at,
     });
@@ -187,17 +187,30 @@ async fn wait_for_claim(claim_path: &Path, wait_claimed_secs: f64) -> Option<Str
 /// message and fails if no claim shows up in time, matching the retired
 /// `longhouse antigravity-channel send` CLI's behavior.
 pub async fn send_text(session_id: &str, text: &str) -> Result<AntigravitySendOutcome> {
+    deliver(session_id, text, "send").await
+}
+
+/// Steer a running turn. Same inbox and same claim as `send_text`: agy's
+/// PreInvocation hook returns the message as `injectSteps`, so it lands after
+/// the tool call in flight and before the next model call. That is bounded,
+/// not immediate: one long tool call delays it.
+pub async fn steer_text(session_id: &str, text: &str) -> Result<AntigravitySendOutcome> {
+    deliver(session_id, text, "steer").await
+}
+
+async fn deliver(session_id: &str, text: &str, intent: &str) -> Result<AntigravitySendOutcome> {
     let wait =
         crate::control_wait::control_wait(Duration::from_secs_f64(DEFAULT_WAIT_CLAIMED_SECS));
-    send_text_with_timeout(session_id, text, wait.as_secs_f64()).await
+    send_text_with_timeout(session_id, text, intent, wait.as_secs_f64()).await
 }
 
 async fn send_text_with_timeout(
     session_id: &str,
     text: &str,
+    intent: &str,
     wait_claimed_secs: f64,
 ) -> Result<AntigravitySendOutcome> {
-    let enqueued = enqueue(session_id, text)?;
+    let enqueued = enqueue(session_id, text, intent)?;
     if let Some(claimed_at) = wait_for_claim(&enqueued.claim_path, wait_claimed_secs).await {
         return Ok(AntigravitySendOutcome {
             message_id: enqueued.message_id,
@@ -226,7 +239,7 @@ mod tests {
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
-            let enqueued = enqueue("session-abc", "hello there").unwrap();
+            let enqueued = enqueue("session-abc", "hello there", "send").unwrap();
 
             let expected_dir = temp
                 .path()
@@ -277,13 +290,31 @@ mod tests {
     }
 
     #[test]
+    fn steer_writes_the_same_inbox_message_with_a_steer_intent() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            let enqueued = enqueue("session-steer", "change course", "steer").unwrap();
+            let payload: Value =
+                serde_json::from_slice(&std::fs::read(&enqueued.message_path).unwrap()).unwrap();
+            assert_eq!(payload["intent"], "steer");
+            assert_eq!(payload["text"], "change course");
+            assert_eq!(
+                enqueued.message_path.parent().unwrap(),
+                temp.path()
+                    .join("managed-local/antigravity/inbox/session-steer")
+            );
+        });
+    }
+
+    #[test]
     fn send_text_returns_claimed_at_once_the_hook_claims_the_message() {
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let rt = runtime();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
             rt.block_on(async {
-                let enqueued = enqueue("session-claim", "queued text").unwrap();
+                let enqueued = enqueue("session-claim", "queued text", "send").unwrap();
                 std::fs::create_dir_all(enqueued.claim_path.parent().unwrap()).unwrap();
                 std::fs::write(
                     &enqueued.claim_path,
@@ -308,7 +339,7 @@ mod tests {
         let rt = runtime();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
             rt.block_on(async {
-                let result = send_text_with_timeout("session-timeout", "never claimed", 0.05).await;
+                let result = send_text_with_timeout("session-timeout", "never claimed", "send", 0.05).await;
                 assert!(result.is_err(), "{result:?}");
 
                 let inbox_dir = temp
@@ -335,8 +366,8 @@ mod tests {
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
-            assert!(enqueue("", "text").is_err());
-            assert!(enqueue("session", "   ").is_err());
+            assert!(enqueue("", "text", "send").is_err());
+            assert!(enqueue("session", "   ", "send").is_err());
         });
     }
 
@@ -403,7 +434,7 @@ mod tests {
 
         // This is the exact production function `session.send_text` calls
         // for provider "antigravity" in control_channel/dispatch.rs.
-        let enqueued = enqueue(&session_id, &text).unwrap();
+        let enqueued = enqueue(&session_id, &text, "send").unwrap();
 
         let hook_payload = json!({
             "conversationId": "unused-conversation-id",

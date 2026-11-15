@@ -2759,7 +2759,7 @@
       "reattach": false,
       "send_input": true,
       "interrupt": true,
-      "steer_active_turn": false,
+      "steer_active_turn": true,
       "answer_pause": false,
       "terminate": false,
       "tail_output": true,
@@ -2933,12 +2933,12 @@
           "observed_provider_version": "1.5.9"
         },
         "steer_active_turn": {
-          "level": "none",
-          "source": "Helm not implemented; Console steer is `antigravity.turn_steer`, riding on turn_start",
-          "disposition": "not_implemented",
-          "reason": "This flag is the Helm steer. Two upstream mechanisms are proven live on 1.5.9. (1) ACP: a second `session/prompt` sent during a running turn lands between tool steps (quirk: the first prompt's RPC returns `end_turn` immediately while the turn continues). The Console adapter uses it for `antigravity.turn_steer`, with text and native image parts, proven live on 1.5.9 against the scripted endpoint (the image reached the model as inline data). (2) Hooks: a PreInvocation hook returns `injectSteps` with a `userMessage`, claimed after the running tool call; Helm does not route to it yet. Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate.",
+          "level": "hermetic",
+          "source": "Helm steer writes a steer-intent message into the PreInvocation hook inbox; fake-hook tests prove claim and injectSteps. Console steer is a second ACP session/prompt (live on 1.5.9, step 2).",
+          "disposition": "implemented",
+          "reason": "Helm: the engine writes the message into the hook inbox and agy's PreInvocation hook returns it as `injectSteps` after the running tool call (proven live on 1.5.9). Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate, and product copy must say so. Images ride as staged file paths in the message text (the model opens them with read_file). Availability follows observed hook readiness per session.",
           "observed_provider_version": "1.5.9",
-          "owner_action": "Helm: route steer to the PreInvocation hook inbox (step 3)"
+          "owner_action": "live Helm receipt on the bench (antigravity-parity.md step 3)"
         },
         "answer_pause": {
           "level": "none",
@@ -2984,6 +2984,7 @@
       },
       "machine_control_supports": [
         "antigravity.send",
+        "antigravity.steer",
         "antigravity.turn_start",
         "antigravity.turn_steer",
         "antigravity.turn_interrupt"

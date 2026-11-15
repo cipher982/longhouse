@@ -10,14 +10,14 @@ image; the server only needs the row to exist.
   ``opencode run -f``).
 - ``path``: the engine stages the file where the provider's own file/Read
   tool can open it and names the path in the prompt (Claude, Cursor,
-  Antigravity Console).
+  Antigravity Helm).
 
-Antigravity Helm is absent on purpose: its remote send transport is the
-hook inbox (see ``antigravity_hook_inbox.py``), whose message schema only
-ever carries ``text`` -- there is no image/attachment field, and the hook's
-``injectSteps: [{"userMessage": ...}]`` reply has nowhere to put one. So
-advertising attachments there would advertise a delivery path that cannot
-run, independent of the send transport itself being up.
+Antigravity Helm is ``path``: its remote transport is the hook inbox (see
+``antigravity_hook_inbox.py``), whose messages only carry ``text`` and whose
+``injectSteps: [{"userMessage": ...}]`` reply has nowhere to put an image
+part. The engine stages the file and names its path in the message; agy's
+model opens it with ``read_file`` (proven live on 1.5.9). Antigravity Console
+sends native ACP image parts.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ ATTACHMENT_DELIVERY: dict[tuple[str, str], str] = {
     ("claude", "console"): "path",
     ("cursor", "helm"): "path",
     ("cursor", "console"): "path",
+    ("antigravity", "helm"): "path",
     ("antigravity", "console"): "native",
 }
 

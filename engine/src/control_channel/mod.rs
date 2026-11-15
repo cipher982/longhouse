@@ -395,8 +395,8 @@ fn attachment_stage_command_error(message: String) -> CommandError {
 /// Helm attachments for non-Codex providers: fetch the blobs into an
 /// input-scoped tmpdir the provider can read. Codex Helm fetches inside its
 /// own bridge, so this returns nothing for it. Antigravity Helm carries a
-/// plain string to its hook inbox (and that transport is itself broken), so
-/// an attachment there is an explicit error, never a silently text-only send.
+/// plain string to its hook inbox, so its images are staged here and named as
+/// file paths in the injected message.
 async fn stage_helm_attachments(
     config: &ShipperConfig,
     session_id: &str,
@@ -2246,7 +2246,6 @@ mod tests {
             ("opencode", "resume_run_once"),
             ("opencode", "launch"),
             ("antigravity", "interrupt"),
-            ("antigravity", "steer"),
             ("antigravity", "answer_pause"),
             ("antigravity", "launch"),
             ("claude", "run_once"),
@@ -2412,7 +2411,7 @@ mod tests {
         assert!(supports.contains(&"opencode.turn_start".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(!supports.contains(&"antigravity.interrupt".to_string()));
-        assert!(!supports.contains(&"antigravity.steer".to_string()));
+        assert!(supports.contains(&"antigravity.steer".to_string()));
         assert!(!supports.contains(&"antigravity.launch".to_string()));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2892,6 +2891,79 @@ mod tests {
             result["result"]["claimed_at"], "2026-01-01T00:00:00.000000Z",
             "{result}"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_antigravity_steer_through_the_hook_inbox() {
+        // Helm steer is the same hook inbox as send, queued with a steer
+        // intent: agy's PreInvocation hook claims it after the tool call in
+        // flight. This test plays the hook, records what it claimed, and checks
+        // the message the engine queued.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let old_home = std::env::var_os("LONGHOUSE_HOME");
+        std::env::set_var("LONGHOUSE_HOME", temp.path());
+        let session_id = "session-steer";
+        let inbox_dir = temp
+            .path()
+            .join("managed-local")
+            .join("antigravity")
+            .join("inbox")
+            .join(session_id);
+        let claimer = tokio::spawn({
+            let inbox_dir = inbox_dir.clone();
+            async move {
+                let message_path = loop {
+                    if let Ok(entries) = std::fs::read_dir(&inbox_dir) {
+                        if let Some(entry) = entries
+                            .filter_map(|entry| entry.ok())
+                            .find(|entry| entry.file_name().to_string_lossy().starts_with("msg-"))
+                        {
+                            break entry.path();
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                };
+                let queued: Value =
+                    serde_json::from_slice(&std::fs::read(&message_path).unwrap()).unwrap();
+                let message_id = queued["id"].as_str().unwrap().to_string();
+                let claimed_dir = inbox_dir.join("claimed");
+                std::fs::create_dir_all(&claimed_dir).unwrap();
+                std::fs::write(
+                    claimed_dir.join(format!("claimed-msg-{message_id}.json")),
+                    serde_json::to_vec(&json!({
+                        "id": message_id,
+                        "claimed_at": "2026-01-01T00:00:00.000000Z",
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                queued
+            }
+        });
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-antigravity-steer-hook",
+                "session_id": session_id,
+                "command_type": COMMAND_STEER_TEXT,
+                "payload": {"provider": "antigravity", "text": "change course"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        let queued = claimer.await.unwrap();
+        if let Some(value) = old_home {
+            std::env::set_var("LONGHOUSE_HOME", value);
+        } else {
+            std::env::remove_var("LONGHOUSE_HOME");
+        }
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
+        assert_eq!(queued["intent"], "steer");
+        assert_eq!(queued["text"], "change course");
     }
 
     #[tokio::test]

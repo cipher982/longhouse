@@ -519,7 +519,7 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     # live-control sibling `antigravity.interrupt` stays unadvertised, so
     # can_interrupt below stays 0.
     assert contract.interrupt is True
-    assert contract.steer_active_turn is False
+    assert contract.steer_active_turn is True
     assert contract.answer_pause is False
     assert contract.tail_output is True
     assert contract.runtime_phase is True
@@ -527,7 +527,7 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     send_evidence = contract.operation_evidence_for("send_input")
     assert send_evidence["disposition"] == "implemented"
     assert send_evidence["level"] == "live_token"
-    assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
+    assert contract.operation_evidence_for("steer_active_turn")["level"] == "hermetic"
     # Console is served through one `agy acp` process per turn: it needs no
     # hook, so it works under either credential authority.
     assert contract.console_adapter == "antigravity_acp"
@@ -542,6 +542,7 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     assert turn_start_evidence["owner_action"]
     assert contract.machine_control_supports == (
         "antigravity.send",
+        "antigravity.steer",
         "antigravity.turn_start",
         "antigravity.turn_steer",
         "antigravity.turn_interrupt",
@@ -565,7 +566,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
     assert "claude_channel_bridge" in steer_control_planes()
     assert "opencode_server_bridge" in steer_control_planes()
     assert "opencode_process" not in steer_control_planes()
-    assert "antigravity_hook_inbox" not in steer_control_planes()
+    assert "antigravity_hook_inbox" in steer_control_planes()
     assert "antigravity_process" not in steer_control_planes()
     assert managed_transport_for_control_plane("opencode_process") == ManagedSessionTransport.OPENCODE_PROCESS
     assert provider_for_control_plane("opencode_process") == "opencode"
@@ -620,7 +621,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         # parity steps in antigravity-parity.md land.
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
-        ("antigravity", "session.steer_text", None),
+        ("antigravity", "session.steer_text", "antigravity.steer"),
         ("antigravity", "session.answer_pause", None),
         ("antigravity", "session.terminate", None),
         ("antigravity", "session.turn.interrupt", "antigravity.turn_interrupt"),
@@ -878,9 +879,9 @@ def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
     from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     payload = copy.deepcopy(_manifest_copy())
-    # steer_active_turn is false for Antigravity; claiming it is implemented must fail.
-    _provider_entry(payload, "antigravity")["operation_evidence"]["steer_active_turn"]["disposition"] = "implemented"
-    with pytest.raises(ValueError, match="contradicts the steer_active_turn support flag"):
+    # terminate is false for Antigravity until step 4; claiming it is implemented must fail.
+    _provider_entry(payload, "antigravity")["operation_evidence"]["terminate"]["disposition"] = "implemented"
+    with pytest.raises(ValueError, match="contradicts the terminate support flag"):
         validate_generated_contract_manifest(payload)
 
 

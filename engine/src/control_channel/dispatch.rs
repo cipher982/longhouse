@@ -532,8 +532,9 @@ pub(super) async fn execute_command(
                 }));
             }
             if provider == "antigravity" {
-                // stage_helm_attachments already refused attachments here.
-                let outcome = crate::antigravity_channel_control::send_text(&session_id, &text)
+                // Images arrive as staged file paths inside the injected
+                // message (the model opens them with read_file).
+                let outcome = crate::antigravity_channel_control::send_text(&session_id, &path_text)
                     .await
                     .map_err(CommandError::command_failed)?;
                 return Ok(json!({
@@ -961,11 +962,19 @@ pub(super) async fn execute_command(
                 );
             }
             if provider == "antigravity" {
-                return Err(CommandError {
-                    code: "unsupported_command".to_string(),
-                    message: "Antigravity hook inbox does not support active-turn steer"
-                        .to_string(),
-                });
+                let outcome =
+                    crate::antigravity_channel_control::steer_text(&session_id, &path_text)
+                        .await
+                        .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "antigravity",
+                    "transport": crate::antigravity_channel_control::ANTIGRAVITY_HOOK_INBOX_TRANSPORT,
+                    "message_id": outcome.message_id,
+                    "claimed_at": outcome.claimed_at,
+                }));
             }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;

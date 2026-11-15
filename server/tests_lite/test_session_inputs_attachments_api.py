@@ -1689,43 +1689,32 @@ def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_clie
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_rejects_unsupported_helm_provider(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
-    # Antigravity Helm has no image delivery (its hook inbox carries a plain
-    # string), so the explicit support table refuses it before anything is
-    # persisted. Every other provider accepts; see the Claude test below.
+def test_multipart_antigravity_helm_accepts_images_as_path_delivery(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
+    # Antigravity Helm delivers an image as a staged file path inside the hook
+    # inbox message, so the support table admits it (mode `path`).
+    from zerg.services.input_attachments_support import attachment_delivery
+
+    assert attachment_delivery("antigravity", "helm") == "path"
+    assert attachment_delivery("antigravity", "console") == "native"
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-agy@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
     session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="antigravity")
-    # A control channel that would happily accept the send, so the rejection
-    # below is a fact about the support gate, not about the machine.
     websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["antigravity.send"]))
 
     try:
         resp = live_catalog_client.post(
             f"/sessions/{session_id}/inputs-multipart",
-            data={"text": "blocked", "intent": "auto", "client_request_id": "attach-agy-1"},
+            data={"text": "look at this", "intent": "auto", "client_request_id": "attach-agy-1"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
             cookies=cookies,
         )
-        assert resp.status_code == 409, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "attachments_unsupported"
-        assert detail["disposition"] == "rejected"
-        assert "attachments" in detail["message"].lower()
-        assert websocket.sent == []
-        # The gate runs before anything is persisted: no receipt, no blob.
-        assert (
-            _live_catalog_receipt(
-                live_catalog,
-                owner_id=owner_id,
-                session_id=session_id,
-                client_request_id="attach-agy-1",
-            )
-            is None
-        )
-        assert list((tmp_path / "blobs").rglob("*.bin")) == []
+        assert resp.status_code == 200, resp.text
+        assert len(websocket.sent) == 1
+        payload = websocket.sent[0]["payload"]
+        assert payload["provider"] == "antigravity"
+        assert len(payload["attachments"]) == 1
     finally:
         asyncio.run(_clear_machine_control_registry())
 

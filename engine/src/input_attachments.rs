@@ -41,7 +41,12 @@ pub fn attachment_delivery(provider: &str, mode: &str) -> Option<&'static str> {
         | ("pi", "helm" | "console")
         | ("omp", "helm" | "console")
         | ("antigravity", "console") => Some("native"),
-        ("claude", "helm" | "console") | ("cursor", "helm" | "console") => Some("path"),
+        // Antigravity Helm has only a plain-string hook inbox, so an image
+        // travels as a staged file path in the injected message (the model
+        // opens it with read_file); Console sends native image parts over ACP.
+        ("claude", "helm" | "console")
+        | ("cursor", "helm" | "console")
+        | ("antigravity", "helm") => Some("path"),
         _ => None,
     }
 }
@@ -385,7 +390,7 @@ mod tests {
             attachment_delivery("antigravity", "console"),
             Some("native")
         );
-        assert_eq!(attachment_delivery("antigravity", "helm"), None);
+        assert_eq!(attachment_delivery("antigravity", "helm"), Some("path"));
         assert_eq!(attachment_delivery("codex", "shadow"), None);
     }
 
