@@ -150,6 +150,57 @@ fn blob_media_bytes(blob_root: &Path, reference: &str, mime_type: &str) -> Optio
     None
 }
 
+/// The image bytes an Antigravity transcript line points at, or nothing.
+///
+/// Antigravity records a tool result's screenshot, and a user's pasted image,
+/// as a local file under the conversation's own `brain/<id>/` directory and
+/// names it by URI in the line's `media` array. The URI is data the provider
+/// (and so, indirectly, whatever the agent ran) wrote, so it is never trusted
+/// to name an arbitrary file: it must resolve, after symlinks, to a regular
+/// file inside the conversation directory the transcript itself lives in, be
+/// no larger than the media ceiling, and start with the magic bytes of a
+/// raster image. Anything else yields no media.
+pub fn antigravity_media_bytes(transcript: &Path, uri: &str) -> Option<Vec<u8>> {
+    let brain_conversation = transcript.ancestors().find(|dir| {
+        dir.parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "brain")
+    })?;
+    let root = std::fs::canonicalize(brain_conversation).ok()?;
+    let raw_path = uri.strip_prefix("file://").unwrap_or(uri);
+    if !raw_path.starts_with('/') {
+        return None;
+    }
+    let resolved = std::fs::canonicalize(raw_path).ok()?;
+    if !resolved.starts_with(&root) {
+        return None;
+    }
+    let metadata = std::fs::metadata(&resolved).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_BLOB_MEDIA_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&resolved).ok()?;
+    sniff_image_mime(&bytes)?;
+    Some(bytes)
+}
+
+/// The MIME type of a raster image from its leading bytes.
+pub fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"BM") {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
 #[derive(Deserialize)]
 struct PiImageEnvelope<'a> {
     #[serde(borrow)]

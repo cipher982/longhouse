@@ -309,6 +309,10 @@ impl Witness for FileWitness<'_> {
     }
 
     fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+        if !reference.starts_with("blob:sha256:") {
+            // Not a Pi digest: an Antigravity `media` URI, a local file.
+            return crate::media_redaction::antigravity_media_bytes(self.path, reference);
+        }
         let root = crate::media_redaction::provider_blob_root(self.path)?;
         crate::media_redaction::provider_blob_bytes(&root, reference, mime_type)
     }
@@ -449,6 +453,11 @@ pub struct CapturedWitness {
     /// and no events), so the host must not mint one either.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub render_withheld: bool,
+    /// Content digest of each local media file a line named by URI (an
+    /// Antigravity screenshot), as the laptop read it. The bytes ship as media
+    /// objects; this is how the host finds them from the URI in the raw line.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub media_files: std::collections::BTreeMap<String, String>,
     /// Blob bytes by sha256, from the shipped content-addressed media. Not
     /// serialized: media travels as media objects, not inside the fact.
     #[serde(skip)]
@@ -473,7 +482,10 @@ impl Witness for CapturedWitness {
             .unwrap_or((None, None))
     }
     fn blob(&self, reference: &str, _mime_type: &str) -> Option<Vec<u8>> {
-        let digest = reference.strip_prefix("blob:sha256:")?.to_ascii_lowercase();
+        let digest = match reference.strip_prefix("blob:sha256:") {
+            Some(digest) => digest.to_ascii_lowercase(),
+            None => self.media_files.get(reference)?.clone(),
+        };
         self.media.get(&digest).cloned()
     }
     fn fallback_time(&self) -> DateTime<Utc> {
@@ -490,6 +502,7 @@ pub struct CapturingWitness<'a> {
     cursor_transcript_timestamps: RefCell<Option<(DateTime<Utc>, DateTime<Utc>)>>,
     workspace: RefCell<Option<WorkspaceWitness>>,
     git: RefCell<Vec<GitWitness>>,
+    media_files: RefCell<std::collections::BTreeMap<String, String>>,
 }
 
 impl<'a> CapturingWitness<'a> {
@@ -504,6 +517,7 @@ impl<'a> CapturingWitness<'a> {
             cursor_transcript_timestamps: RefCell::new(None),
             workspace: RefCell::new(None),
             git: RefCell::new(Vec::new()),
+            media_files: RefCell::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -515,6 +529,7 @@ impl<'a> CapturingWitness<'a> {
             cursor_transcript_timestamps: self.cursor_transcript_timestamps.into_inner(),
             workspace: self.workspace.into_inner(),
             git: self.git.into_inner(),
+            media_files: self.media_files.into_inner(),
             previous_provider_session_id: None,
             managed_binding_is_exact: false,
             render_withheld: false,
@@ -557,7 +572,14 @@ impl Witness for CapturingWitness<'_> {
     }
     fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
         // Blob bytes ship as media objects; the host answers from those.
-        self.inner.blob(reference, mime_type)
+        let bytes = self.inner.blob(reference, mime_type);
+        if let (false, Some(bytes)) = (reference.starts_with("blob:sha256:"), bytes.as_ref()) {
+            self.media_files.borrow_mut().insert(
+                reference.to_string(),
+                format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
+            );
+        }
+        bytes
     }
     fn fallback_time(&self) -> DateTime<Utc> {
         self.fallback_time

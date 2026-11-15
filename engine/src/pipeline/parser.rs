@@ -2148,22 +2148,23 @@ fn parse_large_file(
         let line_bytes = &line_buf[..bytes_read - 1];
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
 
-        let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
-            let redacted =
-                redact_source_line_with_media(line_str, blob_lookup.as_ref().map(|f| f as _));
-            media_objects.extend(parsed_media_objects(
-                line_offset,
-                &redacted.original_line_sha256,
-                redacted.media,
-            ));
-            source_lines.push(ParsedSourceLine {
-                source_offset: line_offset,
-                raw_line: redacted.raw_line.clone(),
-            });
-            redacted.raw_line
-        } else {
-            String::new()
-        };
+        let (redacted_line, original_line_sha256) =
+            if let Ok(line_str) = std::str::from_utf8(line_bytes) {
+                let redacted =
+                    redact_source_line_with_media(line_str, blob_lookup.as_ref().map(|f| f as _));
+                media_objects.extend(parsed_media_objects(
+                    line_offset,
+                    &redacted.original_line_sha256,
+                    redacted.media,
+                ));
+                source_lines.push(ParsedSourceLine {
+                    source_offset: line_offset,
+                    raw_line: redacted.raw_line.clone(),
+                });
+                (redacted.raw_line, redacted.original_line_sha256)
+            } else {
+                (String::new(), String::new())
+            };
 
         // Skip empty/whitespace lines
         let trimmed = trim_bytes(line_bytes);
@@ -2205,6 +2206,15 @@ fn parse_large_file(
             &mut claude_state,
             cursor_order_anchor,
             native_flavor,
+        );
+        antigravity_line_media(
+            &obj,
+            trimmed,
+            line_offset,
+            &original_line_sha256,
+            witness,
+            &mut events,
+            &mut media_objects,
         );
         extract_provider_facts(
             &obj,
@@ -2311,6 +2321,7 @@ fn parse_buffered(
             &redacted.original_line_sha256,
             redacted.media,
         ));
+        let original_line_sha256 = redacted.original_line_sha256;
         let redacted_line = redacted.raw_line;
         source_lines.push(ParsedSourceLine {
             source_offset: line_offset,
@@ -2349,6 +2360,15 @@ fn parse_buffered(
             &mut claude_state,
             cursor_order_anchor,
             native_flavor,
+        );
+        antigravity_line_media(
+            &obj,
+            trimmed.as_bytes(),
+            line_offset,
+            &original_line_sha256,
+            witness,
+            &mut events,
+            &mut media_objects,
         );
         extract_provider_facts(
             &obj,
@@ -5669,6 +5689,80 @@ fn extract_cursor_events(
                     raw_line,
                 ));
             }
+        }
+    }
+}
+
+/// Images an Antigravity line names by local file URI (`media: [{mime_type, uri}]`).
+///
+/// The bytes come from the witness: this machine's disk at ship time, the
+/// shipped copy on a host. A file that cannot be read (deleted, outside the
+/// conversation directory, not an image) becomes a one-line note on the tool
+/// result instead, so the timeline says an image was there. The raw line is
+/// left as written; its URI plus the witness's digest is what ties the two.
+fn antigravity_line_media(
+    obj: &RawLine,
+    trimmed: &[u8],
+    line_offset: u64,
+    original_line_sha256: &str,
+    witness: &dyn Witness,
+    events: &mut [ParsedEvent],
+    media_objects: &mut Vec<ParsedMediaObject>,
+) {
+    const MARKER: &[u8] = b"\"media\"";
+    if !is_antigravity_line(obj) || !trimmed.windows(MARKER.len()).any(|w| w == MARKER) {
+        return;
+    }
+    let Ok(line) = serde_json::from_slice::<Value>(trimmed) else {
+        return;
+    };
+    let Some(entries) = line.get("media").and_then(Value::as_array) else {
+        return;
+    };
+    let mut seen = HashSet::new();
+    let mut unavailable = Vec::new();
+    for entry in entries {
+        let Some(uri) = entry.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        match witness.blob(uri, "") {
+            Some(bytes) => {
+                let sha256 = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+                if !seen.insert(sha256.clone()) {
+                    continue;
+                }
+                let mime_type = crate::media_redaction::sniff_image_mime(&bytes)
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                media_objects.push(ParsedMediaObject {
+                    source_offset: line_offset,
+                    sha256,
+                    mime_type,
+                    byte_size: bytes.len(),
+                    original_chars: 0,
+                    original_line_sha256: original_line_sha256.to_string(),
+                    bytes,
+                });
+            }
+            None => {
+                let name = uri.rsplit('/').next().unwrap_or(uri);
+                unavailable.push(format!("[image unavailable: {name}]"));
+            }
+        }
+    }
+    if unavailable.is_empty() {
+        return;
+    }
+    if let Some(output) = events
+        .iter_mut()
+        .rev()
+        .take_while(|event| event.source_offset == line_offset)
+        .filter(|event| matches!(event.role, Role::Tool))
+        .find_map(|event| event.tool_output_text.as_mut())
+    {
+        for note in unavailable {
+            output.push('\n');
+            output.push_str(&note);
         }
     }
 }
@@ -12172,5 +12266,180 @@ please research the steering shaft options"#;
             .any(|ev| ev.raw_type == "claude_thinking"
                 && ev.content_text.is_none()
                 && ev.item == ItemFacts::reasoning(Visibility::Withheld)));
+    }
+
+    /// A tool-result line shaped like a real Antigravity `view_file` of an image:
+    /// the text only says a binary file was shown; the pixels are a local file
+    /// named by `media[].uri`.
+    fn antigravity_image_line(step: u64, uri: &str) -> String {
+        format!(
+            r#"{{"step_index":{step},"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-11-10T18:07:18Z","content":"Created At: 2026-11-10T13:07:18-05:00\nCompleted At: 2026-11-10T13:07:18-05:00\nShowing binary file of type image/jpeg","media":[{{"mime_type":"image/jpeg","uri":"{uri}"}}]}}"#
+        )
+    }
+
+    const FAKE_JPEG: &[u8] = &[
+        0xff, 0xd8, 0xff, 0xe0, 0, 0x10, b'J', b'F', b'I', b'F', 0, 1, 2, 3,
+    ];
+
+    /// `<tmp>/brain/<id>/.system_generated/logs/transcript_full.jsonl` with the
+    /// given lines, and the conversation directory.
+    fn antigravity_media_fixture(temp: &tempfile::TempDir, lines: &[String]) -> (PathBuf, PathBuf) {
+        let conversation = temp
+            .path()
+            .join("brain")
+            .join("57781a55-2360-4650-b183-5ec341e31de2");
+        let transcript = conversation
+            .join(".system_generated")
+            .join("logs")
+            .join("transcript_full.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, lines.join("\n") + "\n").unwrap();
+        (transcript, conversation)
+    }
+
+    fn write_media(conversation: &Path, name: &str, bytes: &[u8]) -> String {
+        let dir = conversation.join(".system_generated/logs/media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        format!("file://{}", path.display())
+    }
+
+    #[test]
+    fn antigravity_tool_result_image_becomes_a_media_object_on_its_line() {
+        let temp = tempfile::tempdir().unwrap();
+        let (transcript, conversation) = antigravity_media_fixture(&temp, &[]);
+        let uri = write_media(&conversation, "step_132_media_0.jpg", FAKE_JPEG);
+        let line = antigravity_image_line(132, &uri);
+        std::fs::write(&transcript, format!("{line}\n")).unwrap();
+
+        let result = parse_session_file(&transcript, 0).unwrap();
+        assert_eq!(result.media_objects.len(), 1);
+        let media = &result.media_objects[0];
+        assert_eq!(media.source_offset, 0);
+        assert_eq!(media.mime_type, "image/jpeg");
+        assert_eq!(media.bytes, FAKE_JPEG);
+        assert_eq!(media.byte_size, FAKE_JPEG.len());
+        assert_eq!(
+            media.sha256,
+            format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(FAKE_JPEG))
+        );
+        // The raw line stays as written: the URI is small and is the host's key.
+        assert_eq!(result.source_lines[0].raw_line, line);
+        let result_event = result
+            .events
+            .iter()
+            .find(|event| event.role == Role::Tool)
+            .expect("the image result still renders as a tool result");
+        assert_eq!(result_event.source_offset, 0);
+        assert!(!result_event
+            .tool_output_text
+            .as_deref()
+            .unwrap()
+            .contains("image unavailable"));
+    }
+
+    #[test]
+    fn antigravity_image_that_cannot_be_read_leaves_a_note_not_a_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let (transcript, conversation) = antigravity_media_fixture(&temp, &[]);
+        let outside = temp.path().join("secret.jpg");
+        std::fs::write(&outside, FAKE_JPEG).unwrap();
+        let linked = conversation.join("link.jpg");
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        let not_image = write_media(&conversation, "notes.jpg", b"plain text, not a picture");
+        let lines = [
+            // Deleted.
+            antigravity_image_line(
+                1,
+                &format!(
+                    "file://{}/.system_generated/logs/media/gone.jpg",
+                    conversation.display()
+                ),
+            ),
+            // Outside the conversation directory.
+            antigravity_image_line(2, &format!("file://{}", outside.display())),
+            // A symlink inside the directory to a file outside it.
+            antigravity_image_line(3, &format!("file://{}", linked.display())),
+            // Path traversal.
+            antigravity_image_line(
+                4,
+                &format!("file://{}/../../../secret.jpg", conversation.display()),
+            ),
+            // Inside, but not an image.
+            antigravity_image_line(5, &not_image),
+        ];
+        std::fs::write(&transcript, lines.join("\n") + "\n").unwrap();
+
+        let result = parse_session_file(&transcript, 0).unwrap();
+        assert!(result.media_objects.is_empty());
+        let notes: Vec<_> = result
+            .events
+            .iter()
+            .filter(|event| event.role == Role::Tool)
+            .map(|event| event.tool_output_text.clone().unwrap())
+            .collect();
+        assert_eq!(notes.len(), 5);
+        for (note, name) in notes.iter().zip([
+            "gone.jpg",
+            "secret.jpg",
+            "link.jpg",
+            "secret.jpg",
+            "notes.jpg",
+        ]) {
+            assert!(
+                note.ends_with(&format!("[image unavailable: {name}]")),
+                "{note}"
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_image_reaches_a_host_that_holds_only_the_shipped_bytes() {
+        use crate::pipeline::source::{CapturingWitness, SourceBytes};
+        let temp = tempfile::tempdir().unwrap();
+        let (transcript, conversation) = antigravity_media_fixture(&temp, &[]);
+        let uri = write_media(&conversation, "step_132_media_0.jpg", FAKE_JPEG);
+        std::fs::write(&transcript, antigravity_image_line(132, &uri) + "\n").unwrap();
+
+        let source = FileSource::named(&transcript, &transcript);
+        let capturing = CapturingWitness::new(&transcript, Utc::now());
+        let laptop = parse_source(&source, &capturing, 0, None, None).unwrap();
+        let mut captured = capturing.finish(SourceBytes::identity(&source).clone());
+        assert_eq!(laptop.media_objects.len(), 1);
+        let sha = laptop.media_objects[0].sha256.clone();
+        assert_eq!(captured.media_files.get(&uri), Some(&sha));
+        // The fact is what travels; the bytes ride as media.
+        let shipped: crate::pipeline::source::CapturedWitness =
+            serde_json::from_value(serde_json::to_value(&captured).unwrap()).unwrap();
+        assert_eq!(shipped.media_files, captured.media_files);
+        captured.media.insert(sha.clone(), FAKE_JPEG.to_vec());
+
+        // The host has neither the file nor the brain directory.
+        std::fs::remove_dir_all(&conversation).unwrap();
+        let host_source = crate::pipeline::source::MemorySource::new(
+            SourceBytes::identity(&source).clone(),
+            (antigravity_image_line(132, &uri) + "\n").into_bytes(),
+        );
+        let host = parse_source(&host_source, &captured, 0, None, None).unwrap();
+        assert_eq!(host.media_objects.len(), 1);
+        assert_eq!(host.media_objects[0].sha256, sha);
+        assert_eq!(host.media_objects[0].bytes, FAKE_JPEG);
+
+        // Without the shipped bytes the host says so instead of inventing an image.
+        let bare = parse_source(
+            &host_source,
+            &crate::pipeline::source::NoWitness,
+            0,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(bare.media_objects.is_empty());
+        assert!(bare.events[0]
+            .tool_output_text
+            .as_deref()
+            .unwrap()
+            .ends_with("[image unavailable: step_132_media_0.jpg]"));
     }
 }
