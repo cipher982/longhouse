@@ -25,8 +25,6 @@ const FF = (h: number) => 2300 * Math.pow(h, 1.5);
 const TILE_LINGER_MS = 4000;
 /** Forget a session's heat this long after its last cell unmounts. */
 const HEAT_TTL_MS = 120_000;
-/** Redraw idle coal beds this often while nothing burns (they cool in wall time). */
-const COOL_REDRAW_MS = 30_000;
 const SPARK_MARGIN_PX = 4;
 /** The drawn tile is this many cell heights tall (aspect TW:TH), bottom on the cell. */
 const TILE_SCALE = 1.2;
@@ -180,7 +178,6 @@ export class HearthRenderer {
   private ring = 0;
   private dpr = 1;
   private box = { left: 0, top: 0, width: 0, height: 0 };
-  private coolTimer = 0;
   private dead = false;
   /** Reduced motion: sim steps left before the still frame is settled.
    * A signal change resets it (never adds), and each frame spends at most
@@ -277,10 +274,6 @@ export class HearthRenderer {
     if (typeof IntersectionObserver !== "undefined") {
       this.io = new IntersectionObserver(this.handleIntersect, { rootMargin: "48px 0px" });
     }
-    this.coolTimer = window.setInterval(() => {
-      this.rmSettle = RM_SETTLE_STEPS;
-      this.requestFrame();
-    }, COOL_REDRAW_MS);
   }
 
   // ---------------- public API ----------------
@@ -335,7 +328,6 @@ export class HearthRenderer {
     this.dead = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
-    window.clearInterval(this.coolTimer);
     this.io?.disconnect();
     this.canvas.removeEventListener("webglcontextlost", this.handleLost, false);
     document.removeEventListener("visibilitychange", this.handleVisibility);
@@ -457,6 +449,7 @@ export class HearthRenderer {
     const dg = Math.exp(-realDt / 0.6);
     const slew = realDt * 1.2; // at most 1.2 tile heights per second
     let burning = 0;
+    let cooling = false;
     let pendingEvents = false;
     for (let i = 0; i < this.nt; i++) {
       const cell = this.tileCell[i];
@@ -466,6 +459,7 @@ export class HearthRenderer {
       const snap = heat?.snap;
       if (!heat || !snap) continue;
       if (heat.hasPending()) pendingEvents = true;
+      if (!heat.isActive(t) && heat.isCooling(wall)) cooling = true;
       let ht = heat.target(t);
       if (snap.mode === "waiting") {
         // Guttering: a low flame that dips and recovers, calmer than work but never still.
@@ -550,7 +544,7 @@ export class HearthRenderer {
       this.q = null;
     }
     this.stats.frames++;
-    const keepGoing = burning > 0 || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
+    const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.stats.running = keepGoing;
     if (keepGoing) this.raf = requestAnimationFrame(this.frame);
     else if (this.q) {

@@ -4000,9 +4000,9 @@ struct LonghouseMenuBarCoreTests {
         #expect(sessions.filter { $0.hearthKind.asksForUser }.map(\.sessionId) == ["sess-cad"])
         let executing = sessions[1].hearthHeat, waiting = sessions[0].hearthHeat
         #expect(executing > sessions[2].hearthHeat && sessions[2].hearthHeat > waiting)
-        // Lit above 0.12; lost control and quiet are cold ash.
+        // Lit flame above 0.12; lost control and quiet are cold ash (<= 0.05).
         #expect(waiting > 0.12)
-        #expect(sessions[4].hearthHeat <= 0.12 && sessions[5].hearthHeat <= 0.12)
+        #expect(sessions[4].hearthHeat <= 0.05 && sessions[5].hearthHeat <= 0.05)
     }
 
     @Test
@@ -4033,7 +4033,7 @@ struct LonghouseMenuBarCoreTests {
 
         let passive = try #require(entries.first { $0.id == "sess-passive-shell" })
         #expect(passive.kind == .background)
-        #expect(passive.heat <= 0.12)
+        #expect(passive.heat > 0.05 && passive.heat <= 0.12)
         #expect(passive.subtitle == "zerg · Background · 1 command")
         #expect(passive.detail == "Wait for QA deploy then run the Phase 4 proof")
         #expect(snapshot.menuBarPresentation(relativeTo: collectedAt).headline == "2 agents working · 1 background")

@@ -674,10 +674,15 @@ describe("rail rows follow the Timeline's tiers", () => {
     });
     expect(rows[0].tone).toBe("cool");
     expect(rows[0].detail).toBe("Background · 1 command");
+    expect(rows[0].hearth?.mode).toBe("background");
 
     const listedOnly = buildRailRows([passiveCard], now, null);
     expect(listedOnly[0].tone).toBe("cool");
     expect(listedOnly[0].detail).toBe("Background · 1 command");
+    expect(listedOnly[0].hearth?.mode).toBe("background");
+
+    const expired = buildRailRows([passiveCard], Date.parse("2026-10-06T12:41:00Z"), null);
+    expect(expired[0].hearth?.mode).toBe("idle");
   });
 });
 

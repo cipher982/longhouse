@@ -229,13 +229,14 @@ export function buildRailRows(
   const activeRow = (group: RailGroup, listed?: RailRow): RailRow => {
     const lamp = LAMP_FOR_TONE[active.tone];
     const needsUser = active.needsUser ?? false;
+    const passiveBackground = lamp === "idle" && active.statusKey === "delegated_work";
     return {
       ...active,
       lamp,
       statusKey: active.statusKey ?? null,
       needsUser,
       group,
-      hearth: listed?.hearth ? { ...listed.hearth, mode: hearthModeForLamp(lamp) } : undefined,
+      hearth: listed?.hearth ? { ...listed.hearth, mode: hearthModeForLamp(lamp, { passiveBackground }) } : undefined,
       detail:
         lamp === "working" || needsUser || active.statusKey === "delegated_work"
           ? active.stateText

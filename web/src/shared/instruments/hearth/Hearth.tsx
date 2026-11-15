@@ -200,9 +200,9 @@ export function coalColor(kelvin: number): string {
 }
 
 /** Static fallback, drawn like the live fire: no box, just a low coal pile
- * on the baseline coloured by its cooled temperature, a flame for a working
- * session (with a faint warm spill) and a low one while it waits on you.
- * Ended is a small grey smudge of ash. */
+ * on the baseline coloured by its mode (cold for idle, smoldering embers for
+ * passive background waits, warm under a low flame while waiting on you, hot
+ * under a live flame while working). Ended is a small grey smudge of ash. */
 function HearthGlyph({ snapshot }: { snapshot: HearthSnapshot }) {
   const uid = useId();
   const flameId = `${uid}-flame`;
@@ -223,9 +223,9 @@ function HearthGlyph({ snapshot }: { snapshot: HearthSnapshot }) {
       </svg>
     );
   }
-  const coal = coalColor(bed.surface);
+  const coal = coalColor(mode === "background" ? 820 : bed.surface);
   const crack = coalColor(Math.max(bed.surface, bed.core));
-  const crackOpacity = Math.min(1, Math.max(0.25, (bed.core - 450) / 500));
+  const crackOpacity = mode === "background" ? 0.95 : Math.min(1, Math.max(0.25, (bed.core - 450) / 500));
   return (
     <svg className="hearth-glyph" viewBox="0 0 26 36" aria-hidden="true" focusable="false">
       <defs>
@@ -240,7 +240,11 @@ function HearthGlyph({ snapshot }: { snapshot: HearthSnapshot }) {
           <stop offset="1" stopColor="#f08a24" stopOpacity="0" />
         </radialGradient>
       </defs>
-      {flame ? <ellipse cx="13" cy="26" rx="13" ry="10" fill={`url(#${spillId})`} /> : null}
+      {flame ? (
+        <ellipse cx="13" cy="26" rx="13" ry="10" fill={`url(#${spillId})`} />
+      ) : mode === "background" ? (
+        <ellipse cx="13" cy="28" rx="11" ry="7" fill={`url(#${spillId})`} opacity={0.45} />
+      ) : null}
       {flame ? <path d={flame} fill={`url(#${flameId})`} /> : null}
       <ellipse cx="9.6" cy="32.8" rx="3.2" ry="1.7" fill={coal} />
       <ellipse cx="16.2" cy="32.9" rx="3" ry="1.6" fill={coal} />

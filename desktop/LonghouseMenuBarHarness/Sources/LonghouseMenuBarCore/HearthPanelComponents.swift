@@ -8,7 +8,7 @@ enum HearthSessionKind: Int, Comparable {
     case blocked
     /// Thinking, executing, starting, or active delegated subagents.
     case working
-    /// Waiting on passive background work (shells, monitors, waiting subagents): unlit coal bed.
+    /// Waiting on passive background work (shells, monitors, waiting subagents): smoldering coal bed.
     case background
     /// Longhouse lost its control path (terminal detached, bridge degraded).
     case lostControl
@@ -34,8 +34,8 @@ extension ManagedSessionSnapshot {
         return .quiet
     }
 
-    /// Fire size, 0...1. Executing burns hottest; waiting keeps a low flame;
-    /// anything below ~0.12 is an unlit coal bed.
+    /// Fire size, 0...1. Above 0.12 is a live flame, `0.05 < heat <= 0.12` is a
+    /// smoldering background coal bed, and `<= 0.05` is cold ash.
     var hearthHeat: Double { hearthHeat(asOf: Date()) }
 
     func hearthHeat(asOf now: Date) -> Double {

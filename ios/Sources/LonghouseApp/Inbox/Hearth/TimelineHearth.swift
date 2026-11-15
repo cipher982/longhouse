@@ -57,10 +57,16 @@ private struct HearthGlyph: View {
     let mode: HearthMode
 
     var body: some View {
-        Image(systemName: mode == .working || mode == .waiting ? "flame.fill" : "circle.hexagongrid.fill")
-            .font(.system(size: mode == .waiting ? 13 : 17))
-            .foregroundStyle(mode == .working || mode == .waiting ? Ember.flame : Ember.ash)
-            .opacity(mode == .ended ? 0.4 : 0.75)
+        let icon = mode == .working || mode == .waiting ? "flame.fill" : "circle.hexagongrid.fill"
+        let size: CGFloat = mode == .waiting ? 13 : (mode == .background ? 15 : 17)
+        let color = (mode == .working || mode == .waiting)
+            ? Ember.flame
+            : (mode == .background ? Ember.ember : Ember.ash)
+        let opacity = mode == .ended ? 0.4 : (mode == .background ? 0.85 : 0.75)
+        Image(systemName: icon)
+            .font(.system(size: size))
+            .foregroundStyle(color)
+            .opacity(opacity)
             .frame(width: TimelineHearthLamp.cell.width, height: TimelineHearthLamp.cell.height, alignment: .bottom)
     }
 }
@@ -75,7 +81,12 @@ extension HearthSnapshot {
         case .working: mode = .working
         case .attention: mode = .waiting
         case .closed: mode = .ended
-        case .quiet, .unknown: mode = .idle
+        case .quiet:
+            let passiveDelegated = !suppressed
+                && session.stateFacts.primary?.key == "delegated_work"
+                && !session.stateFacts.workClaimExpired(asOf: now)
+            mode = passiveDelegated ? .background : .idle
+        case .unknown: mode = .idle
         }
         var subagents = 0
         var children: [String: ChildCounters] = [:]

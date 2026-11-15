@@ -3,6 +3,7 @@ import Foundation
 enum HearthMode: Equatable {
     case working
     case waiting
+    case background
     case idle
     case ended
 }
@@ -85,8 +86,10 @@ final class HearthHeat {
     static let hotTemperature: Float = 1350
     static let litTemperature: Float = 1150
     static let waitingTemperature: Float = 1020
-    static let surfaceCoolingTime: TimeInterval = 1200
-    static let coreCoolingTime: TimeInterval = 10800
+    static let backgroundSurfaceTemperature: Float = 980
+    static let backgroundCoreTemperature: Float = 1060
+    static let surfaceCoolingTime: TimeInterval = 1.2
+    static let coreCoolingTime: TimeInterval = 1.6
     static let heightFloor: Float = 0.42
     static let heightTop: Float = 0.8
 
@@ -110,7 +113,7 @@ final class HearthHeat {
     private var pending: [Pending] = []
     private var lastEventTime = -TimeInterval.infinity
     private var lastUpdateTime = -TimeInterval.infinity
-    private var lastEventWall: Date?
+    private var stoppedWall: Date?
     private var wasActive = false
 
     func update(snapshot next: HearthSnapshot, time: TimeInterval, wall: Date) {
@@ -119,16 +122,14 @@ final class HearthHeat {
         if retained.tool == nil { retained.tool = previous?.tool }
         snapshot = retained
         guard let previous else {
-            surfaceBaseline = next.mode == .ended ? Self.ambientTemperature : Self.litTemperature
-            coreBaseline = surfaceBaseline
+            let bed = Self.restBed(for: next.mode)
+            surface = bed.surface
+            core = bed.core
+            surfaceBaseline = bed.surface
+            coreBaseline = bed.core
+            stoppedWall = nil
             if next.mode == .working {
-                surface = Self.litTemperature
-                core = Self.litTemperature
                 work = 18 + densityWork(next)
-            } else {
-                let bed = initialBed(next, wall: wall)
-                surface = bed.surface
-                core = bed.core
             }
             wasActive = next.mode == .working
             lastUpdateTime = time
@@ -147,7 +148,7 @@ final class HearthHeat {
                 core = Self.ambientTemperature
                 surfaceBaseline = surface
                 coreBaseline = core
-                lastEventWall = nil
+                stoppedWall = nil
                 wasActive = false
             } else if wasActive {
                 stopHeating(wall: wall)
@@ -192,7 +193,6 @@ final class HearthHeat {
         for index in credited.indices where !visibleIndices.contains(index) {
             deposit(credited[index], time: time)
         }
-        if !credited.isEmpty { lastEventWall = wall }
         if wasActive && !isActive(time: time) { stopHeating(wall: wall) }
     }
 
@@ -203,7 +203,6 @@ final class HearthHeat {
         for item in due {
             deposit(item.event, time: time)
             lastEventTime = time
-            lastEventWall = wall
             switch item.event {
             case .prompt: surface += 0.3 * (Self.hotTemperature - surface)
             case .tool: surface += 0.03 * (Self.hotTemperature - surface)
@@ -223,6 +222,7 @@ final class HearthHeat {
             core = Self.ambientTemperature
             surfaceBaseline = surface
             coreBaseline = core
+            stoppedWall = nil
             wasActive = false
         } else if active {
             let power = 0.35 + min(0.6, Double(rate) / 200)
@@ -230,10 +230,11 @@ final class HearthHeat {
             if surface > core {
                 core += (surface - core) * Float(1 - exp(-elapsed / 300))
             }
+            stoppedWall = nil
             wasActive = true
         } else {
             if wasActive {
-                stopHeating(wall: lastEventWall.map { min(wall, $0.addingTimeInterval(5)) } ?? wall)
+                stopHeating(wall: wall)
             }
             let bed = coolBed(wall: wall)
             surface = bed.surface
@@ -253,6 +254,27 @@ final class HearthHeat {
         guard let snapshot, snapshot.mode != .ended, snapshot.acceptsEvents else { return false }
         return snapshot.mode == .working || pending.contains { time < $0.at + 5 }
             || deposits.contains { $0.end > time } || time - lastEventTime < 5
+    }
+
+    func isCooling(wall: Date) -> Bool {
+        guard let snapshot, snapshot.mode != .ended, let stoppedWall else { return false }
+        let elapsed = max(0, wall.timeIntervalSince(stoppedWall))
+        guard elapsed < 4.5 else { return false }
+        let target = Self.restBed(for: snapshot.mode)
+        return surface > target.surface + 5 || core > target.core + 5
+    }
+
+    static func restBed(for mode: HearthMode) -> (surface: Float, core: Float) {
+        switch mode {
+        case .working:
+            return (litTemperature, litTemperature)
+        case .waiting:
+            return (waitingTemperature, waitingTemperature)
+        case .background:
+            return (backgroundSurfaceTemperature, backgroundCoreTemperature)
+        case .idle, .ended:
+            return (ambientTemperature, ambientTemperature)
+        }
     }
 
     private func increase(_ previous: Int?, _ next: Int?) -> Int {
@@ -280,34 +302,21 @@ final class HearthHeat {
         surfaceBaseline = surface
         coreBaseline = max(core, surface)
         wasActive = false
-        lastEventWall = max(lastEventWall ?? wall, wall)
+        stoppedWall = max(stoppedWall ?? wall, wall)
     }
 
     private func cool(_ temperature: Float, seconds: TimeInterval, tau: TimeInterval) -> Float {
         Self.ambientTemperature + (temperature - Self.ambientTemperature) * Float(exp(-max(0, seconds) / tau))
     }
 
-    private func initialBed(_ snapshot: HearthSnapshot, wall: Date) -> (surface: Float, core: Float) {
-        guard snapshot.mode != .ended, let lastActivity = snapshot.lastActivity else {
-            return (Self.ambientTemperature, Self.ambientTemperature)
-        }
-        let idle = wall.timeIntervalSince(lastActivity)
-        let surface = cool(Self.litTemperature, seconds: idle, tau: Self.surfaceCoolingTime)
-        let core = cool(Self.litTemperature, seconds: idle, tau: Self.coreCoolingTime)
-        if snapshot.mode == .waiting {
-            return (max(surface, Self.waitingTemperature), max(core, Self.waitingTemperature))
-        }
-        return (surface, core)
-    }
-
     private func coolBed(wall: Date) -> (surface: Float, core: Float) {
-        let last = [snapshot?.lastActivity, lastEventWall].compactMap { $0 }.max()
-        let idle = last.map { wall.timeIntervalSince($0) } ?? .infinity
-        let surface = cool(surfaceBaseline, seconds: idle, tau: Self.surfaceCoolingTime)
-        let core = cool(coreBaseline, seconds: idle, tau: Self.coreCoolingTime)
-        if snapshot?.mode == .waiting {
-            return (max(surface, Self.waitingTemperature), max(core, Self.waitingTemperature))
-        }
+        guard let snapshot else { return (Self.ambientTemperature, Self.ambientTemperature) }
+        let target = Self.restBed(for: snapshot.mode)
+        guard snapshot.mode != .ended, let stoppedWall else { return target }
+        let elapsed = max(0, wall.timeIntervalSince(stoppedWall))
+        if elapsed >= 4.5 { return target }
+        let surface = max(target.surface, cool(surfaceBaseline, seconds: elapsed, tau: Self.surfaceCoolingTime))
+        let core = max(target.core, cool(coreBaseline, seconds: elapsed, tau: Self.coreCoolingTime))
         return (surface, core)
     }
 }

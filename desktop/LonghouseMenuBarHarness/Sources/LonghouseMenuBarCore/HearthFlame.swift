@@ -107,9 +107,10 @@ extension EnvironmentValues {
 }
 
 /// A small fire whose height and temperature follow `heat` (0...1), drawn in
-/// the web timeline hearth's colours. Below ~0.12 it is an unlit coal bed and
-/// never animates. Every frame is a pure function of time, so a still flame
-/// and a fixture render are the same deterministic picture.
+/// the web timeline hearth's colours. Below `0.05` is cold ash, `0.05 < heat <= 0.12`
+/// is smoldering coals (static, never animates), and above `0.12` is a live
+/// animated flame. Every frame is a pure function of time, so a still flame and
+/// a fixture render are the same deterministic picture.
 struct HearthFlame: View {
     let heat: Double
     let seed: Int
@@ -207,13 +208,25 @@ private struct HearthFlameRenderer {
         let w = size.width, h = size.height
         let baseY = h * 0.84
 
-        if heat > 0.05 {
+        if heat > 0.12 {
             // Warm light on the hearth floor: a gradient, not a blur pass.
             let glow = CGRect(x: 0, y: baseY - h * 0.5 * heat, width: w, height: h * 0.6 * heat + 8)
             graphics.fill(
                 Path(ellipseIn: glow),
                 with: .radialGradient(
                     Gradient(colors: [HearthPalette.ember.opacity(0.34 * heat), .clear]),
+                    center: CGPoint(x: glow.midX, y: glow.midY),
+                    startRadius: 0,
+                    endRadius: max(glow.width, glow.height) / 2
+                )
+            )
+        } else if heat > 0.05 {
+            // Faint warm spill on the hearth floor under smoldering background coals.
+            let glow = CGRect(x: w * 0.08, y: baseY - h * 0.16, width: w * 0.84, height: h * 0.28 + 6)
+            graphics.fill(
+                Path(ellipseIn: glow),
+                with: .radialGradient(
+                    Gradient(colors: [HearthPalette.ember.opacity(additive ? 0.18 : 0.11), .clear]),
                     center: CGPoint(x: glow.midX, y: glow.midY),
                     startRadius: 0,
                     endRadius: max(glow.width, glow.height) / 2
@@ -293,10 +306,13 @@ private struct HearthFlameRenderer {
         }
 
         // Coal bed: dark lumps with glowing seams, hotter as the fire works.
-        // Unlit, it is grey ash: visible on glass, plainly not burning.
-        let cold = heat <= 0.12
+        // 0.05 < heat <= 0.12 is smoldering background work; <= 0.05 is cold ash.
+        let cold = heat <= 0.05
+        let smoldering = heat > 0.05 && heat <= 0.12
         let ash = Color(white: additive ? 0.36 : 0.62)
-        let surface = 420 + heat * 760 + (cold ? 0 : flicker(9, seed) * 30 * heat)
+        let surface = 420 + heat * 760 + (heat <= 0.12 ? 0 : flicker(9, seed) * 30 * heat)
+        let coalKelvin = smoldering ? (additive ? 820.0 : 860.0) : (surface - 420)
+        let seamKelvin = smoldering ? (additive ? 1060.0 : 1080.0) : (surface + 40)
         let lumps: [(Double, Double, Double, Double)] = [
             (-0.2, 0.17, 0.075, 0.012), (0.21, 0.16, 0.07, 0.016), (0, 0.19, 0.085, -0.006),
         ]
@@ -308,7 +324,7 @@ private struct HearthFlameRenderer {
                 graphics.fill(Path(ellipseIn: rect), with: .color(ash.opacity(0.9 - Double(index) * 0.15)))
                 continue
             }
-            graphics.fill(Path(ellipseIn: rect), with: .color(HearthPalette.coal(surface - 420)))
+            graphics.fill(Path(ellipseIn: rect), with: .color(HearthPalette.coal(coalKelvin)))
             var seam = Path()
             seam.move(to: CGPoint(x: rect.minX + rect.width * 0.18, y: rect.midY + rect.height * 0.1))
             seam.addLine(to: CGPoint(x: rect.midX - rect.width * 0.05, y: rect.midY - rect.height * (0.15 + 0.1 * Double(index % 2))))
@@ -316,7 +332,7 @@ private struct HearthFlameRenderer {
             seam.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.2, y: rect.midY - rect.height * 0.08))
             graphics.stroke(
                 seam,
-                with: .color(HearthPalette.coal(surface + 40)),
+                with: .color(HearthPalette.coal(seamKelvin)),
                 style: StrokeStyle(lineWidth: max(0.7, w * 0.03), lineCap: .round, lineJoin: .round)
             )
         }

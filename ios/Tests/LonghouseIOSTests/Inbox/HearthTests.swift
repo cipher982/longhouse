@@ -51,15 +51,28 @@ struct HearthHeatTests {
     }
 
     @Test
-    func anIdleBedCoolsFromItsLastActivity() {
-        let heat = HearthHeat()
-        let snapshot = HearthSnapshot(mode: .idle, lastActivity: wall.addingTimeInterval(-HearthHeat.surfaceCoolingTime))
-        heat.update(snapshot: snapshot, time: 0, wall: wall)
-        let expected = HearthHeat.ambientTemperature
-            + (HearthHeat.litTemperature - HearthHeat.ambientTemperature) * Float(exp(-1.0))
-        #expect(abs(heat.surface - expected) < 1)
-        #expect(heat.core > heat.surface)
-        #expect(heat.target(time: 0) == 0)
+    func eachModeUsesItsDistinctBedAndIdleSettlesQuicklyAfterWork() {
+        let idleRecent = HearthHeat()
+        idleRecent.update(snapshot: HearthSnapshot(mode: .idle, lastActivity: wall.addingTimeInterval(-30)), time: 0, wall: wall)
+        #expect(idleRecent.surface == HearthHeat.ambientTemperature)
+        #expect(idleRecent.core == HearthHeat.ambientTemperature)
+        #expect(idleRecent.target(time: 0) == 0)
+
+        let background = HearthHeat()
+        background.update(snapshot: HearthSnapshot(mode: .background, lastActivity: wall.addingTimeInterval(-28_800)), time: 0, wall: wall)
+        #expect(background.surface == HearthHeat.backgroundSurfaceTemperature)
+        #expect(background.core == HearthHeat.backgroundCoreTemperature)
+        #expect(background.target(time: 0) == 0)
+
+        let liveToIdle = HearthHeat()
+        liveToIdle.update(snapshot: HearthSnapshot(mode: .working, toolCalls: 10), time: 0, wall: wall)
+        _ = events(liveToIdle, from: 0, seconds: 5)
+        liveToIdle.update(snapshot: HearthSnapshot(mode: .idle, lastActivity: wall.addingTimeInterval(5)), time: 11, wall: wall.addingTimeInterval(11))
+        liveToIdle.step(time: 11.1, delta: 0.1, wall: wall.addingTimeInterval(11.1)) { _ in }
+        #expect(liveToIdle.isCooling(wall: wall.addingTimeInterval(11.2)))
+        liveToIdle.step(time: 21, delta: 0.1, wall: wall.addingTimeInterval(21)) { _ in }
+        #expect(abs(liveToIdle.surface - HearthHeat.ambientTemperature) < 1)
+        #expect(!liveToIdle.isCooling(wall: wall.addingTimeInterval(21)))
     }
 
     @Test

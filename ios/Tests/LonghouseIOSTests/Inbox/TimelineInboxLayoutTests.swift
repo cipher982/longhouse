@@ -297,6 +297,38 @@ struct TimelineInboxLayoutTests {
         #expect(capped.dropFirst().map(\.id) == ["history-0", "history-1"])
     }
 
+    @Test
+    func passiveDelegatedWorkResolvesToBackgroundHearthWhileFresh() {
+        let now = LonghouseDateParser.parse("2026-08-01T12:05:00Z")!
+        let expired = LonghouseDateParser.parse("2026-08-01T12:30:00Z")!
+        var facts = makeSessionStateFacts(
+            activity: "quiescent",
+            workingSet: "open",
+            primaryOverride: SessionStateLabel(
+                key: "delegated_work",
+                label: "Background · 1 command",
+                tone: "idle",
+                observedAt: "2026-08-01T12:00:00Z"
+            )
+        )
+        facts.delegation = SessionDelegationFacts(
+            state: "pending",
+            count: 1,
+            kinds: ["shell": 1],
+            source: "claude_hook",
+            observedAt: "2026-08-01T12:00:00Z",
+            validUntil: "2026-08-01T12:30:00Z",
+            items: nil
+        )
+        facts = facts.withMirroredSignal()
+
+        let passiveRow = session(id: "passive-shell", facts: facts)
+        #expect(TimelineSignal.resolve(for: passiveRow, asOf: now) == .quiet)
+        #expect(HearthSnapshot(session: passiveRow, suppressed: false, now: now).mode == .background)
+        #expect(HearthSnapshot(session: passiveRow, suppressed: true, now: now).mode == .idle)
+        #expect(HearthSnapshot(session: passiveRow, suppressed: false, now: expired).mode == .idle)
+    }
+
     private func session(
         id: String,
         facts: SessionStateFacts,

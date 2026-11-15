@@ -6,6 +6,8 @@ import {
   TAU_BED,
   TAU_CORE,
   T_AMB,
+  T_BACKGROUND_CORE,
+  T_BACKGROUND_SURFACE,
   T_LIT,
   T_WAITING,
   cool,
@@ -15,6 +17,7 @@ import {
   hearthSnapshotFromSession,
   initialBed,
   kindOf,
+  restBed,
   targetHeight,
   type HearthEvent,
   type HearthSnapshot,
@@ -136,36 +139,39 @@ describe("work curve", () => {
   });
 });
 
-describe("cooling", () => {
-  it("cools the surface over ~20 min and the deep embers over ~3 h", () => {
-    expect(cool(T_LIT, 0, TAU_BED)).toBe(T_LIT);
-    expect(cool(T_LIT, TAU_BED, TAU_BED)).toBeCloseTo(T_AMB + (T_LIT - T_AMB) / Math.E);
-    const recent = initialBed(snap({ mode: "idle", lastActivityMs: NOW - 2 * 60_000 }), NOW);
-    const hours = initialBed(snap({ mode: "idle", lastActivityMs: NOW - 4 * 3_600_000 }), NOW);
-    expect(recent.surface).toBeGreaterThan(1000); // orange
-    expect(hours.surface).toBeLessThan(320); // black
-    expect(hours.core).toBeCloseTo(cool(T_LIT, 4 * 3600, TAU_CORE)); // a faint red in the cracks
-    expect(hours.core).toBeGreaterThan(hours.surface);
-  });
+describe("mode coal beds", () => {
+  it("gives every mode its distinct coal temperature: cold idle/ended, smoldering background, warm waiting", () => {
+    expect(restBed("idle")).toEqual({ surface: T_AMB, core: T_AMB });
+    expect(restBed("ended")).toEqual({ surface: T_AMB, core: T_AMB });
+    expect(restBed("background")).toEqual({ surface: T_BACKGROUND_SURFACE, core: T_BACKGROUND_CORE });
+    expect(restBed("waiting")).toEqual({ surface: T_WAITING, core: T_WAITING });
 
-  it("cools an idle bed exactly once on first sight", () => {
-    const idle = snap({ mode: "idle", lastActivityMs: NOW - 20 * 60_000 });
-    const expected = initialBed(idle, NOW);
-    const heat = new SessionHeat();
-    heat.update(idle, 0, NOW);
-    heat.step(0.016, 0.016, NOW);
-    expect(heat.surface).toBeCloseTo(expected.surface, 3);
-    expect(heat.core).toBeCloseTo(expected.core, 3);
-    expect(heat.surface).toBeCloseTo(cool(T_LIT, 20 * 60, TAU_BED), 3);
-  });
+    // Idle starts completely cold even when last activity was just moments ago.
+    expect(initialBed(snap({ mode: "idle", lastActivityMs: NOW - 30_000 }), NOW)).toEqual({
+      surface: T_AMB,
+      core: T_AMB,
+    });
+    expect(initialBed(snap({ mode: "idle", lastActivityMs: NOW - 4 * 3_600_000 }), NOW)).toEqual({
+      surface: T_AMB,
+      core: T_AMB,
+    });
 
-  it("keeps a waiting session's coals warm and an ended one's cold", () => {
-    const waiting = initialBed(snap({ mode: "waiting", lastActivityMs: NOW - 3 * 3_600_000 }), NOW);
-    expect(waiting.surface).toBeGreaterThanOrEqual(T_WAITING);
+    // Background keeps steady smoldering coals with zero flame height, even after hours.
+    const background = new SessionHeat();
+    background.update(snap({ mode: "background", lastActivityMs: NOW - 8 * 3_600_000 }), 0, NOW);
+    background.step(0.016, 0.016, NOW);
+    expect(background.surface).toBe(T_BACKGROUND_SURFACE);
+    expect(background.core).toBe(T_BACKGROUND_CORE);
+    expect(background.target(0.016)).toBe(0);
+
+    expect(initialBed(snap({ mode: "waiting", lastActivityMs: NOW - 3 * 3_600_000 }), NOW)).toEqual({
+      surface: T_WAITING,
+      core: T_WAITING,
+    });
     expect(initialBed(snap({ mode: "ended" }), NOW)).toEqual({ surface: T_AMB, core: T_AMB });
   });
 
-  it("cools from the moment work stops, in wall time", () => {
+  it("cools briefly after live work stops, then settles at the new mode's rest bed", () => {
     const heat = new SessionHeat();
     heat.update(snap({ mode: "working" }), 0, NOW);
     drain(heat, 0, 30);
@@ -173,9 +179,14 @@ describe("cooling", () => {
     heat.update(stopped, 30, NOW);
     heat.step(40, 0.1, NOW);
     const hot = heat.coolBed(NOW).surface;
-    const later = heat.coolBed(NOW + 20 * 60_000).surface;
+    const mid = heat.coolBed(NOW + TAU_BED * 1000).surface;
+    const settled = heat.coolBed(NOW + 10_000).surface;
     expect(hot).toBeGreaterThan(1100);
-    expect(later - T_AMB).toBeCloseTo((hot - T_AMB) / Math.E, 0);
+    expect(mid - T_AMB).toBeCloseTo((hot - T_AMB) / Math.E, 0);
+    expect(settled).toBeCloseTo(T_AMB, 1);
+    expect(heat.isCooling(NOW + 100)).toBe(true);
+    expect(heat.isCooling(NOW + 10_000)).toBe(false);
+    expect(cool(T_LIT, TAU_CORE, TAU_CORE)).toBeCloseTo(T_AMB + (T_LIT - T_AMB) / Math.E);
   });
 });
 
@@ -194,8 +205,48 @@ describe("mapping from the timeline row", () => {
     expect(hearthModeForLamp("working")).toBe("working");
     expect(hearthModeForLamp("waiting")).toBe("waiting");
     expect(hearthModeForLamp("ended")).toBe("ended");
+    expect(hearthModeForLamp("idle")).toBe("idle");
+    expect(hearthModeForLamp("idle", { passiveBackground: true })).toBe("background");
     expect(hearthModeForLamp("done")).toBe("idle");
     expect(hearthModeForLamp("unknown")).toBe("idle");
+  });
+
+  it("promotes idle to background when fresh passive delegated work is present", () => {
+    const facts = makeSessionStateFacts({});
+    const session = {
+      id: "passive-bg",
+      tool_calls: 25,
+      assistant_messages: 10,
+      user_messages: 3,
+      last_activity_at: "2026-09-27T15:58:00Z",
+      started_at: "2026-09-27T15:00:00Z",
+      session_state: {
+        ...facts,
+        activity: { ...facts.activity, state: "quiescent" as const, tool: null },
+        delegation: {
+          state: "pending" as const,
+          count: 1,
+          kinds: { shell: 1 },
+          valid_until: "2026-09-27T16:05:00Z",
+          items: [{ id: "shell", kind: "shell", status: "running", description: "Wait for QA" }],
+        },
+        presentation: {
+          ...facts.presentation,
+          primary: {
+            key: "delegated_work",
+            label: "Background · 1 command",
+            tone: "idle" as const,
+            observed_at: "2026-09-27T15:58:00Z",
+          },
+          signal: {
+            state: "quiet" as const,
+            valid_until: "2026-09-27T16:05:00Z",
+          },
+        },
+      },
+    };
+    expect(hearthSnapshotFromSession(session, "idle", NOW).mode).toBe("background");
+    expect(hearthSnapshotFromSession(session, "idle", NOW + 6 * 60_000).mode).toBe("idle");
   });
 
   it("reads parent counts and fresh subagent roots without counting command or monitor kinds", () => {

@@ -19,9 +19,9 @@
 
 import type { AgentSession, SessionStateFacts } from "@/shared/api/agents";
 import { delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
-import { executingToolName } from "@/shared/session/sessionStatus";
+import { delegatedWorkLabel, executingToolName } from "@/shared/session/sessionStatus";
 
-export type HearthMode = "working" | "waiting" | "idle" | "ended";
+export type HearthMode = "working" | "waiting" | "background" | "idle" | "ended";
 export type ToolKind = "exec" | "edit" | "read" | "agent" | "other";
 
 interface ChildArchiveCounters {
@@ -72,12 +72,15 @@ export const T_AMB = 300;
 export const T_HOT = 1350;
 /** Bed temperature when a working session stops. */
 export const T_LIT = 1150;
-export const TAU_BED = 1200; // 20 min: the surface goes orange -> red -> black
-export const TAU_CORE = 10800; // 3 h: embers deep in the cracks
+export const TAU_BED = 1.2; // rapid surface settle after a live flame extinguishes
+export const TAU_CORE = 1.6; // rapid seam settle after a live flame extinguishes
 const TAU_HEAT = 25;
 const TAU_SOAK = 300;
 /** Coals stay warm while a session waits on its person. */
 export const T_WAITING = 1020;
+/** Steady smoldering coal bed for passive background waits (no flame). */
+export const T_BACKGROUND_SURFACE = 980;
+export const T_BACKGROUND_CORE = 1060;
 
 export const H_FLOOR = 0.42;
 export const H_TOP = 0.8;
@@ -89,7 +92,7 @@ export const ACTIVE_HOLD = 5;
 export const TOOL_WORK = 150;
 export const MSG_WORK = 90;
 /** Base work while the activity observation says the agent is running. */
-export const BASE_WORK: Record<HearthMode, number> = { working: 18, waiting: 0, idle: 0, ended: 0 };
+export const BASE_WORK: Record<HearthMode, number> = { working: 18, waiting: 0, background: 0, idle: 0, ended: 0 };
 /** Work credited per tool/second of lifetime density, capped. */
 const DENSITY_WORK = 0.5 * TOOL_WORK;
 const DENSITY_CAP = 90;
@@ -122,16 +125,24 @@ export function cool(T0: number, seconds: number, tau: number): number {
   return T_AMB + (T0 - T_AMB) * Math.exp(-Math.max(0, seconds) / tau);
 }
 
-/** Bed temperatures for a session seen for the first time, from its idle age. */
-export function initialBed(snap: HearthSnapshot, nowMs: number): { surface: number; core: number } {
-  if (snap.mode === "ended") return { surface: T_AMB, core: T_AMB };
-  if (snap.mode === "working") return { surface: T_LIT, core: T_LIT };
-  const idle = snap.lastActivityMs == null ? Infinity : (nowMs - snap.lastActivityMs) / 1000;
-  if (!Number.isFinite(idle)) return { surface: T_AMB, core: T_AMB };
-  const surface = cool(T_LIT, idle, TAU_BED);
-  const core = cool(T_LIT, idle, TAU_CORE);
-  if (snap.mode === "waiting") return { surface: Math.max(surface, T_WAITING), core: Math.max(core, T_WAITING) };
-  return { surface, core };
+/** Semantic at-rest coal temperatures for each Hearth mode. */
+export function restBed(mode: HearthMode): { surface: number; core: number } {
+  switch (mode) {
+    case "working":
+      return { surface: T_LIT, core: T_LIT };
+    case "waiting":
+      return { surface: T_WAITING, core: T_WAITING };
+    case "background":
+      return { surface: T_BACKGROUND_SURFACE, core: T_BACKGROUND_CORE };
+    case "idle":
+    case "ended":
+      return { surface: T_AMB, core: T_AMB };
+  }
+}
+
+/** Bed temperatures for a session seen for the first time, from its mode. */
+export function initialBed(snap: HearthSnapshot, _nowMs: number): { surface: number; core: number } {
+  return restBed(snap.mode);
 }
 
 export interface CardDelta {
@@ -201,8 +212,8 @@ export class SessionHeat {
   private pending: Pending[] = [];
   private lastEventT = -Infinity;
   private lastUpdateT = -Infinity;
-  /** Wall ms of the last event this client saw (server facts can lag). */
-  private lastEventWallMs: number | null = null;
+  /** Wall ms when an active fire stopped, for short post-flame coal cooling. */
+  private stoppedWallMs: number | null = null;
   private wasActive = false;
 
   /** Apply a new card snapshot. Returns the delta it found (for tests/debug). */
@@ -211,12 +222,12 @@ export class SessionHeat {
     const delta = diffSnapshots(prev, next);
     this.snap = next.tool == null && prev?.tool ? { ...next, tool: prev.tool } : next;
     if (!prev) {
-      // Cooling runs once, from the last activity: the bed was lit then
-      // (cold ash if ended), and coolBed() carries it to now.
       const bed = initialBed(next, wallMs);
       this.surface = bed.surface;
       this.core = bed.core;
-      this.surface0 = this.core0 = next.mode === "ended" ? T_AMB : T_LIT;
+      this.surface0 = bed.surface;
+      this.core0 = bed.core;
+      this.stoppedWallMs = null;
       this.wasActive = next.mode === "working";
       this.work = next.mode === "working" ? BASE_WORK.working + densityWork(next) : 0;
       this.lastUpdateT = t;
@@ -245,9 +256,6 @@ export class SessionHeat {
     });
     // Unshown events still feed the fire.
     for (const event of extra) this.deposit(event, t);
-    if (credited.length) {
-      this.lastEventWallMs = wallMs;
-    }
     return delta;
   }
 
@@ -283,6 +291,7 @@ export class SessionHeat {
 
     if (snap.mode === "ended") {
       this.surface = this.core = this.surface0 = this.core0 = T_AMB;
+      this.stoppedWallMs = null;
       this.wasActive = false;
       return;
     }
@@ -291,6 +300,7 @@ export class SessionHeat {
       const P = 0.35 + Math.min(0.6, r / 200);
       this.surface += (T_HOT - this.surface) * (1 - Math.exp((-P * dt) / TAU_HEAT));
       if (this.surface > this.core) this.core += (this.surface - this.core) * (1 - Math.exp(-dt / TAU_SOAK));
+      this.stoppedWallMs = null;
       this.wasActive = true;
       return;
     }
@@ -298,27 +308,33 @@ export class SessionHeat {
       this.surface0 = this.surface;
       this.core0 = Math.max(this.core, this.surface);
       this.wasActive = false;
-      this.lastEventWallMs = Math.max(this.lastEventWallMs ?? 0, wallMs);
+      this.stoppedWallMs = wallMs;
     }
     const bed = this.coolBed(wallMs);
     this.surface = bed.surface;
     this.core = bed.core;
   }
 
-  /** Closed-form cooling from the last activity, so a bed cools correctly
-   * while the render loop is stopped. */
+  /** At-rest coal temperatures, with a brief settle just after work stops. */
   coolBed(wallMs: number): { surface: number; core: number } {
     const snap = this.snap;
     if (!snap) return { surface: T_AMB, core: T_AMB };
-    const last = Math.max(snap.lastActivityMs ?? 0, this.lastEventWallMs ?? 0);
-    const idle = last > 0 ? (wallMs - last) / 1000 : Infinity;
-    let surface = Number.isFinite(idle) ? cool(this.surface0, idle, TAU_BED) : T_AMB;
-    let core = Number.isFinite(idle) ? cool(this.core0, idle, TAU_CORE) : T_AMB;
-    if (snap.mode === "waiting") {
-      surface = Math.max(surface, T_WAITING);
-      core = Math.max(core, T_WAITING);
-    }
-    return { surface, core };
+    const target = restBed(snap.mode);
+    if (snap.mode === "ended" || this.stoppedWallMs == null) return target;
+    const elapsed = Math.max(0, (wallMs - this.stoppedWallMs) / 1000);
+    if (elapsed >= 4.5) return target;
+    return {
+      surface: Math.max(target.surface, cool(this.surface0, elapsed, TAU_BED)),
+      core: Math.max(target.core, cool(this.core0, elapsed, TAU_CORE)),
+    };
+  }
+
+  isCooling(wallMs: number): boolean {
+    if (!this.snap || this.snap.mode === "ended" || this.stoppedWallMs == null) return false;
+    const elapsed = Math.max(0, (wallMs - this.stoppedWallMs) / 1000);
+    if (elapsed >= 4.5) return false;
+    const target = restBed(this.snap.mode);
+    return this.surface > target.surface + 5 || this.core > target.core + 5;
   }
 
   isActive(t: number): boolean {
@@ -349,7 +365,10 @@ function thin<T extends HearthEvent>(items: T[], n: number): T[] {
 
 /** Row lamp state -> fire mode. Unread results and unknown activity are
  * coals: the label beside the fire says which. */
-export function hearthModeForLamp(state: "working" | "waiting" | "idle" | "unknown" | "ended" | "done" | "failed"): HearthMode {
+export function hearthModeForLamp(
+  state: "working" | "waiting" | "idle" | "unknown" | "ended" | "done" | "failed",
+  options?: { passiveBackground?: boolean },
+): HearthMode {
   switch (state) {
     case "working":
       return "working";
@@ -357,6 +376,8 @@ export function hearthModeForLamp(state: "working" | "waiting" | "idle" | "unkno
       return "waiting";
     case "ended":
       return "ended";
+    case "idle":
+      return options?.passiveBackground ? "background" : "idle";
     default:
       return "idle";
   }
@@ -414,8 +435,10 @@ export function hearthSnapshotFromSession(
   const children = delegationLive && delegation
     ? linkedChildArchiveCounters(delegation, session.id)
     : undefined;
+  const resolvedMode: HearthMode =
+    mode === "idle" && delegatedWorkLabel(session.session_state, nowMs) != null ? "background" : mode;
   return {
-    mode,
+    mode: resolvedMode,
     toolCalls: session.tool_calls ?? 0,
     assistantMessages: session.assistant_messages ?? 0,
     userMessages: session.user_messages ?? 0,

@@ -24,7 +24,6 @@ final class HearthEngine {
     static let shared = HearthEngine()
 
     private static let heatTimeToLive: Double = 120
-    private static let coolRedraw: TimeInterval = 30
     private static let maxInFlight = 2
 
     private enum Phase {
@@ -45,7 +44,6 @@ final class HearthEngine {
     private var tileKeys = [String?](repeating: nil, count: HearthSimulation.capacity)
     private var tileHiddenSince = [Double?](repeating: nil, count: HearthSimulation.capacity)
     private var link: CADisplayLink?
-    private var coolTimer: Timer?
     private var lastFrame: Double?
     private var settle = 0
     private var inFlight = 0
@@ -191,13 +189,6 @@ final class HearthEngine {
             return
         }
         phase = .ready(simulation)
-        coolTimer = Timer.scheduledTimer(withTimeInterval: Self.coolRedraw, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                HearthEngine.shared.settle = HearthSimulation.settleSteps
-                HearthEngine.shared.requestFrame()
-            }
-        }
-        coolTimer?.tolerance = 5
         requestFrame()
     }
 
@@ -259,7 +250,8 @@ final class HearthEngine {
         frames += 1
 
         let pending = tileKeys.contains { key in key.flatMap { entries[$0]?.heat.hasPending } ?? false }
-        let keepGoing = still ? settle > 0 : burning > 0 || pending || simulation.anyWarming || now < simulation.sparkUntil
+        let cooling = tileKeys.contains { key in key.flatMap { entries[$0]?.heat.isCooling(wall: wall) } ?? false }
+        let keepGoing = still ? settle > 0 : burning > 0 || pending || cooling || simulation.anyWarming || now < simulation.sparkUntil
         if !keepGoing {
             setRunning(false)
             lastFrame = nil
