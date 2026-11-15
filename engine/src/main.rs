@@ -30,8 +30,8 @@ mod commands;
 mod compressed_source;
 mod config;
 mod console_adapter;
-mod console_permission;
 mod console_lifecycle;
+mod console_permission;
 mod console_rpc;
 mod console_sink;
 #[cfg(test)]
