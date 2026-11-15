@@ -84,7 +84,7 @@ describe("providers launch support", () => {
       "antigravity",
     ]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);
-    expect(getLaunchProviderSupport("antigravity")?.cloudSessionStart).toBe("none");
+    expect(getLaunchProviderSupport("antigravity")?.cloudSessionStart).toBe("live");
     expect(
       providers
         .filter((provider) => ["claude", "codex", "cursor", "opencode"].includes(provider.id))
@@ -133,9 +133,9 @@ describe("providers launch support", () => {
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
       launchAndSend: true,
       interrupt: true,
-      steerMidTurn: false,
+      steerMidTurn: true,
       resume: false,
-      cloudSessionStart: "none",
+      cloudSessionStart: "live",
       hooksSupport: "none",
     });
   });
