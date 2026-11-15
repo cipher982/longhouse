@@ -284,3 +284,14 @@ async def test_deleting_a_session_drops_its_shadow_rows_and_late_results_are_ign
         late = await stack.catalog.call("render.shadow.record.v2", {"results": results})
         assert late["recorded"] == 0
         assert (await stack.catalog.call("render.shadow.summary.v2", {}))["counts"] == []
+
+
+def test_stored_times_reach_the_engine_as_rfc3339_utc():
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.catalogd.store_mixins.render_shadow import _rfc3339
+
+    assert _rfc3339("2026-11-14 17:56:42.158704") == "2026-11-14T17:56:42.158704+00:00"
+    assert _rfc3339("2026-11-14T12:56:42-05:00") == "2026-11-14T17:56:42+00:00"
+    assert _rfc3339(datetime(2026, 11, 14, 17, 56, 42, tzinfo=UTC)) == "2026-11-14T17:56:42+00:00"

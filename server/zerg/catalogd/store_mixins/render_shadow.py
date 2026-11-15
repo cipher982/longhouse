@@ -34,6 +34,18 @@ from zerg.catalogd.store import _write_transaction
 # A session this large is rebuilt by Phase 4's incremental path, not sampled.
 MAX_SHADOW_RAW_OBJECTS = 20_000
 SHADOW_SESSION_COOLDOWN = timedelta(minutes=30)
+
+
+def _rfc3339(value: object) -> str:
+    """A stored time as the RFC 3339 text the engine parses.
+
+    SQLite hands DateTime columns back as naive text ("2026-11-14 17:56:42.158704");
+    the catalog writes UTC, so a missing offset means UTC.
+    """
+    moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    return (moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)).isoformat()
+
+
 SHADOW_OUTCOMES = ("match", "mismatch", "no_witness", "raw_only", "too_large", "error")
 # Outcomes a newer normalizer revision must answer again. An error is retried
 # after the cooldown whatever the revision.
@@ -154,11 +166,11 @@ class RenderShadowMixin:
             "raw_objects": [
                 {key: (int(value) if key in {"range_start", "range_end"} else value) for key, value in row.items()} for row in raw_rows
             ],
-            "epoch_opened_at": {key: value.isoformat() if hasattr(value, "isoformat") else str(value) for key, value in opened.items()},
+            "epoch_opened_at": {key: _rfc3339(value) for key, value in opened.items()},
             "facts": [
                 {
                     "kind": row["kind"],
-                    "at": row["at"].isoformat() if hasattr(row["at"], "isoformat") else str(row["at"]),
+                    "at": _rfc3339(row["at"]),
                     "source_epoch": row["source_epoch"],
                     "source_position": int(row["source_position"]),
                     "payload": json.loads(row["payload_json"]),
