@@ -1,0 +1,23 @@
+{
+  "event_count": 3,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "antigravity_user",
+      "content_text": "Reply with exactly: BASELINE_WORD"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "antigravity_thinking",
+      "content_text": "Thinking:\n**Observing the Request**\n\nI'm focusing now on the user's input and will answer with the requested word."
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "antigravity_assistant",
+      "content_text": "BASELINE_WORD"
+    }
+  ]
+}

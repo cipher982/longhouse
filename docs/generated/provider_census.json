@@ -582,6 +582,7 @@
     {
       "path": "engine/tests/golden_parser_contract.rs",
       "providers": [
+        "antigravity",
         "claude",
         "codex"
       ]

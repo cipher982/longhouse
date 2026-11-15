@@ -1,0 +1,74 @@
+{
+  "fact_count": 6,
+  "facts": [
+    {
+      "kind": "turn.usage",
+      "at": "2026-11-14T22:00:50Z",
+      "source_offset": 294,
+      "payload": {
+        "cache_read_input_tokens": 6711,
+        "context_tokens": 8783,
+        "input_tokens": 2072,
+        "model": "gemini-3.6-flash-low",
+        "output_tokens": 401
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-11-14T22:01:22Z",
+      "source_offset": 1208,
+      "payload": {
+        "cache_read_input_tokens": 6786,
+        "context_tokens": 9419,
+        "input_tokens": 2633,
+        "model": "gemini-3.6-flash-low",
+        "output_tokens": 51
+      }
+    },
+    {
+      "kind": "delegation.spawn",
+      "at": "2026-11-14T22:01:31Z",
+      "source_offset": 1618,
+      "payload": {
+        "children": [
+          {
+            "metadata": {
+              "conversationId": "77777777-7777-4777-8777-777777777777",
+              "logAbsoluteUri": "file:///private/child.log",
+              "source": "MODEL"
+            },
+            "parent_tool_call_id": "antigravity-5-0",
+            "provider_session_id": "77777777-7777-4777-8777-777777777777"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "turn.api_error",
+      "at": "2026-11-14T22:02:00Z",
+      "source_offset": 1871,
+      "payload": {
+        "error": "API error (attempt 1): Error 429, Message: You exceeded your current quota, Status: RESOURCE_EXHAUSTED, Details: []",
+        "retry_attempt": 1
+      }
+    },
+    {
+      "kind": "turn.api_error",
+      "at": "2026-11-14T22:02:04Z",
+      "source_offset": 2107,
+      "payload": {
+        "error": "API error (attempt 2): Error 429, Message: You exceeded your current quota, Status: RESOURCE_EXHAUSTED, Details: []",
+        "retry_attempt": 2
+      }
+    },
+    {
+      "kind": "context.compaction",
+      "at": "2026-11-14T22:03:01Z",
+      "source_offset": 2613,
+      "payload": {
+        "post_tokens": 700,
+        "pre_tokens": 13100
+      }
+    }
+  ]
+}

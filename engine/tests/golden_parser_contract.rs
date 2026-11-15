@@ -350,6 +350,48 @@ fn run_golden_facts_test(input_path: &Path, expected_path: &Path) {
     assert_eq!(expected, actual);
 }
 
+/// Antigravity's own records carry usage (on the planner step), the model's
+/// reasoning, the failed model calls and the compaction checkpoint. Each must
+/// reach the facts side channel or the render stream, never be dropped.
+#[test]
+fn golden_antigravity_native_facts_and_thinking() {
+    let base = fixtures_dir().join("golden").join("antigravity");
+    run_golden_facts_test(
+        &base.join("native.jsonl"),
+        &base.join("native.facts.expected.json"),
+    );
+    let events = parse_to_snapshot(&base.join("native.jsonl"));
+    assert!(
+        events
+            .events
+            .iter()
+            .any(|event| event.raw_type == "antigravity_thinking"),
+        "planner thinking must become a render event"
+    );
+    assert!(
+        events
+            .events
+            .iter()
+            .all(|event| event.raw_type != "antigravity_error"),
+        "ERROR_MESSAGE is a fact, not a render event"
+    );
+}
+
+/// The planner's `thinking` is a render event, the way Pi's thinking blocks are.
+#[test]
+fn golden_antigravity_thinking() {
+    let base = fixtures_dir().join("golden").join("antigravity");
+    run_golden_test(
+        &base.join("thinking.jsonl"),
+        &base.join("thinking.expected.json"),
+    );
+    let events = parse_to_snapshot(&base.join("thinking.jsonl"));
+    assert!(events
+        .events
+        .iter()
+        .any(|event| event.raw_type == "antigravity_thinking"));
+}
+
 /// A Claude turn ends on a `system/turn_duration` line the transcript never
 /// shows. The parser must surface it as a provider fact, not a render event,
 /// with the provider's own wall-clock accounting intact.

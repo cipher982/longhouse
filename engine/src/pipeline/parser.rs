@@ -306,6 +306,16 @@ struct RawLine {
     payload: Option<CodexPayload>,
     /// Antigravity format: model response records can carry proposed tool calls.
     tool_calls: Option<Vec<AntigravityToolCall>>,
+    /// Antigravity `PLANNER_RESPONSE`: the model's reasoning text, the model
+    /// that answered and that call's token counts. Held as raw values: other
+    /// providers' lines may carry a same-named field of another shape, and one
+    /// of them must never fail the whole line.
+    thinking: Option<Value>,
+    input_tokens: Option<Value>,
+    cache_read_tokens: Option<Value>,
+    output_tokens: Option<Value>,
+    /// Antigravity `SYSTEM/ERROR_MESSAGE`: `API error (attempt N): ...`.
+    error: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -4349,6 +4359,13 @@ fn antigravity_user_text(content: &str) -> String {
     trimmed.to_string()
 }
 
+/// `API error (attempt 3): Error 429, ...` carries its retry attempt in the
+/// message text.
+fn antigravity_error_attempt(message: &str) -> Option<u64> {
+    let rest = message.strip_prefix("API error (attempt ")?;
+    rest.split(')').next()?.trim().parse().ok()
+}
+
 fn antigravity_tool_name_from_type(event_type: &str) -> String {
     event_type.trim().to_ascii_lowercase().replace('_', "-")
 }
@@ -4480,6 +4497,111 @@ fn extract_antigravity_events(
             }
         }
         return;
+    }
+
+    if event_type == "ERROR_MESSAGE" {
+        // The transcript's own record of a failed model call. It has no
+        // `content`, so without this it is dropped; the retry attempt is part
+        // of the message text, not a field.
+        *pending = AntigravityPending::default();
+        if let Some(message) = obj
+            .error
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            let mut payload = serde_json::Map::new();
+            payload.insert("error".to_string(), json!(bounded_text(message, 500)));
+            if let Some(attempt) = antigravity_error_attempt(message) {
+                payload.insert("retry_attempt".to_string(), json!(attempt));
+            }
+            push_bounded_provider_fact(
+                facts,
+                "turn.api_error",
+                timestamp,
+                line_offset,
+                Value::Object(payload),
+            );
+        }
+        return;
+    }
+    if event_type == "CHECKPOINT" && source == "SYSTEM" {
+        // The summary the conversation resumes from after a compaction. Its
+        // token counts are the summarising call's: the input it read and the
+        // summary it wrote.
+        let count = |value: &Option<Value>| value.as_ref().and_then(Value::as_u64);
+        let pre = count(&obj.input_tokens)
+            .map(|input| input + count(&obj.cache_read_tokens).unwrap_or(0));
+        let post = count(&obj.output_tokens);
+        if pre.is_some() || post.is_some() {
+            let mut payload = serde_json::Map::new();
+            if let Some(pre) = pre {
+                payload.insert("pre_tokens".to_string(), json!(pre));
+            }
+            if let Some(post) = post {
+                payload.insert("post_tokens".to_string(), json!(post));
+            }
+            push_bounded_provider_fact(
+                facts,
+                "context.compaction",
+                timestamp,
+                line_offset,
+                Value::Object(payload),
+            );
+        }
+    }
+
+    if event_type == "PLANNER_RESPONSE" && source == "MODEL" {
+        if let Some(thinking) = obj
+            .thinking
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            events.push(ParsedEvent {
+                uuid: antigravity_uuid(obj, line_offset, "thinking"),
+                parent_uuid: None,
+                session_id: session_id.to_string(),
+                timestamp,
+                role: Role::System,
+                content_text: Some(format!("Thinking:\n{thinking}")),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset: line_offset,
+                raw_type: "antigravity_thinking".to_string(),
+                raw_line: if emitted_raw_line {
+                    None
+                } else {
+                    emitted_raw_line = true;
+                    Some(raw_line.to_string())
+                },
+            });
+        }
+        let count = |value: &Option<Value>| value.as_ref().and_then(Value::as_u64);
+        if let Some(output) = count(&obj.output_tokens) {
+            let mut payload = serde_json::Map::new();
+            if let Some(model) = obj.model_id.as_deref() {
+                payload.insert("model".to_string(), json!(model));
+            }
+            let input = count(&obj.input_tokens).unwrap_or(0);
+            let cache_read = count(&obj.cache_read_tokens).unwrap_or(0);
+            payload.insert("input_tokens".to_string(), json!(input));
+            payload.insert("cache_read_input_tokens".to_string(), json!(cache_read));
+            payload.insert("output_tokens".to_string(), json!(output));
+            // Everything the call read: fresh input plus the cached prefix.
+            payload.insert("context_tokens".to_string(), json!(input + cache_read));
+            push_bounded_provider_fact(
+                facts,
+                "turn.usage",
+                timestamp,
+                line_offset,
+                Value::Object(payload),
+            );
+        }
     }
 
     let mut emitted_calls_this_record = false;

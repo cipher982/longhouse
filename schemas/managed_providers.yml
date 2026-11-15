@@ -2047,31 +2047,35 @@ providers:
     helm:
       live_reply_text: expected
       source: antigravity_helm_db runtime events (conversations/<id>.db steps row, read-only, schema-gated)
+  # Surveyed on agy 1.5.9 (2026-11-15): real transcripts from the 2026-11-14 probe
+  # (a billed-key run with thinking) and a scripted-model bench run on wisp that
+  # produced a failed model call (HTTP 429 stub) and a /compact. Fixture:
+  # engine/tests/fixtures/golden/antigravity/native.jsonl, shaped like those records.
   transcript_signals:
     message.phase:
       disposition: not_implemented
-      raw_source: "unsurveyed"
+      raw_source: "PLANNER_RESPONSE.tool_calls (present: in-turn step, absent: the final answer); no explicit phase field"
       canary: antigravity_orchestration_signals
       trigger: turn_end
-      owner_action: "survey a real transcript for a marker or stop reason that separates in-turn commentary from the final answer and record the raw source, or declare upstream_absent"
+      owner_action: "derive phase from whether the planner record carries tool_calls; there is no marker upstream, so the derivation is ours"
     turn.end:
       disposition: not_implemented
-      raw_source: "unsurveyed"
+      raw_source: "no transcript record; Helm Stop hook terminationReason and fullyIdle, Console ACP prompt stopReason"
       canary: antigravity_orchestration_signals
       trigger: turn_end
-      owner_action: "survey a real transcript for a record that ends a turn and says why and record the raw source, or declare upstream_absent"
+      owner_action: "carry the Stop hook's terminationReason (Helm) and the ACP stopReason (Console) onto a turn.end fact; the transcript itself never says a turn ended"
     tool.intent:
       disposition: not_implemented
-      raw_source: "unsurveyed"
+      raw_source: "PLANNER_RESPONSE.tool_calls[].args.toolSummary"
       canary: antigravity_orchestration_signals
       trigger: turn_end
-      owner_action: "survey a real transcript for a per-call purpose field on tool calls and record the raw source, or declare upstream_absent"
+      owner_action: "normalize toolSummary into the tool presentation so Web and iOS stop reading provider input fields"
     delegation.spawn:
-      disposition: not_implemented
-      raw_source: INVOKE_SUBAGENT
+      disposition: implemented
+      raw_source: "INVOKE_SUBAGENT result content (child conversationId, logAbsoluteUri)"
+      fixture: engine/tests/fixtures/golden/antigravity/native.jsonl
       canary: antigravity_orchestration_signals
       trigger: spawn_subagent
-      owner_action: "parse INVOKE_SUBAGENT for the child conversationId and logAbsoluteUri; today it is downgraded to a tool-result string, and the child brain/<id> becomes an unlinked session"
     delegation.background:
       disposition: not_implemented
       raw_source: GENERIC/task-<N> + .system_generated/tasks/<id>.log
@@ -2097,53 +2101,57 @@ providers:
       trigger: census
       owner_action: "SYSTEM_MESSAGE sender=<childId> carries child returns, not peer messages"
     turn.duration:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: "none in transcript_full.jsonl (records carry created_at only); duration_seconds exists on the print result and step_update stream, not the transcript"
       canary: antigravity_transcript_signals
       trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
     session.recap:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: "none: no away or recap record in any surveyed transcript"
       canary: antigravity_transcript_signals
       trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
     session.title:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: "none in the transcript or the brain directory; the title exists only on the ACP stream (session_info_update) and session/list"
       canary: antigravity_transcript_signals
       trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
     turn.usage:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: "PLANNER_RESPONSE.input_tokens + cache_read_tokens + output_tokens + model"
+      fixture: engine/tests/fixtures/golden/antigravity/native.jsonl
       canary: antigravity_transcript_signals
       trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
+      fields:
+        context_tokens: native
+        context_window: absent
+        output_tokens: native
+        thinking_tokens: absent
+        cache_tokens: native
+        cost_usd: absent
+        effort: absent
     turn.api_error:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: "SYSTEM/ERROR_MESSAGE.error (\"API error (attempt N): ...\")"
+      fixture: engine/tests/fixtures/golden/antigravity/native.jsonl
       canary: antigravity_transcript_signals
       trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
     context.compaction:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: "SYSTEM/CHECKPOINT (the resume summary; its input and output tokens are the summarising call's)"
+      fixture: engine/tests/fixtures/golden/antigravity/native.jsonl
       canary: antigravity_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
+      trigger: slash_compact
     input.queue:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: "none: no queue or absorption record; a steer lands as USER_INPUT with source SYSTEM_SDK"
       canary: antigravity_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
+      trigger: send_while_working
     turn.thinking:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: PLANNER_RESPONSE.thinking
+      fixture: engine/tests/fixtures/golden/antigravity/thinking.jsonl
       canary: antigravity_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for antigravity and name the raw source"
+      trigger: turn_end
 - provider: cursor
   display_name: Cursor
   marketing_name: Cursor Agent

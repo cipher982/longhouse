@@ -1,20 +1,65 @@
 {
  "provider": "antigravity",
  "shapes": {
+  "MODEL/GENERIC": {
+   "classification": "provider_tool:result",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ]
+  },
+  "MODEL/INVOKE_SUBAGENT": {
+   "classification": "provider_tool:result",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "source",
+    "step_index",
+    "content"
+   ]
+  },
   "MODEL/PLANNER_RESPONSE": {
    "classification": "provider_tool:planner",
    "first_seen_version": "1.0.0",
-   "last_seen_version": "1.0.0",
+   "last_seen_version": "1.5.9",
    "entrypoints": [],
    "keys": [
+    "cache_read_tokens",
+    "content",
     "created_at",
+    "input_tokens",
+    "model",
+    "output_tokens",
     "source",
+    "status",
     "step_index",
+    "thinking",
     "tool_calls",
     "type",
     "version"
    ],
-   "required_keys": ["type", "source", "step_index"]
+   "required_keys": [
+    "type",
+    "source",
+    "step_index"
+   ]
   },
   "MODEL/TOOL_RESULT": {
    "classification": "provider_tool:result",
@@ -29,7 +74,82 @@
     "type",
     "version"
    ],
-   "required_keys": ["type", "source", "step_index", "content"]
+   "required_keys": [
+    "type",
+    "source",
+    "step_index",
+    "content"
+   ]
+  },
+  "SYSTEM/CHECKPOINT": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "cache_read_tokens",
+    "content",
+    "created_at",
+    "input_tokens",
+    "output_tokens",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "source",
+    "step_index"
+   ]
+  },
+  "SYSTEM/ERROR_MESSAGE": {
+   "classification": "signal:turn.api_error",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "created_at",
+    "error",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "source",
+    "step_index",
+    "error"
+   ]
+  },
+  "SYSTEM/SYSTEM_MESSAGE": {
+   "classification": "provider_system:system_message",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ]
+  },
+  "SYSTEM_SDK/USER_INPUT": {
+   "classification": "transcript:user",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ]
   },
   "UI/USER_INPUT": {
    "classification": "transcript:user",
@@ -44,7 +164,26 @@
     "type",
     "version"
    ],
-   "required_keys": ["type", "source", "step_index"]
+   "required_keys": [
+    "type",
+    "source",
+    "step_index"
+   ]
+  },
+  "USER_EXPLICIT/USER_INPUT": {
+   "classification": "transcript:user",
+   "first_seen_version": "1.5.9",
+   "last_seen_version": "1.5.9",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "media",
+    "source",
+    "status",
+    "step_index",
+    "type"
+   ]
   },
   "legacy/gemini": {
    "classification": "transcript:assistant",
@@ -60,7 +199,10 @@
     "tokens",
     "type"
    ],
-   "required_keys": ["type", "content"]
+   "required_keys": [
+    "type",
+    "content"
+   ]
   },
   "legacy/user": {
    "classification": "transcript:user",
@@ -73,7 +215,10 @@
     "timestamp",
     "type"
    ],
-   "required_keys": ["type", "content"]
+   "required_keys": [
+    "type",
+    "content"
+   ]
   }
  }
 }
