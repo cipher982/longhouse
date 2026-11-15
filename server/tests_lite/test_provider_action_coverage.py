@@ -90,9 +90,8 @@ def test_a_provider_without_the_surface_reports_absent_not_unproven():
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():
     coverage = derive_provider_action_coverage("antigravity")
 
-    assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
-    assert coverage["abort"].reason_code == ActionCoverageReasonCode.CONTRACT_UNSUPPORTED
     assert coverage["reattach"].state == ActionCoverageState.UNSUPPORTED
+    assert coverage["reattach"].reason_code == ActionCoverageReasonCode.CONTRACT_UNSUPPORTED
 
 
 def test_antigravity_send_prompt_follows_executable_contract_not_old_orchestration_label():

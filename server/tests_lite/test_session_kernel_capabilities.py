@@ -325,8 +325,13 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     # holds down is everything the contract still lacks.
     assert caps.can_send_input is True
     assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
-    assert caps.can_interrupt is False
-    assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
+    # The contract's interrupt flag is the Console turn interrupt
+    # (antigravity.turn_interrupt), so the clamp passes it; a real Helm
+    # connection never reports it, because connection capabilities follow the
+    # exact `antigravity.interrupt` live-control support, which is not built.
+    assert caps.can_interrupt is True
+    assert contract_for_provider("antigravity").connection_capabilities["can_interrupt"] == 0
+    assert coverage["abort"].state == ActionCoverageState.SUPPORTED
     assert caps.can_terminate is False
     assert contract_for_provider("antigravity").terminate is False
     assert caps.can_resume is False
@@ -364,7 +369,7 @@ def test_all_manifest_control_planes_clamp_session_capabilities_to_contract(db, 
 @pytest.mark.parametrize(
     ("provider", "control_plane", "expected"),
     [
-        ("antigravity", "antigravity_process", {"send": True, "interrupt": False, "terminate": False, "resume": False}),
+        ("antigravity", "antigravity_process", {"send": True, "interrupt": True, "terminate": False, "resume": False}),
         ("opencode", "opencode_process", {"send": True, "interrupt": True, "terminate": True, "resume": True}),
     ],
 )

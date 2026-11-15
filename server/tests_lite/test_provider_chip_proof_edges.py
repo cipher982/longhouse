@@ -29,6 +29,9 @@ UNPROVEN_RUNTIME_CLAIMS = frozenset(
     {
         ("antigravity", "launch_local"),
         ("antigravity", "send_input"),
+        # Console interrupt is proven on the bench against the scripted model
+        # (antigravity-parity.md step 2), not by a factory assertion (step 6).
+        ("antigravity", "interrupt"),
     }
 )
 

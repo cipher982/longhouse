@@ -1072,7 +1072,8 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["opencode"]["steer_active_turn"]["status"] == by_provider["claude"]["steer_active_turn"]["status"] == "blocked"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "pass"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
-    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
+    # Console interrupt (antigravity.turn_interrupt) is implemented with scripted_model evidence.
+    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "pass"
     assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
     # Antigravity send became policy_disabled on 2026-07-31 (Shadow-only), so
     # the action matrix reports it as settled rather than proven.
@@ -1322,7 +1323,8 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "blocked"
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
-    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
+    # Console interrupt (antigravity.turn_interrupt) is implemented with scripted_model evidence.
+    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "pass"
     # Send is routed and proven now, so it reads as a pass rather than a
     # policy-routed-away row. Whether it is offered on a given session is a
     # separate, runtime question answered by observed hook readiness.
@@ -2157,11 +2159,12 @@ def test_antigravity_separates_unfinished_work_from_absent_pause_answer(tmp_path
     # recorded as an upstream absence until 2026-08-20 on the strength of a
     # 1.1.5 observation; `agy --conversation <id>` resumes an existing
     # conversation with intact history, so the absence was the stale part.
+    # The contract now carries the Console interrupt; what is missing is a
+    # universal harness adapter that drives it.
     interrupt = by_scenario["interrupt_cancel"]
     assert interrupt["status"] == "unsupported_gap"
-    assert interrupt["failure_code"] == "interrupt_cancel_unsupported"
-    assert interrupt["data"]["operation_evidence"]["interrupt"]["failure_code"] == "interrupt_cancel_unsupported"
-    assert interrupt["data"]["disposition"] == "not_implemented"
+    assert interrupt["failure_code"] == "interrupt_cancel_adapter_missing"
+    assert interrupt["data"]["operation_evidence"]["interrupt"]["failure_code"] == "interrupt_cancel_adapter_missing"
 
     resume = by_scenario["resume_reattach"]
     assert resume["status"] == "unsupported_gap"

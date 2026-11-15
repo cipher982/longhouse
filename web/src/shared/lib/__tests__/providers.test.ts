@@ -132,7 +132,7 @@ describe("providers launch support", () => {
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
       launchAndSend: true,
-      interrupt: false,
+      interrupt: true,
       steerMidTurn: false,
       resume: false,
       cloudSessionStart: "none",
