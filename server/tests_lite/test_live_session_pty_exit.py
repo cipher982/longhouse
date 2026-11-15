@@ -27,7 +27,9 @@ def test_wait_bounds_reader_join_when_descendant_holds_pty_slave(tmp_path: Path)
         "    while not pathlib.Path(sys.argv[2]).exists():\n"
         "        time.sleep(0.01)\n"
         "    os._exit(0)\n"
-        "pathlib.Path(sys.argv[1]).write_text(str(child), encoding='utf-8')\n"
+        # Write then rename, so the test never reads a created but empty marker.
+        "pathlib.Path(sys.argv[1] + '.tmp').write_text(str(child), encoding='utf-8')\n"
+        "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
         "os._exit(0)\n",
         encoding="utf-8",
     )
