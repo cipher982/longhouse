@@ -1686,7 +1686,7 @@ async function captureBundle(
   for (const step of actions) {
     const separator = step.indexOf(":");
     if (separator === -1) {
-      throw new Error(`--action step "${step}" needs a verb: click:<selector>, press:<key>, or drag:<selector>:<dx>[,<dy>]`);
+      throw new Error(`--action step "${step}" needs a verb: click:<selector>, press:<key>, scroll:<selector>, or drag:<selector>:<dx>[,<dy>]`);
     }
     const verb = step.slice(0, separator);
     const target = step.slice(separator + 1);
@@ -1694,6 +1694,8 @@ async function captureBundle(
       await page.click(target);
     } else if (verb === "press") {
       await page.keyboard.press(target);
+    } else if (verb === "scroll") {
+      await page.locator(target).first().scrollIntoViewIfNeeded();
     } else if (verb === "drag") {
       const lastColon = target.lastIndexOf(":");
       if (lastColon === -1) throw new Error(`drag action "${step}" needs drag:<selector>:<dx>[,<dy>]`);
@@ -1713,7 +1715,7 @@ async function captureBundle(
       await page.mouse.move(startX + dx, startY + dy, { steps: 10 });
       await page.mouse.up();
     } else {
-      throw new Error(`Unknown --action step "${step}"; use click:<selector>, press:<key>, or drag:<selector>:<dx>[,<dy>]`);
+      throw new Error(`Unknown --action step "${step}"; use click:<selector>, press:<key>, scroll:<selector>, or drag:<selector>:<dx>[,<dy>]`);
     }
     await page.waitForTimeout(150);
   }

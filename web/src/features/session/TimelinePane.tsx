@@ -313,8 +313,10 @@ function mediaRefsForEvents(...events: Array<AgentEvent | null | undefined>): Ag
   return refs;
 }
 
-function mediaRefSource(ref: AgentEventMediaRef): string {
-  return ref.thumb_url || ref.blob_url;
+// The preview is a downscale of the original, so the original's dimensions
+// give the tile its ratio before any bytes arrive and the row never reflows.
+function mediaAspectRatio(ref: AgentEventMediaRef): string | undefined {
+  return ref.width && ref.height ? `${ref.width} / ${ref.height}` : undefined;
 }
 
 function MediaStrip({
@@ -341,9 +343,8 @@ function MediaStrip({
             </span>
           );
         }
-        const src = mediaRefSource(ref);
-        // A preview of an animated image is only its first frame.
-        const animatedStill = ref.mime_type === "image/gif";
+        // Only a generated preview is a still; the original GIF still animates.
+        const animatedStill = ref.mime_type === "image/gif" && Boolean(ref.thumb_url);
         return (
           <a
             key={key}
@@ -354,13 +355,13 @@ function MediaStrip({
           >
             <img
               className="tl-media__image"
-              src={src}
+              src={ref.thumb_url || ref.blob_url}
               alt={`Session media ${ref.sha256.slice(0, 12)}`}
               loading="lazy"
-              // The intrinsic size reserves the row's layout, so the page does
-              // not jump as images arrive. The preview keeps the same aspect.
+              decoding="async"
               width={ref.width ?? undefined}
               height={ref.height ?? undefined}
+              style={{ aspectRatio: mediaAspectRatio(ref) }}
               onError={() => setFailed((previous) => new Set(previous).add(key))}
             />
             {animatedStill ? <span className="tl-media__note">Animated · first frame</span> : null}
@@ -437,7 +438,7 @@ function turnEndForInteraction(interaction: ToolInteraction): AgentEventTurnEnd 
 }
 
 function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
-  const [failed, setFailed] = useState<Set<string>>(new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   const live = urls.filter((url) => !failed.has(url));
   if (live.length === 0) {
     return (
@@ -447,14 +448,30 @@ function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
     );
   }
   return (
-    <div className="tl-msg__thumbs" data-testid="session-attached-thumbs">
+    <div className="tl-media tl-media--message" data-testid="session-attached-thumbs">
       {live.map((url) => (
-        <a key={url} href={url} target="_blank" rel="noreferrer noopener">
-          <img src={url} alt="Attached image" loading="lazy" onError={() => setFailed((prev) => new Set(prev).add(url))} />
+        <a key={url} className="tl-media__item" href={url} target="_blank" rel="noreferrer noopener">
+          <img
+            className="tl-media__image"
+            src={url}
+            alt="Attached image"
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailed((prev) => new Set(prev).add(url))}
+          />
         </a>
       ))}
     </div>
   );
+}
+
+// Claude Code writes "[Image #1]" (sometimes "[Image #1, 906×1500]") into the
+// prompt where an image was pasted. Once the images themselves render below,
+// a line that holds only those tokens says nothing, so it is dropped.
+const IMAGE_TOKEN_LINE_RE = /^[ \t]*(?:\[Image\s*#\d+[^\]\n]*\][ \t]*)+$\n?/gim;
+
+function withoutImageTokenLines(text: string): string {
+  return text.replace(IMAGE_TOKEN_LINE_RE, "").trim();
 }
 
 const MessageRow = memo(function MessageRow({
@@ -468,8 +485,11 @@ const MessageRow = memo(function MessageRow({
 }) {
   const isUser = event.role === "user";
   const split = isUser ? splitAttachmentsBlock(getTimelineMessagePreview(event)) : null;
-  const preview = split && split.imageCount > 0 ? split.text.trim() : getTimelineMessagePreview(event);
   const attachmentUrls = (isUser && event.input_origin?.attachment_urls) || [];
+  const mediaRefs = renderMedia ? mediaRefsForEvents(event) : [];
+  const basePreview = split && split.imageCount > 0 ? split.text.trim() : getTimelineMessagePreview(event);
+  const showsImages = mediaRefs.length > 0 || attachmentUrls.length > 0;
+  const preview = isUser && showsImages ? withoutImageTokenLines(basePreview) : basePreview;
   const outside = isOutsideActiveContext(event);
   const isAssistant = event.role === "assistant";
   const isLonghouseAuthored = event.input_origin?.authored_via === "longhouse";
@@ -478,7 +498,6 @@ const MessageRow = memo(function MessageRow({
   const visible = isLong && !expanded
     ? truncateMarkdown(preview)
     : preview;
-  const mediaRefs = renderMedia ? mediaRefsForEvents(event) : [];
 
   return (
     <div

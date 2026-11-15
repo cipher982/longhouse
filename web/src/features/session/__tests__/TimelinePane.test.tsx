@@ -887,6 +887,86 @@ describe("TimelinePane", () => {
     expect(screen.getByText("Animated · first frame")).toBeInTheDocument();
   });
 
+  it("does not call an original GIF a still when there is no preview", () => {
+    const animated: TimelineItem = {
+      kind: "message",
+      event: {
+        ...mediaMessageItem.event,
+        media_refs: [{ ...mediaMessageItem.event.media_refs![0], mime_type: "image/gif", thumb_url: null }],
+      },
+    };
+    render(
+      <TimelinePane
+        items={[animated]}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByAltText("Session media abc123def456")).toHaveAttribute("src", "/api/media/abc123/blob");
+    expect(screen.queryByText("Animated · first frame")).not.toBeInTheDocument();
+  });
+
+  it("drops [Image #N] placeholder lines from a user prompt once its images render", () => {
+    const item: TimelineItem = {
+      kind: "message",
+      event: {
+        ...mediaMessageItem.event,
+        role: "user",
+        content_text: "[Image #1]\n\n[Image #2, 906×1500]\n\nwhy does [Image #1] differ?",
+      },
+    };
+    render(
+      <TimelinePane
+        items={[item]}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).not.toHaveTextContent("[Image #2");
+    expect(row).toHaveTextContent("why does [Image #1] differ?");
+    expect(screen.getByAltText("Session media abc123def456")).toBeInTheDocument();
+  });
+
+  it("keeps [Image #N] placeholders when no image renders", () => {
+    const item: TimelineItem = {
+      kind: "message",
+      event: { ...mediaMessageItem.event, role: "user", content_text: "[Image #1]\n\nlook", media_refs: [] },
+    };
+    render(
+      <TimelinePane
+        items={[item]}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("session-timeline-row")).toHaveTextContent("[Image #1]");
+  });
+
   it("suppresses media refs when rendering shared read-only timelines", () => {
     render(
       <TimelinePane

@@ -64,6 +64,8 @@ type AgentEvent = {
     byte_size?: number | null;
     blob_url: string;
     thumb_url?: string | null;
+    width?: number | null;
+    height?: number | null;
     source_path?: string | null;
     source_offset?: number | null;
     json_pointer?: string | null;
@@ -816,9 +818,25 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
           byte_size: 512,
           blob_url: MEDIA_REF_FIXTURE_IMAGE,
           thumb_url: MEDIA_REF_FIXTURE_IMAGE,
+          width: 360,
+          height: 220,
           source_path: "/Users/example/.codex/sessions/session-detail-stress.jsonl",
           source_offset: 209,
           json_pointer: "/message/content/0/image",
+          original_kind: "ui_fixture",
+        },
+        {
+          sha256: "9a1d2e7c4b6f8a0c3e5d7f9b1a3c5e7d9f1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f",
+          media_state: "present",
+          mime_type: "image/svg+xml",
+          byte_size: 512,
+          blob_url: MEDIA_REF_FIXTURE_IMAGE,
+          thumb_url: MEDIA_REF_FIXTURE_IMAGE,
+          width: 360,
+          height: 220,
+          source_path: "/Users/example/.codex/sessions/session-detail-stress.jsonl",
+          source_offset: 209,
+          json_pointer: "/message/content/1/image",
           original_kind: "ui_fixture",
         },
       ],
