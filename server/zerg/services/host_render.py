@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 COMMIT_CHUNK = 500
 # Providers whose render the host builds from one envelope and its witness
 # alone; the engine's HOST_RENDERS_ALONE stops shipping their render. Codex,
-# Pi and OMP read their file header from earlier in the epoch, so ingest seals
-# their laptop render and the sweep rebuilds them from the whole epoch.
-HOST_RENDERS_ALONE = frozenset({"claude", "antigravity"})
+# Pi and OMP read their file header from earlier in the epoch and Antigravity
+# links tool results to earlier planner steps, so ingest seals their laptop
+# render and the sweep rebuilds them from the whole epoch.
+HOST_RENDERS_ALONE = frozenset({"claude"})
 INGEST_TIMEOUT_SECONDS = 10.0
 
 

@@ -2797,7 +2797,6 @@
     {
       "path": "server/zerg/services/host_render.py",
       "providers": [
-        "antigravity",
         "claude",
         "cursor"
       ]

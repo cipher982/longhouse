@@ -213,9 +213,11 @@ fn wire_body(
 
 /// Providers whose render the Runtime Host builds from one envelope's raw
 /// records and its capture witness alone. Codex, Pi and OMP read their file
-/// header from earlier in the epoch, so the host needs their render shipped
-/// until it keeps parser state per epoch.
-pub(super) const HOST_RENDERS_ALONE: &[&str] = &["claude", "antigravity"];
+/// header from earlier in the epoch, and Antigravity links a tool result and
+/// a subagent spawn to the planner step that called it, so the host needs
+/// their render shipped until it keeps parser state per epoch. The rebuild
+/// fixture test proves this list (`single_envelope_mismatches`).
+pub(super) const HOST_RENDERS_ALONE: &[&str] = &["claude"];
 
 /// The stored envelope without its render, when a host that renders from raw
 /// can build it alone: a provider in `HOST_RENDERS_ALONE` and a capture
