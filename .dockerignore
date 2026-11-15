@@ -43,21 +43,6 @@ schemas/*
 # exact native control-path sources. Never send the Rust target directory.
 !engine/
 engine/*
-!engine/src/
-engine/src/*
-!engine/src/codex_bridge.rs
-!engine/src/claude_channel_control.rs
-!engine/src/claude_channel_server.rs
-!engine/src/config.rs
-!engine/src/cursor_helm_launcher.rs
-!engine/src/longhouse.rs
-!engine/src/main.rs
-!engine/src/managed_launch_lifecycle.rs
-!engine/src/managed_launch_payload.rs
-!engine/src/managed_bridge_scan.rs
-!engine/src/managed_resume_scan.rs
-!engine/src/opencode_bridge.rs
-!engine/src/opencode_control.rs
 # The runtime image builds the engine's normalizer (`longhouse-engine
 # normalize-worker`) at the image's own commit, so it needs the crate's
 # sources and manifests, never its target directory.
@@ -66,6 +51,7 @@ engine/src/*
 !engine/build.rs
 !engine/assets/
 !engine/assets/**
+!engine/src/
 !engine/src/**
 !.cargo/
 .cargo/*

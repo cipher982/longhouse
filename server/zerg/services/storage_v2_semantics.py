@@ -249,6 +249,7 @@ async def enrich_render_interaction_kinds(
     render_spec: RenderObjectSpec,
     manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
     lane: str = "live",
+    projector_read: bool = False,
 ) -> RenderObjectSpec:
     """Resolve current render facts with raw sequence context before sealing.
 
@@ -292,6 +293,7 @@ async def enrich_render_interaction_kinds(
                 session_id=session_id,
                 owner_id=owner_id,
                 allow_missing_session=True,
+                projector_read=projector_read,
             )
             if owner_id is not None
             else {}

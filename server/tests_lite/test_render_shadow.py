@@ -10,6 +10,7 @@ protocol; the real engine runs in the image and on canary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
@@ -35,6 +36,9 @@ mode = os.environ["FAKE_NORMALIZER_MODE"]
 render = json.loads(os.environ["FAKE_NORMALIZER_RENDER"])
 for line in sys.stdin:
     request = json.loads(line)
+    if "envelopes" not in request:
+        print(json.dumps({"id": None, "error": "bad request: missing field", "revision": os.environ.get("FAKE_NORMALIZER_REVISION", "engine-parser-v2+cursor-fake")}), flush=True)
+        continue
     if mode == "die":
         sys.exit(3)
     answers = []
@@ -54,7 +58,7 @@ for line in sys.stdin:
             "range_end": envelope["range_end"],
             "render": {"records": records, "session": {}, "media": [], "facts": []},
         })
-    print(json.dumps({"id": request["id"], "envelopes": answers, "elapsed_us": 1, "revision": "fake-rev"}), flush=True)
+    print(json.dumps({"id": request["id"], "envelopes": answers, "elapsed_us": 1, "revision": os.environ.get("FAKE_NORMALIZER_REVISION", "engine-parser-v2+cursor-fake")}), flush=True)
 """
 
 
@@ -108,7 +112,9 @@ async def test_a_host_rebuild_equal_to_the_laptop_render_is_recorded_as_a_match(
             results = await _shadow(stack, worker, session_id)
         finally:
             await worker.close()
-        assert [(row["outcome"], row["detail"], row["normalizer_revision"]) for row in results] == [("match", None, "fake-rev")]
+        assert [(row["outcome"], row["detail"], row["normalizer_revision"]) for row in results] == [
+            ("match", None, "engine-parser-v2+cursor-fake")
+        ]
 
         await stack.catalog.call("render.shadow.record.v2", {"results": results})
         assert (await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None}))["sessions"] == []
@@ -229,19 +235,19 @@ async def test_a_new_normalizer_revision_reopens_matches_and_errors_are_retried(
             results = await _shadow(stack, worker, session_id)
         finally:
             await worker.close()
-        assert worker.revision == "fake-rev"
+        assert worker.revision == "engine-parser-v2+cursor-fake"
         await stack.catalog.call("render.shadow.record.v2", {"results": results})
 
         async def candidates(revision):
             listed = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": revision})
             return [row["session_id"] for row in listed["sessions"]]
 
-        assert await candidates("fake-rev") == []
+        assert await candidates("engine-parser-v2+cursor-fake") == []
         assert await candidates(None) == []
         assert await candidates("next-rev") == [session_id]
 
         await stack.catalog.call("render.shadow.record.v2", {"results": [{**results[0], "outcome": "error"}]})
-        assert await candidates("fake-rev") == [session_id]
+        assert await candidates("engine-parser-v2+cursor-fake") == [session_id]
 
 
 @pytest.mark.asyncio
@@ -257,10 +263,64 @@ async def test_a_session_too_large_to_rebuild_is_recorded_and_leaves_the_queue(m
         finally:
             await worker.close()
         assert [row["outcome"] for row in results] == ["too_large"]
-        await stack.catalog.call("render.shadow.record.v2", {"results": results})
+        # An earlier error must not keep an oversized session queued forever.
+        await stack.catalog.call("render.shadow.record.v2", {"results": [dict(results[0], outcome="error", detail="earlier")]})
         monkeypatch.setattr(shadow_store, "SHADOW_SESSION_COOLDOWN", shadow_store.timedelta(0))
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="die", render=[]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+        finally:
+            await worker.close()
+        assert [row["outcome"] for row in results] == ["too_large"]
+        await stack.catalog.call("render.shadow.record.v2", {"results": results})
         listed = await stack.catalog.call("render.shadow.candidates.v2", {"limit": 10, "revision": None})
         assert listed["sessions"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_worker_learns_its_revision_from_a_probe(monkeypatch, tmp_path):
+    worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=[]))
+    try:
+        assert await worker.probe() == "engine-parser-v2+cursor-fake"
+    finally:
+        await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_catalog_call_fails_waits_and_the_batch_goes_on(monkeypatch, tmp_path):
+    from zerg.services import render_shadow
+
+    calls: list[tuple[str, dict]] = []
+
+    class _Catalog:
+        async def call(self, method, params):
+            calls.append((method, params))
+            if method == "render.shadow.candidates.v2":
+                if sum(1 for name, _ in calls if name == method) > 2:
+                    raise asyncio.CancelledError
+                return {"sessions": [{"session_id": "bad"}, {"session_id": "good"}]}
+            if method == "storage.session.rebuild_inputs.v2":
+                if params["session_id"] == "bad":
+                    raise RuntimeError("catalog timeout")
+                return {"found": False}
+            raise AssertionError(method)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(render_shadow.asyncio, "sleep", no_sleep)
+    worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=[]))
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await render_shadow._sweep(_Catalog(), None, None, worker)
+    finally:
+        await worker.close()
+    assert worker.revision == "engine-parser-v2+cursor-fake"
+    inputs = [params["session_id"] for method, params in calls if method == "storage.session.rebuild_inputs.v2"]
+    # The failing session is skipped on the next tick; the good one is not.
+    assert inputs == ["bad", "good", "good"]
+    listed = [params for method, params in calls if method == "render.shadow.candidates.v2"]
+    assert listed[1]["limit"] == render_shadow.SWEEP_BATCH + 1
 
 
 @pytest.mark.asyncio
@@ -295,3 +355,24 @@ def test_stored_times_reach_the_engine_as_rfc3339_utc():
     assert _rfc3339("2026-11-14 17:56:42.158704") == "2026-11-14T17:56:42.158704+00:00"
     assert _rfc3339("2026-11-14T12:56:42-05:00") == "2026-11-14T17:56:42+00:00"
     assert _rfc3339(datetime(2026, 11, 14, 17, 56, 42, tzinfo=UTC)) == "2026-11-14T17:56:42+00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_laptop_render_from_another_parser_revision_is_skew_not_a_mismatch(monkeypatch, tmp_path):
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-shadow-skew-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        monkeypatch.setenv("FAKE_NORMALIZER_REVISION", "engine-parser-v3+cursor-fake")
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="drift", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+        finally:
+            await worker.close()
+        assert [(row["outcome"], row["detail"]) for row in results] == [("revision_skew", "laptop engine-parser-v2 host engine-parser-v3")]
+
+
+def test_the_host_revision_is_named_per_provider_as_laptop_generations_name_it():
+    from zerg.services.render_shadow import provider_revision
+
+    assert provider_revision("engine-parser-v2+cursor-store-render-v8", "claude") == "engine-parser-v2"
+    assert provider_revision("engine-parser-v2+cursor-store-render-v8", "cursor") == "cursor-store-render-v8"
+    assert provider_revision(None, "claude") is None

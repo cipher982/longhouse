@@ -2568,7 +2568,16 @@ class CatalogDaemon:
         if (
             not isinstance(results, list)
             or len(results) > 5_000
-            or not all(isinstance(item, dict) and required <= set(item) and item["outcome"] in SHADOW_OUTCOMES for item in results)
+            or not all(
+                isinstance(item, dict)
+                and required <= set(item)
+                and item["outcome"] in SHADOW_OUTCOMES
+                and all(isinstance(item[key], str) for key in required - {"range_start"})
+                and type(item["range_start"]) is int
+                and (item.get("elapsed_us") is None or type(item["elapsed_us"]) is int)
+                and (item.get("detail") is None or isinstance(item["detail"], str))
+                for item in results
+            )
         ):
             return self._error(request, "invalid_request", "render.shadow.record.v2 results are invalid")
         assert self._store is not None

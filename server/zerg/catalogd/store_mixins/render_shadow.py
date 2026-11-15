@@ -46,10 +46,12 @@ def _rfc3339(value: object) -> str:
     return (moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)).isoformat()
 
 
-SHADOW_OUTCOMES = ("match", "mismatch", "no_witness", "raw_only", "too_large", "error")
+SHADOW_OUTCOMES = ("match", "mismatch", "revision_skew", "no_witness", "raw_only", "too_large", "media_missing", "error")
 # Outcomes a newer normalizer revision must answer again. An error is retried
-# after the cooldown whatever the revision.
-REVISION_BOUND_OUTCOMES = ("match", "mismatch")
+# after the cooldown whatever the revision. `revision_skew` means the laptop
+# render was made by another parser revision than the host's, so the two are
+# not comparable until one of them moves.
+REVISION_BOUND_OUTCOMES = ("match", "mismatch", "revision_skew")
 
 
 class RenderShadowMixin:
@@ -127,27 +129,28 @@ class RenderShadowMixin:
                 .all()
             )
             generation_id = session["current_render_generation"]
-            generation = None
-            render_rows: list[Any] = []
-            if generation_id is not None:
-                generation = (
-                    connection.execute(
-                        select(generations.c.parser_revision, generations.c.ordering_revision).where(
-                            generations.c.generation_id == generation_id
-                        )
-                    )
-                    .mappings()
-                    .first()
+            # Each envelope's laptop render from the current generation, or
+            # from the newest generation holding one: a generation started by a
+            # laptop parser bump need not re-render every older envelope.
+            render_rows: dict[str, dict[str, Any]] = {}
+            for row in connection.execute(
+                select(
+                    render.c.source_envelope_id,
+                    render.c.object_path,
+                    render.c.object_hash,
+                    render.c.event_count,
+                    generations.c.generation_id,
+                    generations.c.parser_revision,
+                    generations.c.commit_seq,
                 )
-                render_rows = (
-                    connection.execute(
-                        select(render.c.source_envelope_id, render.c.object_path, render.c.object_hash, render.c.event_count).where(
-                            render.c.generation_id == generation_id, render.c.retired_at.is_(None)
-                        )
-                    )
-                    .mappings()
-                    .all()
-                )
+                .select_from(render.join(generations, generations.c.generation_id == render.c.generation_id))
+                .where(render.c.session_id == session_id, render.c.retired_at.is_(None))
+            ).mappings():
+                key = str(row["source_envelope_id"])
+                rank = (row["generation_id"] == generation_id, int(row["commit_seq"]))
+                held = render_rows.get(key)
+                if held is None or rank > held["_rank"]:
+                    render_rows[key] = {**dict(row), "_rank": rank}
             media_rows = (
                 connection.execute(
                     select(refs.c.envelope_id, refs.c.media_hash, refs.c.ref_key, media.c.object_path, media.c.state)
@@ -162,7 +165,6 @@ class RenderShadowMixin:
             "provider": session["provider"],
             "owner_id": session["owner_id"],
             "current_render_generation": generation_id,
-            "parser_revision": generation["parser_revision"] if generation else None,
             "raw_objects": [
                 {key: (int(value) if key in {"range_start", "range_end"} else value) for key, value in row.items()} for row in raw_rows
             ],
@@ -177,7 +179,9 @@ class RenderShadowMixin:
                 }
                 for row in fact_rows
             ],
-            "render_objects": [dict(row) for row in render_rows],
+            "render_objects": [
+                {key: value for key, value in row.items() if key not in {"_rank", "commit_seq"}} for row in render_rows.values()
+            ],
             "media": [dict(row) for row in media_rows],
             "checked": checked,
         }
@@ -260,7 +264,15 @@ class RenderShadowMixin:
         return {"recorded": len(rows)}
 
     def render_shadow_summary(self, *, sample: int = 20) -> dict[str, Any]:
-        table = RenderShadowEnvelope.__table__
+        shadow = RenderShadowEnvelope.__table__
+        raw = RawObject.__table__
+        # Only envelopes still stored: a replaced source epoch retires its raw
+        # objects, and its old comparisons say nothing about what is served.
+        table = (
+            select(shadow)
+            .where(shadow.c.envelope_id.in_(select(raw.c.envelope_id).where(raw.c.retired_at.is_(None))))
+            .subquery("live_shadow")
+        )
         with _read_snapshot(self.engine) as connection:
             counts = connection.execute(
                 select(table.c.provider, table.c.outcome, func.count(), func.count(func.distinct(table.c.session_id)))
@@ -272,7 +284,10 @@ class RenderShadowMixin:
             ).all()
             samples = (
                 connection.execute(
-                    select(table).where(table.c.outcome.in_(("mismatch", "error"))).order_by(table.c.checked_at.desc()).limit(sample)
+                    select(table)
+                    .where(table.c.outcome.in_(("mismatch", "revision_skew", "media_missing", "error")))
+                    .order_by(table.c.checked_at.desc())
+                    .limit(sample)
                 )
                 .mappings()
                 .all()
@@ -283,7 +298,7 @@ class RenderShadowMixin:
             "samples": [
                 {
                     **{key: value for key, value in row.items() if key != "checked_at"},
-                    "checked_at": row["checked_at"].isoformat() if row["checked_at"] else None,
+                    "checked_at": _rfc3339(row["checked_at"]) if row["checked_at"] else None,
                 }
                 for row in samples
             ],

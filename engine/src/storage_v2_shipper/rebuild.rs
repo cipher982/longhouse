@@ -534,7 +534,7 @@ pub(crate) fn serve_normalize_worker(
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<EpochRequest>(&line) {
+        let mut response = match serde_json::from_str::<EpochRequest>(&line) {
             Err(error) => {
                 serde_json::json!({ "id": Value::Null, "error": format!("bad request: {error}") })
             }
@@ -547,7 +547,6 @@ pub(crate) fn serve_normalize_worker(
                         "id": request.id,
                         "envelopes": envelopes,
                         "elapsed_us": started.elapsed().as_micros() as u64,
-                        "revision": normalizer_revision(),
                     }),
                     Ok(Err(error)) => {
                         serde_json::json!({ "id": request.id, "error": format!("{error:#}") })
@@ -558,6 +557,9 @@ pub(crate) fn serve_normalize_worker(
                 }
             }
         };
+        // Every answer names the revision, so a caller learns it from a probe
+        // before it has anything to rebuild.
+        response["revision"] = Value::from(normalizer_revision());
         serde_json::to_writer(&mut output, &response)?;
         output.write_all(b"\n")?;
         output.flush()?;
@@ -1270,6 +1272,7 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("bad request"));
+        assert_eq!(lines[0]["revision"], Value::from(normalizer_revision()));
         assert!(lines[1]["error"]
             .as_str()
             .unwrap()

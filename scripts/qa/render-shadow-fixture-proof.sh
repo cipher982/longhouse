@@ -6,13 +6,20 @@
 # shadow to compare each envelope (the host rebuilds it from stored raw plus
 # the capture witness and compares it with the shipped render), prints the
 # outcomes for exactly those sessions, then deletes the sessions and revokes
-# the token. Exit 0 only when every witnessed envelope matched.
+# the token. Exit 0 only when every fixture that shipped events produced a
+# session and every stored envelope of those sessions matched: an envelope the
+# host could not rebuild (no witness, raw only, too large) fails the proof.
+# Needs bash 4.4 or later (macOS: Homebrew bash).
 #
 #   SMOKE_RUNTIME_TOKEN=<QA access token> scripts/qa/render-shadow-fixture-proof.sh
 #
 # Never point it at david010: QA_INSTANCE_SUBDOMAIN defaults to hosted-qa-a
 # and the script refuses the dogfood tenant.
 set -euo pipefail
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+  echo "render-shadow-fixture-proof needs bash 4.4 or later (this is ${BASH_VERSION})" >&2
+  exit 2
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck disable=SC1091
@@ -26,7 +33,9 @@ fi
 API_URL="https://${SUBDOMAIN}.longhouse.ai"
 CONTAINER="longhouse-${SUBDOMAIN}"
 SSH_TARGET="${RENDER_SHADOW_PROOF_SSH_TARGET:-cube}"
-WAIT_SECONDS="${RENDER_SHADOW_PROOF_WAIT_SECONDS:-1200}"
+# Longer than the shadow's 30-minute session cooldown, so a session compared
+# before its last envelope landed is compared again inside the wait.
+WAIT_SECONDS="${RENDER_SHADOW_PROOF_WAIT_SECONDS:-2700}"
 : "${SMOKE_RUNTIME_TOKEN:?Set SMOKE_RUNTIME_TOKEN to the QA host access token}"
 
 SCRATCH="$(mktemp -d /tmp/agents/render-shadow-proof.XXXXXX)"
@@ -36,10 +45,31 @@ TOKEN_ID=""
 DEVICE_TOKEN=""
 SESSION_IDS=()
 
+# The agents session list does not return sessions from a machine with no
+# heartbeat, so read this machine's sessions from the host catalog, the same
+# place the outcomes come from.
+list_sessions() {
+  # The device id expands here, on this side, by design.
+  # shellcheck disable=SC2029
+  ssh "$SSH_TARGET" "docker exec -i ${CONTAINER} python3 - ${DEVICE_ID}" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect("file:/data/longhouse-live.db?mode=ro", uri=True)
+rows = db.execute(
+    "select distinct session_id from raw_objects where machine_id = ? and retired_at is null", (sys.argv[1],)
+)
+print("\n".join(row[0] for row in rows))
+PY
+}
 cleanup() {
   local status=$?
+  # Re-list from the host: a run that stops partway through shipping has
+  # sessions it never got to record.
+  if [[ -n "$TOKEN_ID" ]]; then
+    mapfile -t SESSION_IDS < <(list_sessions || true)
+  fi
   for session_id in "${SESSION_IDS[@]}"; do
-    curl -sS -o /dev/null --max-time 60 -X DELETE -H "Authorization: Bearer ${SMOKE_RUNTIME_TOKEN}" \
+    [[ -n "$session_id" ]] || continue
+    curl -sS --fail -o /dev/null --max-time 60 -X DELETE -H "Authorization: Bearer ${SMOKE_RUNTIME_TOKEN}" \
       "${API_URL}/api/user-data/sessions/${session_id}" || echo "Warning: could not delete session ${session_id}" >&2
   done
   if [[ -n "$TOKEN_ID" ]]; then
@@ -69,6 +99,7 @@ FIXTURE_SETS=(
 )
 shipped=0
 ship_failures=0
+with_events=0
 for entry in "${FIXTURE_SETS[@]}"; do
   read -r tree provider <<<"$entry"
   source_root="$ROOT_DIR/engine/tests/fixtures/$tree"
@@ -149,39 +180,36 @@ PY
       --url "$API_URL" --token "$DEVICE_TOKEN" --db "$case_root/state-$shipped.db" \
       --machine-name "$DEVICE_ID" --json >"$case_root/ship-$shipped.json" 2>"$case_root/ship-$shipped.err" \
       || { echo "ship failed: $tree/$(basename "$transcript")" >&2; cat "$case_root/ship-$shipped.err" >&2; ship_failures=$((ship_failures + 1)); }
-    python3 - "$case_root/ship-$shipped.json" "$tree/$(basename "$transcript")" >&2 <<'PY' || echo "  $tree/$(basename "$transcript"): no ship result" >&2
+    # The JSON result is the last object on stdout, after any progress lines.
+    events="$(python3 -c '
 import json, sys
-result = json.load(open(sys.argv[1]))
-print(f"  {sys.argv[2]:60} events={result.get('events_shipped')} status={result.get('status')}")
-PY
+text = open(sys.argv[1]).read()
+result = json.loads(text[text.index("{"):])
+print(f"  {sys.argv[2]:60} events={result.get(\"events_shipped\")} status={result.get(\"status\")}", file=sys.stderr)
+print(result.get("events_shipped") or 0)
+' "$case_root/ship-$shipped.json" "$tree/$(basename "$transcript")" || echo "?")"
+    if [[ "$events" == "?" ]]; then
+      echo "  $tree/$(basename "$transcript"): no ship result" >&2
+      ship_failures=$((ship_failures + 1))
+    elif [[ "$events" -gt 0 ]]; then
+      with_events=$((with_events + 1))
+    fi
     shipped=$((shipped + 1))
   done < <(find "$case_root/src" -type f \( -name '*.jsonl' -o -name '*.json' \) ! -name '*.expected.*' ! -name '*.meta.json' -print0 | sort -z)
 done
 echo "shipped ${shipped} fixture transcripts to ${SUBDOMAIN} as ${DEVICE_ID}" >&2
 [[ "$ship_failures" -eq 0 ]] || { echo "${ship_failures} fixture(s) failed to ship" >&2; exit 1; }
 
-# The agents session list does not return sessions from a machine with no
-# heartbeat, so read this machine's sessions from the host catalog, the same
-# place the outcomes come from.
-list_sessions() {
-  ssh "$SSH_TARGET" "docker exec -i ${CONTAINER} python3 - ${DEVICE_ID}" <<'PY'
-import sqlite3, sys
-db = sqlite3.connect("file:/data/longhouse-live.db?mode=ro", uri=True)
-rows = db.execute(
-    "select distinct session_id from raw_objects where machine_id = ? and retired_at is null", (sys.argv[1],)
-)
-print("\n".join(row[0] for row in rows))
-PY
-}
 mapfile -t SESSION_IDS < <(list_sessions)
-echo "${#SESSION_IDS[@]} sessions to compare" >&2
-[[ "${#SESSION_IDS[@]}" -gt 0 ]] || { echo "no sessions arrived" >&2; exit 1; }
+echo "${#SESSION_IDS[@]} sessions to compare (${with_events} fixtures shipped events)" >&2
+[[ "${#SESSION_IDS[@]}" -ge "$with_events" && "$with_events" -gt 0 ]] \
+  || { echo "expected at least ${with_events} sessions, found ${#SESSION_IDS[@]}" >&2; exit 1; }
 
 ids_csv="$(IFS=,; echo "${SESSION_IDS[*]}")"
 deadline=$((SECONDS + WAIT_SECONDS))
 while :; do
   # The session ids expand here, on this side, by design.
-  # shellcheck disable=SC2087
+  # shellcheck disable=SC2087,SC2029
   report="$(ssh "$SSH_TARGET" "docker exec -i ${CONTAINER} python3 -" <<PY
 import json, sqlite3
 ids = "${ids_csv}".split(",")
@@ -193,7 +221,7 @@ rows = db.execute(
     ids,
 ).fetchall()
 diffs = db.execute(
-    f"select provider, session_id, detail from render_shadow_envelopes where session_id in ({marks}) and outcome in ('mismatch','error') limit 20",
+    f"select provider, session_id, outcome || ': ' || coalesce(detail, '') from render_shadow_envelopes where session_id in ({marks}) and outcome != 'match' limit 20",
     ids,
 ).fetchall()
 print(json.dumps({"raw": raw, "compared": sum(r[2] for r in rows), "rows": rows, "diffs": diffs}))
@@ -211,7 +239,8 @@ for provider, outcome, count, max_us in sorted(d["rows"]):
     print(f"  {provider:12} {outcome:10} {count:5}  max {max_us or 0} us")
 for provider, session, detail in d["diffs"]:
     print(f"  DIFF {provider} {session}: {detail}")
-bad = sum(c for _p, o, c, _m in d["rows"] if o in ("mismatch", "error"))
+# Every stored envelope matched: anything else, a no_witness or raw_only
+# included, means the host could not prove that envelope.
 matched = sum(c for _p, o, c, _m in d["rows"] if o == "match")
-sys.exit(0 if d["compared"] >= d["raw"] and bad == 0 and matched > 0 else 1)
+sys.exit(0 if d["raw"] > 0 and matched == d["raw"] == d["compared"] else 1)
 PY

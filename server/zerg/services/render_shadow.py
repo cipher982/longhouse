@@ -26,6 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.store_mixins.render_shadow import REVISION_BOUND_OUTCOMES
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 
@@ -44,6 +45,10 @@ READ_QUEUE_SECONDS = 30.0
 SWEEP_IDLE_SECONDS = 60.0
 RECORD_CHUNK = 1_000
 SWEEP_PACE_SECONDS = 2.0
+# A session whose catalog calls failed waits this long before the sweep takes
+# it up again, so one bad session cannot hold the head of the queue.
+SESSION_BACKOFF_SECONDS = 30 * 60.0
+SWEEP_BATCH = 4
 RENDER_FIELDS = (
     "event_id",
     "parent_uuid",
@@ -134,6 +139,16 @@ class NormalizerWorker:
             self.revision = str(answer["revision"])
         return answer
 
+    async def probe(self) -> str | None:
+        """Learn the engine's revision before there is anything to rebuild.
+
+        Every answer names the revision, an error answer included, so an empty
+        request is enough. Without this, stored matches from an older revision
+        would wait for a new witnessed envelope before being rechecked.
+        """
+        await self.rebuild({})
+        return self.revision
+
     async def _kill(self) -> None:
         process, self._process = self._process, None
         if process is not None and process.returncode is None:
@@ -151,6 +166,17 @@ class NormalizerWorker:
                 except asyncio.TimeoutError:
                     process.kill()
                     await process.wait()
+
+
+def _as_ingested_facts(facts: object, row: dict[str, Any]) -> list[dict[str, Any]]:
+    """Host facts as ingest would store them: the wire parser's checks and cap,
+    then one row per (position, kind), the first one winning."""
+    from zerg.storage_v2.envelope_wire import _parse_provider_facts
+
+    stored: dict[tuple[int, str], dict[str, Any]] = {}
+    for fact in _parse_provider_facts(facts, range_start=row["range_start"], range_end=row["range_end"]):
+        stored.setdefault((fact["source_position"], fact["kind"]), fact)
+    return list(stored.values())
 
 
 def _render_row(record: dict[str, Any]) -> dict[str, Any]:
@@ -215,6 +241,7 @@ async def _ingested_rows(
         render_spec=spec,
         manifest_cache=manifest_cache,
         lane="repair",
+        projector_read=True,
     )
     return sorted((_render_row(asdict(record)) for record in spec.records), key=_sort_key)
 
@@ -243,7 +270,7 @@ async def shadow_session(
         previous = checked.get(envelope_id)
         if previous is None or previous["outcome"] == "error":
             return True
-        return previous["outcome"] in ("match", "mismatch") and worker.revision is not None and previous["revision"] != worker.revision
+        return previous["outcome"] in REVISION_BOUND_OUTCOMES and worker.revision is not None and previous["revision"] != worker.revision
 
     results: list[dict[str, Any]] = []
 
@@ -263,8 +290,10 @@ async def shadow_session(
         )
 
     if inputs.get("too_large") is True:
+        # Every unanswered envelope, errors and stale revisions included, or
+        # the session would stay a candidate forever.
         for row in inputs["raw_objects"]:
-            if row["envelope_id"] not in checked:
+            if unanswered(row["envelope_id"]):
                 result(row, "too_large", f"session has {len(inputs['raw_objects'])} raw objects")
         return results
 
@@ -313,6 +342,10 @@ async def shadow_session(
             for row in pending:
                 result(row, "too_large", str(exc))
             continue
+        except _MediaMissing as exc:
+            for row in pending:
+                result(row, "media_missing", str(exc))
+            continue
         except Exception as exc:  # noqa: BLE001 - retried after the cooldown
             for row in pending:
                 result(row, "error", f"reading stored inputs: {type(exc).__name__}: {exc}")
@@ -344,6 +377,11 @@ async def shadow_session(
             if answer.get("error"):
                 result(row, "error", str(answer["error"]), per_envelope_us)
                 continue
+            laptop_object = render_by_envelope.get(row["envelope_id"])
+            host_revision = provider_revision(worker.revision, provider)
+            if laptop_object is not None and host_revision is not None and laptop_object.get("parser_revision") != host_revision:
+                result(row, "revision_skew", f"laptop {laptop_object.get('parser_revision')} host {host_revision}", per_envelope_us)
+                continue
             try:
                 outcome, detail = await _compare(
                     catalog=catalog,
@@ -354,7 +392,7 @@ async def shadow_session(
                     row=row,
                     raw_spec=raw_specs[row["envelope_id"]],
                     rebuilt=answer["render"],
-                    laptop_object=render_by_envelope.get(row["envelope_id"]),
+                    laptop_object=laptop_object,
                     stored_facts=[
                         fact for fact in provider_facts.get(epoch, []) if row["range_start"] <= fact["source_position"] < row["range_end"]
                     ],
@@ -370,6 +408,22 @@ async def shadow_session(
 
 class _EpochTooLarge(Exception):
     pass
+
+
+class _MediaMissing(Exception):
+    """A media blob the envelope references was deleted: the epoch can never be rebuilt."""
+
+
+def provider_revision(revision: str | None, provider: str) -> str | None:
+    """The host's parser revision for one provider, as a laptop generation names it.
+
+    The worker reports `<file parser>+<cursor store parser>`; a laptop render
+    generation carries only the one that made it.
+    """
+    if not revision:
+        return None
+    file_parser, _plus, cursor_store = revision.partition("+")
+    return cursor_store if provider == "cursor" and cursor_store else file_parser
 
 
 async def _epoch_request(
@@ -416,6 +470,8 @@ async def _epoch_request(
             )
             if media["media_hash"] not in media_bytes:
                 if not media.get("object_path"):
+                    if media.get("state") == "deleted":
+                        raise _MediaMissing(f"media {media['media_hash']} was deleted")
                     raise LookupError(f"media {media['media_hash']} has no stored object ({media.get('state')})")
                 # A blob the host cannot read is an error, never a silent difference.
                 blob = await raw_workers.read_media(
@@ -505,7 +561,7 @@ async def _compare(
         )
         host_facts = sorted(
             (fact["kind"], fact["source_position"], _at(fact["at"]), json.dumps(fact["payload"], sort_keys=True))
-            for fact in rebuilt.get("facts") or []
+            for fact in _as_ingested_facts(rebuilt.get("facts"), row)
         )
         if stored != host_facts:
             difference = f"provider facts laptop={len(stored)} host={len(host_facts)}"
@@ -526,28 +582,48 @@ def render_shadow_enabled() -> bool:
 async def _sweep(
     catalog: CatalogClient, raw_workers: RawObjectWorkerPool, render_workers: RenderObjectWorkerPool, worker: NormalizerWorker
 ) -> None:
+    backoff: dict[str, float] = {}
     while True:
         try:
-            candidates = (await catalog.call("render.shadow.candidates.v2", {"limit": 4, "revision": worker.revision})).get(
-                "sessions"
-            ) or []
+            if worker.revision is None:
+                try:
+                    await worker.probe()
+                except NormalizerUnavailable:
+                    raise
+                except Exception:  # noqa: BLE001 - the first real answer teaches it instead
+                    logger.warning("Render shadow could not probe the normalizer revision", exc_info=True)
+            now = time.monotonic()
+            for session_id in [key for key, until in backoff.items() if until <= now]:
+                del backoff[session_id]
+            listed = (
+                await catalog.call("render.shadow.candidates.v2", {"limit": SWEEP_BATCH + len(backoff), "revision": worker.revision})
+            ).get("sessions") or []
+            candidates = [candidate for candidate in listed if str(candidate["session_id"]) not in backoff][:SWEEP_BATCH]
             for candidate in candidates:
-                results = await shadow_session(
-                    catalog=catalog,
-                    raw_workers=raw_workers,
-                    render_workers=render_workers,
-                    worker=worker,
-                    session_id=str(candidate["session_id"]),
-                )
+                session_id = str(candidate["session_id"])
+                try:
+                    results = await shadow_session(
+                        catalog=catalog,
+                        raw_workers=raw_workers,
+                        render_workers=render_workers,
+                        worker=worker,
+                        session_id=session_id,
+                    )
+                    for chunk in range(0, len(results), RECORD_CHUNK):
+                        await catalog.call("render.shadow.record.v2", {"results": results[chunk : chunk + RECORD_CHUNK]})
+                except (asyncio.CancelledError, NormalizerUnavailable):
+                    raise
+                except Exception:  # noqa: BLE001 - this session waits; the rest of the batch goes on
+                    logger.exception("Render shadow session=%s failed; retrying after backoff", session_id)
+                    backoff[session_id] = time.monotonic() + SESSION_BACKOFF_SECONDS
+                    continue
                 logger.info(
                     "render shadow session=%s envelopes=%d outcomes=%s normalizer_peak_rss_kib=%d",
-                    candidate["session_id"],
+                    session_id,
                     len(results),
                     dict(Counter(row["outcome"] for row in results)),
                     worker.peak_rss_kib,
                 )
-                for chunk in range(0, len(results), RECORD_CHUNK):
-                    await catalog.call("render.shadow.record.v2", {"results": results[chunk : chunk + RECORD_CHUNK]})
                 await asyncio.sleep(SWEEP_PACE_SECONDS)
             await asyncio.sleep(SWEEP_PACE_SECONDS if candidates else SWEEP_IDLE_SECONDS)
         except asyncio.CancelledError:

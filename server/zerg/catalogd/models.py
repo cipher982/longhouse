@@ -711,27 +711,6 @@ class LegacyMigrationSession(CatalogBase):
     __table_args__ = (Index("ix_legacy_migration_claim", "run_id", "state", "retry_at", "lease_expires_at", "session_id"),)
 
 
-__all__ = [
-    "CatalogBase",
-    "FactConflict",
-    "FactHead",
-    "FactParityDelta",
-    "FactReceipt",
-    "LegacyMigrationRun",
-    "LegacyMigrationSession",
-    "MediaObject",
-    "ProjectorState",
-    "ProjectorStoreBinding",
-    "RawObject",
-    "RenderGeneration",
-    "RenderObject",
-    "SessionMediaRef",
-    "SessionTombstone",
-    "SourceEpoch",
-    "StorageSession",
-]
-
-
 class RenderShadowEnvelope(CatalogBase):
     """One envelope's host rebuild compared with the render its laptop shipped.
 
@@ -740,7 +719,8 @@ class RenderShadowEnvelope(CatalogBase):
     normalizer, and records whether the result equals the stored laptop render
     (`match`), differs (`mismatch`, with the first difference), cannot be
     rebuilt because the envelope predates capture witnesses (`no_witness`) or
-    shipped raw only (`raw_only`), or failed (`error`). Derived and disposable.
+    shipped raw only (`raw_only`), is over the rebuild size limit
+    (`too_large`), or failed (`error`). Derived and disposable.
     """
 
     __tablename__ = "render_shadow_envelopes"
@@ -759,3 +739,25 @@ class RenderShadowEnvelope(CatalogBase):
     normalizer_revision = Column(String(128), nullable=False)
     elapsed_us = Column(BigInteger, nullable=True)
     checked_at = Column(DateTime(timezone=True), nullable=False)
+
+
+__all__ = [
+    "CatalogBase",
+    "FactConflict",
+    "FactHead",
+    "FactParityDelta",
+    "FactReceipt",
+    "LegacyMigrationRun",
+    "LegacyMigrationSession",
+    "MediaObject",
+    "ProjectorState",
+    "ProjectorStoreBinding",
+    "RawObject",
+    "RenderGeneration",
+    "RenderShadowEnvelope",
+    "RenderObject",
+    "SessionMediaRef",
+    "SessionTombstone",
+    "SourceEpoch",
+    "StorageSession",
+]
