@@ -1,6 +1,6 @@
 {
   "name": "@longhouse/runner",
-  "version": "0.1.80",
+  "version": "0.1.81",
   "description": "Longhouse runner daemon for executing commands on user infrastructure",
   "license": "Apache-2.0",
   "scripts": {
