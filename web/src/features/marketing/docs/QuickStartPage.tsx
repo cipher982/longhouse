@@ -163,9 +163,9 @@ longhouse antigravity  # Antigravity CLI`}
         is generated from the managed-provider declarations. OpenCode Helm
         supports managed send, interrupt, terminate, pause-answer, and
         active-turn steer that lands at the next step boundary. Antigravity
-        Helm offers send today and refuses to start if its Longhouse hook is
-        not installed; its upstream CLI supports steering, interrupt and resume,
-        which Longhouse is wiring up. The{" "}
+        Helm offers send, steer, interrupt and terminate through its hook inbox,
+        landing at the next invocation boundary rather than instantly, and
+        refuses to start if its Longhouse hook is not installed. The{" "}
         <Link to="/docs/integrations">Integrations</Link> page carries the full
         provider detail, generated from the managed-provider declarations.
       </p>

@@ -260,11 +260,22 @@ def claim_inbox_messages(
             write_private_json(claim_path, payload)
         except Exception:
             pass
-        receipts.append({"id": message_id, "text": text, "claimed_at": claimed_at})
+        receipts.append(
+            {
+                "id": message_id,
+                "text": text,
+                "claimed_at": claimed_at,
+                "intent": str(payload.get("intent") or "send"),
+            }
+        )
     return receipts
 
 
-def hook_response(event: str, texts: list[str], inbox_dir: str) -> dict:
+def hook_response(event: str, texts: list[str], inbox_dir: str, terminate: bool = False) -> dict:
+    # An interrupt ends the turn at this invocation boundary: agy finishes the
+    # tool call in flight, then the next model call never happens.
+    if terminate and event in {"PreInvocation", "PostInvocation"}:
+        return {"injectSteps": [], "terminationBehavior": "terminate"}
     if event == "PreInvocation":
         return {"injectSteps": [{"userMessage": text} for text in texts]}
     if event == "PostInvocation":
@@ -391,8 +402,11 @@ if event in {"PreInvocation", "PostInvocation"}:
         step_index=step_index,
     )
 
-claimed_texts = [str(receipt.get("text") or "") for receipt in claimed_receipts]
-response = hook_response(event, claimed_texts, inbox_dir)
+interrupt_requested = any(receipt.get("intent") == "interrupt" for receipt in claimed_receipts)
+claimed_texts = [
+    str(receipt.get("text") or "") for receipt in claimed_receipts if receipt.get("intent") != "interrupt"
+]
+response = hook_response(event, claimed_texts, inbox_dir, interrupt_requested)
 print(json.dumps(response, separators=(",", ":")), flush=True)
 if session_id and claimed_receipts:
     last_receipt = claimed_receipts[-1]

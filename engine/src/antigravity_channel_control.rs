@@ -198,6 +198,93 @@ pub async fn steer_text(session_id: &str, text: &str) -> Result<AntigravitySendO
     deliver(session_id, text, "steer").await
 }
 
+/// Text of an interrupt message. The hook never injects it: it only needs a
+/// non-empty body to claim, and answers with `terminationBehavior` instead.
+const INTERRUPT_TEXT: &str = "Longhouse interrupt";
+
+/// Interrupt a running Helm turn. The hook claims an `interrupt` message at the
+/// next PreInvocation or PostInvocation and answers `terminationBehavior:
+/// terminate`, so agy finishes the tool call in flight and starts no further
+/// model call. A message not claimed in time is deleted rather than left
+/// queued: a stale interrupt must never end a later turn. The TUI is the
+/// user's own terminal, so kill-and-resume is not an option here (it would
+/// close their terminal session).
+pub async fn interrupt(session_id: &str) -> Result<AntigravitySendOutcome> {
+    deliver(session_id, INTERRUPT_TEXT, "interrupt").await
+}
+
+/// Where the Helm launcher records the provider process it spawned.
+fn session_state_path(session_id: &str) -> Result<PathBuf> {
+    Ok(antigravity_managed_local_dir()?
+        .join("sessions")
+        .join(format!("{session_id}.json")))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AntigravityTerminateOutcome {
+    pub pid: u32,
+    pub process_group_id: i32,
+    pub shutdown: &'static str,
+}
+
+/// Grace between SIGTERM and SIGKILL for a terminated Helm group.
+const TERMINATE_GRACE: Duration = Duration::from_secs(3);
+
+/// Terminate a Helm session: stop the whole process group the launcher
+/// recorded (agy's tool children outlive a plain kill of agy, confirmed on
+/// 1.5.9). The recorded pid is verified against its start time first, so a
+/// recycled pid is never signalled.
+pub async fn terminate(session_id: &str) -> Result<AntigravityTerminateOutcome> {
+    let state: Value = serde_json::from_slice(
+        &std::fs::read(session_state_path(session_id)?)
+            .context("Antigravity session has no state file")?,
+    )
+    .context("Antigravity session state is not valid JSON")?;
+    let pid = state
+        .get("provider_pid")
+        .and_then(Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .context("Antigravity launcher recorded no provider pid")?;
+    let pgid = state
+        .get("provider_process_group_id")
+        .and_then(Value::as_i64)
+        .and_then(|pgid| i32::try_from(pgid).ok())
+        .context("Antigravity launcher recorded no process group")?;
+    let expected_start = state
+        .get("provider_process_start_time")
+        .and_then(Value::as_str)
+        .context("Antigravity launcher recorded no process start time")?;
+    match crate::process_identity::try_collect_process_fact(pid) {
+        None => {
+            return Ok(AntigravityTerminateOutcome {
+                pid,
+                process_group_id: pgid,
+                shutdown: crate::process_group::GroupShutdown::Absent.as_str(),
+            })
+        }
+        Some(fact) if fact.lstart != expected_start => {
+            return Err(anyhow!(
+            "Antigravity provider pid {pid} now belongs to another process; refusing to signal it"
+        ))
+        }
+        Some(_) => {}
+    }
+    if crate::process_group::leader_group_for(pid) != Some(pgid) {
+        return Err(anyhow!(
+            "Antigravity provider process-group identity changed; refusing to signal it"
+        ));
+    }
+    let outcome = crate::process_group::shutdown_group(pgid, TERMINATE_GRACE).await;
+    if !outcome.is_gone() {
+        return Err(anyhow!("Antigravity process group {pgid} survived SIGKILL"));
+    }
+    Ok(AntigravityTerminateOutcome {
+        pid,
+        process_group_id: pgid,
+        shutdown: outcome.as_str(),
+    })
+}
+
 async fn deliver(session_id: &str, text: &str, intent: &str) -> Result<AntigravitySendOutcome> {
     let wait =
         crate::control_wait::control_wait(Duration::from_secs_f64(DEFAULT_WAIT_CLAIMED_SECS));
@@ -304,6 +391,153 @@ mod tests {
                 temp.path()
                     .join("managed-local/antigravity/inbox/session-steer")
             );
+        });
+    }
+
+    #[test]
+    fn interrupt_writes_a_claimable_interrupt_message() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let rt = runtime();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            rt.block_on(async {
+                // Nothing claims it: the message must be deleted, never left
+                // behind to end a later turn.
+                let result =
+                    send_text_with_timeout("session-int", INTERRUPT_TEXT, "interrupt", 0.05).await;
+                assert!(result.is_err());
+                let inbox = temp
+                    .path()
+                    .join("managed-local/antigravity/inbox/session-int");
+                let leftovers = std::fs::read_dir(&inbox)
+                    .map(|dir| dir.filter_map(|e| e.ok()).count())
+                    .unwrap_or(0);
+                assert_eq!(leftovers, 0, "an unclaimed interrupt must not stay queued");
+            });
+        });
+    }
+
+    fn write_state(home: &Path, session_id: &str, state: Value) {
+        let path = home
+            .join("managed-local/antigravity/sessions")
+            .join(format!("{session_id}.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn terminate_reaps_the_whole_recorded_process_group_including_tool_children() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let rt = runtime();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            rt.block_on(async {
+                // A stand-in for agy: a group leader whose tool child would
+                // outlive a plain kill of the leader.
+                let child_pid_file = temp.path().join("tool.pid");
+                let mut leader = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!(
+                        "sleep 60 & echo $! > {}; wait",
+                        child_pid_file.display()
+                    ))
+                    .process_group(0)
+                    .spawn()
+                    .unwrap();
+                let pid = leader.id().unwrap();
+                let fact = loop {
+                    if let Some(fact) = crate::process_identity::try_collect_process_fact(pid) {
+                        break fact;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                };
+                while !child_pid_file.exists()
+                    || std::fs::read_to_string(&child_pid_file)
+                        .unwrap()
+                        .trim()
+                        .is_empty()
+                {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                let tool_pid: i32 = std::fs::read_to_string(&child_pid_file)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                write_state(
+                    temp.path(),
+                    "session-term",
+                    json!({
+                        "provider_pid": pid,
+                        "provider_process_group_id": pid,
+                        "provider_process_start_time": fact.lstart,
+                    }),
+                );
+                let reaper = tokio::spawn(async move { leader.wait().await });
+                let outcome = terminate("session-term").await.unwrap();
+                reaper.await.unwrap().unwrap();
+                assert!(
+                    matches!(outcome.shutdown, "terminated" | "killed"),
+                    "{outcome:?}"
+                );
+                assert!(
+                    !crate::process_group::group_is_alive(pid as i32),
+                    "the process group must be gone"
+                );
+                assert_eq!(
+                    unsafe { libc::kill(tool_pid, 0) },
+                    -1,
+                    "the tool child must not outlive terminate"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn terminate_refuses_a_pid_whose_start_time_changed() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let rt = runtime();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            rt.block_on(async {
+                let mut bystander = tokio::process::Command::new("sleep")
+                    .arg("30")
+                    .process_group(0)
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+                let pid = bystander.id().unwrap();
+                write_state(
+                    temp.path(),
+                    "session-recycled",
+                    json!({
+                        "provider_pid": pid,
+                        "provider_process_group_id": pid,
+                        "provider_process_start_time": "Mon Jan  1 00:00:00 2001",
+                    }),
+                );
+                let error = terminate("session-recycled").await.unwrap_err();
+                assert!(error.to_string().contains("refusing to signal"), "{error}");
+                assert!(crate::process_group::group_is_alive(pid as i32));
+                let _ = bystander.kill().await;
+            });
+        });
+    }
+
+    #[test]
+    fn terminate_without_a_recorded_process_is_an_error_not_a_guess() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let rt = runtime();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            rt.block_on(async {
+                write_state(
+                    temp.path(),
+                    "session-none",
+                    json!({"session_id": "session-none"}),
+                );
+                assert!(terminate("session-none").await.is_err());
+            });
         });
     }
 
@@ -494,5 +728,174 @@ mod tests {
             .await
             .expect("hook script left no claim receipt after a successful claim");
         assert!(!claimed_at.is_empty());
+    }
+    // ---- live receipt (real agy behind the scripted model; run on a bench host) ----
+
+    /// A 1x1 PNG, enough for a real staged image file.
+    const LIVE_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// Run agy the way a managed Helm session runs it for the hook's purposes
+    /// (managed identity env, own process group); the harness stands in for the
+    /// user by passing the permission flag a user could type. Print mode stands
+    /// in for the TUI: the hook inbox does not care which one called it.
+    fn live_spawn(bin: &str, cwd: &Path, session_id: &str, prompt: &str) -> tokio::process::Child {
+        let mut command = tokio::process::Command::new(bin);
+        command
+            .args([
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "stream-json",
+                "--print-timeout",
+                "0s",
+                "--print",
+                prompt,
+            ])
+            .current_dir(cwd)
+            .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
+            .env("LONGHOUSE_MANAGED_PROVIDER", "antigravity")
+            .env("LONGHOUSE_HOOK_PYTHON", "python3")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .process_group(0);
+        command.spawn().expect("spawn agy")
+    }
+
+    async fn live_wait_for_hook(home: &Path, session_id: &str, event: &str) {
+        let path = home
+            .join("managed-local/antigravity/sessions")
+            .join(format!("{session_id}.json"));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let seen = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .and_then(|state| {
+                    state
+                        .get("last_hook_event")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            if seen.as_deref() == Some(event) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "hook event {event} never observed"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn live_record_process(home: &Path, session_id: &str, child: &tokio::process::Child) {
+        let pid = child.id().unwrap();
+        let fact =
+            crate::process_identity::try_collect_process_fact(pid).expect("agy process fact");
+        let path = home
+            .join("managed-local/antigravity/sessions")
+            .join(format!("{session_id}.json"));
+        let mut state = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        state.insert("provider_pid".into(), json!(pid));
+        state.insert("provider_process_group_id".into(), json!(pid));
+        state.insert("provider_process_start_time".into(), json!(fact.lstart));
+        std::fs::write(&path, serde_json::to_vec(&Value::Object(state)).unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "needs a real agy and the scripted model endpoint; run scripts/qa/agy-helm-live-receipt.sh on a bench host"]
+    async fn live_agy_helm_receipt() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let bin = std::env::var("LONGHOUSE_ANTIGRAVITY_BIN").expect("LONGHOUSE_ANTIGRAVITY_BIN");
+        let receipt_path =
+            PathBuf::from(std::env::var("LIVE_RECEIPT_FILE").expect("LIVE_RECEIPT_FILE"));
+        let cwd = PathBuf::from(std::env::var("LIVE_CWD").expect("LIVE_CWD"));
+        let home = crate::config::get_longhouse_home().unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut receipt = json!({"agy_bin": bin});
+        let save = |receipt: &Value| {
+            std::fs::write(&receipt_path, serde_json::to_vec_pretty(receipt).unwrap()).unwrap()
+        };
+
+        // 1. Steer with an image path through the hook inbox.
+        let sid = format!("live-steer-{}", Uuid::new_v4().simple());
+        let png = cwd.join("steer.png");
+        std::fs::write(&png, LIVE_PNG).unwrap();
+        let staged = vec![crate::input_attachments::StagedAttachment {
+            path: png.clone(),
+            mime_type: "image/png".to_string(),
+        }];
+        let started = std::time::Instant::now();
+        let child = live_spawn(&bin, &cwd, &sid, "HELM_STEER_START");
+        live_wait_for_hook(&home, &sid, "PreToolUse").await;
+        let message = crate::input_attachments::prompt_with_attachments(
+            "HELM_STEER_NOW change course",
+            &staged,
+        );
+        let outcome = steer_text(&sid, &message).await;
+        let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
+            .await
+            .expect("steer turn ended")
+            .unwrap();
+        receipt["steer"] = json!({
+            "claimed": outcome.as_ref().ok().map(|o| o.claimed_at.clone()),
+            "error": outcome.as_ref().err().map(|e| e.to_string()),
+            "image_path": png,
+            "exit_code": output.status.code(),
+            "elapsed_secs": started.elapsed().as_secs_f64(),
+            "stdout_tail": String::from_utf8_lossy(&output.stdout).chars().rev().take(1200).collect::<String>().chars().rev().collect::<String>(),
+        });
+        save(&receipt);
+
+        // 2. Interrupt: ends the turn at the next invocation boundary.
+        let sid = format!("live-int-{}", Uuid::new_v4().simple());
+        let started = std::time::Instant::now();
+        let child = live_spawn(&bin, &cwd, &sid, "HELM_INT_START");
+        live_wait_for_hook(&home, &sid, "PreToolUse").await;
+        let outcome = interrupt(&sid).await;
+        let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
+            .await
+            .expect("interrupted turn ended")
+            .unwrap();
+        receipt["interrupt"] = json!({
+            "claimed": outcome.as_ref().ok().map(|o| o.claimed_at.clone()),
+            "error": outcome.as_ref().err().map(|e| e.to_string()),
+            "exit_code": output.status.code(),
+            "elapsed_secs": started.elapsed().as_secs_f64(),
+            "stdout_tail": String::from_utf8_lossy(&output.stdout).chars().rev().take(1200).collect::<String>().chars().rev().collect::<String>(),
+        });
+        save(&receipt);
+
+        // 3. Terminate: the whole process group, tool child included.
+        let sid = format!("live-term-{}", Uuid::new_v4().simple());
+        let mut child = live_spawn(&bin, &cwd, &sid, "HELM_TERM_START");
+        live_wait_for_hook(&home, &sid, "PreToolUse").await;
+        live_record_process(&home, &sid, &child);
+        let pid = child.id().unwrap();
+        let reaper = tokio::spawn(async move {
+            let status = child.wait().await;
+            status.ok().and_then(|s| s.code())
+        });
+        let started = std::time::Instant::now();
+        let outcome = terminate(&sid).await;
+        let exit = reaper.await.unwrap();
+        receipt["terminate"] = json!({
+            "shutdown": outcome.as_ref().ok().map(|o| o.shutdown),
+            "error": outcome.as_ref().err().map(|e| e.to_string()),
+            "exit_code": exit,
+            "group_alive_after": crate::process_group::group_is_alive(pid as i32),
+            "elapsed_secs": started.elapsed().as_secs_f64(),
+        });
+        save(&receipt);
     }
 }

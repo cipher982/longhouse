@@ -1988,11 +1988,13 @@ mod tests {
             granted_control_operations("cursor", true),
             ["interrupt", "send_input", "terminate"]
         );
-        // Antigravity grants send and nothing else: the hook inbox delivers a
-        // user turn and has no interrupt or active-turn steer to deliver.
+        // Antigravity grants interrupt, send and terminate: the hook inbox
+        // delivers a user turn or a terminate-at-next-boundary interrupt, and
+        // the launcher records the process group terminate stops. Steer rides
+        // on send_input.
         assert_eq!(
             granted_control_operations("antigravity", true),
-            ["send_input"]
+            ["interrupt", "send_input", "terminate"]
         );
         // Detached means the hook has not been seen; the grant goes with it.
         assert!(granted_control_operations("antigravity", false).is_empty());
@@ -2245,7 +2247,6 @@ mod tests {
             ("opencode", "run_once"),
             ("opencode", "resume_run_once"),
             ("opencode", "launch"),
-            ("antigravity", "interrupt"),
             ("antigravity", "answer_pause"),
             ("antigravity", "launch"),
             ("claude", "run_once"),
@@ -2410,7 +2411,7 @@ mod tests {
         assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"opencode.turn_start".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
-        assert!(!supports.contains(&"antigravity.interrupt".to_string()));
+        assert!(supports.contains(&"antigravity.interrupt".to_string()));
         assert!(supports.contains(&"antigravity.steer".to_string()));
         assert!(!supports.contains(&"antigravity.launch".to_string()));
 

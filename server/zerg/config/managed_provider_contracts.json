@@ -2972,7 +2972,7 @@
       "interrupt": true,
       "steer_active_turn": true,
       "answer_pause": false,
-      "terminate": false,
+      "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
@@ -3143,18 +3143,18 @@
         },
         "interrupt": {
           "level": "scripted_model",
-          "source": "real agy 1.5.9 on the bench against the scripted Gemini endpoint (scripts/qa/agy-acp-live-receipt.sh), plus hermetic fake-agy tests; Helm interrupt not built",
+          "source": "real agy 1.5.9 on the bench against the scripted Gemini endpoint (scripts/qa/agy-acp-live-receipt.sh for Console, scripts/qa/agy-helm-live-receipt.sh for Helm), plus hermetic fake-agy and fake-hook tests",
           "disposition": "implemented",
-          "reason": "Console (antigravity.turn_interrupt): the engine marks the claim cancel-requested, writes the ACP `session/cancel` notification, and kills the process group if the running prompt has not resolved within 5 s (the process is turn-scoped, so a kill loses nothing the transcript has not already recorded). Live on 1.5.9, agy honoured a cancel sent during a running tool call in under 0.5 s with `stopReason: cancelled`; the grace kill covers a provider that does not. Helm interrupt (`antigravity.interrupt`, kill-and-resume or a PreInvocation `terminationBehavior: terminate`) is not built and stays unadvertised (step 4); the engine refuses it. Print mode's SIGINT and stream-json stdin (user events only) are not used.",
+          "reason": "Console (antigravity.turn_interrupt): the engine marks the claim cancel-requested, writes the ACP `session/cancel` notification, and kills the process group if the running prompt has not resolved within 5 s (the process is turn-scoped, so a kill loses nothing the transcript has not already recorded). Live on 1.5.9, agy honoured a cancel sent during a running tool call in under 0.5 s with `stopReason: cancelled`. Helm (antigravity.interrupt): an `interrupt` message in the hook inbox is claimed at the next PreInvocation or PostInvocation, and the hook answers `terminationBehavior: terminate`. Live on 1.5.9 (print mode with the real hook): the tool call in flight finished, no further model call was made, and agy exited. The interrupt lands at an invocation boundary, so a long tool call delays it (bounded, not immediate); a message not claimed within the control wait is deleted so a stale interrupt never ends a later turn. Kill-and-resume is not used for Helm because the TUI is the user's own terminal. Print mode's SIGINT and stream-json stdin (user events only) are not used.",
           "observed_provider_version": "1.5.9"
         },
         "steer_active_turn": {
-          "level": "hermetic",
-          "source": "Helm steer writes a steer-intent message into the PreInvocation hook inbox; fake-hook tests prove claim and injectSteps. Console steer is a second ACP session/prompt (live on 1.5.9, step 2).",
+          "level": "scripted_model",
+          "source": "real agy 1.5.9 on the bench with the real Longhouse hook (scripts/qa/agy-helm-live-receipt.sh): the steer message was claimed mid tool call and reached the model with the staged image path. Console steer is a second ACP session/prompt (live on 1.5.9, step 2).",
           "disposition": "implemented",
           "reason": "Helm: the engine writes the message into the hook inbox and agy's PreInvocation hook returns it as `injectSteps` after the running tool call (proven live on 1.5.9). Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate, and product copy must say so. Images ride as staged file paths in the message text (the model opens them with read_file). Availability follows observed hook readiness per session.",
           "observed_provider_version": "1.5.9",
-          "owner_action": "live Helm receipt on the bench (antigravity-parity.md step 3)"
+          "owner_action": "drive the real Helm TUI under a PTY (the receipt used print mode with the same hook)"
         },
         "answer_pause": {
           "level": "none",
@@ -3164,12 +3164,11 @@
           "observed_provider_version": "1.5.9"
         },
         "terminate": {
-          "level": "none",
-          "source": "not implemented; process-group reaping confirmed necessary on 1.5.9",
-          "disposition": "not_implemented",
-          "reason": "A tool's child (`sleep`) outlived its killed process group on 1.5.9, so terminate must reap the whole process group, not the agy pid. Upstream does not block this. Longhouse has not built it.",
-          "observed_provider_version": "1.5.9",
-          "owner_action": "antigravity terminate with process-group reaping and a canary (step 4)"
+          "level": "scripted_model",
+          "source": "real agy 1.5.9 on the bench (scripts/qa/agy-helm-live-receipt.sh); hermetic tests with a tool child",
+          "disposition": "implemented",
+          "reason": "Helm: the launcher records agy's pid, process group and start time in the session state file; terminate verifies that identity (a recycled pid is never signalled) and stops the whole group with SIGTERM then SIGKILL, because a tool's child outlived a plain kill of agy on 1.5.9. Live on 1.5.9: the group was gone in 28 ms. Console turns are stopped through turn interrupt and close their own group.",
+          "observed_provider_version": "1.5.9"
         },
         "tail_output": {
           "level": "hermetic",
@@ -3201,6 +3200,8 @@
       "machine_control_supports": [
         "antigravity.send",
         "antigravity.steer",
+        "antigravity.interrupt",
+        "antigravity.terminate",
         "antigravity.turn_start",
         "antigravity.turn_steer",
         "antigravity.turn_interrupt"

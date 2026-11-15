@@ -666,11 +666,18 @@ pub(super) async fn execute_command(
                 }));
             }
             if provider == "antigravity" {
-                return Err(CommandError {
-                    code: "unsupported_command".to_string(),
-                    message: "Antigravity hook inbox does not support remote interrupts"
-                        .to_string(),
-                });
+                let outcome = crate::antigravity_channel_control::interrupt(&session_id)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "antigravity",
+                    "transport": crate::antigravity_channel_control::ANTIGRAVITY_HOOK_INBOX_TRANSPORT,
+                    "message_id": outcome.message_id,
+                    "claimed_at": outcome.claimed_at,
+                }));
             }
             if provider == "cursor" {
                 let summary = crate::cursor_helm_control::interrupt(&session_id, None)
@@ -766,6 +773,21 @@ pub(super) async fn execute_command(
                 result["pid"] = json!(summary.pid);
                 result["forced"] = json!(summary.forced);
                 return Ok(result);
+            }
+            if provider == "antigravity" {
+                let outcome = crate::antigravity_channel_control::terminate(&session_id)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "antigravity",
+                    "transport": crate::antigravity_channel_control::ANTIGRAVITY_HOOK_INBOX_TRANSPORT,
+                    "pid": outcome.pid,
+                    "process_group_id": outcome.process_group_id,
+                    "shutdown": outcome.shutdown,
+                }));
             }
             if provider == "opencode" {
                 let summary = crate::opencode_control::stop_server_bridge(&session_id)

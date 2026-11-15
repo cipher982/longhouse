@@ -543,14 +543,16 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     assert contract.machine_control_supports == (
         "antigravity.send",
         "antigravity.steer",
+        "antigravity.interrupt",
+        "antigravity.terminate",
         "antigravity.turn_start",
         "antigravity.turn_steer",
         "antigravity.turn_interrupt",
     )
     assert contract.connection_capabilities == {
         "can_send_input": 1,
-        "can_interrupt": 0,
-        "can_terminate": 0,
+        "can_interrupt": 1,
+        "can_terminate": 1,
         "can_tail_output": 1,
         "can_resume": 0,
     }
@@ -620,10 +622,10 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         # Antigravity Helm is hook-driven and grants send only until the
         # parity steps in antigravity-parity.md land.
         ("antigravity", "session.send_text", "antigravity.send"),
-        ("antigravity", "session.interrupt", None),
+        ("antigravity", "session.interrupt", "antigravity.interrupt"),
         ("antigravity", "session.steer_text", "antigravity.steer"),
         ("antigravity", "session.answer_pause", None),
-        ("antigravity", "session.terminate", None),
+        ("antigravity", "session.terminate", "antigravity.terminate"),
         ("antigravity", "session.turn.interrupt", "antigravity.turn_interrupt"),
         ("antigravity", "session.turn.steer", "antigravity.turn_steer"),
     ],
@@ -879,9 +881,9 @@ def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
     from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     payload = copy.deepcopy(_manifest_copy())
-    # terminate is false for Antigravity until step 4; claiming it is implemented must fail.
-    _provider_entry(payload, "antigravity")["operation_evidence"]["terminate"]["disposition"] = "implemented"
-    with pytest.raises(ValueError, match="contradicts the terminate support flag"):
+    # answer_pause is false for Antigravity (upstream absent); claiming it is implemented must fail.
+    _provider_entry(payload, "antigravity")["operation_evidence"]["answer_pause"]["disposition"] = "implemented"
+    with pytest.raises(ValueError, match="contradicts the answer_pause support flag"):
         validate_generated_contract_manifest(payload)
 
 

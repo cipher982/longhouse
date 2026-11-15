@@ -1784,7 +1784,13 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         &confirm_notices,
         degraded_registration,
         &deferred_notices,
-        |cmd, after_spawn| run_foreground_command_after_spawn(cmd, after_spawn),
+        |cmd, after_spawn| {
+            run_foreground_command_after_spawn(cmd, || {
+                after_spawn()?;
+                record_antigravity_provider_process(&session_id);
+                Ok(())
+            })
+        },
     )?;
     warp_cli_agent::emit_session_event(
         "antigravity",
@@ -1875,6 +1881,35 @@ fn start_antigravity_degraded_registration(
 /// the launcher writes the identity, and the hook's own updates merge over it.
 /// A session with no launcher therefore has no identity, no control fact, and
 /// no authorization -- which is exactly the Shadow contract.
+/// Record the spawned agy process in the session state file so Helm terminate
+/// can stop its whole process group later. Best effort: without it the session
+/// simply offers no terminate.
+fn record_antigravity_provider_process(session_id: &str) {
+    let pgrp = FOREGROUND_CHILD_PGRP.load(std::sync::atomic::Ordering::Acquire);
+    if pgrp <= 0 {
+        return;
+    }
+    let Ok(home) = longhouse_home() else { return };
+    let path = home
+        .join("managed-local")
+        .join("antigravity")
+        .join("sessions")
+        .join(format!("{session_id}.json"));
+    let mut state = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    state.insert("provider_pid".into(), json!(pgrp));
+    state.insert("provider_process_group_id".into(), json!(pgrp));
+    if let Some(started) = crate::process_identity::try_collect_process_fact(pgrp as u32) {
+        state.insert("provider_process_start_time".into(), json!(started.lstart));
+    }
+    if let Err(error) = write_private_json(&path, &serde_json::Value::Object(state)) {
+        eprintln!("Longhouse warning: could not record the Antigravity process for terminate: {error:#}");
+    }
+}
+
 fn seed_antigravity_control_identity(
     session_id: &str,
     run_id: &str,
@@ -4518,6 +4553,11 @@ fn run_foreground_command(command: &mut Command) -> anyhow::Result<i32> {
 }
 
 #[cfg(unix)]
+/// Process group of the provider child the last foreground launch spawned,
+/// published before `after_spawn` runs so a launcher can record it. The child
+/// is its own group leader (pid == pgid). A launch is one process, so one slot.
+static FOREGROUND_CHILD_PGRP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
 fn run_foreground_command_after_spawn(
     command: &mut Command,
     after_spawn: impl FnOnce() -> anyhow::Result<()>,
@@ -4636,6 +4676,7 @@ fn run_foreground_command_after_spawn(
     unsafe {
         libc::setpgid(child_pgrp, child_pgrp);
     }
+    FOREGROUND_CHILD_PGRP.store(child_pgrp, std::sync::atomic::Ordering::Release);
     if let Err(error) = after_spawn() {
         unsafe {
             libc::close(release_fds[1]);
