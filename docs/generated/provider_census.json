@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 365,
+  "file_count": 358,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -385,24 +385,6 @@
       ]
     },
     {
-      "path": "engine/src/pipeline/parser.rs",
-      "providers": [
-        "antigravity",
-        "claude",
-        "omp",
-        "pi"
-      ]
-    },
-    {
-      "path": "engine/src/pipeline/parser.rs",
-      "providers": [
-        "antigravity",
-        "claude",
-        "omp",
-        "pi"
-      ]
-    },
-    {
       "path": "engine/src/pipeline/source.rs",
       "providers": [
         "codex",
@@ -596,26 +578,6 @@
       "providers": [
         "claude",
         "codex"
-      ]
-    },
-    {
-      "path": "engine/tests/golden_parser_contract.rs",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "omp",
-        "pi"
-      ]
-    },
-    {
-      "path": "engine/tests/golden_parser_contract.rs",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "omp",
-        "pi"
       ]
     },
     {
@@ -1668,30 +1630,6 @@
         "claude",
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_managed_provider_contracts.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_managed_provider_contracts.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
       ]
     },
     {
@@ -3035,20 +2973,6 @@
       ]
     },
     {
-      "path": "server/zerg/services/storage_v2_semantics.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/zerg/services/storage_v2_semantics.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/zerg/services/tool_presentation.py",
       "providers": [
         "codex",
@@ -3138,6 +3062,13 @@
         "codex",
         "omp",
         "opencode"
+      ]
+    },
+    {
+      "path": "web/src/features/session/__tests__/SessionDetailPage.test.tsx",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

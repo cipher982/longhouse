@@ -26,7 +26,7 @@ export {
   getTimelineMessagePreview,
   splitAttachmentsBlock,
   normalizeSessionOriginLabel,
-  truncatePath, formatTurnDuration } from "./formatters";
+  truncatePath, formatCompactTokens, formatTurnDuration } from "./formatters";
 
 export {
   buildTimelineModel,
@@ -63,7 +63,15 @@ export {
 
 export { formatFinalAnswer } from "./finalAnswer";
 
-export { childrenForToolCall, runIdsInToolOutput, subagentLabel, summarizeSubagents } from "./subagents";
+export {
+  buildSubagentTree,
+  childrenForToolCall,
+  flattenSubagentTree,
+  runIdsInToolOutput,
+  subagentLabel,
+  summarizeSubagents,
+  type SubagentTreeNode,
+} from "./subagents";
 
 export { getSessionInteractionCapabilities } from "./interaction";
 
@@ -78,8 +86,13 @@ export {
 } from "./editSummary";
 
 export {
+  summarizeApiError,
   summarizeCompactionNotice,
   summarizeProviderNotice,
+  summarizeTaskNotification,
+  type ApiErrorSummary,
   type CompactionNoticeSummary,
   type ProviderNoticeSummary,
+  type TaskNotificationEntrySummary,
+  type TaskNotificationSummary,
 } from "./providerNotice";

@@ -87,6 +87,8 @@ import { errorDetails } from "@/shared/ui/errorDetails";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "@/shared/api/base";
 import {
   countTimelineItems,
+  formatCompactTokens,
+  formatTurnDuration,
   getSessionInteractionCapabilities,
 } from "@/shared/session/model";
 import type { OutboxEntry } from "./OutboxRow";
@@ -429,6 +431,7 @@ function SessionDetailWorkspaceRoute({
     capabilities: branchSourceSession.capabilities,
     origin_kind: branchSourceSession.origin_kind,
     session_state: branchSourceSession.session_state,
+    pending_background_agent_count: branchSourceSession.pending_background_agent_count,
   };
   const runtimeHostLabel =
     displaySession.control?.source_runner_name?.trim() ||
@@ -475,12 +478,53 @@ function SessionDetailWorkspaceRoute({
   const identityLabel = [...metaItems, ...(usageLabel ? [usageLabel] : [])].join(" · ") || null;
   const contextTokens = displaySession.usage_latest?.context_tokens ?? null;
   const contextWindow = displaySession.usage_latest?.context_window ?? null;
+  const explicitUsedPercent = displaySession.usage_latest?.used_percent ?? null;
   // A ring only when the window is known; otherwise the label's "267k ctx"
   // stands alone and nothing guesses a denominator.
   const contextFraction =
-    contextTokens != null && contextWindow != null && contextWindow > 0
-      ? Math.min(1, Math.max(0, contextTokens / contextWindow))
+    explicitUsedPercent != null && Number.isFinite(explicitUsedPercent)
+      ? Math.min(1, Math.max(0, explicitUsedPercent / 100))
+      : contextTokens != null && contextWindow != null && contextWindow > 0
+        ? Math.min(1, Math.max(0, contextTokens / contextWindow))
+        : null;
+  const contextPercentLabel =
+    contextFraction != null && contextWindow != null && contextWindow > 0
+      ? `${Math.round(contextFraction * 100)}% of ${formatCompactTokens(contextWindow)}`
       : null;
+  const costUsd = displaySession.usage_latest?.cost_usd ?? null;
+  const costLabel =
+    typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd >= 0
+      ? `$${costUsd.toFixed(2)}`
+      : null;
+  const cumulativeDurationMs = displaySession.usage_latest?.cumulative_duration_ms ?? null;
+  const cumulativeDurationLabel =
+    typeof cumulativeDurationMs === "number" &&
+    Number.isFinite(cumulativeDurationMs) &&
+    cumulativeDurationMs > 0
+      ? formatTurnDuration(cumulativeDurationMs)
+      : null;
+  const cwdLeaf = displaySession.cwd
+    ? displaySession.cwd.split("/").filter(Boolean).pop() ?? null
+    : null;
+  const worktreeName = displaySession.worktree?.name?.trim() || null;
+  const gitBranch = displaySession.worktree?.branch?.trim() || displaySession.git_branch?.trim() || null;
+  const gitContextLabel = [
+    cwdLeaf,
+    gitBranch ? `git:(${gitBranch})` : null,
+    worktreeName ? `wt:${worktreeName}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const permissionModeRaw = displaySession.permission_mode?.trim() || null;
+  const permissionModeLabel =
+    permissionModeRaw === "bypassPermissions"
+      ? "bypass permissions"
+      : permissionModeRaw === "acceptEdits"
+        ? "accept edits"
+        : permissionModeRaw === "dontAsk"
+          ? "don't ask"
+          : permissionModeRaw;
+  const sessionCronCount = displaySession.session_crons?.length ?? 0;
   // The branch form sits beside Resume in the Run ended notice. A refusal gets
   // words only when `branchUnavailableNote` has some; see there for which.
   const branchAction = branchSourceSession.session_state.control.actions.branch;
@@ -608,7 +652,7 @@ function SessionDetailWorkspaceRoute({
             ) : null}
             <span className="session-workspace-header__meta-text">
               {metaItems.join(" · ")}
-              {usageLabel ? (
+              {usageLabel || contextPercentLabel ? (
                 <span className="session-workspace-header__usage" data-testid="session-usage">
                   {metaItems.length > 0 ? " · " : ""}
                   {contextFraction != null ? (
@@ -620,8 +664,56 @@ function SessionDetailWorkspaceRoute({
                       aria-hidden="true"
                     />
                   ) : null}
-                  {usageLabel}
+                  {usageLabel ?? contextPercentLabel}
+                  {usageLabel && contextPercentLabel && !usageLabel.includes(contextPercentLabel)
+                    ? ` · ${contextPercentLabel}`
+                    : ""}
                 </span>
+              ) : null}
+              {costLabel ? (
+                <span className="session-workspace-header__cost" data-testid="session-cost">
+                  {` · ${costLabel}`}
+                </span>
+              ) : null}
+              {cumulativeDurationLabel ? (
+                <span
+                  className="session-workspace-header__duration"
+                  data-testid="session-cumulative-duration"
+                >
+                  {` · ${cumulativeDurationLabel}`}
+                </span>
+              ) : null}
+              {gitContextLabel ? (
+                <span className="session-workspace-header__git" data-testid="session-git-context">
+                  {` · ${gitContextLabel}`}
+                </span>
+              ) : null}
+              {permissionModeLabel ? (
+                <>
+                  {" · "}
+                  <span
+                    className={`session-permission-pill${
+                      permissionModeRaw === "bypassPermissions" ? " session-permission-pill--bypass" : ""
+                    }`}
+                    data-testid="session-permission-mode"
+                  >
+                    {permissionModeLabel}
+                  </span>
+                </>
+              ) : null}
+              {sessionCronCount > 0 ? (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    className="session-permission-pill session-cron-pill"
+                    data-testid="session-crons-pill"
+                    title="View scheduled session crons"
+                    onClick={() => setDrawerOpen(true)}
+                  >
+                    {sessionCronCount} {sessionCronCount === 1 ? "cron" : "crons"}
+                  </button>
+                </>
               ) : null}
             </span>
           </span>
@@ -762,6 +854,14 @@ function SessionDetailWorkspaceRoute({
           provider={displaySession.provider}
           outbox={outboxEntries}
           liveness={{ facts: displaySession.session_state, host: identityHost }}
+          topBanner={
+            displaySession.recap?.text ? (
+              <div className="session-away-recap" data-testid="session-away-recap">
+                <div className="session-away-recap__label">While you were away</div>
+                <div className="session-away-recap__text">{displaySession.recap.text}</div>
+              </div>
+            ) : null
+          }
           totalEntries={totalEntries}
           loadedEntries={loadedEntryCount}
           abandonedEvents={abandonedEvents}

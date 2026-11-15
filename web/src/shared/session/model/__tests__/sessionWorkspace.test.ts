@@ -286,20 +286,21 @@ describe("buildTimelineModel", () => {
     expect(model.eventIdToSelectionKey.get(reasoningEvent.id)).toBe("reasoning:44");
   });
 
-  it("adds no row for a turn end or withheld reasoning that carries no text", () => {
+  it("adds a reasoning row for withheld reasoning while skipping text-less turn ends and empty non-withheld reasoning", () => {
     const at = (minute: number) => `2026-03-22T22:${String(minute).padStart(2, "0")}:00Z`;
     const events: AgentEvent[] = [
       { id: 1, role: "user", content_text: "Run the tests.", tool_name: null, tool_input_json: null, tool_output_text: null, tool_call_id: null, timestamp: at(1), in_active_context: true },
       { id: 2, role: "system", content_text: null, interaction_kind: "provider_reasoning", item: { kind: "reasoning", visibility: "withheld" }, tool_name: null, tool_input_json: null, tool_output_text: null, tool_call_id: null, timestamp: at(2), in_active_context: true },
       { id: 3, role: "assistant", content_text: "All 42 pass.", item: { phase: "final", phase_source: "derived" }, tool_name: null, tool_input_json: null, tool_output_text: null, tool_call_id: null, timestamp: at(3), in_active_context: true },
       { id: 4, role: "system", content_text: null, item: { kind: "turn_end", end_reason: "completed" }, tool_name: null, tool_input_json: null, tool_output_text: null, tool_call_id: null, timestamp: at(4), in_active_context: true },
+      { id: 5, role: "system", content_text: null, interaction_kind: "provider_reasoning", item: { kind: "reasoning" }, tool_name: null, tool_input_json: null, tool_output_text: null, tool_call_id: null, timestamp: at(5), in_active_context: true },
     ];
 
     const model = buildTimelineModel(
       events.map((event) => ({ kind: "event" as const, session_id: "session-claude", timestamp: event.timestamp, event })),
     );
 
-    expect(model.items.map((item) => item.kind)).toEqual(["message", "message"]);
+    expect(model.items.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
   });
 
   it("keeps a completed live preview tool out of the activity group", () => {

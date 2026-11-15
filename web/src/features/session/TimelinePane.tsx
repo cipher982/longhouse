@@ -15,14 +15,17 @@ import {
 } from "./RunningCallRow";
 import type {
   ActivityGroup,
+  SubagentChild,
   TimelineAction,
   TimelineItem,
   TimelineSeam,
   ToolInteraction,
 } from "@/shared/session/model";
 import {
+  flattenSubagentTree,
   formatContinuationStamp,
   formatActivitySummary,
+  formatCompactTokens,
   formatEditStat,
   formatToolInput,
   formatTime,
@@ -51,6 +54,7 @@ import {
   isToolInteractionRunning,
   parseLonghouseOutput,
   splitExplorationOverflow,
+  summarizeApiError,
   summarizeCompactionNotice,
   timelineItemContainsSelection,
   subagentLabel,
@@ -131,6 +135,7 @@ interface TimelinePaneProps {
   /** Session evidence for running calls (work claim, host). Without it a
    *  running call renders as a plain row and never animates. */
   liveness?: TimelineLiveness | null;
+  topBanner?: ReactNode;
 }
 
 function timelineItemTimeMs(item: TimelineItem): number {
@@ -423,17 +428,30 @@ function truncateMarkdown(text: string): string {
 
 function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined }) {
   if (!turnEnd) return null;
-  const stopped = turnEnd.outcome === "aborted";
+  const stopped = turnEnd.outcome === "aborted" || turnEnd.outcome === "interrupted";
+  const errored = turnEnd.outcome === "error";
+  const prefix = errored
+    ? "Stopped with error after"
+    : stopped
+      ? "Interrupted after"
+      : "Worked for";
+  const suffix = errored ? "error" : stopped ? "stopped" : "done";
+  const modifier = errored ? " tl-turn-end--error" : stopped ? " tl-turn-end--stopped" : "";
+  const hookSuffix = turnEnd.stop_hook_summary?.trim() ? ` · ${turnEnd.stop_hook_summary.trim()}` : "";
   return (
-    <div className="tl-turn-end" data-testid="session-turn-end">
+    <div className={`tl-turn-end${modifier}`} data-testid="session-turn-end" data-turn-outcome={turnEnd.outcome ?? "completed"}>
       <span className="tl-turn-end__icon" aria-hidden="true">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2.5 6.3 5 8.8l4.5-5.6" />
+          {errored || stopped ? (
+            <path d="M3 3l6 6M9 3l-6 6" />
+          ) : (
+            <path d="M2.5 6.3 5 8.8l4.5-5.6" />
+          )}
         </svg>
       </span>
       <span className="tl-turn-end__text">
-        {stopped ? "Interrupted after" : "Worked for"} {formatTurnDuration(turnEnd.duration_ms)} ·{" "}
-        {stopped ? "stopped" : "done"} {formatTime(turnEnd.ended_at)}
+        {prefix} {formatTurnDuration(turnEnd.duration_ms)} · {suffix} {formatTime(turnEnd.ended_at)}
+        {hookSuffix}
       </span>
       <span className="tl-turn-end__rule" aria-hidden="true" />
     </div>
@@ -442,6 +460,14 @@ function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined
 
 function turnEndForInteraction(interaction: ToolInteraction): AgentEventTurnEnd | null | undefined {
   return interaction.resultEvent?.turn_end ?? interaction.callEvent?.turn_end;
+}
+
+function turnEndForGroup(group: ActivityGroup): AgentEventTurnEnd | null | undefined {
+  for (let i = group.interactions.length - 1; i >= 0; i -= 1) {
+    const turnEnd = turnEndForInteraction(group.interactions[i]);
+    if (turnEnd) return turnEnd;
+  }
+  return null;
 }
 
 function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
@@ -519,6 +545,16 @@ const MessageRow = memo(function MessageRow({
     ? truncateMarkdown(preview)
     : preview;
 
+  const resolvedPhase =
+    event.message_phase ??
+    (event.item?.phase === "commentary"
+      ? "commentary"
+      : event.item?.phase === "final"
+        ? "final_answer"
+        : undefined);
+  const isCommentary = isAssistant && resolvedPhase === "commentary";
+  const inlineApiError = event.api_error ? summarizeApiError(event.api_error, null) : null;
+
   return (
     <div
       id={send ? undefined : `event-${event.id}`}
@@ -527,7 +563,8 @@ const MessageRow = memo(function MessageRow({
       data-message-role={event.role}
       data-outbox-state={send?.state}
       aria-busy={send?.state === "sending" || undefined}
-      className={`tl-msg tl-msg--${event.role}${send ? ` tl-msg--outbox tl-msg--outbox-${send.state}` : ""}`}
+      data-message-phase={resolvedPhase}
+      className={`tl-msg tl-msg--${event.role}${send ? ` tl-msg--outbox tl-msg--outbox-${send.state}` : ""}${isCommentary ? " tl-msg--commentary" : ""}`}
     >
       <div className="tl-msg__head">
         {isAssistant || isUser ? (
@@ -555,6 +592,11 @@ const MessageRow = memo(function MessageRow({
             {formatTime(event.timestamp)}
           </span>
         )}
+        {isCommentary ? (
+          <span className="tl-chip tl-chip--commentary" data-testid="session-message-phase-commentary">
+            commentary
+          </span>
+        ) : null}
         {outside ? (
           <span className="tl-chip tl-chip--warning">outside active context</span>
         ) : null}
@@ -621,6 +663,12 @@ const MessageRow = memo(function MessageRow({
           </button>
         ) : null}
       </div>
+      {inlineApiError ? (
+        <div className="tl-api-error tl-api-error--inline" data-testid="session-api-error-notice">
+          {inlineApiError.badge ? <span className="tl-api-error__badge">{inlineApiError.badge}</span> : null}
+          <span className="tl-api-error__title">{inlineApiError.title}</span>
+        </div>
+      ) : null}
       <TurnEndRow turnEnd={event.turn_end} />
     </div>
   );
@@ -921,25 +969,49 @@ function ActionCard({
  * sessions in the timeline, and not spliced into this transcript. A 22-agent
  * fan-out inlined would bury the session it belongs to.
  */
+function subagentLiveTone(child: SubagentChild): "running" | "waiting" | "done" {
+  if (child.live_status === "waiting") return "waiting";
+  if (child.live_status === "running" || (child.finished === false && !child.ended_at)) return "running";
+  return "done";
+}
+
 function SubagentNode({ interaction }: { interaction: ToolInteraction }) {
   const children = interaction.children ?? [];
   if (children.length === 0) return null;
+  const treeRows = flattenSubagentTree(children);
   return (
     <details className="tl-subagents" data-testid="tool-subagents">
       <summary className="tl-subagents__summary">
         <span className="tl-subagents__count">{summarizeSubagents(children)}</span>
       </summary>
       <ul className="tl-subagents__list">
-        {children.map((child) => (
-          <li key={child.session_id} className="tl-subagents__item">
-            <Link className="tl-subagents__link" to={`/timeline/${child.session_id}`}>
-              <span className="tl-subagents__label">{subagentLabel(child)}</span>
-              <span className="tl-subagents__meta">
-                {child.tool_calls} {child.tool_calls === 1 ? "call" : "calls"}
-              </span>
-            </Link>
-          </li>
-        ))}
+        {treeRows.map(({ child, depth }) => {
+          const tone = subagentLiveTone(child);
+          const metaParts: string[] = [];
+          if (child.duration_ms != null && child.duration_ms > 0) {
+            metaParts.push(formatTurnDuration(child.duration_ms));
+          }
+          if (child.total_tokens != null && child.total_tokens > 0) {
+            metaParts.push(`${formatCompactTokens(child.total_tokens)} tok`);
+          }
+          metaParts.push(`${child.tool_calls} ${child.tool_calls === 1 ? "call" : "calls"}`);
+          return (
+            <li
+              key={child.session_id}
+              className="tl-subagents__item"
+              style={depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined}
+              data-spawn-depth={depth}
+            >
+              <Link className="tl-subagents__link" to={`/timeline/${child.session_id}`}>
+                <span className={`tl-subagents__status tl-subagents__status--${tone}`} aria-hidden="true" />
+                {child.agent_type ? <span className="tl-subagents__badge">{child.agent_type}</span> : null}
+                {child.is_fork ? <span className="tl-subagents__badge tl-subagents__badge--fork">fork</span> : null}
+                <span className="tl-subagents__label">{subagentLabel(child)}</span>
+                <span className="tl-subagents__meta">{metaParts.join(" · ")}</span>
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </details>
   );
@@ -1319,6 +1391,7 @@ export const TimelinePane = memo(function TimelinePane({
   provider = null,
   outbox = EMPTY_OUTBOX,
   liveness = null,
+  topBanner = null,
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1905,19 +1978,21 @@ export const TimelinePane = memo(function TimelinePane({
 
     const groupKey = `group:${item.group.key}`;
     return (
-      <ActivityChip
-        key={item.group.key}
-        group={item.group}
-        rowId={`event-${item.group.anchorId}`}
-        expanded={expandedGroups.has(item.group.key)}
-        isSelected={timelineItemContainsSelection(item, selectedKey)}
-        expandedInteractionKeys={expandedTools}
-        onSelect={() => onSelectKey(groupKey)}
-        onToggleExpand={() => toggleGroup(item.group.key)}
-        onToggleInteraction={(k) => toggleTool(k)}
-        renderMedia={renderMedia}
-        trail={narration.trail.has(timelineItemIdentity(item))}
-      />
+      <Fragment key={item.group.key}>
+        <ActivityChip
+          group={item.group}
+          rowId={`event-${item.group.anchorId}`}
+          expanded={expandedGroups.has(item.group.key)}
+          isSelected={timelineItemContainsSelection(item, selectedKey)}
+          expandedInteractionKeys={expandedTools}
+          onSelect={() => onSelectKey(groupKey)}
+          onToggleExpand={() => toggleGroup(item.group.key)}
+          onToggleInteraction={(k) => toggleTool(k)}
+          renderMedia={renderMedia}
+          trail={narration.trail.has(timelineItemIdentity(item))}
+        />
+        <TurnEndRow turnEnd={turnEndForGroup(item.group)} />
+      </Fragment>
     );
   };
 
@@ -2044,6 +2119,7 @@ export const TimelinePane = memo(function TimelinePane({
           className="timeline-pane__list timeline-events"
           data-testid="session-timeline-list"
         >
+        {topBanner}
         {hasPreviousPage || isFetchingPreviousPage ? (
           <div
             ref={topSentinelRef}

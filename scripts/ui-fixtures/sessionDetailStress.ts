@@ -429,6 +429,7 @@ export type SessionDetailFixture = {
   projection: AgentSessionProjectionResponse;
   workspace: AgentSessionWorkspaceResponse;
   turns: AgentSessionTurnsListResponse;
+  subagents?: JsonObject[];
 };
 
 export function buildSessionDetailStressFixture(): SessionDetailFixture {
@@ -2492,5 +2493,318 @@ export function buildSessionRunningCallFixture(expired: boolean): SessionDetailF
   fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
   fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
   fixture.workspace.thread = fixture.thread;
+  return fixture;
+}
+
+/**
+ * Full Claude Code 2.1.325 fidelity scene showcasing:
+ * - 1.0M context HUD (`13% of 1.0M`), $cost, cumulative duration, git branch, worktree, permission mode
+ * - Active parent turn alongside an expandable live roster (running + waiting agents, shells, monitors)
+ * - Nested spawn_depth=2 subagent tree, structured task notifications, waiting marker, API retry notice,
+ *   withheld reasoning, commentary phase, microcompact boundary, and away recap banner
+ */
+export function buildSessionClaudeFidelityFixture(): SessionDetailFixture {
+  const fixture = buildSessionProseIdleFixture();
+  const sessionId = fixture.session.id;
+  const now = SESSION_DETAIL_STRESS_NOW;
+
+  Object.assign(fixture.session as JsonObject, {
+    provider: "claude",
+    project: "zerg",
+    cwd: "/Users/example/git/zerg/control-plane",
+    git_branch: "main",
+    home_label: "cinder",
+    device_id: "cinder",
+    provider_title: "Close remaining Claude fidelity gaps",
+    summary_title: "Close remaining Claude fidelity gaps",
+    timeline_title: "Close remaining Claude fidelity gaps",
+    permission_mode: "bypassPermissions",
+    worktree: { name: "claude-fidelity", branch: "claude-fidelity", path: "/Users/example/git/_wt/claude-fidelity" },
+    recap: {
+      text: "Completed backend runtime and ingest fidelity; 2 subagents and 4 monitors remain active.",
+      at: "2026-04-15T16:11:00Z",
+    },
+    pending_background_agent_count: 3,
+    session_crons: [
+      { id: "cron-ring", schedule: "*/5 * * * *", prompt: "Check canary ring qualification" },
+    ],
+    usage_latest: {
+      model: "claude-opus-4-7",
+      effort: "high",
+      context_tokens: 130_000,
+      context_window: 1_000_000,
+      used_percent: 13,
+      cost_usd: 53.89,
+      cumulative_duration_ms: 28_860_000,
+      output_tokens: 2_700,
+      thinking_tokens: 4_100,
+      rate_limits: [{ kind: "5h", percent_used: 32 }],
+      at: now,
+      label: "opus 4.7 · 126k in · 27 out",
+    },
+    session_state: makeSessionState({
+      working_set: "open",
+      activity: {
+        state: "executing",
+        raw_kind: "running",
+        tool: "Bash",
+        source: "claude_hook",
+        observed_at: now,
+        valid_until: "2026-04-15T16:26:35Z",
+      },
+      delegation: {
+        state: "pending",
+        count: 9,
+        kinds: { agent: 3, shell: 2, monitor: 4 },
+        source: "claude_hook",
+        observed_at: now,
+        valid_until: "2026-04-15T16:26:35Z",
+        items: [
+          {
+            id: "agent-a101",
+            kind: "agent",
+            status: "waiting",
+            agent_type: "general-purpose",
+            description: "Waiting on Claude terminal-truth output",
+            started_at: "2026-04-15T15:18:37Z",
+            session_id: "child-session-a101",
+            spawn_depth: 1,
+            native_progress: {
+              status: "waiting",
+              last_intent: "Waiting for terminal-truth gate on bench",
+              tokens: 194_200,
+              duration_ms: 3_203_000,
+            },
+          },
+          {
+            id: "agent-a102",
+            kind: "agent",
+            status: "running",
+            agent_type: "Explore",
+            description: "Inspect Rust parser subagent meta.json",
+            parent_agent_id: "agent-a101",
+            spawn_depth: 2,
+            started_at: "2026-04-15T15:41:00Z",
+            session_id: "child-session-a102",
+            native_progress: {
+              status: "running",
+              current_tool: "Grep",
+              last_intent: "Scanning engine/src/pipeline/parser.rs",
+              tokens: 116_500,
+              duration_ms: 1_818_000,
+              tool_count: 14,
+            },
+          },
+          {
+            id: "agent-a103",
+            kind: "agent",
+            status: "running",
+            agent_type: "general-purpose",
+            is_fork: true,
+            description: "Rebasing and checking push readiness",
+            started_at: "2026-04-15T15:43:50Z",
+            session_id: "child-session-a103",
+            native_progress: {
+              status: "running",
+              current_tool: "Bash",
+              last_intent: "Running make validate on rebase",
+              tokens: 223_400,
+              duration_ms: 1_690_000,
+              tool_count: 9,
+            },
+          },
+          {
+            id: "shell-s1",
+            kind: "shell",
+            status: "running",
+            description: "make test-frontend watch runner",
+            started_at: "2026-04-15T16:04:00Z",
+            native_progress: { status: "running", duration_ms: 480_000 },
+          },
+          {
+            id: "shell-s2",
+            kind: "shell",
+            status: "running",
+            description: "cargo test --manifest-path engine/Cargo.toml",
+            started_at: "2026-04-15T16:07:00Z",
+            native_progress: { status: "running", duration_ms: 300_000 },
+          },
+          {
+            id: "mon-1",
+            kind: "monitor",
+            status: "running",
+            description: "Watch hosted-live-qa workflow",
+            started_at: "2026-04-15T16:00:00Z",
+          },
+          {
+            id: "mon-2",
+            kind: "monitor",
+            status: "running",
+            description: "Tail canary ring promotion",
+            started_at: "2026-04-15T16:02:00Z",
+          },
+          {
+            id: "mon-3",
+            kind: "monitor",
+            status: "running",
+            description: "Poll bench test session",
+            started_at: "2026-04-15T16:03:00Z",
+          },
+          {
+            id: "mon-4",
+            kind: "monitor",
+            status: "running",
+            description: "Monitor cube disk headroom",
+            started_at: "2026-04-15T16:05:00Z",
+          },
+        ],
+      },
+      presentation: {
+        primary: { key: "executing", label: "Using Bash", tone: "running", observed_at: now },
+        access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
+        transcript: null,
+      },
+    }),
+  });
+
+  const subagents: JsonObject[] = [
+    {
+      session_id: "child-session-a101",
+      provider_session_id: "agent-a101",
+      parent_session_id: sessionId,
+      parent_agent_id: null,
+      provider: "claude",
+      parent_tool_call_id: "fid-agent-call",
+      run_id: null,
+      agent_type: "general-purpose",
+      description: "Audit terminal-truth bench failures",
+      model: "claude-sonnet-4-6",
+      is_fork: false,
+      spawn_depth: 1,
+      finished: false,
+      live_status: "waiting",
+      duration_ms: 3_203_000,
+      total_tokens: 194_200,
+      started_at: "2026-04-15T15:18:37Z",
+      ended_at: null,
+      user_messages: 1,
+      assistant_messages: 6,
+      tool_calls: 19,
+      title: "Audit terminal-truth bench failures",
+      first_user_message_preview: "Inspect Claude terminal-truth prompt mismatch on bench",
+      last_visible_text_preview: null,
+    },
+    {
+      session_id: "child-session-a102",
+      provider_session_id: "agent-a102",
+      parent_session_id: "child-session-a101",
+      parent_agent_id: "a101",
+      provider: "claude",
+      parent_tool_call_id: "child-read-call",
+      run_id: null,
+      agent_type: "Explore",
+      description: "Inspect parser subagent meta.json loader",
+      model: "claude-haiku-4-5",
+      is_fork: false,
+      spawn_depth: 2,
+      finished: false,
+      live_status: "running",
+      duration_ms: 1_818_000,
+      total_tokens: 116_500,
+      started_at: "2026-04-15T15:41:00Z",
+      ended_at: null,
+      user_messages: 1,
+      assistant_messages: 4,
+      tool_calls: 14,
+      title: "Inspect parser subagent meta.json loader",
+      first_user_message_preview: null,
+      last_visible_text_preview: null,
+    },
+  ];
+
+  let nextId = 9000;
+  const at = (hhmmss: string) => `2026-04-15T${hhmmss}Z`;
+  const events: AgentEvent[] = [
+    makeEvent(nextId++, "user", at("16:08:00"), {
+      content_text: "Audit Claude fidelity gaps across backend and clients and land them cleanly.",
+    }),
+    makeEvent(nextId++, "system", at("16:08:04"), {
+      interaction_kind: "provider_reasoning",
+      content_text: "Thinking:\n[Reasoning withheld]",
+      reasoning_withheld: true,
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "assistant", at("16:08:10"), {
+      content_text: "Launching verification workers against the bench harness and parser meta files.",
+      message_phase: "commentary",
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "assistant", at("16:08:15"), {
+      tool_name: "Agent",
+      tool_input_json: {
+        description: "Audit terminal-truth bench failures",
+        subagent_type: "general-purpose",
+        prompt: "Inspect why Claude prompt waits fail on bench",
+      },
+      tool_call_id: "fid-agent-call",
+      tool_intent: "Launch terminal-truth audit worker",
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "tool", at("16:09:10"), {
+      tool_name: "Agent",
+      tool_output_text: "Background agent launched (agentId: a101)",
+      tool_call_id: "fid-agent-call",
+    }),
+    makeEvent(nextId++, "system", at("16:09:12"), {
+      interaction_kind: "provider_notification",
+      content_text: "Waiting for 3 background agents to finish",
+      waiting_background_agents: 3,
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "system", at("16:09:40"), {
+      interaction_kind: "provider_notification",
+      content_text: 'Agent "Laptop release and TestFlight" completed',
+      task_notification: {
+        task_id: "a100",
+        status: "completed",
+        summary: 'Agent "Laptop release and TestFlight" completed',
+        duration_ms: 1613000,
+        subagent_tokens: 94200,
+        tool_uses: 18,
+        note: "TestFlight build queued",
+        result: "Uploaded internal TestFlight build 0.1.81 without warnings.",
+      },
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "system", at("16:10:00"), {
+      interaction_kind: "provider_notification",
+      content_text: "API error (retry 1/4): Overloaded",
+      api_error: {
+        retry_attempt: 1,
+        max_retries: 4,
+        status_code: 529,
+        retry_in_ms: 4000,
+        error: "Overloaded",
+        details: "Anthropic edge returned transient 529; retrying automatically.",
+      },
+    } as Partial<AgentEvent>),
+    makeEvent(nextId++, "system", at("16:10:15"), {
+      interaction_kind: "compaction_boundary",
+      content_text: "Context microcompacted [trigger=auto tokens_saved=14200]",
+    }),
+    makeEvent(nextId++, "assistant", at("16:11:40"), {
+      content_text: "All 3 background workers report clean parity; waiting on final bench log stream.",
+      message_phase: "final_answer",
+      turn_end: {
+        duration_ms: 220_000,
+        ended_at: at("16:11:40"),
+        message_count: 10,
+        outcome: "completed",
+        stop_hook_summary: "Stop hook passed",
+      },
+    } as Partial<AgentEvent>),
+  ];
+
+  const items = events.map((event) => projectionEvent(event, sessionId));
+  fixture.projection = { ...fixture.projection, items, total: items.length };
+  fixture.workspace = { ...fixture.workspace, session: fixture.session, projection: fixture.projection };
+  fixture.thread = { ...fixture.thread, sessions: [fixture.session] };
+  fixture.workspace.thread = fixture.thread;
+  fixture.subagents = subagents;
   return fixture;
 }

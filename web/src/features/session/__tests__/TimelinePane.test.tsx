@@ -1,8 +1,9 @@
 import { useCallback, useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
-import type { TimelineItem } from "@/shared/session/model";
+import { buildTimelineModel, type TimelineItem } from "@/shared/session/model";
 
 const seamItem: TimelineItem = {
   kind: "seam",
@@ -321,21 +322,23 @@ function makeAskUserQuestionItem(
 /** Render the pane with default props; only `items` varies in these tests. */
 function renderPane(items: TimelineItem[]) {
   return render(
-    <TimelinePane
-      items={items}
-      totalEntries={items.length}
-      loadedEntries={items.length}
-      abandonedEvents={0}
-      showAbandonedBranches={false}
-      onShowAbandonedBranchesChange={vi.fn()}
-      hasPreviousPage={false}
-      isFetchingPreviousPage={false}
-      onFetchPreviousPage={vi.fn()}
-      loading={false}
-      error={null}
-      selectedKey={null}
-      onSelectKey={vi.fn()}
-    />,
+    <MemoryRouter>
+      <TimelinePane
+        items={items}
+        totalEntries={items.length}
+        loadedEntries={items.length}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -1751,5 +1754,174 @@ describe("TimelinePane outbox", () => {
     fireEvent.click(button);
     expect(onFetchPreviousPage).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
+  });
+
+  it("renders structured task_notification, waiting marker, api_error, withheld reasoning, commentary phase, grouped TurnEnd, and nested subagents", () => {
+    const subagents = [
+      {
+        session_id: "child-1",
+        provider_session_id: "agent-c1",
+        parent_session_id: "sess-1",
+        parent_agent_id: null,
+        provider: "claude",
+        parent_tool_call_id: "call-agent",
+        run_id: null,
+        agent_type: "general-purpose",
+        description: "Audit bench failure",
+        model: "claude-sonnet-4-6",
+        is_fork: false,
+        spawn_depth: 1,
+        finished: false,
+        live_status: "running",
+        duration_ms: 42_000,
+        total_tokens: 18_500,
+        started_at: "2026-04-15T16:01:00Z",
+        ended_at: null,
+        user_messages: 1,
+        assistant_messages: 2,
+        tool_calls: 6,
+        title: "Audit bench failure",
+        first_user_message_preview: null,
+        last_visible_text_preview: null,
+      },
+      {
+        session_id: "grand-1",
+        provider_session_id: "agent-g1",
+        parent_session_id: "child-1",
+        parent_agent_id: "c1",
+        provider: "claude",
+        parent_tool_call_id: "inner-read",
+        run_id: null,
+        agent_type: "Explore",
+        description: "Scan meta.json reader",
+        model: "claude-haiku-4-5",
+        is_fork: true,
+        spawn_depth: 2,
+        finished: true,
+        live_status: null,
+        duration_ms: 12_000,
+        total_tokens: 4_200,
+        started_at: "2026-04-15T16:01:05Z",
+        ended_at: "2026-04-15T16:01:17Z",
+        user_messages: 1,
+        assistant_messages: 1,
+        tool_calls: 2,
+        title: null,
+        first_user_message_preview: null,
+        last_visible_text_preview: null,
+      },
+    ];
+
+    const groupedTurnEnd = {
+      duration_ms: 14_000,
+      ended_at: "2026-04-15T16:02:14Z",
+      message_count: 3,
+      outcome: "completed" as const,
+      stop_hook_summary: "Stop hook verified",
+    };
+
+    const makeProjectionItem = (
+      id: number,
+      contentText: string,
+      role: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      kind: "event" as const,
+      session_id: "sess-1",
+      timestamp: `2026-04-15T16:01:${String(id).padStart(2, "0")}Z`,
+      event: {
+        ...messageItem.event,
+        id,
+        role,
+        content_text: contentText,
+        timestamp: `2026-04-15T16:01:${String(id).padStart(2, "0")}Z`,
+        ...overrides,
+      },
+    });
+
+    const rawEvents = [
+      makeProjectionItem(10, "Opening notes", "assistant", {
+        message_phase: "commentary",
+      }),
+      makeProjectionItem(11, "Thinking:\n[Reasoning withheld]", "system", {
+        interaction_kind: "provider_reasoning",
+        reasoning_withheld: true,
+      }),
+      makeProjectionItem(12, "", "assistant", {
+        tool_name: "Agent",
+        tool_call_id: "call-agent",
+        tool_input_json: { description: "Audit bench failure", subagent_type: "general-purpose" },
+      }),
+      makeProjectionItem(13, "", "tool", {
+        tool_name: "Agent",
+        tool_call_id: "call-agent",
+        tool_output_text: "Launched",
+      }),
+      makeProjectionItem(14, "Waiting for 2 background agents to finish", "system", {
+        interaction_kind: "provider_notification",
+        waiting_background_agents: 2,
+      }),
+      makeProjectionItem(15, 'Agent "Audit" completed', "system", {
+        interaction_kind: "provider_notification",
+        task_notification: {
+          task_id: "c1",
+          status: "completed",
+          summary: 'Agent "Audit" completed',
+          duration_ms: 42_000,
+          subagent_tokens: 18_500,
+          tool_uses: 6,
+          note: "Merged",
+          result: "Detailed audit output line",
+        },
+      }),
+      makeProjectionItem(16, "API error (retry 1/4): Overloaded", "system", {
+        interaction_kind: "provider_notification",
+        api_error: { retry_attempt: 1, max_retries: 4, status_code: 529, error: "Overloaded" },
+      }),
+      makeProjectionItem(17, "", "assistant", {
+        tool_name: "Read",
+        tool_call_id: "r-1",
+        tool_input_json: { file_path: "a.ts" },
+      }),
+      makeProjectionItem(18, "", "tool", {
+        tool_name: "Read",
+        tool_call_id: "r-1",
+        tool_output_text: "a",
+      }),
+      makeProjectionItem(19, "", "assistant", {
+        tool_name: "Read",
+        tool_call_id: "r-2",
+        tool_input_json: { file_path: "b.ts" },
+      }),
+      makeProjectionItem(20, "", "tool", {
+        tool_name: "Read",
+        tool_call_id: "r-2",
+        tool_output_text: "b",
+        turn_end: groupedTurnEnd,
+      }),
+    ];
+
+    const timelineItems = buildTimelineModel(rawEvents, subagents).items;
+    renderPane(timelineItems);
+
+    expect(screen.getByTestId("session-message-phase-commentary")).toBeInTheDocument();
+    expect(screen.getByTestId("session-reasoning-withheld")).toHaveTextContent("Reasoning withheld");
+    // Agent call with subagents is NOT swallowed into ActivityChip.
+    const subagentWidget = screen.getByTestId("tool-subagents");
+    expect(subagentWidget).toHaveTextContent("2 agents · 1 running");
+    fireEvent.click(subagentWidget.querySelector("summary")!);
+    expect(subagentWidget).toHaveTextContent("Audit bench failure");
+    expect(subagentWidget).toHaveTextContent("Scan meta.json reader");
+
+    expect(screen.getByTestId("session-waiting-background-agents")).toHaveTextContent(
+      "Waiting for 2 background agents to finish",
+    );
+    const taskNotif = screen.getByTestId("session-task-notification");
+    expect(taskNotif).toHaveTextContent("42s · 18.5k tokens · 6 tool uses");
+    fireEvent.click(within(taskNotif).getByRole("button"));
+    expect(screen.getByTestId("session-task-notification-result")).toHaveTextContent("Detailed audit output line");
+
+    expect(screen.getByTestId("session-api-error-notice")).toHaveTextContent("retry 1/4 · HTTP 529");
+    expect(screen.getByTestId("session-turn-end")).toHaveTextContent("Stop hook verified");
   });
 });

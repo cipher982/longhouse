@@ -87,3 +87,18 @@ export function formatTurnDuration(durationMs: number): string {
   if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
   return `${seconds}s`;
 }
+
+/** Compact token formatting matching Claude Code CLI ("1.0M", "194.2k", "126k", "420"). */
+export function formatCompactTokens(tokens: number): string {
+  const safe = Math.max(0, Math.round(tokens));
+  if (safe >= 1_000_000) {
+    const millions = safe / 1_000_000;
+    return `${millions >= 10 ? Math.round(millions) : millions.toFixed(1)}M`;
+  }
+  if (safe >= 1_000) {
+    const thousands = safe / 1_000;
+    const rounded = thousands.toFixed(1);
+    return rounded.endsWith(".0") ? `${rounded.slice(0, -2)}k` : `${rounded}k`;
+  }
+  return String(safe);
+}

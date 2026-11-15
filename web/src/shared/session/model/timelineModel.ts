@@ -260,6 +260,8 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
  * read there).
  */
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
+  const callIntent = interaction.callEvent?.tool_intent;
+  if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();
   const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
   const shell = isShellTool(interaction.presentation?.tool_name ?? interaction.toolName);
   const fields = shell ? (["i", "intent", "description"] as const) : (["i", "intent"] as const);
@@ -275,6 +277,7 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
 export function isActivityEligible(interaction: ToolInteraction): boolean {
+  if ((interaction.children?.length ?? 0) > 0) return false;
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
   // A live preview row stays standalone until its durable event replaces it,
@@ -1015,9 +1018,12 @@ export function buildTimelineModel(
 
     const event = projectionItem.event;
     if (!event) continue;
-    // Turn ends and withheld reasoning carry facts but no text; until the
-    // shared presentation renders them they add nothing to read.
-    if ((event.item?.kind === "turn_end" || event.item?.kind === "reasoning") && !event.content_text) continue;
+    // Turn ends and non-withheld empty reasoning rows add nothing to read;
+    // withheld reasoning renders a compact indicator instead.
+    const isWithheldReasoning =
+      Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
+    if (event.item?.kind === "turn_end" && !event.content_text) continue;
+    if (event.item?.kind === "reasoning" && !event.content_text && !isWithheldReasoning) continue;
     if (event.interaction_kind === "provider_reasoning") {
       items.push({ kind: "reasoning", event });
       continue;

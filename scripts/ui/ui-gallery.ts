@@ -52,6 +52,7 @@ const JOBS: Job[] = [
   { page: "session-detail", scene: "session-input-outbox" },
   { page: "session-detail", scene: "session-remote-image-outbox" },
   { page: "session-detail", scene: "session-background-notices" },
+  { page: "session-detail", scene: "session-claude-fidelity" },
   { page: "session-detail", scene: "landing-session" },
   { page: "session-detail", scene: "session-demo-shell" },
   { page: "timeline", scene: "timeline-card-stress" },

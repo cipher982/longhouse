@@ -666,3 +666,157 @@
   line-height: 14px;
   opacity: 0.65;
 }
+
+.session-chat-composer-row__accessory {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.session-background-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-surface-well);
+}
+
+.session-background-roster__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-family: var(--font-family-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-background-roster__summary--static {
+  cursor: default;
+}
+
+.session-background-roster__summary:hover .session-background-roster__label {
+  color: var(--color-text-primary);
+}
+
+.session-background-roster__chev {
+  display: inline-flex;
+  font-family: var(--font-family-mono);
+  font-size: 13px;
+  color: var(--color-text-muted);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.session-background-roster__chev.is-open {
+  transform: rotate(90deg);
+}
+
+.session-background-roster__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-background-roster__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--color-border-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(30dvh, 250px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 720px) {
+  .session-background-roster__list {
+    max-height: min(22dvh, 170px);
+  }
+}
+
+.session-background-roster__item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.session-background-roster__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--color-intent-success);
+}
+
+.session-background-roster__dot--waiting {
+  background: var(--color-intent-warning);
+}
+
+.session-background-roster__badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--color-border-primary);
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+}
+
+.session-background-roster__badge--fork {
+  color: var(--color-intent-warning);
+}
+
+.session-background-roster__status {
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+.session-background-roster__title {
+  color: var(--color-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-background-roster__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.session-background-roster__link:hover {
+  text-decoration: underline;
+}
+
+.session-background-roster__step {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+.session-background-roster__meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
