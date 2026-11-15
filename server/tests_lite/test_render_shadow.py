@@ -78,10 +78,12 @@ def _fake_normalizer(tmp_path: Path, monkeypatch, *, mode: str, render: list[dic
     return str(script)
 
 
-async def _commit(stack, *, witnessed: bool) -> tuple[str, dict]:
+async def _commit(stack, *, witnessed: bool, laptop_render: bool = True) -> tuple[str, dict]:
     payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
     session_id = str(uuid4())
     payload["session_id"] = session_id
+    if not laptop_render:
+        payload["render"] = None
     if witnessed:
         payload["facts"] = [
             {"kind": "capture.witness", "at": "2026-07-12T12:00:00+00:00", "source_position": 0, "payload": {"format": "codex"}}
@@ -472,3 +474,27 @@ async def test_ingest_seals_the_host_render_of_a_witnessed_envelope(monkeypatch,
         assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
         inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
         assert inputs["current_render_generation"] == "018f0c3a-7b2d-7f10-8a11-423456789abc"
+
+
+@pytest.mark.asyncio
+async def test_a_witnessed_envelope_without_a_laptop_render_is_served_from_the_host_render(monkeypatch, tmp_path):
+    from zerg.services.host_render import close_ingest_normalizer
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-norender-") as stack:
+        records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"]["records"]
+        monkeypatch.setenv("LONGHOUSE_NORMALIZER_BIN", _fake_normalizer(tmp_path, monkeypatch, mode="match", render=records))
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps({"generation_id": str(uuid4()), "parser_revision": "engine-parser-v2", "ordering_revision": "semantic-order-v2"}),
+        )
+        capabilities = await stack.client.get("/agents/storage/v2/capabilities", headers={"X-Longhouse-Machine-Id": "cinder"})
+        assert capabilities.status_code == 200, capabilities.text
+        assert capabilities.json()["host_render"] is True
+        try:
+            session_id, _sent = await _commit(stack, witnessed=True, laptop_render=False)
+        finally:
+            await close_ingest_normalizer()
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert page.status_code == 200, page.text
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "world"]

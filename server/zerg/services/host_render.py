@@ -78,8 +78,14 @@ async def host_rebuild_session(
     render_workers: RenderObjectWorkerPool,
     worker: NormalizerWorker,
     session_id: str,
+    only_missing: bool = False,
 ) -> dict[str, Any]:
     """Rebuild one session into its host generation and commit it.
+
+    With `only_missing`, an epoch whose witnessed envelopes all have a render
+    in the current generation is not rebuilt: ingest committed raw it could
+    not render on its own (an OpenCode or Cursor store envelope needs the
+    epoch's earlier records), and only that needs filling.
 
     Returns the host-rendered envelope ids and whether the host generation is
     now current. Raises `HostRenderSkipped` when a complete generation cannot
@@ -107,7 +113,14 @@ async def host_rebuild_session(
     host_envelopes: list[str] = []
     for (_machine, provider, _source, epoch), rows in epochs.items():
         rows.sort(key=lambda row: row["range_start"])
-        if not any((epoch, row["range_start"]) in capture for row in rows):
+        witnessed = [row for row in rows if (epoch, row["range_start"]) in capture]
+        if not witnessed or provider == "cursor":
+            continue
+        if (
+            only_missing
+            and current is not None
+            and all(str((laptop_objects.get(row["envelope_id"]) or {}).get("generation_id")) == str(current) for row in witnessed)
+        ):
             continue
         try:
             request, raw_specs = await _epoch_request(
@@ -166,7 +179,7 @@ async def host_rebuild_session(
             )
             host_envelopes.append(row["envelope_id"])
     if generation is None:
-        raise HostRenderSkipped("no witnessed envelope")
+        raise HostRenderSkipped("nothing to rebuild" if only_missing else "no witnessed envelope")
 
     if current is not None and str(current) != generation["generation_id"]:
         # Carry every other native envelope the current generation serves.
@@ -234,6 +247,7 @@ async def host_rebuild_session(
 
 _ingest_worker: NormalizerWorker | None = None
 _scheduled: dict[str, asyncio.Task[None]] = {}
+_rerun: set[str] = set()
 
 
 def _ingest_normalizer() -> NormalizerWorker | None:
@@ -280,14 +294,25 @@ async def render_at_ingest(
     render to seal.
     """
     worker = _ingest_normalizer()
-    if worker is None:
+    if worker is None or raw_spec.provider == "cursor":
+        # Cursor keeps the laptop's render authority for now: its store.db
+        # render must replace a lossy agent-transcripts render whenever it
+        # arrives, which a host generation's coverage rule would block.
         return None
     witness = [
         {key: fact[key] for key in ("kind", "at", "source_position", "payload")}
         for fact in parsed.get("provider_facts") or []
         if fact.get("kind") == CAPTURE_WITNESS and fact.get("source_position") == raw_spec.range_start
     ]
-    host_renders = bool(witness) and raw_spec.range_kind == "byte_offset" and not parsed.get("media_refs")
+    host_renders = bool(witness) and raw_spec.range_kind == "byte_offset"
+    refs: list[dict[str, Any]] = []
+    media: dict[str, str] = {}
+    if host_renders:
+        try:
+            refs, media = await _ingest_media(parsed.get("media_refs") or [], owner_id=owner_id)
+        except Exception:  # noqa: BLE001 - the laptop render is sealed and the sweep rebuilds
+            logger.info("host render at ingest: media unreadable for session %s", raw_spec.session_id, exc_info=True)
+            host_renders = False
     envelope = {
         "range_start": raw_spec.range_start,
         "range_end": raw_spec.range_end,
@@ -296,7 +321,7 @@ async def render_at_ingest(
             for record in raw_spec.records
         ],
         "facts": witness,
-        "media": [],
+        "media": refs,
     }
     request = {
         "id": "ingest",
@@ -307,7 +332,7 @@ async def render_at_ingest(
         "range_kind": raw_spec.range_kind,
         # With no envelope the worker still names the generation.
         "envelopes": [envelope] if host_renders else [],
-        "media": {},
+        "media": media,
     }
     try:
         answer = await worker.rebuild(request)
@@ -339,22 +364,71 @@ async def render_at_ingest(
             lane=lane,
             projector_read=False,
         )
-        return {"generation": generation, "spec": spec, "render_source": "host", "object_parser_revision": generation["parser_revision"]}
+        return {
+            "generation": generation,
+            "spec": spec,
+            "render_source": "host",
+            "object_parser_revision": generation["parser_revision"],
+            "witnessed": True,
+        }
     laptop = parsed.get("render_spec")
     if laptop is None:
-        return {"generation": generation, "spec": None, "render_source": "laptop", "object_parser_revision": None}
+        return {
+            "generation": generation,
+            "spec": None,
+            "render_source": "laptop",
+            "object_parser_revision": None,
+            "witnessed": bool(witness),
+        }
     retargeted = replace(
         laptop,
         render_generation=UUID(generation["generation_id"]),
         parser_revision=generation["parser_revision"],
         ordering_revision=generation["ordering_revision"],
     )
-    return {"generation": generation, "spec": retargeted, "render_source": "laptop", "object_parser_revision": laptop.parser_revision}
+    return {
+        "generation": generation,
+        "spec": retargeted,
+        "render_source": "laptop",
+        "object_parser_revision": laptop.parser_revision,
+        "witnessed": bool(witness),
+    }
+
+
+async def _ingest_media(refs: list[dict[str, Any]], *, owner_id: str | None) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """The envelope's media references and bytes, as the normalizer reads them.
+
+    The Machine Agent uploads media before the envelope that names it, so the
+    bytes are in the store by now.
+    """
+    if not refs:
+        return [], {}
+    if owner_id is None:
+        raise LookupError("media needs an owner")
+    from zerg.routers.agents_storage_v2 import read_storage_v2_media_bytes
+
+    wire = []
+    media: dict[str, str] = {}
+    for ref in refs:
+        wire.append(
+            {
+                "sha256": ref["media_hash"],
+                "source_position": ref["source_position"],
+                "ref_key": ref["ref_key"],
+                "availability": ref["availability"],
+            }
+        )
+        if ref["availability"] == "available" and ref["media_hash"] not in media:
+            _hash, _manifest, data = await read_storage_v2_media_bytes(str(ref["media_hash"]), owner_id=int(owner_id))
+            media[str(ref["media_hash"])] = base64.b64encode(data).decode("ascii")
+    return wire, media
 
 
 def schedule_host_rebuild(session_id: str) -> None:
     """Fill a host generation that is not served yet, once per session at a time."""
     if session_id in _scheduled:
+        # Envelopes keep arriving while a rebuild runs; one more pass covers them.
+        _rerun.add(session_id)
         return
     from zerg.services.render_shadow import _worker as sweep_worker
     from zerg.services.render_shadow import rebuild_context
@@ -365,12 +439,18 @@ def schedule_host_rebuild(session_id: str) -> None:
 
     async def run() -> None:
         try:
-            await host_rebuild_session(worker=sweep_worker, session_id=session_id, **context)
-        except HostRenderSkipped as exc:
-            logger.info("host render session=%s skipped: %s", session_id, exc)
+            while True:
+                _rerun.discard(session_id)
+                try:
+                    await host_rebuild_session(worker=sweep_worker, session_id=session_id, only_missing=True, **context)
+                except HostRenderSkipped as exc:
+                    logger.info("host render session=%s skipped: %s", session_id, exc)
+                if session_id not in _rerun:
+                    break
         except Exception:  # noqa: BLE001 - the sweep retries it
             logger.exception("host render rebuild failed session=%s", session_id)
         finally:
             _scheduled.pop(session_id, None)
+            _rerun.discard(session_id)
 
     _scheduled[session_id] = asyncio.create_task(run())

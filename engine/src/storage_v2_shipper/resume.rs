@@ -466,6 +466,7 @@ mod tests {
             envelope_content_encodings: Vec::new(),
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: resume.then(|| RESUME_PATH.to_string()),
+            host_render: false,
         }
     }
 

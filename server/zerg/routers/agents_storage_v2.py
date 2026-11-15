@@ -852,7 +852,17 @@ async def storage_v2_capabilities(
         "range_kinds": ["byte_offset", "record_ordinal"],
         "lanes": ["live", "repair"],
         "lane_header": "X-Longhouse-Storage-Lane",
+        # Host-normalized transcripts Phase 4: this host renders witnessed
+        # envelopes from raw, so the Machine Agent need not ship its render.
+        "host_render": _host_renders(),
     }
+
+
+def _host_renders() -> bool:
+    from zerg.services.render_shadow import host_authority_enabled
+    from zerg.services.render_shadow import normalizer_binary
+
+    return host_authority_enabled() and normalizer_binary() is not None
 
 
 class SourceResumeSource(BaseModel):
@@ -1256,8 +1266,12 @@ async def _commit_admitted_envelope(
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
         timer.mark("catalog_commit")
-        if host_render is not None and render_manifest is not None and committed.get("render_served") is False:
-            # A host generation that does not cover what is served yet: fill it now.
+        if host_render is not None and (
+            (render_manifest is not None and committed.get("render_served") is False)
+            or (render_manifest is None and host_render.get("witnessed"))
+        ):
+            # A host generation that does not cover what is served yet, or a
+            # witnessed envelope ingest could not render alone: fill it now.
             from zerg.services.host_render import schedule_host_rebuild
 
             schedule_host_rebuild(str(spec.session_id))

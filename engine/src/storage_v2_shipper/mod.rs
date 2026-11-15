@@ -727,6 +727,7 @@ mod tests {
             envelope_content_encodings: Vec::new(),
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
+            host_render: false,
         }
     }
 
@@ -1190,6 +1191,37 @@ mod tests {
         if let Err(error) = outcome {
             std::panic::resume_unwind(error);
         }
+    }
+
+    #[test]
+    fn a_host_that_renders_from_raw_gets_the_witness_and_no_laptop_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"019c638d-0000-0000-0000-0000000000ab\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"content\":\"hi\"},\"cwd\":\"/tmp/proj\"}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let mut host = capabilities();
+        host.host_render = true;
+        let prepared = prepare_next_envelope(&mut conn, &host, &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(prepared.envelope.render.is_none());
+        assert!(prepared
+            .envelope
+            .facts
+            .iter()
+            .any(|fact| fact.kind == crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND));
+
+        // An older host still gets the laptop render.
+        let other = dir.path().join("other.jsonl");
+        fs::copy(&path, &other).unwrap();
+        let laptop = prepare_next_envelope(&mut conn, &capabilities(), &other, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(laptop.envelope.render.is_some());
     }
 
     #[test]

@@ -39,6 +39,11 @@ pub struct StorageV2Capabilities {
     /// today's behavior: a fresh epoch from position zero.
     #[serde(default)]
     pub source_resume_path: Option<String>,
+    /// The Runtime Host builds the render from raw and the capture witness
+    /// (host-normalized-transcripts Phase 4), so a witnessed envelope need
+    /// not carry the laptop's render. Absent on older hosts.
+    #[serde(default)]
+    pub host_render: bool,
 }
 
 impl StorageV2Capabilities {
@@ -561,6 +566,7 @@ mod tests {
             envelope_content_encodings: vec!["zstd".to_string(), "identity".to_string()],
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
+            host_render: false,
             ..older_host
         };
         assert_eq!(
@@ -616,6 +622,7 @@ mod tests {
             envelope_content_encodings: Vec::new(),
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
+            host_render: false,
         }
     }
 
@@ -696,6 +703,7 @@ mod tests {
             envelope_content_encodings: Vec::new(),
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
+            host_render: false,
         };
         valid.validate("cinder").unwrap();
         let mut drift = valid;
