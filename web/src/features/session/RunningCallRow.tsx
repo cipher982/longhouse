@@ -9,7 +9,7 @@ import {
   getToolSummary,
   type ToolInteraction,
 } from "@/shared/session/model";
-import { ACTIVITY_UNCERTAIN_LABEL, sessionIsWorking, workClaimExpired } from "@/shared/session/sessionStatus";
+import { sessionIsWorking, workClaimExpired } from "@/shared/session/sessionStatus";
 import { formatElapsedClock } from "./sessionHeaderState";
 
 /**
@@ -110,10 +110,10 @@ export function useRunningCallState(interaction: ToolInteraction) {
 
   const note =
     state === "live"
-      ? `No output yet: the transcript records a call's output when the call returns.${sinceSignal ? ` Last signal from ${host} ${sinceSignal} ago.` : ""}`
+      ? `Waiting for return${sinceSignal ? ` · ${host} signal ${sinceSignal} ago` : ""}`
       : state === "uncertain"
-        ? `${ACTIVITY_UNCERTAIN_LABEL}: ${sinceSignal ? `no signal from ${host} for ${sinceSignal}` : `no recent signal from ${host}`}. The call may still be running; Longhouse can't confirm it.`
-        : `No output recorded yet.${sinceSignal ? ` Last signal from ${host} ${sinceSignal} ago.` : ""}`;
+        ? `Unconfirmed · ${sinceSignal ? `no signal from ${host} for ${sinceSignal}` : `no recent signal from ${host}`}`
+        : `No output recorded${sinceSignal ? ` · ${host} signal ${sinceSignal} ago` : ""}`;
 
   return {
     enabled: liveness != null,
@@ -231,7 +231,13 @@ export function RunningCallRow({
       {expanded ? (
         <div id={detailId}>{detail}</div>
       ) : tail ? null : (
-        <div className="tl-run__note" data-testid="running-call-note">{run.note}</div>
+        <div
+          className="tl-run__note"
+          data-testid="running-call-note"
+          title={run.state === "live" ? "The transcript records a call's output when the call returns." : undefined}
+        >
+          {run.note}
+        </div>
       )}
     </div>
   );

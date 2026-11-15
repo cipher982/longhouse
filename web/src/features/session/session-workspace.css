@@ -4022,7 +4022,7 @@
 }
 .tl-run__note {
   margin: 7px 0 0 24px;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--color-text-muted);
 }
@@ -4055,7 +4055,7 @@
   opacity: 0.7;
 }
 .tl-run[data-run-state="uncertain"] .tl-run__note {
-  color: var(--color-text-secondary);
+  color: var(--color-intent-warning);
 }
 .tl-run.is-expanded .tl-detail {
   margin-top: 8px;

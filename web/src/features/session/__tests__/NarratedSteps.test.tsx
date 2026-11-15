@@ -159,7 +159,7 @@ describe("a running call", () => {
     expect(screen.getByTestId("running-call-clock")).toHaveTextContent("41:53");
     expect(screen.getByTestId("running-call-clock")).toHaveTextContent("of 1:00:00 timeout");
     expect(row.querySelector(".tl-run__shimmer")).not.toBeNull();
-    expect(screen.getByTestId("running-call-note")).toHaveTextContent("Last signal from cinder 4 s ago");
+    expect(screen.getByTestId("running-call-note")).toHaveTextContent("Waiting for return · cinder signal 4 s ago");
   });
 
   it("names the tool on the row when the headline is the description or the command", () => {
@@ -180,7 +180,7 @@ describe("a running call", () => {
     // The clock stops at the last signal rather than running on inference.
     expect(screen.getByTestId("running-call-clock")).toHaveTextContent("38:53");
     expect(screen.getByTestId("running-call-note")).toHaveTextContent(
-      "Activity uncertain: no signal from cinder for 3 min",
+      "Unconfirmed · no signal from cinder for 3 min",
     );
   });
 
