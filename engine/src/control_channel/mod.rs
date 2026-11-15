@@ -3195,28 +3195,6 @@ mod tests {
         assert_eq!(result["error"]["code"], "unsupported_command");
     }
 
-    #[tokio::test]
-    async fn handle_command_frame_rejects_unproven_provider_steer_paths() {
-        let mut cache = command_cache();
-        let antigravity = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-antigravity-steer",
-                "session_id": "session-1",
-                "command_type": COMMAND_STEER_TEXT,
-                "payload": {"provider": "antigravity", "text": "change course"},
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-
-        assert_eq!(antigravity["ok"], false);
-        // Refused for lacking an active-turn steer path, not for being
-        // Antigravity. The hook inbox delivers a turn; it cannot redirect one.
-        assert_eq!(antigravity["error"]["code"], "unsupported_command");
-    }
-
     #[test]
     fn completed_command_cache_evicts_oldest_result() {
         let mut cache = CompletedCommandCache::new(1, Duration::from_secs(60));

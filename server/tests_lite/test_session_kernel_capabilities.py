@@ -293,16 +293,17 @@ def test_antigravity_hook_inbox_passes_contract_send_through(db):
     caps = project_session_capabilities(db, session_id=s.id)
 
     assert caps.managed_transport.value == "antigravity_hook_inbox"
-    # The contract implements send, so a connection carrying send=1 keeps it.
-    # The clamp still holds down every operation the contract lacks, and the
-    # honesty gate for send lives past this row: the served grant additionally
-    # requires a control fact whose granted_operations names it.
+    # The contract implements send, so a connection carrying send=1 keeps it;
+    # interrupt and terminate stay off because this connection does not carry
+    # them. The honesty gate lives past this row: the served grant additionally
+    # requires a control fact whose granted_operations names the operation.
+    # Steer follows the hook inbox control plane once send is live.
     assert caps.can_send_input is True
     assert caps.can_interrupt is False
     assert caps.can_terminate is False
     assert caps.can_tail_output is True
     assert caps.can_resume is False
-    assert caps.can_steer_active_turn is False
+    assert caps.can_steer_active_turn is True
 
 
 def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
@@ -325,15 +326,13 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     # holds down is everything the contract still lacks.
     assert caps.can_send_input is True
     assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
-    # The contract's interrupt flag is the Console turn interrupt
-    # (antigravity.turn_interrupt), so the clamp passes it; a real Helm
-    # connection never reports it, because connection capabilities follow the
-    # exact `antigravity.interrupt` live-control support, which is not built.
+    # Helm interrupt (hook terminationBehavior) and terminate (process-group
+    # reap) are implemented, so the clamp passes both.
     assert caps.can_interrupt is True
-    assert contract_for_provider("antigravity").connection_capabilities["can_interrupt"] == 0
+    assert contract_for_provider("antigravity").connection_capabilities["can_interrupt"] == 1
     assert coverage["abort"].state == ActionCoverageState.SUPPORTED
-    assert caps.can_terminate is False
-    assert contract_for_provider("antigravity").terminate is False
+    assert caps.can_terminate is True
+    assert contract_for_provider("antigravity").terminate is True
     assert caps.can_resume is False
     assert coverage["reattach"].state == ActionCoverageState.UNSUPPORTED
     assert caps.can_tail_output is True
@@ -369,7 +368,7 @@ def test_all_manifest_control_planes_clamp_session_capabilities_to_contract(db, 
 @pytest.mark.parametrize(
     ("provider", "control_plane", "expected"),
     [
-        ("antigravity", "antigravity_process", {"send": True, "interrupt": True, "terminate": False, "resume": False}),
+        ("antigravity", "antigravity_process", {"send": True, "interrupt": True, "terminate": True, "resume": False}),
         ("opencode", "opencode_process", {"send": True, "interrupt": True, "terminate": True, "resume": True}),
     ],
 )
@@ -433,7 +432,7 @@ def test_degraded_claude_channel_bridge_still_projects_steer_when_send_capable(d
 
 @pytest.mark.parametrize(
     "control_plane",
-    ["log_tail", "opencode_process", "antigravity_hook_inbox", "antigravity_process"],
+    ["log_tail", "opencode_process", "antigravity_process"],
 )
 def test_non_injection_control_planes_do_not_project_steer(db, control_plane):
     s = _make_session(db, provider="opencode")

@@ -32,14 +32,15 @@ def test_attachment_bytes_must_match_the_declared_image_type():
     assert excinfo.value.status_code == 415
 
 
-def test_every_provider_has_a_console_row_except_none_and_helm_excludes_antigravity():
+def test_every_provider_has_a_console_and_a_helm_row():
     providers = {"codex", "claude", "opencode", "cursor", "pi", "omp", "antigravity"}
     assert {provider for provider, mode in ATTACHMENT_DELIVERY if mode == "console"} == providers
-    assert {provider for provider, mode in ATTACHMENT_DELIVERY if mode == "helm"} == providers - {"antigravity"}
+    assert {provider for provider, mode in ATTACHMENT_DELIVERY if mode == "helm"} == providers
     assert attachment_delivery("codex", "helm") == "native"
     assert attachment_delivery("claude", "console") == "path"
     assert attachment_delivery("Claude", " HELM ") == "path"
-    assert not attachments_supported("antigravity", "helm")
+    # Antigravity Helm names the staged file in the hook-inbox message.
+    assert attachment_delivery("antigravity", "helm") == "path"
     assert not attachments_supported("codex", "shadow")
     assert not attachments_supported(None, None)
 
@@ -52,7 +53,7 @@ def test_attach_capability_follows_the_modes_own_send_action():
     assert _attach_images_capability(provider="claude", session_mode="console", live_control_available=False, can_start_turn=True)
     assert not _attach_images_capability(provider="claude", session_mode="console", live_control_available=False, can_start_turn=False)
     # Unsupported cells stay off regardless of availability.
-    assert not _attach_images_capability(provider="antigravity", session_mode="helm", live_control_available=True, can_start_turn=True)
+    assert _attach_images_capability(provider="antigravity", session_mode="helm", live_control_available=True, can_start_turn=False)
     assert not _attach_images_capability(provider="codex", session_mode="shadow", live_control_available=True, can_start_turn=True)
 
 

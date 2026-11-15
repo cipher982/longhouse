@@ -2697,15 +2697,14 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
     }
     assert Path(codex["data"]["raw_steer_dispatch_path"]).is_file()
     # OpenCode steer is implemented and needs live_token proof this no-token
-    # harness cannot produce (opencode_helm_lifecycle owns it); Antigravity's
-    # stays Longhouse backlog.
+    # harness cannot produce (opencode_helm_lifecycle owns it). Antigravity
+    # Helm steer is implemented too (hook inbox); its live proof is the bench
+    # receipt, not this no-token harness.
     opencode = by_provider["opencode"]
     assert opencode["status"] == "blocked"
 
     antigravity = by_provider["antigravity"]
-    assert antigravity["status"] == "unsupported_gap"
-    assert antigravity["failure_code"] == "steer_active_turn_unsupported"
-    assert antigravity["data"]["disposition"] == "not_implemented"
+    assert antigravity["status"] == "blocked"
 
 
 def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_path: Path) -> None:
@@ -2879,15 +2878,11 @@ def test_terminate_cleanup_respects_provider_contract(tmp_path: Path) -> None:
 
     assert payload["verdict"] == "yellow"
     by_provider = {result["provider"]: result for result in payload["results"]}
-    for provider in ("claude", "codex", "opencode"):
+    for provider in ("claude", "codex", "opencode", "antigravity"):
         result = by_provider[provider]
         assert result["status"] == "pass"
         assert result["data"]["operation_evidence"]["terminate"]["status"] == "pass"
         assert result["data"]["cleanup_assertions"]["owned_processes_remaining"] == 0
-    antigravity = by_provider["antigravity"]
-    assert antigravity["status"] == "unsupported_gap"
-    assert antigravity["failure_code"] == "terminate_cleanup_unsupported"
-    assert antigravity["data"]["operation_evidence"]["terminate"]["status"] == "unsupported_gap"
 
 
 def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_path: Path, monkeypatch) -> None:

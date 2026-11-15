@@ -94,26 +94,22 @@ def test_live_executing_claude_channel_bridge_uses_steer_intent():
 
 
 def test_live_executing_non_steerable_transport_uses_queue_intent():
-    affordance = _project(_caps(control_plane="antigravity_hook_inbox"), provider_label="Antigravity", is_executing=True)
+    affordance = _project(_caps(control_plane="opencode_process"), provider_label="OpenCode", is_executing=True)
 
     assert affordance.input_mode == "live"
     assert affordance.default_input_intent == "queue"
     assert affordance.send_disabled_reason is None
 
 
-def test_live_executing_antigravity_hook_inbox_uses_queue_intent_not_steer():
-    caps = _caps(
-        control_plane="antigravity_hook_inbox",
-        can_interrupt=False,
-        can_terminate=False,
-        can_resume=False,
-    )
-    assert caps.can_steer_active_turn is False
+def test_live_executing_antigravity_hook_inbox_steers():
+    # Helm steer rides the hook inbox: it lands at the next invocation boundary.
+    caps = _caps(control_plane="antigravity_hook_inbox", can_resume=False)
+    assert caps.can_steer_active_turn is True
 
     affordance = _project(caps, provider_label="Antigravity", is_executing=True)
 
     assert affordance.input_mode == "live"
-    assert affordance.default_input_intent == "queue"
+    assert affordance.default_input_intent == "steer"
     assert affordance.send_disabled_reason is None
 
 

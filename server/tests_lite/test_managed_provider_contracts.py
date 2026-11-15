@@ -527,7 +527,7 @@ def test_antigravity_contract_serves_hook_send_and_acp_console_turns():
     send_evidence = contract.operation_evidence_for("send_input")
     assert send_evidence["disposition"] == "implemented"
     assert send_evidence["level"] == "live_token"
-    assert contract.operation_evidence_for("steer_active_turn")["level"] == "hermetic"
+    assert contract.operation_evidence_for("steer_active_turn")["level"] == "scripted_model"
     # Console is served through one `agy acp` process per turn: it needs no
     # hook, so it works under either credential authority.
     assert contract.console_adapter == "antigravity_acp"

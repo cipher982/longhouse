@@ -497,7 +497,8 @@ def test_select_managed_control_transport_rejects_antigravity_process_transport(
     "command_type",
     [MANAGED_CONTROL_COMMAND_INTERRUPT, MANAGED_CONTROL_COMMAND_STEER_TEXT],
 )
-def test_select_managed_control_transport_rejects_antigravity_non_send_commands(command_type):
+def test_select_managed_control_transport_routes_antigravity_hook_inbox_control(command_type):
+    # Helm interrupt and steer ride the hook inbox through the engine channel.
     async def _run():
         await _clear_machine_registry()
         try:
@@ -515,7 +516,7 @@ def test_select_managed_control_transport_rejects_antigravity_non_send_commands(
                     owner_id=42,
                     command_type=command_type,
                 )
-                is None
+                == "engine_channel"
             )
         finally:
             await _clear_machine_registry()

@@ -490,6 +490,21 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
 
 
 def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
+    """A contract without active-turn steer is refused before any control write.
+
+    Every shipped provider steers now, so the gate is exercised with a contract
+    whose steer flag is cleared.
+    """
+    import dataclasses
+
+    import zerg.services.managed_local_control as control
+    from zerg.services.managed_provider_contracts import contract_for_provider as real_contract
+
+    monkeypatch.setattr(
+        control,
+        "contract_for_provider",
+        lambda name: dataclasses.replace(real_contract(name), steer_active_turn=False),
+    )
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     for provider in ("antigravity",):
