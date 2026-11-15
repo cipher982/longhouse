@@ -480,33 +480,20 @@ def test_runs_on_a_topic_branch_do_not_speak_for_the_ship() -> None:
     ship's verdict. Prefer the default branch's runs when it has any.
     """
 
-    payload = [
-        {
-            "databaseId": 1,
-            "workflowName": "CI",
-            "status": "completed",
-            "conclusion": "success",
-            "url": "",
-            "headSha": "abc123",
-            "createdAt": "",
-            "event": "push",
-            "headBranch": "main",
-        },
-        {
-            "databaseId": 2,
-            "workflowName": "CI",
-            "status": "completed",
-            "conclusion": "failure",
-            "url": "",
-            "headSha": "abc123",
-            "createdAt": "",
-            "event": "push",
-            "headBranch": "ci-gate-shape",
-        },
-    ]
+    def item(run_id: int, branch: str, conclusion: str) -> dict:
+        return {
+            "id": run_id, "name": "CI", "status": "completed", "conclusion": conclusion, "html_url": "",
+            "head_sha": "abc123", "created_at": "", "event": "push", "head_branch": branch,
+        }
+
+    payload = {"workflow_runs": [item(1, "main", "success"), item(2, "ci-gate-shape", "failure")]}
+    ship_monitor._ETAG_CACHE.clear()
 
     def fake_run(cmd, cwd=None, check=True, env=None):  # noqa: ANN001
-        stdout = "origin/main\n" if cmd[:2] == ["git", "symbolic-ref"] else json.dumps(payload)
+        if cmd[:2] == ["git", "symbolic-ref"]:
+            stdout = "origin/main\n"
+        else:
+            stdout = 'HTTP/2.0 200 OK\r\nEtag: "e1"\r\n\r\n' + json.dumps(payload)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
     previous = ship_monitor.run
@@ -517,6 +504,37 @@ def test_runs_on_a_topic_branch_do_not_speak_for_the_ship() -> None:
         ship_monitor.run = previous
 
     assert [run.databaseId for run in runs] == [1]
+
+
+def test_unchanged_run_list_is_a_conditional_request_answered_by_304() -> None:
+    """A 304 is free against the GitHub rate limit; one call per poll, with If-None-Match after the first."""
+
+    ship_monitor._ETAG_CACHE.clear()
+    calls: list[list[str]] = []
+    body = {"workflow_runs": [{"id": 7, "name": "CI", "status": "in_progress", "conclusion": None, "html_url": "",
+                               "head_sha": "abc123", "created_at": "", "event": "push", "head_branch": "main"}]}
+
+    def fake_run(cmd, cwd=None, check=True, env=None):  # noqa: ANN001
+        if cmd[:2] == ["git", "symbolic-ref"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="origin/main\n", stderr="")
+        calls.append(cmd)
+        if "If-None-Match: \"e1\"" in cmd:
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="HTTP/2.0 304 Not Modified\r\n\r\n", stderr="")
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout='HTTP/2.0 200 OK\r\nEtag: "e1"\r\n\r\n' + json.dumps(body), stderr=""
+        )
+
+    previous = ship_monitor.run
+    ship_monitor.run = fake_run
+    try:
+        first = ship_monitor.fetch_runs("cipher982/longhouse", "abc123")
+        second = ship_monitor.fetch_runs("cipher982/longhouse", "abc123")
+    finally:
+        ship_monitor.run = previous
+
+    assert len(calls) == 2, calls  # one API call per poll, not one per event
+    assert "If-None-Match" not in " ".join(calls[0]) and "If-None-Match" in " ".join(calls[1])
+    assert [r.databaseId for r in first] == [r.databaseId for r in second] == [7]
 
 
 def test_runtime_schema_only_change_requires_new_runtime() -> None:
@@ -646,4 +664,5 @@ if __name__ == "__main__":
     test_runtime_candidate_is_not_covered_by_docs_only_head()
     test_a_real_failure_on_main_head_is_not_treated_as_superseded()
     test_deploy_that_stood_down_counts_as_superseded()
+    test_unchanged_run_list_is_a_conditional_request_answered_by_304()
     print("ship-monitor tests passed")

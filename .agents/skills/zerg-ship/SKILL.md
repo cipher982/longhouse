@@ -149,9 +149,14 @@ Re-land your change with the fix on top. Dry run against any red run:
 `GITHUB_TOKEN=$(gh auth token) python3 scripts/ci/main_repair.py --run-id <id> --dry-run`.
 
 Waiting rules: use a completion event or blocking wait once and move on; no
-`pgrep`/`curl` loops. For a queued GitHub run use
-`gh run watch <id> --interval 60 --compact --exit-status` (the 3 s default hits
-the API rate limit when several watchers run).
+`pgrep`/`curl` loops. Never run `gh run watch` (it polls every 3 s, and even with
+`--interval 60` several watchers add up) and never poll GitHub more often than
+every 45 s. All personal GitHub tokens share one 5000/h budget; on 2026-11-15 agent
+watchers exhausted it and blocked every `gh` call for 15 minutes. Use
+`make ship-watch SHA=<sha>` (ETag-cached, 45 s floor), or hand the SHA to the
+Sauron `longhouse-ship-watch` job and wait for its message: `make ship` already
+leaves the ref that makes it wake the session on a failure or a missed deadline.
+Check the budget with `gh api rate_limit` (free).
 
 Reading the result:
 

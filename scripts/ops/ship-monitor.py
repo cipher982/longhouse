@@ -108,7 +108,12 @@ def parse_args() -> argparse.Namespace:
         default=1800,
         help="How long to wait for the first push workflow run to appear. Default: 1800.",
     )
-    parser.add_argument("--poll", type=int, default=10, help="Polling interval in seconds. Default: 10.")
+    parser.add_argument(
+        "--poll",
+        type=int,
+        default=45,
+        help=f"Polling interval in seconds. Default: 45; values under {MIN_POLL_SECONDS} are raised to it (GitHub rate budget).",
+    )
     parser.add_argument(
         "--skip-live",
         action="store_true",
@@ -153,40 +158,54 @@ def resolve_commit_sha(root: Path, rev: str) -> str:
     return proc.stdout.strip()
 
 
-def fetch_runs_for_event(repo: str, sha: str, event: str) -> list[RunInfo]:
-    proc = run(
-        [
-            "gh",
-            "run",
-            "list",
-            "-R",
-            repo,
-            "--commit",
-            sha,
-            "--event",
-            event,
-            "--limit",
-            "100",
-            "--json",
-            "databaseId,workflowName,status,conclusion,url,headSha,createdAt,event,headBranch",
-        ]
-    )
-    payload = json.loads(proc.stdout or "[]")
+MIN_POLL_SECONDS = 30
+# etag + body per REST path. A 304 answer to If-None-Match is not charged against the
+# GitHub rate limit, so an unchanged run list costs nothing while a ship waits.
+_ETAG_CACHE: dict[str, tuple[str, object]] = {}
+
+
+def gh_api_cached(path: str):
+    """GET a GitHub REST path through gh with ETag caching; returns the parsed JSON body."""
+
+    cached = _ETAG_CACHE.get(path)
+    cmd = ["gh", "api", "-i"]
+    if cached:
+        cmd += ["-H", f"If-None-Match: {cached[0]}"]
+    cmd.append(path)
+    proc = run(cmd, check=False)
+    out = (proc.stdout or "").replace("\r\n", "\n")
+    head, _, body = out.partition("\n\n")
+    status_line = head.splitlines()[0] if head.strip() else ""
+    if " 304" in status_line and cached:
+        return cached[1]
+    if proc.returncode != 0 or " 200" not in status_line:
+        raise RuntimeError((proc.stderr or status_line or "gh api failed").strip())
+    payload = json.loads(body or "{}")
+    etag = next((ln.split(":", 1)[1].strip() for ln in head.splitlines() if ln.lower().startswith("etag:")), "")
+    if etag:
+        _ETAG_CACHE[path] = (etag, payload)
+    return payload
+
+
+def fetch_runs_for_sha(repo: str, sha: str) -> list[RunInfo]:
+    """Every push or dispatch run of one commit: one conditional call instead of one list per event."""
+
+    data = gh_api_cached(f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100")
     runs: list[RunInfo] = []
-    for item in payload:
-        if item.get("headSha") != sha:
+    for item in data.get("workflow_runs") or []:
+        if item.get("head_sha") != sha or item.get("event") not in ("push", "workflow_dispatch"):
             continue
         runs.append(
             RunInfo(
-                databaseId=int(item["databaseId"]),
-                workflowName=item.get("workflowName") or f"run-{item['databaseId']}",
+                databaseId=int(item["id"]),
+                workflowName=item.get("name") or f"run-{item['id']}",
                 status=item.get("status") or "",
                 conclusion=item.get("conclusion"),
-                url=item.get("url") or "",
-                headSha=item.get("headSha"),
-                createdAt=item.get("createdAt"),
+                url=item.get("html_url") or "",
+                headSha=item.get("head_sha"),
+                createdAt=item.get("created_at"),
                 event=item.get("event"),
-                headBranch=item.get("headBranch"),
+                headBranch=item.get("head_branch"),
             )
         )
     return runs
@@ -211,11 +230,7 @@ def default_branch() -> str | None:
 
 
 def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
-    runs_by_id: dict[int, RunInfo] = {}
-    for event in ("push", "workflow_dispatch"):
-        for run_info in fetch_runs_for_event(repo, sha, event):
-            runs_by_id[run_info.databaseId] = run_info
-    runs = list(runs_by_id.values())
+    runs = fetch_runs_for_sha(repo, sha)
     # The same commit often exists on a topic branch and on the default branch:
     # a ship pushes a branch, then main. A failure on the topic branch is not a
     # fact about the ship -- a branch run of the *same* SHA failed on a git fetch
@@ -835,6 +850,7 @@ def emit_json(payload: dict) -> None:
 
 def main() -> int:
     args = parse_args()
+    args.poll = max(args.poll, MIN_POLL_SECONDS)
     root = repo_root()
     target_sha = resolve_commit_sha(root, args.sha.strip()) if args.sha else resolve_head_sha(root)
     short_sha = target_sha[:10]

@@ -39,5 +39,14 @@ done
 [ -n "$run_id" ] || die "dispatched, but no new run appeared within 2 minutes; check: gh run list -R $REPO -w $WORKFLOW"
 
 echo "testflight-ship: $SHA -> run $run_id (https://github.com/$REPO/actions/runs/$run_id)"
-gh run watch "$run_id" -R "$REPO" --exit-status
+# Never `gh run watch`: it polls every 3 s and spends the shared GitHub rate budget.
+conclusion=""
+for _ in $(seq 1 120); do
+  state="$(gh run view "$run_id" -R "$REPO" --json status,conclusion -q '.status + " " + (.conclusion // "")')" || state=""
+  case "$state" in
+    "completed "*) conclusion="${state#completed }"; break ;;
+  esac
+  sleep 45
+done
+[ "$conclusion" = "success" ] || die "run $run_id ended '${conclusion:-still running after 90 minutes}': https://github.com/$REPO/actions/runs/$run_id"
 echo "testflight-ship: done. See publish details in the job summary of run $run_id, or use 'make testflight-status'"

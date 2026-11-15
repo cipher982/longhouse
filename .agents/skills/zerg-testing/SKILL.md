@@ -156,6 +156,13 @@ revision; a dirty worktree is refused and there is no local fallback.
   ([maintainer testing runbook](../../../docs/runbooks/maintainer-testing.md)). Real execution,
   rendered pixels and connection recovery are separate proof obligations.
 
+## Waiting on GitHub
+
+Never run `gh run watch` or a `gh run view`/`gh run list` loop faster than every
+45 s: every personal token of the cipher982 account shares one 5000/h budget, and
+agent watchers exhausted it on 2026-11-15. Wait with `make ship-watch SHA=<sha>`
+or for the Sauron ship watcher's message. `gh api rate_limit` is free.
+
 ## Proof-run cleanup
 
 Whoever starts a server, engine, provider process, poll loop, browser tab,
