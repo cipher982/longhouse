@@ -509,3 +509,21 @@ fn golden_claude_usage_error_and_compaction_facts() {
         "the compaction boundary stays a visible system event"
     );
 }
+
+#[test]
+fn golden_claude_fidelity_signals() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_test(
+        &base.join("claude_fidelity_signals.jsonl"),
+        &base.join("claude_fidelity_signals.expected.json"),
+    );
+}
+
+#[test]
+fn golden_claude_fidelity_signals_facts() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_facts_test(
+        &base.join("claude_fidelity_signals.jsonl"),
+        &base.join("claude_fidelity_signals.facts.expected.json"),
+    );
+}

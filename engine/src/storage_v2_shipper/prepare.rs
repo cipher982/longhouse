@@ -479,6 +479,8 @@ fn prepare_file_envelope(
             pi_lineage_source_revision(path)?
         } else if is_cursor_agent_transcript_path(provider, path) {
             cursor_agent_transcript_source_revision(path)?
+        } else if provider.eq_ignore_ascii_case("claude") {
+            claude_subagent_sidecar_revision(path)?
         } else if provider.eq_ignore_ascii_case("antigravity")
             && framing == RawSourceFraming::WholeDocument
         {

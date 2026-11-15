@@ -3389,8 +3389,8 @@ class CatalogDaemon:
             title = bounded_text(request.params["title"], "title", 255)
             completed_at = _parse_datetime(request.params["completed_at"], "completed_at")
             source = request.params.get("source", "ai")
-            if source not in {"ai", "provider"}:
-                raise ValueError("title source must be ai or provider")
+            if source not in {"ai", "provider", "user"}:
+                raise ValueError("title source must be ai, provider, or user")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
@@ -4645,14 +4645,26 @@ def _validate_storage_identity_fields(params: dict) -> None:
 PROVIDER_FACT_KINDS = frozenset(
     {
         "turn.duration",
+        "turn.end",
+        "turn.thinking",
         "session.recap",
         "session.title",
+        "session.cost",
+        "session.permission_mode",
+        "session.worktree",
         "turn.usage",
         "turn.api_error",
+        "message.phase",
+        "tool.intent",
+        "input.queue",
         "context.compaction",
         "delegation.metadata",
         "delegation.spawn",
         "delegation.activity",
+        "delegation.background",
+        "delegation.waiting",
+        "delegation.scheduled",
+        "delegation.task_notification",
         # What the laptop parser read from outside the shipped bytes (git
         # resolution, sidecars, source identity), so the host can rebuild the
         # render from raw. Source-tier: never served, never dropped by a rebuild.
@@ -4742,6 +4754,14 @@ def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object
                 raise ValueError("delegation.activity occurred_at_ms must be a signed 64-bit integer")
             parsed["occurred_at_ms"] = occurred_at_ms
         return parsed
+    if kind == "delegation.waiting":
+        if not isinstance(payload, dict) or type(payload.get("count")) is not int or payload["count"] < 0:
+            raise ValueError("delegation.waiting facts need a non-negative integer count")
+        return dict(payload)
+    if kind in {"delegation.background", "delegation.scheduled", "delegation.task_notification"}:
+        if not isinstance(payload, dict):
+            raise ValueError(f"{kind} payload must be a JSON object")
+        return dict(payload)
     return payload if isinstance(payload, dict) else {}
 
 
@@ -4777,9 +4797,23 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
     if kind == "turn.usage" and type(payload.get("output_tokens")) is not int:
         raise ValueError("turn.usage facts need integer output_tokens")
     if kind == "context.compaction" and not any(
-        type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens", "replacement_items")
+        type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens", "replacement_items", "tokens_saved")
     ):
-        raise ValueError("context.compaction facts need pre_tokens, post_tokens or replacement_items")
+        raise ValueError("context.compaction facts need pre_tokens, post_tokens, replacement_items or tokens_saved")
+    if kind == "turn.end" and not (isinstance(payload.get("outcome"), str) and payload["outcome"].strip()):
+        raise ValueError("turn.end facts need a non-empty outcome")
+    if kind == "message.phase" and payload.get("phase") not in {"commentary", "final_answer"}:
+        raise ValueError("message.phase facts need phase commentary or final_answer")
+    if kind == "turn.thinking" and type(payload.get("block_count")) is not int:
+        raise ValueError("turn.thinking facts need integer block_count")
+    if kind == "session.permission_mode":
+        mode_value = payload.get("permission_mode")
+        if not (isinstance(mode_value, str) and mode_value.strip()):
+            fallback_mode = payload.get("mode")
+            if isinstance(fallback_mode, str) and fallback_mode.strip():
+                payload = {**payload, "permission_mode": fallback_mode.strip()}
+            else:
+                raise ValueError("session.permission_mode facts need a non-empty permission_mode")
     return {
         "kind": kind,
         "at": _parse_datetime(item["at"], "provider fact at"),

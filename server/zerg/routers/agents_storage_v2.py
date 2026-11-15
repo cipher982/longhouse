@@ -297,37 +297,60 @@ async def _read_bounded_bytes(request: Request, *, maximum: int) -> bytes:
     return bytes(body)
 
 
-def _first_provider_title(facts: list[dict[str, Any]]) -> str | None:
-    """The oldest provider title in this batch, sanitized like every anchor."""
+def _select_provider_title(facts: list[dict[str, Any]]) -> tuple[str, str] | None:
+    """Pick the winning provider/user session title and provenance in this batch.
+
+    User-authored renames (``payload.source == "user"``, such as Claude
+    ``/rename`` custom-title records) outrank provider-generated titles and
+    take the newest rename. Otherwise take the oldest provider-generated title
+    in the batch.
+    """
     from zerg.services.session_title import sanitize_timeline_title
 
-    titled = sorted(
-        (fact for fact in facts if fact["kind"] == "session.title" and isinstance(fact["payload"].get("title"), str)),
+    titled = [fact for fact in facts if fact["kind"] == "session.title" and isinstance(fact["payload"].get("title"), str)]
+    user_facts = sorted(
+        (fact for fact in titled if str(fact["payload"].get("source") or "").strip().lower() == "user"),
         key=lambda fact: int(fact["source_position"]),
+        reverse=True,
     )
-    for fact in titled:
+    for fact in user_facts:
         title = sanitize_timeline_title(fact["payload"]["title"], max_words=6)
         if title:
-            return title
+            return title, "user"
+
+    provider_facts = sorted(
+        (fact for fact in titled if str(fact["payload"].get("source") or "").strip().lower() != "user"),
+        key=lambda fact: int(fact["source_position"]),
+    )
+    for fact in provider_facts:
+        title = sanitize_timeline_title(fact["payload"]["title"], max_words=6)
+        if title:
+            return title, "provider"
     return None
 
 
-async def _apply_provider_title(catalogd: Any, session_id: UUID, title: str) -> None:
-    """Fill the anchor with the provider's own session name, as a fallback only.
+def _first_provider_title(facts: list[dict[str, Any]]) -> str | None:
+    """Compatibility helper returning only the selected title string."""
+    selected = _select_provider_title(facts)
+    return selected[0] if selected is not None else None
 
-    The store decides: an empty anchor takes the name, a later provider name
-    never rewrites an existing anchor, and a Longhouse AI title (the single
-    title authority) promotes over a provider anchor once it lands. This
-    runs on every path that stores a title fact, including exact replays,
-    so the outcome does not depend on which batch the title arrived in.
-    """
+
+async def _apply_provider_title(
+    catalogd: Any,
+    session_id: UUID,
+    title: str,
+    *,
+    source: str = "provider",
+) -> None:
+    """Store a provider-generated or user-authored title anchor on the session."""
+    resolved_source = "user" if str(source or "").strip().lower() == "user" else "provider"
     await catalogd.call(
         "storage.session.title.complete.v2",
         {
             "session_id": str(session_id),
             "title": title,
             "completed_at": datetime.now(UTC).isoformat(),
-            "source": "provider",
+            "source": resolved_source,
         },
         timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
     )
@@ -1135,9 +1158,14 @@ async def _commit_admitted_envelope(
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
-                replayed_title = _first_provider_title(parsed["provider_facts"])
+                replayed_title = _select_provider_title(parsed["provider_facts"])
                 if replayed_title is not None:
-                    await _apply_provider_title(catalogd, spec.session_id, replayed_title)
+                    await _apply_provider_title(
+                        catalogd,
+                        spec.session_id,
+                        replayed_title[0],
+                        source=replayed_title[1],
+                    )
             return replay_receipt
 
         owner_value = getattr(auth_token, "owner_id", None)
@@ -1264,14 +1292,14 @@ async def _commit_admitted_envelope(
             expected_envelope_id=sealed.envelope_id,
             expected_object_hash=sealed.object_hash,
         )
-        provider_title = _first_provider_title(parsed["provider_facts"])
+        provider_title = _select_provider_title(parsed["provider_facts"])
         if provider_title is not None:
-            # The provider named this session. That only ever fills an empty
-            # anchor as an immediate fallback (or is a no-op against an
-            # earlier provider name) -- it never blocks or preempts the
-            # Longhouse AI title below, which is the single title authority
-            # and promotes over a provider fallback once it lands.
-            await _apply_provider_title(catalogd, spec.session_id, provider_title)
+            await _apply_provider_title(
+                catalogd,
+                spec.session_id,
+                provider_title[0],
+                source=provider_title[1],
+            )
             timer.mark("provider_title")
         if (
             committed.get("title_generation_required") is True

@@ -734,3 +734,422 @@ async def test_an_oversized_capture_witness_never_blocks_an_exact_replay(monkeyp
         assert replay.status_code == 200, replay.text
         listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
         assert [fact["kind"] for fact in listed["facts"]] == ["turn.duration"]
+
+
+@pytest.mark.asyncio
+async def test_user_rename_title_overrides_provider_and_ai_and_never_reverts(monkeypatch):
+    """Explicit /rename (source='user') wins over provider/ai and stays pinned against later non-user updates."""
+    from zerg.services import storage_session_titles
+    from zerg.storage_v2.contracts import EnvelopeIdentity
+    from zerg.storage_v2.contracts import envelope_id
+    from zerg.storage_v2.contracts import hash_records
+
+    monkeypatch.setattr(storage_session_titles, "schedule_storage_session_title", lambda candidate: True)
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-user-title-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        t0 = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
+        epoch = uuid4()
+        data = b"hello\n"
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=epoch, data=data)
+        payload["session_id"] = str(session_id)
+        payload["provider"] = "claude"
+        payload["expected_envelope_id"] = envelope_id(
+            EnvelopeIdentity(
+                tenant_id=tenant_id,
+                machine_id="cinder",
+                provider="claude",
+                opaque_source_id="history.jsonl",
+                source_epoch=epoch,
+                range_kind="byte_offset",
+                range_start=0,
+                range_end=len(data),
+                record_hashes=hash_records((data,)),
+            )
+        )
+        payload["facts"] = [{"kind": "session.title", "at": t0.isoformat(), "source_position": 0, "payload": {"title": "Auto fallback"}}]
+        res = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert res.status_code == 200, res.text
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("Auto fallback", "provider")
+
+        await stack.catalog.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "Generated AI title",
+                "completed_at": (t0 + timedelta(seconds=1)).isoformat(),
+                "source": "ai",
+            },
+        )
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("Generated AI title", "ai")
+
+        # User /rename overrides both provider and ai titles.
+        await stack.catalog.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "My custom /rename",
+                "completed_at": (t0 + timedelta(seconds=2)).isoformat(),
+                "source": "user",
+            },
+        )
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("My custom /rename", "user")
+
+        # Subsequent ai or provider titles must not overwrite a user anchor.
+        for bad_source, title in (("ai", "Stale AI overwrite"), ("provider", "Stale provider overwrite")):
+            await stack.catalog.call(
+                "storage.session.title.complete.v2",
+                {
+                    "session_id": str(session_id),
+                    "title": title,
+                    "completed_at": (t0 + timedelta(seconds=3)).isoformat(),
+                    "source": bad_source,
+                },
+            )
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("My custom /rename", "user")
+
+        # A second user /rename does update it.
+        await stack.catalog.call(
+            "storage.session.title.complete.v2",
+            {
+                "session_id": str(session_id),
+                "title": "Renamed again by user",
+                "completed_at": (t0 + timedelta(seconds=4)).isoformat(),
+                "source": "user",
+            },
+        )
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert (read["session"]["anchor_title"], read["session"]["anchor_title_source"]) == ("Renamed again by user", "user")
+
+
+@pytest.mark.asyncio
+async def test_claude_fidelity_facts_are_accepted_and_projected_into_hud(monkeypatch):
+    """All 12 Claude fidelity provider fact kinds validate, store, and fold cleanly into HUD projections."""
+    from zerg.services.session_provider_facts import project_session_hud
+    from zerg.storage_v2.contracts import EnvelopeIdentity
+    from zerg.storage_v2.contracts import envelope_id
+    from zerg.storage_v2.contracts import hash_records
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-fidelity-facts-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        t0 = datetime(2026, 11, 14, 15, 0, tzinfo=UTC)
+        epoch = uuid4()
+        data = b"".join(f"line-{i}\n".encode() for i in range(16))
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=epoch, data=data)
+        payload["session_id"] = str(session_id)
+        payload["provider"] = "claude"
+        payload["expected_envelope_id"] = envelope_id(
+            EnvelopeIdentity(
+                tenant_id=tenant_id,
+                machine_id="cinder",
+                provider="claude",
+                opaque_source_id="history.jsonl",
+                source_epoch=epoch,
+                range_kind="byte_offset",
+                range_start=0,
+                range_end=len(data),
+                record_hashes=hash_records((data,)),
+            )
+        )
+        payload["facts"] = [
+            {"kind": "delegation.waiting", "at": t0.isoformat(), "source_position": 0, "payload": {"count": 3}},
+            {
+                "kind": "delegation.background",
+                "at": (t0 + timedelta(seconds=1)).isoformat(),
+                "source_position": 1,
+                "payload": {"task_id": "bash-1", "kind": "shell", "status": "running"},
+            },
+            {
+                "kind": "delegation.scheduled",
+                "at": (t0 + timedelta(seconds=2)).isoformat(),
+                "source_position": 2,
+                "payload": {"id": "cron-1", "action": "create", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check health"},
+            },
+            {
+                "kind": "delegation.scheduled",
+                "at": (t0 + timedelta(seconds=3)).isoformat(),
+                "source_position": 3,
+                "payload": {"id": "cron-2", "action": "create", "schedule": "0 * * * *", "recurring": False},
+            },
+            {
+                "kind": "delegation.scheduled",
+                "at": (t0 + timedelta(seconds=4)).isoformat(),
+                "source_position": 4,
+                "payload": {"id": "cron-2", "action": "cancel"},
+            },
+            {
+                "kind": "delegation.task_notification",
+                "at": (t0 + timedelta(seconds=5)).isoformat(),
+                "source_position": 5,
+                "payload": {"task_id": "agent-1", "status": "completed", "duration_ms": 1200},
+            },
+            {
+                "kind": "turn.end",
+                "at": (t0 + timedelta(seconds=6)).isoformat(),
+                "source_position": 6,
+                "payload": {"outcome": "interrupted", "stop_hook_continued": True, "stop_hook_summary": "hook ran", "source": "hook"},
+            },
+            {
+                "kind": "turn.thinking",
+                "at": (t0 + timedelta(seconds=7)).isoformat(),
+                "source_position": 7,
+                "payload": {"block_count": 1, "withheld": True},
+            },
+            {
+                "kind": "turn.api_error",
+                "at": (t0 + timedelta(seconds=8)).isoformat(),
+                "source_position": 8,
+                "payload": {"error": "API Error: 529 Overloaded", "retry_attempt": 2, "max_retries": 5, "retry_in_ms": 1500},
+            },
+            {
+                "kind": "message.phase",
+                "at": (t0 + timedelta(seconds=9)).isoformat(),
+                "source_position": 9,
+                "payload": {"phase": "commentary"},
+            },
+            {
+                "kind": "tool.intent",
+                "at": (t0 + timedelta(seconds=10)).isoformat(),
+                "source_position": 10,
+                "payload": {"tool_use_id": "tu-1", "intent": "Check cluster health"},
+            },
+            {
+                "kind": "context.compaction",
+                "at": (t0 + timedelta(seconds=11)).isoformat(),
+                "source_position": 11,
+                "payload": {"trigger": "auto", "tokens_saved": 42_000},
+            },
+            {
+                "kind": "session.worktree",
+                "at": (t0 + timedelta(seconds=12)).isoformat(),
+                "source_position": 12,
+                "payload": {"name": "wt-feat", "branch": "feat/x", "path": "/repo/.wt/wt-feat"},
+            },
+            {
+                "kind": "session.permission_mode",
+                "at": (t0 + timedelta(seconds=13)).isoformat(),
+                "source_position": 13,
+                "payload": {"mode": "bypassPermissions"},
+            },
+            {
+                "kind": "session.cost",
+                "at": (t0 + timedelta(seconds=14)).isoformat(),
+                "source_position": 14,
+                "payload": {"cost_usd": 53.89, "cumulative_duration_ms": 28_860_000},
+            },
+            {
+                "kind": "turn.usage",
+                "at": (t0 + timedelta(seconds=15)).isoformat(),
+                "source_position": 15,
+                "payload": {
+                    "model": "claude-opus-5-5",
+                    "effort": "medium",
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 130_000,
+                    "output_tokens": 27,
+                },
+            },
+        ]
+
+        res = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert res.status_code == 200, res.text
+
+        listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
+        kinds = {fact["kind"] for fact in listed["facts"]}
+        assert {
+            "delegation.waiting",
+            "delegation.background",
+            "delegation.scheduled",
+            "delegation.task_notification",
+            "turn.end",
+            "turn.thinking",
+            "turn.api_error",
+            "message.phase",
+            "tool.intent",
+            "context.compaction",
+            "session.worktree",
+            "session.permission_mode",
+            "session.cost",
+            "turn.usage",
+        }.issubset(kinds)
+
+        hud = project_session_hud(listed["facts"], base_hud={"provider": "claude"})
+        assert hud["usage_latest"]["context_window"] == 1_000_000
+        assert hud["usage_latest"]["context_window_source"] == "derived"
+        assert hud["usage_latest"]["used_percent"] == 13.0
+        assert hud["usage_latest"]["cost_usd"] == pytest.approx(53.89)
+        assert hud["usage_latest"]["cumulative_duration_ms"] == 28_860_000
+        assert hud["permission_mode"] == "bypassPermissions"
+        assert hud["worktree"]["branch"] == "feat/x"
+        assert hud["session_crons"] == [{"id": "cron-1", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check health"}]
+
+
+def test_workspace_envelope_projects_claude_fidelity_fields_and_dedups_task_notifications():
+    """Workspace projection populates tool_intent, phase, withheld thinking, turn_end, api_error, and task_notification dedup."""
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="claude",
+        origin_kind=None,
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True, can_start_turn=True),
+        model_dump=lambda mode: {"id": str(session_id)},
+    )
+    t0 = datetime(2026, 11, 14, 16, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(seconds=1)
+    t1_tool = t0 + timedelta(seconds=2)
+    t1_think = t0 + timedelta(seconds=3)
+    t2 = t0 + timedelta(seconds=4)
+    t3 = t0 + timedelta(seconds=5)
+    t4 = t0 + timedelta(seconds=6)
+    t5 = t0 + timedelta(seconds=8)
+
+    events = [
+        {
+            **_event("u-prompt", "user", t0),
+            "content_text": "check background work",
+            "raw_locator": {"source_position": 0, "event_subordinal": 0},
+        },
+        {
+            **_event("a-commentary", "assistant", t1),
+            "content_text": "Running a quick check",
+            "raw_locator": {"source_position": 1, "event_subordinal": 0},
+        },
+        {
+            **_event("a-tool", "assistant", t1_tool),
+            "content_text": None,
+            "tool_name": "CustomTool",
+            "tool_call_id": "tc-1",
+            "tool_input_json": {"raw": 1},
+            "raw_locator": {"source_position": 2, "event_subordinal": 0},
+        },
+        {
+            **_event("a-withheld", "assistant", t1_think),
+            "content_text": "Thinking:\n[Reasoning withheld]",
+            "interaction_kind": "provider_reasoning",
+            "raw_locator": {"source_position": 3, "event_subordinal": 0},
+        },
+        # Rich user-record task notification and a duplicate queue-operation copy for the same (task_id, status).
+        {
+            **_event("n-user", "user", t2),
+            "interaction_kind": "provider_notification",
+            "content_text": 'Agent "Worker" completed',
+            "raw_locator": {"source_position": 4, "event_subordinal": 0},
+        },
+        {
+            **_event("n-queue-dup", "system", t2),
+            "interaction_kind": "provider_notification",
+            "content_text": 'Agent "Worker" completed',
+            "raw_locator": {"source_position": 5, "event_subordinal": 0},
+        },
+        # A mid-turn queue-operation notification with no matching rich user record MUST stay visible.
+        {
+            **_event("n-queue-unique", "system", t3),
+            "interaction_kind": "provider_notification",
+            "content_text": "Waiting for 2 background agents to finish",
+            "raw_locator": {"source_position": 6, "event_subordinal": 0},
+        },
+        {
+            **_event("a-final", "assistant", t4),
+            "content_text": "Done.",
+            "raw_locator": {"source_position": 7, "event_subordinal": 0},
+        },
+    ]
+    facts = [
+        {"kind": "message.phase", "at": t1, "source_position": 1, "payload": {"phase": "commentary"}},
+        {"kind": "tool.intent", "at": t1_tool, "source_position": 2, "payload": {"tool_call_id": "tc-1", "intent": "Run fast unit checks"}},
+        {"kind": "turn.thinking", "at": t1_think, "source_position": 3, "payload": {"block_count": 1, "withheld": True, "chars": 0}},
+        {
+            "kind": "delegation.task_notification",
+            "at": t2,
+            "source_position": 4,
+            "payload": {
+                "task_id": "bg-1",
+                "status": "completed",
+                "source": "user",
+                "subagent_tokens": 194_200,
+                "duration_ms": 3_283_000,
+                "result": "All good",
+            },
+        },
+        {
+            "kind": "delegation.task_notification",
+            "at": t2,
+            "source_position": 5,
+            "payload": {
+                "task_id": "bg-1",
+                "status": "completed",
+                "source": "queue_operation",
+            },
+        },
+        {
+            "kind": "delegation.task_notification",
+            "at": t3,
+            "source_position": 6,
+            "payload": {
+                "task_id": "bg-2",
+                "status": "running",
+                "source": "queue_operation",
+            },
+        },
+        {"kind": "delegation.waiting", "at": t3, "source_position": 6, "payload": {"count": 2}},
+        {"kind": "message.phase", "at": t4, "source_position": 7, "payload": {"phase": "final_answer"}},
+        {"kind": "turn.duration", "at": t4, "source_position": 7, "payload": {"duration_ms": 4200, "message_count": 5}},
+        {
+            "kind": "turn.end",
+            "at": t4,
+            "source_position": 7,
+            "payload": {
+                "outcome": "interrupted",
+                "interrupted": True,
+                "stop_hook_continued": True,
+                "stop_hook_summary": "re-queued",
+                "source": "hook",
+            },
+        },
+        {
+            "kind": "turn.api_error",
+            "at": t5,
+            "source_position": 8,
+            "payload": {"error": "API Error: 529 Overloaded", "retry_attempt": 1, "max_retries": 3, "retry_in_ms": 800},
+        },
+    ]
+    envelope = _workspace_envelope(
+        owner_id=7,
+        session_id=session_id,
+        session=session,
+        session_commit_seq="11",
+        branch_mode="head",
+        anchor="tail",
+        cursor=None,
+        storage={"commit_seq": "11", "session": {"updated_at": t5.isoformat()}},
+        page={"events": events, "total": len(events), "generation_id": "g1", "next_cursor": None},
+        receipts=[],
+        facts=facts,
+    )
+    items = envelope["projection"]["items"]
+    by_id = {item.get("event", {}).get("id"): item for item in items if item.get("event")}
+    assert "n-user" in by_id
+    assert "n-queue-dup" not in by_id
+    assert "n-queue-unique" in by_id
+    assert by_id["n-user"]["event"]["task_notification"]["duration_ms"] == 3_283_000
+    assert by_id["n-user"]["event"]["task_notification"]["subagent_tokens"] == 194_200
+    assert by_id["n-user"]["event"]["task_notification"]["result"] == "All good"
+    assert by_id["a-commentary"]["event"]["message_phase"] == "commentary"
+    assert by_id["a-tool"]["event"]["tool_intent"] == "Run fast unit checks"
+    assert by_id["a-withheld"]["event"]["reasoning_withheld"] is True
+    assert by_id["n-queue-unique"]["event"]["waiting_background_agents"] == 2
+    assert by_id["a-final"]["event"]["message_phase"] == "final_answer"
+    assert by_id["a-final"]["event"]["turn_end"]["outcome"] == "interrupted"
+    assert by_id["a-final"]["event"]["turn_end"]["stop_hook_continued"] is True
+    assert by_id["a-final"]["event"]["turn_end"]["stop_hook_summary"] == "re-queued"
+
+    error_notices = [item for item in items if (item.get("event") or {}).get("api_error")]
+    assert len(error_notices) == 1
+    assert error_notices[0]["event"]["api_error"]["retry_attempt"] == 1
+    assert "529 Overloaded" in error_notices[0]["event"]["api_error"]["error"]

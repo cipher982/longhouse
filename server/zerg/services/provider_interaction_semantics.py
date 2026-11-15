@@ -49,7 +49,7 @@ _TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION
 # content behind this marker (engine/src/pipeline/parser.rs); the marker is
 # selection evidence only, and the raw thinking part remains the authority.
 REASONING_PROJECTION_PREFIX = "Thinking:\n"
-REASONING_PART_PROVIDERS = frozenset({"omp", "pi"})
+REASONING_PART_PROVIDERS = frozenset({"claude", "omp", "pi"})
 
 # Pi and OMP share a native ``custom_message`` record: the runtime or an
 # extension injects a message into the conversation, and its ``display`` flag
@@ -276,7 +276,7 @@ def provider_reasoning_record(provider: str | None, *, role: str | None, raw_jso
     content = message.get("content")
     if not isinstance(content, list):
         return False
-    return any(isinstance(part, Mapping) and part.get("type") == "thinking" for part in content)
+    return any(isinstance(part, Mapping) and part.get("type") in {"thinking", "redacted_thinking"} for part in content)
 
 
 def provider_display_message_content_candidate(provider: str | None, *, role: str | None, content_text: str | None) -> bool:
@@ -555,6 +555,27 @@ def _claude_task_tag_value(body: str, tag: str) -> str | None:
     return value[:2_000] or None
 
 
+def _claude_task_notification_summary_from_body(body: str) -> str:
+    summary = _claude_task_tag_value(body, "summary")
+    if summary is not None:
+        return summary
+    status = _claude_task_tag_value(body, "status")
+    if status is not None:
+        return f"Background task {status}"[:2_000]
+    return "Background task update"
+
+
+def _claude_verified_task_notification_summary(content_text: str | None) -> str | None:
+    text = str(content_text or "").lstrip()
+    if not text.startswith("<task-notification>"):
+        return None
+    after_open = text[len("<task-notification>") :]
+    end = after_open.find("</task-notification>")
+    if end < 0:
+        return None
+    return _claude_task_notification_summary_from_body(after_open[:end].strip())
+
+
 def claude_task_notification_summary(content_text: str | None) -> str | None:
     """Return the compact display text from Claude's task notification XML.
 
@@ -568,26 +589,30 @@ def claude_task_notification_summary(content_text: str | None) -> str | None:
     match = _CLAUDE_TASK_NOTIFICATION_RE.fullmatch(str(content_text or ""))
     if match is None:
         return None
-    summary = _claude_task_tag_value(match.group("body"), "summary")
-    if summary is not None:
-        return summary
-    status = _claude_task_tag_value(match.group("body"), "status")
-    if status is not None:
-        return f"Background task {status}"[:2_000]
-    return "Background task update"
+    return _claude_task_notification_summary_from_body(match.group("body"))
 
 
 def claude_task_notification_display(raw_json: Any) -> str | None:
     """Recognize a genuine Claude task notification and return its display text.
 
-    Claude marks these records with ``origin.kind=task-notification``. The
-    marker is the authorship boundary: pasted or quoted XML without it stays a
-    normal user message even when the text has the same tags.
+    Claude marks these records with ``origin.kind=task-notification`` on user
+    rows, or emits them mid-turn as ``type=queue-operation`` (``enqueue`` /
+    ``popAll``) with XML content. That structural envelope is the authorship
+    boundary: pasted or quoted XML in ordinary user prompts stays untouched.
+    Trailing ``<note>`` or reminders after ``</task-notification>`` are
+    accepted only once the structural origin is verified.
     """
 
     raw = _raw_mapping(raw_json)
     if raw is None:
         return None
+    if raw.get("type") == "queue-operation":
+        if raw.get("operation") not in {"enqueue", "popAll"}:
+            return None
+        content = raw.get("content")
+        if not isinstance(content, str):
+            return None
+        return _claude_verified_task_notification_summary(content)
     origin = raw.get("origin")
     if not isinstance(origin, Mapping) or origin.get("kind") != "task-notification":
         return None
@@ -596,7 +621,28 @@ def claude_task_notification_display(raw_json: Any) -> str | None:
     message = raw.get("message")
     if not isinstance(message, Mapping) or message.get("role") not in {None, "user"}:
         return None
-    return claude_task_notification_summary(_raw_content(raw))
+    return _claude_verified_task_notification_summary(_raw_content(raw))
+
+
+def claude_system_notification_record(raw_json: Any, *, role: str | None) -> bool:
+    """Recognize Claude system notification records surfaced to the timeline.
+
+    Covers waiting-for-background-agents markers on ``system/turn_duration``,
+    ``system/scheduled_task_fire`` records, and ``system/api_error`` notices.
+    """
+
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    if raw is None or raw.get("type") != "system":
+        return False
+    subtype = raw.get("subtype")
+    if subtype in {"scheduled_task_fire", "api_error"}:
+        return True
+    if subtype == "turn_duration":
+        pending = raw.get("pendingBackgroundAgentCount")
+        return type(pending) is int and pending > 0
+    return False
 
 
 def _claude_native_command_record(
@@ -914,7 +960,7 @@ def _compaction_boundary_record(
     row_type = raw.get("type")
     if row_type == "summary" and provider in {"claude", ""}:
         return True
-    if row_type == "system" and raw.get("subtype") == "compact_boundary" and provider in {"claude", ""}:
+    if row_type == "system" and raw.get("subtype") in {"compact_boundary", "microcompact_boundary"} and provider in {"claude", ""}:
         return True
     if row_type == "compacted" and provider in {"codex", ""}:
         return True
@@ -965,11 +1011,19 @@ def classify_provider_interaction(
         and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
     )
     codex_provider_system = normalized_provider == "codex" and codex_provider_system_record(raw)
+    claude_system_notification = normalized_provider == "claude" and claude_system_notification_record(
+        raw,
+        role=normalized_role,
+    )
     claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
     provider_reasoning = provider_reasoning_record(normalized_provider, role=normalized_role, raw_json=raw)
     provider_display_message = provider_display_message_record(normalized_provider, role=normalized_role, raw_json=raw)
     compaction_boundary = _compaction_boundary_record(normalized_provider, role=normalized_role, raw=raw)
-    if codex_provider_system or claude_provider_system:
+    if claude_system_notification:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
+        changes_provider_state = False
+        starts_model_turn = False
+    elif codex_provider_system or claude_provider_system:
         kind = INTERACTION_PROVIDER_SYSTEM
         changes_provider_state = False
         starts_model_turn = False
@@ -1015,7 +1069,12 @@ def classify_provider_interaction(
     # evidence to classify, not an authority that can demote itself.
     explicit_kind = (
         None
-        if codex_provider_system or claude_provider_system or compaction_boundary or provider_reasoning or provider_display_message
+        if codex_provider_system
+        or claude_system_notification
+        or claude_provider_system
+        or compaction_boundary
+        or provider_reasoning
+        or provider_display_message
         else interaction_kind
     )
     if explicit_kind in _INTERACTION_KINDS:
@@ -1231,6 +1290,7 @@ __all__ = [
     "codex_provider_system_candidate",
     "codex_provider_system_record",
     "claude_provider_system_record",
+    "claude_system_notification_record",
     "claude_task_notification_display",
     "claude_task_notification_summary",
     "interaction_context_key_parts",

@@ -454,11 +454,13 @@ def _pending_response_from_catalog(
     capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     selected_model = _selected_model_from_thread(_primary_thread_facts(catalog_facts))
+    norm_provider_facts = provider_facts_from_rows(catalog_facts.get("provider_facts"))
     hud = project_session_hud(
-        catalog_facts.get("provider_facts"),
+        norm_provider_facts,
         catalog_facts.get("runtime_meta"),
         delegation=session_state.delegation,
         fallback_model=selected_model,
+        base_hud={"provider": session.provider},
     )
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -494,6 +496,8 @@ def _pending_response_from_catalog(
             "confidence": canonical_aliases["confidence"],
             "summary": session.summary,
             "selected_model": selected_model,
+            "last_turn": project_last_turn(norm_provider_facts, {}) if norm_provider_facts else None,
+            "recap": project_recap(norm_provider_facts) if norm_provider_facts else None,
             "usage_latest": hud["usage_latest"],
             "permission_mode": hud["permission_mode"],
             "provider_title": hud["provider_title"],
@@ -595,6 +599,7 @@ def _response_from_catalog(
         catalog_facts.get("runtime_meta"),
         delegation=session_state.delegation,
         fallback_model=selected_model,
+        base_hud={"provider": session.provider},
     )
     return SessionResponse(
         id=str(session.session_id),
@@ -961,12 +966,30 @@ def project_machine_session_delta(
                             {
                                 **item.model_dump(
                                     mode="json",
-                                    include={"id", "kind", "status", "session_id", "native_progress"},
+                                    include={
+                                        "id",
+                                        "kind",
+                                        "status",
+                                        "session_id",
+                                        "agent_type",
+                                        "model",
+                                        "is_fork",
+                                        "parent_agent_id",
+                                        "spawn_depth",
+                                        "first_observed_at",
+                                        "started_at",
+                                        "last_activity_at",
+                                        "ended_at",
+                                        "user_messages",
+                                        "assistant_messages",
+                                        "tool_calls",
+                                        "native_progress",
+                                    },
                                     exclude_none=True,
                                 ),
-                                **({"description": item.description[:96]} if item.description else {}),
+                                **({"description": item.description[:120]} if item.description else {}),
                             }
-                            for item in state.delegation.items[:4]
+                            for item in state.delegation.items[:16]
                         ]
                         if state.delegation.items is not None
                         else None

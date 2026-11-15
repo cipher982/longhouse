@@ -1175,7 +1175,22 @@ def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
     claude = contract_for_provider("claude")
     assert claude is not None
     implemented = sorted(signal for signal, cell in claude.transcript_signals.items() if cell["disposition"] == "implemented")
-    assert implemented == ["context.compaction", "session.recap", "session.title", "turn.api_error", "turn.duration", "turn.usage"]
+    assert implemented == [
+        "context.compaction",
+        "delegation.background",
+        "delegation.scheduled",
+        "delegation.spawn",
+        "input.queue",
+        "message.phase",
+        "session.recap",
+        "session.title",
+        "tool.intent",
+        "turn.api_error",
+        "turn.duration",
+        "turn.end",
+        "turn.thinking",
+        "turn.usage",
+    ]
     assert claude.transcript_signals["turn.duration"]["entrypoints"] == ["cli"], "print-mode Claude never writes turn_duration"
 
 
@@ -1247,8 +1262,8 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
     assert {(row["provider"], row["operation"]) for row in rows} >= {
         ("codex", "transcript_signal:session.title"),
         ("codex", "transcript_signal:input.queue"),
-        ("claude", "transcript_signal:input.queue"),
-        ("claude", "transcript_signal:turn.thinking"),
+        ("claude", "transcript_signal:delegation.workflow"),
+        ("claude", "transcript_signal:delegation.peer_message"),
     }
     assert all(row["owner_action"] for row in rows), "every open signal names the work that closes it"
     for provider in ("claude", "codex"):
@@ -1256,6 +1271,19 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
             row["provider"] == provider and row["operation"] in {"transcript_signal:turn.duration", "transcript_signal:turn.usage"}
             for row in rows
         ), f"{provider} turn signals are implemented"
+    for signal in (
+        "turn.thinking",
+        "input.queue",
+        "message.phase",
+        "turn.end",
+        "tool.intent",
+        "delegation.spawn",
+        "delegation.background",
+        "delegation.scheduled",
+    ):
+        assert not any(row["provider"] == "claude" and row["operation"] == f"transcript_signal:{signal}" for row in rows), (
+            f"claude {signal} is implemented"
+        )
 
 
 def test_live_stream_signals_are_declared_and_strictly_validated():
@@ -1320,7 +1348,7 @@ def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
         _validate_transcript_signal_surfaces({"transcript_signal_surfaces": bad_surfaces}, manifest["providers"])
     with pytest.raises(ValueError, match="cannot be implemented without at least one launch-tier provider"):
         bad_surfaces = {k: dict(v) for k, v in surfaces.items()}
-        bad_surfaces["input.queue"] = {"disposition": "implemented", "surface_proof": "tests_lite/test_x.py"}
+        bad_surfaces["delegation.workflow"] = {"disposition": "implemented", "surface_proof": "tests_lite/test_x.py"}
         _validate_transcript_signal_surfaces({"transcript_signal_surfaces": bad_surfaces}, manifest["providers"])
 
     # turn.usage fields validation

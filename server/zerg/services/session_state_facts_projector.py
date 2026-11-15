@@ -1051,18 +1051,32 @@ def _registry_items_with_lifecycle(
 
 
 def _project_delegation_task(item: Mapping[str, Any], children: Mapping[str, Any]) -> SessionDelegationTaskResponse:
-    child = _mapping(children.get(item.get("parent_tool_call_id")) or children.get(f"native:{item.get('native_child_id')}"))
+    child = _mapping(
+        children.get(item.get("parent_tool_call_id"))
+        or children.get(f"native:{item.get('native_child_id')}")
+        or children.get(f"native:{item.get('id')}")
+    )
     progress_raw = dict(item["native_progress"]) if isinstance(item.get("native_progress"), Mapping) else None
     child_tokens = child.get("tokens")
     child_duration_ms = child.get("duration_ms")
-    if (child_tokens is not None or child_duration_ms is not None) and (
-        progress_raw is None or progress_raw.get("tokens") is None or progress_raw.get("duration_ms") is None
+    child_ctx_tokens = child.get("context_tokens")
+    child_ctx_window = child.get("context_window")
+    if (child_tokens is not None or child_duration_ms is not None or child_ctx_tokens is not None or child_ctx_window is not None) and (
+        progress_raw is None
+        or progress_raw.get("tokens") is None
+        or progress_raw.get("duration_ms") is None
+        or progress_raw.get("context_tokens") is None
+        or progress_raw.get("context_window") is None
     ):
         enriched = dict(progress_raw or {})
         if enriched.get("tokens") is None and child_tokens is not None:
             enriched["tokens"] = int(child_tokens)
         if enriched.get("duration_ms") is None and child_duration_ms is not None:
             enriched["duration_ms"] = int(child_duration_ms)
+        if enriched.get("context_tokens") is None and child_ctx_tokens is not None:
+            enriched["context_tokens"] = int(child_ctx_tokens)
+        if enriched.get("context_window") is None and child_ctx_window is not None:
+            enriched["context_window"] = int(child_ctx_window)
         progress_raw = enriched
     is_fork_val = item.get("is_fork")
     if not isinstance(is_fork_val, bool):

@@ -14,6 +14,9 @@
   "golden/claude/basic.jsonl@start": [
     "git_info"
   ],
+  "golden/claude/claude_fidelity_signals.jsonl@start": [
+    "git_info"
+  ],
   "golden/claude/recap_title.jsonl@resume": [
     "git_info"
   ],

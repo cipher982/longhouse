@@ -461,6 +461,34 @@ fn cursor_agent_transcript_source_revision(path: &Path) -> Result<Option<String>
     Ok(Some(hex_hash(hasher.finalize().into())))
 }
 
+/// Revision signal for Claude Code `subagents/agent-<id>.jsonl` sidecars.
+///
+/// The JSONL transcript stays append-only, so its bytes below the cursor do not
+/// move when Claude marks `"finished": true` inside the sibling `.meta.json`.
+/// Tracking the hashed sidecar here stays invariant during normal appends and
+/// rotates the epoch once when the sidecar appears or finishes.
+fn claude_subagent_sidecar_revision(path: &Path) -> Result<Option<String>> {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return Ok(None);
+    };
+    let Some(stem) = name.strip_suffix(".jsonl") else {
+        return Ok(None);
+    };
+    if !stem.starts_with("agent-")
+        || !path
+            .components()
+            .any(|component| component.as_os_str() == "subagents")
+    {
+        return Ok(None);
+    }
+    let sidecar = path.with_file_name(format!("{stem}.meta.json"));
+    if sidecar.is_file() {
+        Ok(Some(format!("claude-subagent-meta:{}", hash_file(&sidecar)?)))
+    } else {
+        Ok(Some("claude-subagent-meta:absent".to_string()))
+    }
+}
+
 /// Cursor's agent transcript JSONL is a live provider-owned projection rather
 /// than an append-only file. Cursor may rewrite an existing line while a turn
 /// is still in flight, so a byte offset that was valid for the previous file
@@ -6799,6 +6827,7 @@ mod tests {
     /// between the others, so the walk meets unchanged session-3 before it.
     /// Returns how many record streams the next walk built.
     fn streams_built_after_an_older_session_changes(rests_disabled: bool) -> usize {
+        let _guard = crate::console_adapter::agent_state_guard();
         opencode_source::OPENCODE_SESSION_RESTS_DISABLED
             .store(rests_disabled, std::sync::atomic::Ordering::Relaxed);
         let dir = tempfile::tempdir().unwrap();
@@ -9531,6 +9560,69 @@ mod tests {
                 "{provider}"
             );
         }
+    }
+
+    #[test]
+    fn claude_subagent_meta_completion_rotates_epoch_and_reships_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let subagent_dir = dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("proj")
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents");
+        fs::create_dir_all(&subagent_dir).unwrap();
+        let jsonl = subagent_dir.join("agent-a1b2c3d.jsonl");
+        let meta = subagent_dir.join("agent-a1b2c3d.meta.json");
+        fs::write(
+            &jsonl,
+            "{\"type\":\"user\",\"isSidechain\":true,\"agentId\":\"a1b2c3d\",\"uuid\":\"u1\",\"sessionId\":\"11111111-2222-3333-4444-555555555555\",\"timestamp\":\"2026-11-14T10:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"check\"}}\n",
+        )
+        .unwrap();
+        fs::write(
+            &meta,
+            "{\"agentType\":\"Explore\",\"description\":\"Audit signals\",\"finished\":false,\"spawnDepth\":1}",
+        )
+        .unwrap();
+
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let initial = prepare_next_envelope(&mut conn, &capabilities(), &jsonl, "claude", None)
+            .unwrap()
+            .unwrap();
+        let initial_meta = initial
+            .envelope
+            .facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .expect("initial shipment should carry delegation.metadata");
+        assert_eq!(initial_meta.payload["metadata"]["finished"], false);
+        acknowledge_prepared(&mut conn, &initial);
+
+        // No further appends and unchanged sidecar should not emit another envelope.
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &jsonl, "claude", None)
+                .unwrap()
+                .is_none()
+        );
+
+        // Finishing the sidecar rotates the epoch and re-ships updated metadata.
+        fs::write(
+            &meta,
+            "{\"agentType\":\"Explore\",\"description\":\"Audit signals\",\"finished\":true,\"spawnDepth\":1}",
+        )
+        .unwrap();
+        let replacement = prepare_next_envelope(&mut conn, &capabilities(), &jsonl, "claude", None)
+            .unwrap()
+            .expect("finishing .meta.json should rotate source_epoch and re-ship");
+        assert_ne!(replacement.source_epoch, initial.source_epoch);
+        let replacement_meta = replacement
+            .envelope
+            .facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .expect("re-shipped envelope should include updated delegation.metadata");
+        assert_eq!(replacement_meta.payload["metadata"]["finished"], true);
     }
 }
 

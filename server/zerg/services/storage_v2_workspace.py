@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
+from collections.abc import Mapping
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -31,6 +36,7 @@ from zerg.services.session_provider_facts import provider_facts_from_rows
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
+from zerg.services.tool_presentation import extract_tool_intent
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.services.transcript_lite import DETAIL_FULL
 from zerg.services.transcript_lite import DETAIL_LITE
@@ -145,6 +151,80 @@ def _media_refs_for_event(event: dict[str, object], by_owner: dict[tuple[str, in
     return by_owner.get((str(locator.get("source_envelope_id")), position), [])
 
 
+_WAITING_BG_RE = re.compile(r"^Waiting for (\d+) background agents? to finish$")
+
+
+def _parse_ts(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _index_facts_by_position(facts: list[dict[str, object]]) -> dict[int, dict[str, dict[str, Any]]]:
+    indexed: dict[int, dict[str, dict[str, Any]]] = {}
+    for fact in facts:
+        pos = fact.get("source_position")
+        kind = fact.get("kind")
+        payload = fact.get("payload")
+        if type(pos) is not int or not isinstance(kind, str) or not isinstance(payload, Mapping):
+            continue
+        indexed.setdefault(pos, {})[kind] = dict(payload)
+    return indexed
+
+
+def _fact_tool_intent(pos_facts: Mapping[str, Mapping[str, Any]], tool_call_id: str | None) -> str | None:
+    fact = pos_facts.get("tool.intent")
+    if not isinstance(fact, Mapping):
+        return None
+    items = fact.get("items")
+    if isinstance(items, list):
+        if tool_call_id:
+            for item in items:
+                if isinstance(item, Mapping) and str(item.get("tool_call_id") or "") == tool_call_id:
+                    intent = item.get("intent")
+                    if isinstance(intent, str) and intent.strip():
+                        return intent.strip()
+        elif len(items) == 1 and isinstance(items[0], Mapping):
+            intent = items[0].get("intent")
+            if isinstance(intent, str) and intent.strip():
+                return intent.strip()
+    if tool_call_id and fact.get("tool_call_id") and str(fact.get("tool_call_id")) != tool_call_id:
+        return None
+    intent = fact.get("intent")
+    return intent.strip() if isinstance(intent, str) and intent.strip() else None
+
+
+def _task_notification_entries(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
+        return []
+    entries = [dict(payload)]
+    extra = payload.get("additional_items")
+    if isinstance(extra, list):
+        source = payload.get("source")
+        for item in extra:
+            if isinstance(item, Mapping):
+                entry = dict(item)
+                if source and "source" not in entry:
+                    entry["source"] = source
+                entries.append(entry)
+    return entries
+
+
+def _format_api_error_text(payload: Mapping[str, Any]) -> str:
+    attempt = payload.get("retry_attempt")
+    max_retries = payload.get("max_retries")
+    error_text = str(payload.get("error") or payload.get("details") or "Provider API error").strip()
+    if type(attempt) is int and type(max_retries) is int:
+        return f"API error (retry {attempt}/{max_retries}): {error_text}"
+    return f"API error: {error_text}"
+
+
 def _event_projection(
     event: dict[str, object],
     *,
@@ -156,6 +236,8 @@ def _event_projection(
     input_origin: dict[str, object] | None = None,
     turn_end: dict[str, object] | None = None,
     media_refs: list[dict[str, object]] | None = None,
+    facts_by_pos: Mapping[int, Mapping[str, Mapping[str, Any]]] | None = None,
+    attached_api_error_positions: set[int] | None = None,
 ) -> dict[str, object]:
     event_id = str(event["event_id"])
     tool_call_id = str(event["tool_call_id"]) if event.get("tool_call_id") else None
@@ -164,6 +246,53 @@ def _event_projection(
         tool_call_state = (
             "completed" if tool_call_id in completed_tool_call_ids or cursor_run_ended else ("dropped" if closed else "running")
         )
+    locator = event.get("raw_locator")
+    pos = locator.get("source_position") if isinstance(locator, Mapping) and type(locator.get("source_position")) is int else None
+    subordinal = locator.get("event_subordinal") if isinstance(locator, Mapping) else None
+    pos_facts = facts_by_pos.get(pos, {}) if (pos is not None and facts_by_pos is not None) else {}
+
+    tool_intent: str | None = None
+    if event.get("tool_name"):
+        tool_intent = extract_tool_intent(event.get("tool_name"), event.get("tool_input_json"), provider=provider)
+        if tool_intent is None:
+            tool_intent = _fact_tool_intent(pos_facts, tool_call_id)
+
+    message_phase: str | None = None
+    if event.get("role") == "assistant" and not event.get("tool_name"):
+        phase_fact = pos_facts.get("message.phase")
+        if isinstance(phase_fact, Mapping) and phase_fact.get("phase") in {"commentary", "final_answer"}:
+            message_phase = str(phase_fact["phase"])
+
+    reasoning_withheld = False
+    if event.get("interaction_kind") == "provider_reasoning":
+        thinking_fact = pos_facts.get("turn.thinking")
+        if event.get("content_text") == "Thinking:\n[Reasoning withheld]" or (
+            isinstance(thinking_fact, Mapping) and thinking_fact.get("withheld") is True and int(thinking_fact.get("chars") or 0) == 0
+        ):
+            reasoning_withheld = True
+
+    task_notification: dict[str, Any] | None = None
+    waiting_background_agents: int | None = None
+    if event.get("interaction_kind") == "provider_notification":
+        tn_fact = pos_facts.get("delegation.task_notification")
+        if isinstance(tn_fact, Mapping):
+            task_notification = dict(tn_fact)
+        waiting_fact = pos_facts.get("delegation.waiting")
+        if isinstance(waiting_fact, Mapping) and type(waiting_fact.get("count")) is int:
+            waiting_background_agents = int(waiting_fact["count"])
+        else:
+            match = _WAITING_BG_RE.fullmatch(str(event.get("content_text") or "").strip())
+            if match is not None:
+                waiting_background_agents = int(match.group(1))
+
+    api_error: dict[str, Any] | None = None
+    if subordinal in {0, None} and pos is not None:
+        api_err_fact = pos_facts.get("turn.api_error")
+        if isinstance(api_err_fact, Mapping):
+            api_error = dict(api_err_fact)
+            if attached_api_error_positions is not None:
+                attached_api_error_positions.add(pos)
+
     return {
         "kind": "event",
         "session_id": str(session_id),
@@ -188,6 +317,12 @@ def _event_projection(
                 event.get("tool_input_json"),
                 provider=provider,
             ),
+            "tool_intent": tool_intent,
+            "message_phase": message_phase,
+            "reasoning_withheld": reasoning_withheld,
+            "task_notification": task_notification,
+            "waiting_background_agents": waiting_background_agents,
+            "api_error": api_error,
             "timestamp": event["timestamp"],
             "in_active_context": event.get("branch_kind") != "abandoned",
             "branch_id": None,
@@ -249,8 +384,11 @@ def _workspace_envelope(
         or (anchor == "start" and page is not None and page.get("has_more") is False)
     )
     turn_ends = turn_ends_by_event(facts, events, page_is_tail=page_is_tail)
-    items = [
-        _event_projection(
+    facts_by_pos = _index_facts_by_position(facts)
+    attached_api_error_positions: set[int] = set()
+    projected_with_ts: list[tuple[datetime, int, dict[str, object]]] = []
+    for index, event in enumerate(events):
+        projected_item = _event_projection(
             event,
             session_id=session_id,
             closed=session.runtime_display.lifecycle == "closed",
@@ -260,9 +398,109 @@ def _workspace_envelope(
             input_origin=input_origins.get(str(event["event_id"])),
             turn_end=turn_ends.get(str(event["event_id"])),
             media_refs=_media_refs_for_event(event, media_by_owner),
+            facts_by_pos=facts_by_pos,
+            attached_api_error_positions=attached_api_error_positions,
         )
-        for event in events
-    ]
+        ev_ts = _parse_ts(event.get("timestamp")) or datetime.fromtimestamp(0, tz=UTC)
+        projected_with_ts.append((ev_ts, index, projected_item))
+
+    event_timestamps = [ts for ts, _idx, _item in projected_with_ts if ts is not None]
+    if event_timestamps:
+        min_ts = min(event_timestamps)
+        max_ts = max(event_timestamps)
+        for fact_index, fact in enumerate(facts):
+            if fact.get("kind") != "turn.api_error":
+                continue
+            pos = fact.get("source_position")
+            if type(pos) is not int or pos in attached_api_error_positions:
+                continue
+            fact_at = _parse_ts(fact.get("at"))
+            if fact_at is None:
+                continue
+            if page_is_tail:
+                if fact_at < min_ts:
+                    continue
+            elif fact_at < min_ts or fact_at > max_ts:
+                continue
+            payload = fact.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            iso_ts = fact_at.isoformat()
+            projected_with_ts.append(
+                (
+                    fact_at,
+                    len(events) + fact_index,
+                    {
+                        "kind": "event",
+                        "session_id": str(session_id),
+                        "timestamp": iso_ts,
+                        "event": {
+                            "id": f"fact:api_error:{pos}",
+                            "cursor": None,
+                            "role": "system",
+                            "content_text": _format_api_error_text(payload),
+                            "interaction_kind": "provider_notification",
+                            "raw_content_text": None,
+                            "input_origin": None,
+                            "turn_end": None,
+                            "tool_name": None,
+                            "tool_input_json": None,
+                            "tool_output_text": None,
+                            "tool_output_truncated": False,
+                            "tool_output_original_chars": None,
+                            "tool_call_id": None,
+                            "tool_presentation": None,
+                            "tool_intent": None,
+                            "message_phase": None,
+                            "reasoning_withheld": False,
+                            "task_notification": None,
+                            "waiting_background_agents": None,
+                            "api_error": dict(payload),
+                            "timestamp": iso_ts,
+                            "in_active_context": True,
+                            "branch_id": None,
+                            "is_head_branch": True,
+                            "event_origin": "durable",
+                            "provisional_state": None,
+                            "provisional_cursor": None,
+                            "provisional_complete": False,
+                            "reconciled_event_id": None,
+                            "tool_call_state": None,
+                            "media_refs": [],
+                        },
+                        "action": None,
+                        "continued_from_session_id": None,
+                        "continuation_kind": None,
+                        "origin_label": None,
+                        "parent_origin_label": None,
+                        "parent_continuation_kind": None,
+                        "branched_from_event_id": None,
+                    },
+                )
+            )
+    if len(projected_with_ts) > len(events):
+        projected_with_ts.sort(key=lambda entry: (entry[0], entry[1]))
+    items = [entry[2] for entry in projected_with_ts]
+
+    rich_user_keys = {
+        (str(entry["task_id"]), str(entry.get("status") or ""))
+        for item in items
+        for entry in _task_notification_entries((item.get("event") or {}).get("task_notification"))
+        if entry.get("source") == "user" and entry.get("task_id")
+    }
+    if rich_user_keys:
+        deduped_items: list[dict[str, object]] = []
+        for item in items:
+            ev = item.get("event")
+            tn = ev.get("task_notification") if isinstance(ev, Mapping) else None
+            if isinstance(tn, Mapping) and tn.get("source") == "queue_operation":
+                entries = _task_notification_entries(tn)
+                if entries and all(
+                    entry.get("task_id") and (str(entry["task_id"]), str(entry.get("status") or "")) in rich_user_keys for entry in entries
+                ):
+                    continue
+            deduped_items.append(item)
+        items = deduped_items
     latest_event_id = str(events[-1]["event_id"]) if events else None
     fingerprint_payload = {
         "session_commit_seq": session_commit_seq,

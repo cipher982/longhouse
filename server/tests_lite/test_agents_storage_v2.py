@@ -1369,8 +1369,8 @@ async def test_storage_v2_serves_an_omp_background_job_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_serves_full_compaction_boundaries_and_hides_microcompact(monkeypatch):
-    """Full compactions are served with cursor pagination; microcompact stays hidden."""
+async def test_storage_v2_serves_full_and_micro_compaction_boundaries(monkeypatch):
+    """Full and micro compaction boundaries are served with cursor pagination."""
 
     tempdir = TemporaryDirectory(prefix="lh2-compaction-", dir="/tmp")
     root = Path(tempdir.name)
@@ -1500,15 +1500,17 @@ async def test_storage_v2_serves_full_compaction_boundaries_and_hides_microcompa
             )
             assert response.status_code == 200, response.text
 
-            page1 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=2&anchor=start")
+            page1 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=3&anchor=start")
             assert page1.status_code == 200, page1.text
             body1 = page1.json()
-            assert [event["event_id"] for event in body1["events"]] == ["u-1", "sys-compact"]
+            assert [event["event_id"] for event in body1["events"]] == ["u-1", "sys-micro", "sys-compact"]
             assert body1["events"][1]["role"] == "system"
             assert body1["events"][1]["interaction_kind"] == "compaction_boundary"
+            assert body1["events"][2]["role"] == "system"
+            assert body1["events"][2]["interaction_kind"] == "compaction_boundary"
             assert body1["has_more"] is True
 
-            page2 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=2&anchor=start&cursor={body1['next_cursor']}")
+            page2 = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=3&anchor=start&cursor={body1['next_cursor']}")
             assert page2.status_code == 200, page2.text
             assert [event["event_id"] for event in page2.json()["events"]] == ["a-2"]
 

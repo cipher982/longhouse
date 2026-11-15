@@ -1376,14 +1376,14 @@ class StorageMixin:
             )
             if existing is None:
                 return {"changed": False, "title": title, "missing": True, "commit_seq": str(_current_commit_seq(connection))}
-            # An anchor is frozen once, with one exception: the Longhouse AI
-            # title promotes a provider-native name that won the race to it.
-            # The AI title is the single title authority -- once it lands it
-            # is never rewritten, by the provider or a later AI guess. A
-            # provider name is only ever a fallback for the anchor slot.
+            # An anchor is frozen once, with two explicit overrides:
+            # - Longhouse AI titles promote a provider fallback name.
+            # - An explicit user rename (source == "user") overrides provider
+            #   or AI titles and allows subsequent user renames.
             anchored = bool(existing["anchor_title"])
+            user_override = source == "user"
             promotion = anchored and source == "ai" and _title_anchor_replaceable(existing["anchor_title"], existing["anchor_title_source"])
-            if anchored and not promotion:
+            if anchored and not promotion and not user_override:
                 return {
                     "changed": False,
                     "title": str(existing["anchor_title"]),
@@ -1392,14 +1392,17 @@ class StorageMixin:
             if not bool(existing["origin_eligible"]) or bool(existing["worker_only"]):
                 return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
-            anchor_guard = (
-                _title_anchor_replaceable_clause(table) if promotion else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
-            )
+            if user_override:
+                anchor_guards: tuple[Any, ...] = ()
+            elif promotion:
+                anchor_guards = (_title_anchor_replaceable_clause(table),)
+            else:
+                anchor_guards = (or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),)
             changed = connection.execute(
                 update(table)
                 .where(
                     table.c.session_id == session_key,
-                    anchor_guard,
+                    *anchor_guards,
                     or_(
                         factory_title_assurance_session_clause(table),
                         title_origin_eligible_clause(table),

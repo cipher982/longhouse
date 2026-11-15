@@ -526,12 +526,11 @@ impl<'a> CapturingWitness<'a> {
 impl Witness for CapturingWitness<'_> {
     fn subagent_meta(&self) -> Option<String> {
         let value = self.inner.subagent_meta();
-        // The parser reads only the spawning tool call's id from the sidecar;
-        // ship that, not the whole file.
+        // Retain structured sidecar metadata fields so host rebuilds recover
+        // agentType, description, model, spawnDepth, and toolUseId cleanly.
         *self.subagent_meta.borrow_mut() = value
             .as_deref()
-            .and_then(super::parser::subagent_tool_use_id_from_meta)
-            .map(|id| serde_json::json!({ "toolUseId": id }).to_string());
+            .and_then(super::parser::sanitize_subagent_meta_witness);
         value
     }
     fn cursor_transcript_timestamps(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {

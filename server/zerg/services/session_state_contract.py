@@ -1585,6 +1585,46 @@ def build_session_state_facts(
     )
 
 
+def infer_context_window(
+    provider: str | None,
+    model: str | None,
+    context_tokens: int | None = None,
+) -> int | None:
+    """Derive model context window when the provider omits it from turn.usage.
+
+    Only infers documented 1M Claude models (Opus 4.6/4.7/5, Sonnet 4.6, explicit
+    `[1m]` tags, or observed Claude context > 200k). Returns None otherwise so
+    native provider windows or pure `usage_latest` callers remain unchanged.
+    """
+    raw_model = str(model or "").strip().lower()
+    raw_provider = str(provider or "").strip().lower()
+    is_claude = (
+        raw_provider == "claude"
+        or "claude" in raw_model
+        or any(token in raw_model for token in ("opus-4-6", "opus-4.6", "opus-4-7", "opus-4.7", "opus-5", "sonnet-4-6", "sonnet-4.6"))
+    )
+    if not is_claude:
+        return None
+    if "[1m]" in raw_model or raw_model.endswith("-1m") or raw_model.endswith(":1m"):
+        return 1_000_000
+    if any(
+        token in raw_model
+        for token in (
+            "opus-4-6",
+            "opus-4.6",
+            "opus-4-7",
+            "opus-4.7",
+            "opus-5",
+            "sonnet-4-6",
+            "sonnet-4.6",
+        )
+    ):
+        return 1_000_000
+    if isinstance(context_tokens, int) and context_tokens > 200_000:
+        return 1_000_000
+    return None
+
+
 __all__ = [
     "ACCESS_PRESENTATION_KEYS",
     "helm_activity_held_by_lease",
@@ -1607,6 +1647,7 @@ __all__ = [
     "SessionTranscriptFacts",
     "assemble_session_state_facts",
     "build_session_state_facts",
+    "infer_context_window",
     "project_pending_interaction_facts",
     "project_transcript_facts",
     "session_state_contract_manifest",

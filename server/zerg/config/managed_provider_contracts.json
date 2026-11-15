@@ -1898,58 +1898,58 @@
       },
       "transcript_signals": {
         "message.phase": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "assistant.message.stop_reason (tool_use: commentary, end_turn: final)",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "derive phase from the stop_reason of the message that carries each text block; Claude has no explicit marker, and the stop reason is the protocol's own distinction"
+          "trigger": "turn_end"
         },
         "turn.end": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "system/turn_duration + system/stop_hook_summary + assistant.message.stop_reason",
           "entrypoints": [
             "cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit a turn.end fact with its reason (completed, interrupted, error, stop hook continued); end_turn messages and turn_duration records do not pair one to one, because stop hooks and background work resume a turn"
+          "trigger": "turn_end"
         },
         "tool.intent": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "assistant.content.tool_use.input.description",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "turn_end",
-          "owner_action": "normalize the description into the tool presentation so Web and iOS stop reading provider input fields (Web reads it only on shell tools today)"
+          "trigger": "turn_end"
         },
         "delegation.spawn": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "subagents/agent-*.meta.json",
           "entrypoints": [
             "cli"
           ],
           "first_seen_version": "2.1.150",
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "spawn_subagent",
-          "owner_action": "read agent_id/agent_type from every hook so a child's tool event stops writing the parent's activity head; read requestShape/spawnDepth from the spawn sidecar"
+          "trigger": "spawn_subagent"
         },
         "delegation.background": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "system/turn_duration.pendingBackgroundAgentCount",
           "entrypoints": [
             "cli"
           ],
           "first_seen_version": "2.1.259",
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "background_work",
-          "owner_action": "consume the pending_background_agents provider fact the engine already ships with no reader; the live typed registry (hook Stop background_tasks[]) is a product seam, not a transcript signal, because the release census cannot fingerprint hook stdin"
+          "trigger": "background_work"
         },
         "delegation.workflow": {
           "disposition": "not_implemented",
@@ -1963,15 +1963,15 @@
           "owner_action": "read the started/result/failed ledger for fan-out width and per-branch verdicts instead of skipping the file at discovery"
         },
         "delegation.scheduled": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "system/scheduled_task_fire",
           "entrypoints": [
             "cli"
           ],
           "first_seen_version": "2.1.161",
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_orchestration_signals",
-          "trigger": "cron_create",
-          "owner_action": "add the scheduled_task_fire shape to the parser and the fired cron to the delegated-work dimension"
+          "trigger": "cron_create"
         },
         "delegation.peer_message": {
           "disposition": "not_implemented",
@@ -2030,11 +2030,11 @@
           "trigger": "turn_end",
           "fields": {
             "context_tokens": "native",
-            "context_window": "absent",
+            "context_window": "derived",
             "output_tokens": "native",
             "thinking_tokens": "native",
             "cache_tokens": "native",
-            "cost_usd": "absent",
+            "cost_usd": "derived",
             "effort": "native"
           }
         },
@@ -2062,27 +2062,27 @@
           "trigger": "slash_compact"
         },
         "input.queue": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "queue-operation",
           "entrypoints": [
             "cli"
           ],
           "first_seen_version": "2.1.150",
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_transcript_signals",
-          "trigger": "send_while_working",
-          "owner_action": "project absorbed_mid_turn beside the receipt-based send reconciliation"
+          "trigger": "send_while_working"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "assistant.content.thinking",
           "entrypoints": [
             "cli",
             "sdk-cli"
           ],
           "first_seen_version": "2.1.121",
+          "fixture": "engine/tests/fixtures/golden/claude/claude_fidelity_signals.jsonl",
           "canary": "claude_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "emit thinking blocks as provider_reasoning instead of dropping them (engine/src/pipeline/parser.rs extract_assistant_events). Most blocks carry only a signature with empty text (the API defaults Opus 5.5 and newer to display: omitted), so a signature-only block becomes a withheld-reasoning marker, not nothing"
+          "trigger": "turn_end"
         }
       }
     },

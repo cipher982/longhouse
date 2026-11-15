@@ -1,0 +1,304 @@
+{
+  "fact_count": 24,
+  "facts": [
+    {
+      "kind": "turn.usage",
+      "at": "2026-11-14T10:00:03Z",
+      "source_offset": 261,
+      "payload": {
+        "cache_creation_input_tokens": 300,
+        "cache_read_input_tokens": 45000,
+        "context_tokens": 46500,
+        "input_tokens": 1200,
+        "model": "claude-opus-5",
+        "output_tokens": 85,
+        "stop_reason": "tool_use",
+        "thinking_tokens": 24
+      }
+    },
+    {
+      "kind": "turn.thinking",
+      "at": "2026-11-14T10:00:03Z",
+      "source_offset": 261,
+      "payload": {
+        "block_count": 1,
+        "chars": 52,
+        "withheld": false
+      }
+    },
+    {
+      "kind": "message.phase",
+      "at": "2026-11-14T10:00:03Z",
+      "source_offset": 261,
+      "payload": {
+        "phase": "commentary",
+        "stop_reason": "tool_use"
+      }
+    },
+    {
+      "kind": "tool.intent",
+      "at": "2026-11-14T10:00:03Z",
+      "source_offset": 261,
+      "payload": {
+        "intent": "Check modified files",
+        "items": [
+          {
+            "intent": "Check modified files",
+            "tool_call_id": "tu-agent-1",
+            "tool_name": "Bash"
+          }
+        ],
+        "tool_call_id": "tu-agent-1",
+        "tool_name": "Bash"
+      }
+    },
+    {
+      "kind": "delegation.spawn",
+      "at": "2026-11-14T10:00:05Z",
+      "source_offset": 926,
+      "payload": {
+        "children": [
+          {
+            "metadata": {
+              "agent_id": "a1b2c3d",
+              "description": "Audit backend signals",
+              "is_async": true,
+              "model": "claude-opus-5",
+              "output_file": "/tmp/subagents/a1b2c3d.out",
+              "status": "async_launched",
+              "total_duration_ms": 12450,
+              "total_tokens": 18400,
+              "total_tool_use_count": 5
+            },
+            "parent_tool_call_id": "tu-agent-1",
+            "provider_session_id": "a1b2c3d"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-11-14T10:00:10Z",
+      "source_offset": 1423,
+      "payload": {
+        "cache_creation_input_tokens": 50,
+        "cache_read_input_tokens": 46500,
+        "context_tokens": 46650,
+        "input_tokens": 100,
+        "model": "claude-opus-5",
+        "output_tokens": 140,
+        "stop_reason": "end_turn"
+      }
+    },
+    {
+      "kind": "turn.thinking",
+      "at": "2026-11-14T10:00:10Z",
+      "source_offset": 1423,
+      "payload": {
+        "block_count": 1,
+        "chars": 0,
+        "withheld": true
+      }
+    },
+    {
+      "kind": "message.phase",
+      "at": "2026-11-14T10:00:10Z",
+      "source_offset": 1423,
+      "payload": {
+        "phase": "final_answer",
+        "stop_reason": "end_turn"
+      }
+    },
+    {
+      "kind": "input.queue",
+      "at": "2026-11-14T10:00:18Z",
+      "source_offset": 1889,
+      "payload": {
+        "absorbed_task_notification": true,
+        "delivery_id": "dlv-1",
+        "operation": "enqueue",
+        "reason": "background_agent"
+      }
+    },
+    {
+      "kind": "delegation.task_notification",
+      "at": "2026-11-14T10:00:18Z",
+      "source_offset": 1889,
+      "payload": {
+        "duration_ms": 18320,
+        "note": "Full transcript saved",
+        "output_file": "/tmp/subagents/a1b2c3d.out",
+        "result": "Found 3 fidelity gaps",
+        "source": "queue_operation",
+        "status": "completed",
+        "subagent_tokens": 24500,
+        "summary": "Agent \"Audit backend signals\" completed",
+        "task_id": "a1b2c3d",
+        "tool_use_id": "tu-agent-1",
+        "tool_uses": 7
+      }
+    },
+    {
+      "kind": "delegation.task_notification",
+      "at": "2026-11-14T10:00:18.200Z",
+      "source_offset": 2509,
+      "payload": {
+        "duration_ms": 18320,
+        "output_file": "/tmp/subagents/a1b2c3d.out",
+        "result": "Found 3 fidelity gaps",
+        "source": "user_message",
+        "status": "completed",
+        "subagent_tokens": 24500,
+        "summary": "Agent \"Audit backend signals\" completed",
+        "task_id": "a1b2c3d",
+        "tool_use_id": "tu-agent-1",
+        "tool_uses": 7
+      }
+    },
+    {
+      "kind": "delegation.task_notification",
+      "at": "2026-11-14T10:00:18.500Z",
+      "source_offset": 3128,
+      "payload": {
+        "note": "This agent stopped with no live background children.",
+        "source": "user_message",
+        "status": "stopped",
+        "summary": "Agent \"Background monitor\" stopped",
+        "task_id": "b2c3d4e"
+      }
+    },
+    {
+      "kind": "turn.duration",
+      "at": "2026-11-14T10:00:19Z",
+      "source_offset": 3575,
+      "payload": {
+        "duration_ms": 18500,
+        "message_count": 8,
+        "pending_background_agents": 2
+      }
+    },
+    {
+      "kind": "turn.end",
+      "at": "2026-11-14T10:00:19Z",
+      "source_offset": 3575,
+      "payload": {
+        "duration_ms": 18500,
+        "outcome": "completed",
+        "source": "turn_duration"
+      }
+    },
+    {
+      "kind": "delegation.background",
+      "at": "2026-11-14T10:00:19Z",
+      "source_offset": 3575,
+      "payload": {
+        "pending_background_agents": 2
+      }
+    },
+    {
+      "kind": "delegation.waiting",
+      "at": "2026-11-14T10:00:19Z",
+      "source_offset": 3575,
+      "payload": {
+        "pending_background_agents": 2
+      }
+    },
+    {
+      "kind": "delegation.scheduled",
+      "at": "2026-11-14T10:00:25Z",
+      "source_offset": 3789,
+      "payload": {
+        "content": "Running scheduled canary check",
+        "cron": "*/5 * * * *",
+        "cron_kind": "recurring",
+        "prompt": "Check canary",
+        "task_id": "cron-1",
+        "task_kind": "cron"
+      }
+    },
+    {
+      "kind": "session.cost",
+      "at": "2026-11-14T10:00:25Z",
+      "source_offset": 4091,
+      "payload": {
+        "has_unknown_model_cost": false,
+        "lines_added": 42,
+        "lines_removed": 9,
+        "model_usage": {
+          "claude-opus-5": {
+            "costUSD": 4.25,
+            "inputTokens": 1300,
+            "outputTokens": 225
+          }
+        },
+        "total_api_duration_ms": 95000,
+        "total_api_duration_no_retries_ms": 92000,
+        "total_cost_usd": 4.25,
+        "total_duration_ms": 125000,
+        "total_tool_duration_ms": 30000
+      }
+    },
+    {
+      "kind": "session.permission_mode",
+      "at": "2026-11-14T10:00:25Z",
+      "source_offset": 4454,
+      "payload": {
+        "permission_mode": "bypassPermissions"
+      }
+    },
+    {
+      "kind": "session.worktree",
+      "at": "2026-11-14T10:00:25Z",
+      "source_offset": 4569,
+      "payload": {
+        "active": true,
+        "original_cwd": "/Users/dev/project",
+        "worktree_branch": "worktree-feat-x",
+        "worktree_name": "feat-x",
+        "worktree_path": "/Users/dev/.claude/worktrees/feat-x"
+      }
+    },
+    {
+      "kind": "session.title",
+      "at": "1970-01-01T00:00:00Z",
+      "source_offset": 4813,
+      "payload": {
+        "source": "user",
+        "title": "Custom User Rename"
+      }
+    },
+    {
+      "kind": "context.compaction",
+      "at": "2026-11-14T10:00:30Z",
+      "source_offset": 4919,
+      "payload": {
+        "boundary_kind": "microcompact",
+        "tokens_saved": 14200,
+        "trigger": "auto"
+      }
+    },
+    {
+      "kind": "turn.end",
+      "at": "2026-11-14T10:00:32Z",
+      "source_offset": 5135,
+      "payload": {
+        "has_output": true,
+        "hook_count": 1,
+        "outcome": "stop_hook_continued",
+        "prevented_continuation": true,
+        "source": "stop_hook_summary",
+        "stop_reason": "hook_blocked",
+        "tool_use_id": "stop-2"
+      }
+    },
+    {
+      "kind": "turn.end",
+      "at": "2026-11-14T10:00:35Z",
+      "source_offset": 5396,
+      "payload": {
+        "outcome": "interrupted",
+        "source": "user_interrupt"
+      }
+    }
+  ]
+}

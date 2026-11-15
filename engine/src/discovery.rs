@@ -105,6 +105,9 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
 pub fn provider_root_depth(provider: &str) -> usize {
     if provider == "opencode" {
         1
+    } else if provider == "claude" {
+        // Cover nested subagent paths (e.g. spawnDepth >= 2 or workflow runs) under projects/.
+        8
     } else {
         DISCOVERY_MAX_DEPTH
     }
@@ -791,6 +794,11 @@ pub fn session_path_for_watcher_event(
             }
             continue;
         }
+        if provider.name == "claude" {
+            if let Some(transcript) = claude_subagent_transcript_for_sidecar(path) {
+                return Some((transcript, provider.name));
+            }
+        }
         if is_provider_session_file(provider, path) {
             return Some((path.to_path_buf(), provider.name));
         }
@@ -801,6 +809,22 @@ pub fn session_path_for_watcher_event(
         }
     }
     None
+}
+
+fn claude_subagent_transcript_for_sidecar(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name().and_then(|value| value.to_str())?;
+    let stem = name.strip_suffix(".meta.json")?;
+    if !stem.starts_with("agent-") {
+        return None;
+    }
+    if !path
+        .components()
+        .any(|component| component.as_os_str() == "subagents")
+    {
+        return None;
+    }
+    let transcript = path.with_file_name(format!("{stem}.jsonl"));
+    transcript.is_file().then_some(transcript)
 }
 
 fn cursor_database_path_for_event(path: &Path) -> Option<PathBuf> {
@@ -2118,5 +2142,44 @@ mod tests {
                 "{lane}: project opt-in for {path:?}"
             );
         }
+    }
+
+    #[test]
+    fn claude_depth8_subagent_discovery_and_meta_sidecar_watcher_mapping() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let home = home_dir.path().canonicalize().unwrap();
+        let claude_root = home.join(".claude").join("projects");
+        let nested_dir = claude_root
+            .join("proj-a")
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_run01")
+            .join("nested");
+        fs::create_dir_all(&nested_dir).unwrap();
+        let transcript = nested_dir.join("agent-nested123.jsonl");
+        let meta = nested_dir.join("agent-nested123.meta.json");
+        fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"11111111-2222-3333-4444-555555555555\",\"timestamp\":\"2026-11-14T10:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        )
+        .unwrap();
+        fs::write(&meta, "{\"agentType\":\"Explore\",\"finished\":false}").unwrap();
+
+        let providers = existing_provider_roots(provider_candidates(
+            &home,
+            &home.join(".claude"),
+            &home.join(".config"),
+        ));
+        assert_eq!(provider_root_depth("claude"), 8);
+        let scan = discover_files_in_scope(&providers, &ImportScope::all("cli"));
+        let discovered: BTreeSet<&Path> = scan.files.iter().map(|f| f.path.as_path()).collect();
+        assert!(discovered.contains(transcript.as_path()));
+        assert!(!discovered.contains(meta.as_path()));
+
+        let routed = session_path_for_watcher_event(&meta, &providers)
+            .expect(".meta.json watcher event should map to sibling agent transcript");
+        assert_eq!(routed.0, transcript);
+        assert_eq!(routed.1, "claude");
     }
 }

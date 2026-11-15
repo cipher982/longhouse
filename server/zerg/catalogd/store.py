@@ -1820,6 +1820,17 @@ _SESSION_READ_LATEST_FACT_KINDS = (
     "delegation.waiting",
 )
 # Every turn duration, newest first, so any loaded page can anchor its footers.
+_SESSION_READ_TURN_FACT_KINDS = (
+    "turn.duration",
+    "turn.end",
+    "turn.thinking",
+    "message.phase",
+    "tool.intent",
+    "turn.api_error",
+    "context.compaction",
+    "delegation.scheduled",
+    "delegation.task_notification",
+)
 _SESSION_READ_TURN_FACT_LIMIT = 2_000
 # The busiest real session carries a few hundred screenshots; past that the
 # session read stops being a bounded payload. The workspace joins what is here
@@ -1877,7 +1888,7 @@ def _session_read_provider_facts(connection: Connection, *, session_id: str) -> 
     rows.extend(
         connection.execute(
             select(table)
-            .where(table.c.session_id == session_id, table.c.kind == "turn.duration")
+            .where(table.c.session_id == session_id, table.c.kind.in_(_SESSION_READ_TURN_FACT_KINDS))
             .order_by(*newest_first)
             .limit(_SESSION_READ_TURN_FACT_LIMIT)
         )
@@ -1902,7 +1913,7 @@ def _latest_provider_facts_by_session(connection: Connection, *, session_ids: li
     if not session_ids:
         return {}
     table = SessionProviderFact.__table__
-    kinds = (*_SESSION_READ_LATEST_FACT_KINDS, "turn.duration")
+    kinds = (*_SESSION_READ_LATEST_FACT_KINDS, "turn.duration", "turn.end", "delegation.scheduled")
     ranked = (
         select(
             table,
@@ -1916,7 +1927,9 @@ def _latest_provider_facts_by_session(connection: Connection, *, session_ids: li
         .where(table.c.session_id.in_(session_ids), table.c.kind.in_(kinds))
         .subquery()
     )
-    rows = connection.execute(select(ranked).where(ranked.c.fact_rank == 1)).mappings()
+    rows = connection.execute(
+        select(ranked).where(ranked.c.fact_rank <= case((ranked.c.kind == "delegation.scheduled", 32), else_=1))
+    ).mappings()
     by_session: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_session.setdefault(str(row["session_id"]), []).append(_provider_fact_dto(row))
@@ -4752,10 +4765,175 @@ def _merge_registry_lifecycle_heads(connection, heads_by_session: dict[str, list
     return heads_by_session
 
 
+def _subagent_native_variants(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    variants = {text}
+    if text.startswith("agent-"):
+        bare = text[len("agent-") :]
+        if bare:
+            variants.add(bare)
+    else:
+        variants.add(f"agent-{text}")
+    return variants
+
+
+def _enrich_subagent_child_stats(
+    connection: Connection,
+    *,
+    child_ids: list[str],
+    now: datetime,
+) -> dict[str, dict[str, Any]]:
+    """Aggregate child subagent metadata, token usage, duration, and live status."""
+    if not child_ids:
+        return {}
+    from zerg.services.session_state_contract import infer_context_window
+
+    stats: dict[str, dict[str, Any]] = {
+        str(cid): {
+            "metadata": {},
+            "has_usage": False,
+            "duration_ms_sum": 0,
+            "has_duration": False,
+        }
+        for cid in child_ids
+    }
+    fact_table = SessionProviderFact.__table__
+    fact_rows = (
+        connection.execute(
+            select(
+                fact_table.c.session_id,
+                fact_table.c.kind,
+                fact_table.c.payload_json,
+            )
+            .where(
+                fact_table.c.session_id.in_(child_ids),
+                fact_table.c.kind.in_(("delegation.metadata", "turn.usage", "turn.duration")),
+            )
+            .order_by(fact_table.c.at.asc(), fact_table.c.source_position.asc(), fact_table.c.id.asc())
+        )
+        .mappings()
+        .all()
+    )
+    for fact in fact_rows:
+        entry = stats.get(str(fact["session_id"]))
+        if entry is None:
+            continue
+        payload = _decode_json_object(fact["payload_json"])
+        if not isinstance(payload, dict):
+            continue
+        kind = str(fact["kind"] or "")
+        if kind == "delegation.metadata":
+            meta = payload.get("metadata") if isinstance(payload.get("metadata"), Mapping) else payload
+            if isinstance(meta, Mapping):
+                entry["metadata"].update(dict(meta))
+                _copy_delegation_item_metadata(entry, meta, fallback=entry["metadata"])
+                if isinstance(meta.get("description"), str) and meta["description"].strip():
+                    entry["description"] = meta["description"].strip()[:255]
+                if isinstance(meta.get("finished"), bool):
+                    entry["finished"] = meta["finished"]
+                tool_use_id = meta.get("parent_tool_call_id") or meta.get("tool_use_id") or meta.get("toolUseId")
+                if isinstance(tool_use_id, str) and tool_use_id.strip():
+                    entry.setdefault("parent_tool_call_id", tool_use_id.strip())
+        elif kind == "turn.usage":
+            if type(payload.get("output_tokens")) is not int:
+                continue
+            entry["has_usage"] = True
+            output_tokens = max(0, int(payload["output_tokens"]))
+            if type(payload.get("context_tokens")) is int:
+                context_tokens = max(0, int(payload["context_tokens"]))
+            else:
+                context_tokens = sum(
+                    max(0, int(payload[key]))
+                    for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+                    if type(payload.get(key)) is int
+                )
+            entry["context_tokens"] = context_tokens
+            entry["input_tokens"] = context_tokens
+            entry["output_tokens"] = output_tokens
+            entry["total_tokens"] = context_tokens + output_tokens
+            entry["tokens"] = entry["total_tokens"]
+            if type(payload.get("context_window")) is int and int(payload["context_window"]) > 0:
+                entry["context_window"] = int(payload["context_window"])
+            model = payload.get("model")
+            if isinstance(model, str) and model.strip() and not entry.get("model"):
+                entry["model"] = model.strip()[:128]
+        elif kind == "turn.duration":
+            dur = payload.get("duration_ms")
+            if type(dur) is int and dur >= 0:
+                entry["has_duration"] = True
+                entry["duration_ms_sum"] += int(dur)
+
+    head_table = FactHead.__table__
+    head_rows = (
+        connection.execute(
+            select(
+                head_table.c.session_id,
+                head_table.c.family,
+                head_table.c.valid_until,
+                head_table.c.observed_at,
+                head_table.c.value_json,
+            )
+            .where(
+                head_table.c.session_id.in_(child_ids),
+                head_table.c.family == "activity",
+            )
+            .order_by(head_table.c.updated_commit_seq.asc())
+        )
+        .mappings()
+        .all()
+    )
+    for head in head_rows:
+        sid = str(head["session_id"] or "")
+        entry = stats.get(sid)
+        if entry is None:
+            continue
+        valid_until = _as_aware_utc(head["valid_until"]) if head["valid_until"] is not None else None
+        if valid_until is not None and valid_until <= now:
+            continue
+        value = _decode_json_object(head["value_json"])
+        if not isinstance(value, dict):
+            continue
+        raw_state = str(value.get("state") or "").strip().lower()
+        if raw_state in {"thinking", "running"}:
+            entry["live_status"] = "running"
+        elif raw_state in {"waiting", "idle"}:
+            entry["live_status"] = raw_state
+
+    out: dict[str, dict[str, Any]] = {}
+    for sid, entry in stats.items():
+        context_tokens = entry.get("context_tokens")
+        model = entry.get("model")
+        context_window = entry.get("context_window")
+        if context_window is None and (model or isinstance(context_tokens, int)):
+            context_window = infer_context_window(None, model, context_tokens)
+        out[sid] = {
+            "metadata": entry["metadata"],
+            "agent_type": entry.get("agent_type"),
+            "description": entry.get("description"),
+            "model": model,
+            "is_fork": entry.get("is_fork"),
+            "parent_agent_id": entry.get("parent_agent_id"),
+            "spawn_depth": entry.get("spawn_depth"),
+            "finished": entry.get("finished"),
+            "live_status": entry.get("live_status"),
+            "duration_ms": entry["duration_ms_sum"] if entry["has_duration"] else None,
+            "input_tokens": entry.get("input_tokens") if entry["has_usage"] else None,
+            "output_tokens": entry.get("output_tokens") if entry["has_usage"] else None,
+            "total_tokens": entry.get("total_tokens") if entry["has_usage"] else None,
+            "tokens": entry.get("tokens") if entry["has_usage"] else None,
+            "context_tokens": context_tokens if entry["has_usage"] else None,
+            "context_window": context_window,
+        }
+    return out
+
+
 def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], heads_by_session: Mapping[str, Any]) -> None:
     """Join named tasks to source-authored child lineage within this read snapshot."""
     requested: dict[str, set[str]] = {}
     native_requested: dict[tuple[str, str], str] = {}
+    native_id_requested: dict[str, set[str]] = {}
     by_session = {str(fact["catalog"]["session_id"]): fact for fact in facts}
     for session_id, fact in by_session.items():
         run_id = (fact.get("latest_run") or {}).get("id")
@@ -4781,54 +4959,178 @@ def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], head
                 if item.get("kind") == "subagent" and isinstance(native_id, str) and native_id and isinstance(native_path, str):
                     for opaque_id in _opaque_source_ids_for_path(native_path):
                         native_requested[(session_id, opaque_id)] = f"native:{native_id}"
+                elif item.get("kind") == "subagent":
+                    for candidate_key in (native_id, item.get("id")):
+                        if isinstance(candidate_key, str) and candidate_key.strip():
+                            native_id_requested.setdefault(session_id, set()).add(candidate_key.strip())
     _attach_native_delegation_children(connection, by_session=by_session, requested=native_requested)
-    if not requested:
-        return
-    child = StorageSession.__table__
-    parent = child.alias("delegation_parent")
-    rendered = (child.c.render_state == "ready") & child.c.current_render_generation.is_not(None)
-    tool_ids = {tool_id for values in requested.values() for tool_id in values}
-    rows = connection.execute(
-        select(
-            child.c.subagent_parent_session_id,
-            child.c.subagent_parent_tool_call_id,
-            child.c.session_id,
-            child.c.started_at,
-            child.c.last_activity_at,
-            case((rendered, child.c.user_messages), else_=None).label("user_messages"),
-            case((rendered, child.c.assistant_messages), else_=None).label("assistant_messages"),
-            case((rendered, child.c.tool_calls), else_=None).label("tool_calls"),
+    parent_ids_to_walk = list(set(requested) | set(native_id_requested))
+    if parent_ids_to_walk:
+        child = StorageSession.__table__
+        parent = child.alias("delegation_parent")
+        rendered = (child.c.render_state == "ready") & child.c.current_render_generation.is_not(None)
+        parent_scope_rows = (
+            connection.execute(
+                select(
+                    parent.c.session_id,
+                    parent.c.owner_id,
+                    parent.c.provider,
+                    parent.c.machine_id,
+                ).where(parent.c.session_id.in_(parent_ids_to_walk))
+            )
+            .mappings()
+            .all()
         )
-        .select_from(child.join(parent, parent.c.session_id == child.c.subagent_parent_session_id))
-        .where(
-            child.c.subagent_parent_session_id.in_(requested),
-            child.c.subagent_parent_tool_call_id.in_(tool_ids),
-            child.c.owner_id == parent.c.owner_id,
-            child.c.provider == parent.c.provider,
-            child.c.machine_id == parent.c.machine_id,
-            child.c.raw_state != "retired",
-            child.c.render_state != "retired",
-        )
-    ).mappings()
-    ambiguous: set[tuple[str, str]] = set()
-    for row in rows:
-        session_id, tool_id = str(row["subagent_parent_session_id"]), str(row["subagent_parent_tool_call_id"])
-        if tool_id not in requested[session_id]:
-            continue
-        children = by_session[session_id].setdefault("delegation_children", {})
-        coordinate = (session_id, tool_id)
-        if tool_id in children or coordinate in ambiguous:
-            children.pop(tool_id, None)
-            ambiguous.add(coordinate)
-            continue
-        children[tool_id] = {
-            "session_id": str(row["session_id"]),
-            "started_at": _encode_datetime(row["started_at"]),
-            "last_activity_at": _encode_datetime(row["last_activity_at"]),
-            "user_messages": int(row["user_messages"]) if row["user_messages"] is not None else None,
-            "assistant_messages": int(row["assistant_messages"]) if row["assistant_messages"] is not None else None,
-            "tool_calls": int(row["tool_calls"]) if row["tool_calls"] is not None else None,
-        }
+        parent_scope = {str(r["session_id"]): r for r in parent_scope_rows}
+        descendants_by_root: dict[str, list[Mapping[str, Any]]] = {sid: [] for sid in parent_scope}
+        frontier_to_root: dict[str, str] = {sid: sid for sid in parent_scope}
+        visited_sessions: set[str] = set(parent_scope)
+        for _depth in range(6):
+            if not frontier_to_root:
+                break
+            rows = (
+                connection.execute(
+                    select(
+                        child.c.subagent_parent_session_id,
+                        child.c.subagent_parent_tool_call_id,
+                        child.c.session_id,
+                        child.c.owner_id,
+                        child.c.provider,
+                        child.c.machine_id,
+                        child.c.provider_session_id,
+                        child.c.started_at,
+                        child.c.last_activity_at,
+                        child.c.ended_at,
+                        case((rendered, child.c.user_messages), else_=None).label("user_messages"),
+                        case((rendered, child.c.assistant_messages), else_=None).label("assistant_messages"),
+                        case((rendered, child.c.tool_calls), else_=None).label("tool_calls"),
+                    ).where(
+                        child.c.subagent_parent_session_id.in_(list(frontier_to_root)),
+                        child.c.raw_state != "retired",
+                        child.c.render_state != "retired",
+                        child.c.is_subagent == 1,
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            next_frontier: dict[str, str] = {}
+            for row in rows:
+                cid = str(row["session_id"])
+                if cid in visited_sessions:
+                    continue
+                direct_parent = str(row["subagent_parent_session_id"])
+                root_id = frontier_to_root.get(direct_parent)
+                if root_id is None:
+                    continue
+                scope = parent_scope.get(root_id)
+                if scope is None:
+                    continue
+                if (
+                    str(row["owner_id"]) != str(scope["owner_id"])
+                    or str(row["provider"]) != str(scope["provider"])
+                    or str(row["machine_id"]) != str(scope["machine_id"])
+                ):
+                    continue
+                visited_sessions.add(cid)
+                descendants_by_root[root_id].append(row)
+                next_frontier[cid] = root_id
+            frontier_to_root = next_frontier
+
+        all_child_ids = [str(row["session_id"]) for rows_list in descendants_by_root.values() for row in rows_list]
+        aliases_by_child: dict[str, set[str]] = {}
+        if all_child_ids:
+            alias = LiveSessionThreadAlias.__table__
+            thread = LiveSessionThread.__table__
+            for arow in connection.execute(
+                select(thread.c.session_id, alias.c.alias_value)
+                .select_from(alias.join(thread, thread.c.id == alias.c.thread_id))
+                .where(
+                    thread.c.session_id.in_(all_child_ids),
+                    alias.c.alias_kind == "provider_session_id",
+                )
+            ).mappings():
+                aliases_by_child.setdefault(str(arow["session_id"]), set()).update(_subagent_native_variants(arow["alias_value"]))
+
+        ambiguous: set[tuple[str, str]] = set()
+        for root_id, rows_list in descendants_by_root.items():
+            req_tools = requested.get(root_id, set())
+            req_native = native_id_requested.get(root_id, set())
+            children = by_session[root_id].setdefault("delegation_children", {})
+            for row in rows_list:
+                cid = str(row["session_id"])
+                child_payload = {
+                    "session_id": cid,
+                    "started_at": _encode_datetime(row["started_at"]),
+                    "last_activity_at": _encode_datetime(row["last_activity_at"]),
+                    "ended_at": _encode_datetime(row["ended_at"]),
+                    "user_messages": int(row["user_messages"]) if row["user_messages"] is not None else None,
+                    "assistant_messages": int(row["assistant_messages"]) if row["assistant_messages"] is not None else None,
+                    "tool_calls": int(row["tool_calls"]) if row["tool_calls"] is not None else None,
+                }
+                tool_id = str(row["subagent_parent_tool_call_id"] or "").strip()
+                if tool_id and tool_id in req_tools:
+                    coordinate = (root_id, tool_id)
+                    if tool_id in children or coordinate in ambiguous:
+                        children.pop(tool_id, None)
+                        ambiguous.add(coordinate)
+                    else:
+                        children[tool_id] = dict(child_payload)
+                if req_native:
+                    child_variants = _subagent_native_variants(row["provider_session_id"]) | aliases_by_child.get(cid, set())
+                    for match_key in child_variants & req_native:
+                        native_key = f"native:{match_key}"
+                        coordinate = (root_id, native_key)
+                        if coordinate in ambiguous:
+                            continue
+                        existing = children.get(native_key)
+                        if existing is not None:
+                            if existing["session_id"] != cid:
+                                children.pop(native_key, None)
+                                ambiguous.add(coordinate)
+                            continue
+                        children[native_key] = dict(child_payload)
+
+    enrich_ids: list[str] = []
+    seen_enrich: set[str] = set()
+    for fact in facts:
+        for entry in (fact.get("delegation_children") or {}).values():
+            cid = str(entry.get("session_id") or "")
+            if cid and cid not in seen_enrich:
+                seen_enrich.add(cid)
+                enrich_ids.append(cid)
+    if enrich_ids:
+        now = datetime.now(UTC)
+        enriched_map = _enrich_subagent_child_stats(connection, child_ids=enrich_ids, now=now)
+        for fact in facts:
+            for entry in (fact.get("delegation_children") or {}).values():
+                cid = str(entry.get("session_id") or "")
+                extra = enriched_map.get(cid)
+                if not extra:
+                    continue
+                for key in (
+                    "agent_type",
+                    "description",
+                    "model",
+                    "is_fork",
+                    "parent_agent_id",
+                    "spawn_depth",
+                    "finished",
+                    "live_status",
+                    "tokens",
+                    "context_tokens",
+                    "context_window",
+                    "duration_ms",
+                ):
+                    if extra.get(key) is not None:
+                        entry[key] = extra[key]
+                if entry.get("duration_ms") is None:
+                    started_dt = _parse_iso_utc(entry.get("started_at"))
+                    ended_dt = _parse_iso_utc(entry.get("ended_at"))
+                    if started_dt is not None and ended_dt is not None:
+                        delta_ms = int(round((ended_dt - started_dt).total_seconds() * 1000))
+                        if delta_ms >= 0:
+                            entry["duration_ms"] = delta_ms
 
 
 def _attach_native_delegation_children(connection, *, by_session: Mapping[str, Any], requested: Mapping[tuple[str, str], str]) -> None:

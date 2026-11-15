@@ -1,0 +1,92 @@
+{
+  "event_count": 14,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "Audit the repo using subagents and summarize."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking",
+      "content_text": "Thinking:\nInspecting git status and spawning background audit."
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "Starting repository inspection now."
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "tool_name": "Bash",
+      "tool_input_json": {
+        "command": "git status -s",
+        "description": "Check modified files"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "tool_result"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking_withheld",
+      "content_text": "Thinking:\n[Reasoning withheld]"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "Background audit launched."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Audit backend signals\" completed"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Audit backend signals\" completed"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Background monitor\" stopped"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_waiting_background_agents",
+      "content_text": "Waiting for 2 background agents to finish"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "scheduled_task_fire",
+      "content_text": "Running scheduled canary check"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "microcompact_boundary",
+      "content_text": "Context microcompacted [trigger=auto]"
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "[Request interrupted by user]"
+    }
+  ]
+}

@@ -1126,8 +1126,23 @@ class SessionSubagentResponse(UTCBaseModel):
     session_id: str
     provider: str
     provider_session_id: str | None = None
+    parent_session_id: str | None = None
     parent_tool_call_id: str | None = None
+    parent_agent_id: str | None = None
     run_id: str | None = None
+    agent_type: str | None = None
+    description: str | None = None
+    model: str | None = None
+    is_fork: bool | None = None
+    spawn_depth: int | None = None
+    finished: bool | None = None
+    live_status: str | None = None
+    duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    context_tokens: int | None = None
+    context_window: int | None = None
     started_at: str | None = None
     last_activity_at: str | None = None
     ended_at: str | None = None

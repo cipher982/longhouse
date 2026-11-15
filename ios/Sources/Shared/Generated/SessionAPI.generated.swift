@@ -130,6 +130,13 @@ struct APISessionControlResponse: Codable, Hashable, Sendable {
     let attachCommand: String?
 }
 
+struct APISessionCronResponse: Codable, Hashable, Sendable {
+    let id: String
+    let schedule: String
+    let recurring: Bool?
+    let prompt: String?
+}
+
 struct APISessionInputReceiptResponse: Codable, Hashable, Sendable {
     let clientRequestId: String?
     let intent: String
@@ -327,6 +334,11 @@ struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
     let kind: String
     let status: String
     let description: String?
+    let agentType: String?
+    let model: String?
+    let isFork: Bool?
+    let parentAgentId: String?
+    let spawnDepth: Int?
     let firstObservedAt: String?
     let startedAt: String?
     let lastActivityAt: String?
@@ -454,6 +466,14 @@ struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let staleReason: String?
 }
 
+struct APISessionWorktreeResponse: Codable, Hashable, Sendable {
+    let name: String?
+    let branch: String?
+    let path: String?
+    let originalCwd: String?
+    let originalBranch: String?
+}
+
 struct APITimelineBadgePresentationResponse: Codable, Hashable, Sendable {
     let label: String
     let tone: String
@@ -472,6 +492,12 @@ struct APITimelineCardPresentationResponse: Codable, Hashable, Sendable {
     let borderTone: String?
 }
 
+struct APISessionRateLimitResponse: Codable, Hashable, Sendable {
+    let kind: String
+    let percentUsed: Double?
+    let resetsAt: String?
+}
+
 struct APIUsageLatestResponse: Codable, Hashable, Sendable {
     let model: String?
     let effort: String?
@@ -480,6 +506,10 @@ struct APIUsageLatestResponse: Codable, Hashable, Sendable {
     let contextWindowSource: String?
     let outputTokens: Int
     let thinkingTokens: Int?
+    let usedPercent: Double?
+    let costUsd: Double?
+    let cumulativeDurationMs: Int?
+    let rateLimits: [APISessionRateLimitResponse]?
     let at: String
     let label: String
 }
@@ -551,6 +581,11 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let recap: APISessionRecapResponse?
     let selectedModel: String?
     let usageLatest: APIUsageLatestResponse?
+    let permissionMode: String?
+    let providerTitle: String?
+    let worktree: APISessionWorktreeResponse?
+    let sessionCrons: [APISessionCronResponse]?
+    let pendingBackgroundAgentCount: Int?
     let timelineCard: APITimelineCardPresentationResponse
     let userState: String?
     let userHiddenFromTimeline: Bool?
@@ -673,6 +708,9 @@ struct APITurnEndResponse: Codable, Hashable, Sendable {
     let endedAt: String
     let messageCount: Int?
     let outcome: String?
+    let stopHookContinued: Bool?
+    let stopHookSummary: String?
+    let source: String?
 }
 
 struct APIEventResponse: Codable, Hashable, Sendable {
@@ -693,6 +731,12 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolOutputFailed: Bool?
     let toolCallId: String?
     let toolPresentation: APIToolPresentationResponse?
+    let toolIntent: String?
+    let messagePhase: String?
+    let reasoningWithheld: Bool?
+    let taskNotification: [String: JSONValue]?
+    let waitingBackgroundAgents: Int?
+    let apiError: [String: JSONValue]?
     let timestamp: String
     let inActiveContext: Bool?
     let branchId: Int?

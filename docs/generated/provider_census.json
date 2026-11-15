@@ -1284,6 +1284,7 @@
     {
       "path": "server/tests_lite/test_catalogd_session_reads.py",
       "providers": [
+        "claude",
         "codex",
         "cursor",
         "omp"

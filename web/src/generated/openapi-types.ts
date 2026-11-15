@@ -4422,6 +4422,16 @@ export interface components {
             status: string;
             /** Description */
             description?: string | null;
+            /** Agent Type */
+            agent_type?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Is Fork */
+            is_fork?: boolean | null;
+            /** Parent Agent Id */
+            parent_agent_id?: string | null;
+            /** Spawn Depth */
+            spawn_depth?: number | null;
             /** Parent Tool Call Id */
             parent_tool_call_id?: string | null;
             /** Native Child Id */
@@ -4436,7 +4446,7 @@ export interface components {
         };
         /**
          * DelegationUpdateIn
-         * @description One native child edge, never a replacement background registry.
+         * @description One native child edge or upserted task, never a replacement background registry.
          */
         DelegationUpdateIn: {
             /**
@@ -4446,9 +4456,10 @@ export interface components {
             operation: "observe" | "remove";
             /**
              * Membership
-             * @constant
+             * @default existing_exact_link_only
+             * @enum {string}
              */
-            membership: "existing_exact_link_only";
+            membership: "existing_exact_link_only" | "upsert";
             item: components["schemas"]["DelegationTaskIn"];
             /**
              * Observed At
@@ -4459,9 +4470,9 @@ export interface components {
              * Source Event
              * @enum {string}
              */
-            source_event: "SubagentStart" | "SubagentStop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure";
+            source_event: "SubagentStart" | "SubagentStop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "TaskCreated" | "TaskCompleted";
             /** Source Agent Id */
-            source_agent_id: string;
+            source_agent_id?: string | null;
             /** Source Agent Type */
             source_agent_type?: string | null;
             /** Source Agent Transcript Path */
@@ -4697,6 +4708,41 @@ export interface components {
             tool_call_id?: string | null;
             /** @description Versioned read-time tool presentation with raw-provider provenance */
             tool_presentation?: components["schemas"]["ToolPresentationResponse"] | null;
+            /**
+             * Tool Intent
+             * @description Normalized human-readable summary of why this tool was called
+             */
+            tool_intent?: string | null;
+            /**
+             * Message Phase
+             * @description Assistant text phase relative to tool execution vs turn completion
+             */
+            message_phase?: ("commentary" | "final_answer") | null;
+            /**
+             * Reasoning Withheld
+             * @description True when the provider returned a signature/redacted thinking block with no visible text
+             * @default false
+             */
+            reasoning_withheld: boolean;
+            /**
+             * Task Notification
+             * @description Structured metadata for a Claude background task-notification row
+             */
+            task_notification?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Waiting Background Agents
+             * @description Count of pending background agents when a turn ended waiting on them
+             */
+            waiting_background_agents?: number | null;
+            /**
+             * Api Error
+             * @description Provider API error and retry notice metadata when applicable
+             */
+            api_error?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Timestamp
              * Format: date-time
@@ -5524,7 +5570,7 @@ export interface components {
             title_state?: string | null;
             /**
              * Title Source
-             * @description Title provenance: ai|provider|prompt|project
+             * @description Title provenance: user|ai|provider|prompt|project
              */
             title_source?: string | null;
             /**
@@ -6064,6 +6110,20 @@ export interface components {
             run_id?: string | null;
             /** Provider Session Id */
             provider_session_id?: string | null;
+            /** Hook Event Name */
+            hook_event_name?: string | null;
+            /** Session Usage */
+            session_usage?: {
+                [key: string]: unknown;
+            } | null;
+            /** Session Crons */
+            session_crons?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Permission Mode */
+            permission_mode?: string | null;
+            /** Git Branch */
+            git_branch?: string | null;
         };
         /**
          * PresenceState
@@ -7585,6 +7645,33 @@ export interface components {
             attach_command?: string | null;
         };
         /**
+         * SessionCronResponse
+         * @description Scheduled prompt registered inside the provider session.
+         */
+        SessionCronResponse: {
+            /**
+             * Id
+             * @description Scheduler job id
+             */
+            id: string;
+            /**
+             * Schedule
+             * @description Cron expression or interval
+             */
+            schedule: string;
+            /**
+             * Recurring
+             * @description Whether the schedule recurs
+             * @default false
+             */
+            recurring: boolean;
+            /**
+             * Prompt
+             * @description Scheduled prompt preview
+             */
+            prompt?: string | null;
+        };
+        /**
          * SessionDelegationFacts
          * @description Work this session handed to another worker, or that runs beside it.
          *
@@ -7664,6 +7751,16 @@ export interface components {
             status: string;
             /** Description */
             description?: string | null;
+            /** Agent Type */
+            agent_type?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Is Fork */
+            is_fork?: boolean | null;
+            /** Parent Agent Id */
+            parent_agent_id?: string | null;
+            /** Spawn Depth */
+            spawn_depth?: number | null;
             /** First Observed At */
             first_observed_at?: string | null;
             /** Started At */
@@ -8342,6 +8439,27 @@ export interface components {
              */
             has_more: boolean;
         };
+        /**
+         * SessionRateLimitResponse
+         * @description Latest quota bucket snapshot reported by the provider.
+         */
+        SessionRateLimitResponse: {
+            /**
+             * Kind
+             * @description Rate-limit bucket name, e.g. five_hour or seven_day
+             */
+            kind: string;
+            /**
+             * Percent Used
+             * @description Percentage of quota used (0-100)
+             */
+            percent_used?: number | null;
+            /**
+             * Resets At
+             * @description ISO-8601 quota reset timestamp when reported
+             */
+            resets_at?: string | null;
+        };
         /** SessionReadRequest */
         SessionReadRequest: {
             /**
@@ -8690,6 +8808,29 @@ export interface components {
             selected_model?: string | null;
             /** @description Model, effort and context size from the provider's last turn-ending response. */
             usage_latest?: components["schemas"]["UsageLatestResponse"] | null;
+            /**
+             * Permission Mode
+             * @description Current provider permission mode reported by hooks or transcript.
+             */
+            permission_mode?: string | null;
+            /**
+             * Provider Title
+             * @description Latest provider-emitted auto title.
+             */
+            provider_title?: string | null;
+            /** @description Active or last provider worktree metadata. */
+            worktree?: components["schemas"]["SessionWorktreeResponse"] | null;
+            /**
+             * Session Crons
+             * @description Scheduled crons currently active in this provider session.
+             */
+            session_crons?: components["schemas"]["SessionCronResponse"][];
+            /**
+             * Pending Background Agent Count
+             * @description Number of pending or waiting background agents reported for this session.
+             * @default 0
+             */
+            pending_background_agent_count: number;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
@@ -9185,10 +9326,40 @@ export interface components {
             provider: string;
             /** Provider Session Id */
             provider_session_id?: string | null;
+            /** Parent Session Id */
+            parent_session_id?: string | null;
             /** Parent Tool Call Id */
             parent_tool_call_id?: string | null;
+            /** Parent Agent Id */
+            parent_agent_id?: string | null;
             /** Run Id */
             run_id?: string | null;
+            /** Agent Type */
+            agent_type?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Is Fork */
+            is_fork?: boolean | null;
+            /** Spawn Depth */
+            spawn_depth?: number | null;
+            /** Finished */
+            finished?: boolean | null;
+            /** Live Status */
+            live_status?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Context Tokens */
+            context_tokens?: number | null;
+            /** Context Window */
+            context_window?: number | null;
             /** Started At */
             started_at?: string | null;
             /** Last Activity At */
@@ -9573,6 +9744,37 @@ export interface components {
              * @description Hash of the complete durable viewport signature
              */
             fingerprint: string;
+        };
+        /**
+         * SessionWorktreeResponse
+         * @description Active or last provider worktree context for the session.
+         */
+        SessionWorktreeResponse: {
+            /**
+             * Name
+             * @description Worktree name
+             */
+            name?: string | null;
+            /**
+             * Branch
+             * @description Worktree git branch
+             */
+            branch?: string | null;
+            /**
+             * Path
+             * @description Worktree filesystem path
+             */
+            path?: string | null;
+            /**
+             * Original Cwd
+             * @description Original working directory before entering worktree
+             */
+            original_cwd?: string | null;
+            /**
+             * Original Branch
+             * @description Original git branch before entering worktree
+             */
+            original_branch?: string | null;
         };
         /**
          * SessionsSummaryResponse
@@ -10174,11 +10376,26 @@ export interface components {
             message_count?: number | null;
             /**
              * Outcome
-             * @description Whether the provider finished the turn or the user stopped it
+             * @description Whether the provider finished the turn, aborted, or the user interrupted it
              * @default completed
              * @enum {string}
              */
-            outcome: "completed" | "aborted";
+            outcome: "completed" | "aborted" | "interrupted";
+            /**
+             * Stop Hook Continued
+             * @description Whether a stop hook prevented stopping and continued
+             */
+            stop_hook_continued?: boolean | null;
+            /**
+             * Stop Hook Summary
+             * @description Optional stop hook summary reported at turn end
+             */
+            stop_hook_summary?: string | null;
+            /**
+             * Source
+             * @description Signal source that closed the turn (e.g. turn_duration, stop_hook_summary)
+             */
+            source?: string | null;
         };
         /**
          * UsageLatestResponse
@@ -10220,6 +10437,26 @@ export interface components {
              * @description Thinking tokens on that response, when reported
              */
             thinking_tokens?: number | null;
+            /**
+             * Used Percent
+             * @description Context window used percentage (0-100), when reported
+             */
+            used_percent?: number | null;
+            /**
+             * Cost Usd
+             * @description Cumulative session cost in USD, when reported
+             */
+            cost_usd?: number | null;
+            /**
+             * Cumulative Duration Ms
+             * @description Cumulative session duration in ms, when reported
+             */
+            cumulative_duration_ms?: number | null;
+            /**
+             * Rate Limits
+             * @description Latest provider rate-limit snapshots
+             */
+            rate_limits?: components["schemas"]["SessionRateLimitResponse"][] | null;
             /**
              * At
              * Format: date-time

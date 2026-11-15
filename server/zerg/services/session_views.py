@@ -705,9 +705,12 @@ class TurnEndResponse(BaseModel):
     duration_ms: int = Field(..., description="Wall-clock milliseconds the provider reported for the turn")
     ended_at: datetime = Field(..., description="When the provider reported the turn done")
     message_count: Optional[int] = Field(None, description="Provider message count at turn end, when reported")
-    outcome: Literal["completed", "aborted"] = Field(
-        "completed", description="Whether the provider finished the turn or the user stopped it"
+    outcome: Literal["completed", "aborted", "interrupted"] = Field(
+        "completed", description="Whether the provider finished the turn, aborted, or the user interrupted it"
     )
+    stop_hook_continued: Optional[bool] = Field(None, description="Whether a stop hook prevented stopping and continued")
+    stop_hook_summary: Optional[str] = Field(None, description="Optional stop hook summary reported at turn end")
+    source: Optional[str] = Field(None, description="Signal source that closed the turn (e.g. turn_duration, stop_hook_summary)")
 
 
 class SessionRecapResponse(BaseModel):
@@ -1017,7 +1020,7 @@ class MachineSessionResponse(UTCBaseModel):
     title: Optional[str] = Field(None, description="Resolved headline for this session")
     anchor_title: Optional[str] = Field(None, description="Frozen AI-generated headline when one exists")
     title_state: Optional[str] = Field(None, description="AI-title lifecycle: awaiting_input|pending|degraded|ready")
-    title_source: Optional[str] = Field(None, description="Title provenance: ai|provider|prompt|project")
+    title_source: Optional[str] = Field(None, description="Title provenance: user|ai|provider|prompt|project")
     hidden_from_default_timeline: bool = Field(
         False,
         description="True when canonical launch provenance excludes the session from the default timeline.",
@@ -1441,6 +1444,30 @@ class EventResponse(UTCBaseModel):
     tool_presentation: Optional[ToolPresentationResponse] = Field(
         None,
         description="Versioned read-time tool presentation with raw-provider provenance",
+    )
+    tool_intent: Optional[str] = Field(
+        None,
+        description="Normalized human-readable summary of why this tool was called",
+    )
+    message_phase: Optional[Literal["commentary", "final_answer"]] = Field(
+        None,
+        description="Assistant text phase relative to tool execution vs turn completion",
+    )
+    reasoning_withheld: bool = Field(
+        False,
+        description="True when the provider returned a signature/redacted thinking block with no visible text",
+    )
+    task_notification: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured metadata for a Claude background task-notification row",
+    )
+    waiting_background_agents: Optional[int] = Field(
+        None,
+        description="Count of pending background agents when a turn ended waiting on them",
+    )
+    api_error: Optional[dict[str, Any]] = Field(
+        None,
+        description="Provider API error and retry notice metadata when applicable",
     )
     timestamp: datetime = Field(..., description="Event timestamp")
     in_active_context: bool = Field(

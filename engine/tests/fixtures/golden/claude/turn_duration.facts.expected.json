@@ -1,5 +1,5 @@
 {
-  "fact_count": 2,
+  "fact_count": 5,
   "facts": [
     {
       "kind": "turn.usage",
@@ -11,7 +11,30 @@
         "context_tokens": 501710,
         "input_tokens": 2,
         "model": "claude-opus-5",
-        "output_tokens": 177
+        "output_tokens": 177,
+        "stop_reason": "end_turn"
+      }
+    },
+    {
+      "kind": "message.phase",
+      "at": "2026-09-03T14:20:38Z",
+      "source_offset": 292,
+      "payload": {
+        "phase": "final_answer",
+        "stop_reason": "end_turn"
+      }
+    },
+    {
+      "kind": "turn.end",
+      "at": "2026-09-03T14:20:39Z",
+      "source_offset": 836,
+      "payload": {
+        "has_output": false,
+        "hook_count": 2,
+        "outcome": "stop_hook_summary",
+        "prevented_continuation": false,
+        "source": "stop_hook_summary",
+        "tool_use_id": "stop-1"
       }
     },
     {
@@ -21,6 +44,16 @@
       "payload": {
         "duration_ms": 129299,
         "message_count": 898
+      }
+    },
+    {
+      "kind": "turn.end",
+      "at": "2026-09-03T14:20:39.100Z",
+      "source_offset": 1266,
+      "payload": {
+        "duration_ms": 129299,
+        "outcome": "completed",
+        "source": "turn_duration"
       }
     }
   ]

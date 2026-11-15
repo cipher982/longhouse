@@ -1342,6 +1342,39 @@
     "version"
    ]
   },
+  "system/microcompact_boundary": {
+   "classification": "signal:context.compaction",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "level",
+    "microcompactMetadata",
+    "microcompactMetadata.compactedToolIds",
+    "microcompactMetadata.clearedAttachmentUUIDs",
+    "microcompactMetadata.preTokens",
+    "microcompactMetadata.tokensSaved",
+    "microcompactMetadata.trigger",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "microcompactMetadata"
+   ]
+  },
   "system/model_consent_fallback": {
    "classification": "chrome:model fallback",
    "first_seen_version": "2.1.198",
@@ -2214,12 +2247,16 @@
       "classification": "transcript",
       "keys": []
      },
+     "redacted_thinking": {
+      "classification": "transcript",
+      "keys": []
+     },
      "text": {
       "classification": "transcript",
       "keys": []
      },
      "thinking": {
-      "classification": "signal:turn.thinking",
+      "classification": "transcript",
       "keys": []
      },
      "tool_use": {

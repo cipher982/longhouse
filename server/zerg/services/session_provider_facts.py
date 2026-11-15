@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _LIST_TIMEOUT_SECONDS = 4.25
 TURN_DURATION = "turn.duration"
+TURN_END = "turn.end"
 SESSION_RECAP = "session.recap"
 SESSION_TITLE = "session.title"
 TURN_USAGE = "turn.usage"
@@ -32,6 +33,7 @@ SESSION_COST = "session.cost"
 SESSION_PERMISSION_MODE = "session.permission_mode"
 SESSION_WORKTREE = "session.worktree"
 DELEGATION_WAITING = "delegation.waiting"
+DELEGATION_SCHEDULED = "delegation.scheduled"
 
 
 def _as_float(value: object) -> float | None:
@@ -113,16 +115,13 @@ def _event_time(event: dict[str, object]) -> datetime | None:
 def turn_ends_by_event(
     facts: list[dict[str, Any]], events: list[dict[str, object]], *, page_is_tail: bool = True
 ) -> dict[str, dict[str, Any]]:
-    """Anchor each turn-duration fact to the event its turn ended on.
+    """Anchor each turn-ending fact (`turn.duration` / `turn.end`) to its turn's final reply.
 
     A turn is the run of non-user events after the last user event before the
     fact; the anchor is the newest of those at or before the fact's time.
-    Claude writes `turn_duration` after the turn's final assistant message
-    and Codex's `task_complete` behaves the same, so the rule is
-    provider-neutral. A turn with no output of its own (stopped before the
-    first reply) decorates nothing rather than the previous turn's last
-    reply. A fact later than every event on a page that is not the newest
-    belongs to a turn off this page and decorates nothing here either.
+    Claude writes `turn_duration` and `stop_hook_summary` (`turn.end`) after
+    the turn's final assistant message and Codex's `task_complete` behaves the
+    same, so the rule is provider-neutral.
     """
     ordered = sorted(
         (
@@ -133,7 +132,11 @@ def turn_ends_by_event(
         key=lambda item: item[0],
     )
     decorations: dict[str, dict[str, Any]] = {}
-    for fact in sorted((f for f in facts if f.get("kind") == TURN_DURATION), key=lambda f: f["at"]):
+    relevant = sorted(
+        (f for f in facts if f.get("kind") in {TURN_DURATION, TURN_END}),
+        key=lambda f: (f["at"], 0 if f.get("kind") == TURN_DURATION else 1, int(f.get("source_position") or 0)),
+    )
+    for fact in relevant:
         before = [item for item in ordered if item[0] <= fact["at"]]
         if not before or (len(before) == len(ordered) and not page_is_tail):
             continue
@@ -147,41 +150,94 @@ def turn_ends_by_event(
         if anchor is None:
             continue
         payload = fact["payload"]
-        duration_ms = payload.get("duration_ms")
-        if not isinstance(duration_ms, int):
-            continue
-        message_count = payload.get("message_count")
-        decorations[anchor] = {
-            "duration_ms": duration_ms,
-            "ended_at": fact["at"].isoformat(),
-            "message_count": message_count if isinstance(message_count, int) else None,
-            "outcome": _turn_outcome(payload),
-        }
+        kind = fact.get("kind")
+        if kind == TURN_DURATION:
+            duration_ms = payload.get("duration_ms")
+            if not isinstance(duration_ms, int):
+                continue
+            message_count = payload.get("message_count")
+            existing = decorations.get(anchor) or {}
+            decorations[anchor] = {
+                "duration_ms": duration_ms,
+                "ended_at": fact["at"].isoformat(),
+                "message_count": message_count if isinstance(message_count, int) else existing.get("message_count"),
+                "outcome": existing["outcome"] if existing.get("outcome") in {"aborted", "interrupted"} else _turn_outcome(payload),
+                **({"stop_hook_continued": existing["stop_hook_continued"]} if "stop_hook_continued" in existing else {}),
+                **({"stop_hook_summary": existing["stop_hook_summary"]} if "stop_hook_summary" in existing else {}),
+                **({"source": existing["source"]} if "source" in existing else {}),
+            }
+        else:
+            existing = dict(decorations.get(anchor) or {})
+            duration_val = payload.get("duration_ms") if isinstance(payload.get("duration_ms"), int) else existing.get("duration_ms", 0)
+            msg_count = payload.get("message_count") if isinstance(payload.get("message_count"), int) else existing.get("message_count")
+            entry: dict[str, Any] = {
+                "duration_ms": int(duration_val),
+                "ended_at": existing.get("ended_at") or fact["at"].isoformat(),
+                "message_count": msg_count,
+                "outcome": _turn_outcome(payload),
+            }
+            if isinstance(payload.get("stop_hook_continued"), bool):
+                entry["stop_hook_continued"] = payload["stop_hook_continued"]
+            elif "stop_hook_continued" in existing:
+                entry["stop_hook_continued"] = existing["stop_hook_continued"]
+            summary = payload.get("stop_hook_summary")
+            if isinstance(summary, str) and summary.strip():
+                entry["stop_hook_summary"] = summary.strip()
+            elif "stop_hook_summary" in existing:
+                entry["stop_hook_summary"] = existing["stop_hook_summary"]
+            source = payload.get("source")
+            if isinstance(source, str) and source.strip():
+                entry["source"] = source.strip()
+            elif "source" in existing:
+                entry["source"] = existing["source"]
+            decorations[anchor] = entry
     return decorations
 
 
-def _turn_outcome(payload: dict[str, Any]) -> str:
-    """Codex closes an interrupted turn with its duration too; Claude only writes finished ones."""
-    return "aborted" if payload.get("outcome") == "aborted" else "completed"
+def _turn_outcome(payload: Mapping[str, Any]) -> str:
+    """Codex and Claude close completed, aborted, or interrupted turns."""
+    raw = str(payload.get("outcome") or "").strip().lower()
+    if raw in {"aborted", "interrupted"}:
+        return raw
+    return "completed"
 
 
 def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     """The newest finished turn, with its anchor event when it is on the page."""
-    latest = None
+    latest_duration = None
+    latest_end = None
     for fact in facts:
-        if fact.get("kind") != TURN_DURATION or not isinstance(fact["payload"].get("duration_ms"), int):
-            continue
-        if latest is None or fact["at"] > latest["at"]:
-            latest = fact
-    if latest is None:
+        kind = fact.get("kind")
+        if kind == TURN_DURATION and isinstance(fact["payload"].get("duration_ms"), int):
+            if latest_duration is None or fact["at"] > latest_duration["at"]:
+                latest_duration = fact
+        elif kind == TURN_END:
+            if latest_end is None or (fact["at"], int(fact.get("source_position") or 0)) > (
+                latest_end["at"],
+                int(latest_end.get("source_position") or 0),
+            ):
+                latest_end = fact
+    if latest_duration is None and latest_end is None:
         return None
-    ended_at = latest["at"].isoformat()
-    event_id = next((event_id for event_id, turn in decorations.items() if turn["ended_at"] == ended_at), None)
+    if latest_duration is not None and (latest_end is None or latest_duration["at"] >= latest_end["at"]):
+        ended_at = latest_duration["at"].isoformat()
+        event_id = next((eid for eid, turn in decorations.items() if turn.get("ended_at") == ended_at), None)
+        anchored = decorations.get(event_id, {}) if event_id is not None else {}
+        return {
+            "duration_ms": latest_duration["payload"]["duration_ms"],
+            "ended_at": ended_at,
+            "event_id": event_id,
+            "outcome": anchored.get("outcome") or _turn_outcome(latest_duration["payload"]),
+        }
+    assert latest_end is not None
+    ended_at = latest_end["at"].isoformat()
+    event_id = next((eid for eid, turn in decorations.items() if turn.get("ended_at") == ended_at), None)
+    payload = latest_end["payload"]
     return {
-        "duration_ms": latest["payload"]["duration_ms"],
+        "duration_ms": int(payload["duration_ms"]) if isinstance(payload.get("duration_ms"), int) else 0,
         "ended_at": ended_at,
         "event_id": event_id,
-        "outcome": _turn_outcome(latest["payload"]),
+        "outcome": _turn_outcome(payload),
     }
 
 
@@ -386,6 +442,18 @@ def project_session_hud(
             if usage_d is not None
             else (base_usage.get("thinking_tokens") if base_usage is not None else None)
         )
+        context_window_source: str | None = "native" if context_window is not None else None
+        if context_window is None:
+            from zerg.services.session_state_contract import infer_context_window
+
+            derived_window = infer_context_window(
+                base.get("provider") if isinstance(base.get("provider"), str) else None,
+                model,
+                context_tokens,
+            )
+            if derived_window is not None:
+                context_window = derived_window
+                context_window_source = "derived"
         rt_pct = _as_float(rt_ctx.get("percent"))
         base_pct = _as_float(base_usage.get("used_percent")) if base_usage is not None else None
         used_percent: float | None = None
@@ -459,7 +527,7 @@ def project_session_hud(
             "effort": effort,
             "context_tokens": context_tokens,
             "context_window": context_window,
-            "context_window_source": "native" if context_window is not None else None,
+            "context_window_source": context_window_source,
             "output_tokens": output_tokens,
             "thinking_tokens": thinking_tokens,
             "used_percent": used_percent,
@@ -503,6 +571,34 @@ def project_session_hud(
         session_crons = [dict(c) for c in meta["session_crons"] if isinstance(c, Mapping)]
     elif isinstance(base.get("session_crons"), list):
         session_crons = [dict(c) for c in base["session_crons"] if isinstance(c, Mapping)]
+    if not session_crons:
+        crons_by_id: dict[str, dict[str, Any]] = {}
+        scheduled_facts = sorted(
+            (fact for fact in norm_facts if fact.get("kind") == DELEGATION_SCHEDULED),
+            key=lambda fact: (fact["at"], int(fact.get("source_position") or 0)),
+        )
+        for fact in scheduled_facts:
+            payload = fact["payload"]
+            cron_id = str(payload.get("id") or "").strip()
+            if not cron_id:
+                continue
+            action = str(payload.get("action") or "create").strip().lower()
+            if action in {"delete", "cancel", "remove"}:
+                crons_by_id.pop(cron_id, None)
+                continue
+            schedule = str(payload.get("schedule") or payload.get("cron") or "").strip()
+            if not schedule and cron_id in crons_by_id:
+                schedule = str(crons_by_id[cron_id].get("schedule") or "")
+            entry: dict[str, Any] = {
+                "id": cron_id,
+                "schedule": schedule or "scheduled",
+                "recurring": bool(payload.get("recurring", False)),
+            }
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str) and prompt.strip():
+                entry["prompt"] = prompt.strip()
+            crons_by_id[cron_id] = entry
+        session_crons = list(crons_by_id.values())
 
     pending_background_agent_count = 0
     delegation_state = getattr(delegation, "state", None)

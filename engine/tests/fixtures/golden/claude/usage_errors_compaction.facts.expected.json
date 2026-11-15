@@ -1,5 +1,5 @@
 {
-  "fact_count": 3,
+  "fact_count": 5,
   "facts": [
     {
       "kind": "turn.api_error",
@@ -10,6 +10,24 @@
         "max_retries": 10,
         "retry_attempt": 1,
         "retry_in_ms": 1000
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-03T14:18:35Z",
+      "source_offset": 672,
+      "payload": {
+        "cache_creation_input_tokens": 261,
+        "cache_read_input_tokens": 400000,
+        "context_tokens": 400263,
+        "effort": "high",
+        "input_tokens": 2,
+        "model": "claude-opus-5",
+        "output_tokens": 40,
+        "service_tier": "standard",
+        "speed": "standard",
+        "stop_reason": "tool_use",
+        "thinking_tokens": 0
       }
     },
     {
@@ -26,7 +44,17 @@
         "output_tokens": 177,
         "service_tier": "standard",
         "speed": "standard",
+        "stop_reason": "end_turn",
         "thinking_tokens": 12
+      }
+    },
+    {
+      "kind": "message.phase",
+      "at": "2026-09-03T14:18:40Z",
+      "source_offset": 1791,
+      "payload": {
+        "phase": "final_answer",
+        "stop_reason": "end_turn"
       }
     },
     {
