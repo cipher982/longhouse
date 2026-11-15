@@ -52,13 +52,16 @@ from zerg.catalogd.store import _delegation_fact_rows
 from zerg.catalogd.store import _delegation_payload
 from zerg.catalogd.store import _empty_human_helm_is_open
 from zerg.catalogd.store import _encode_datetime
+from zerg.catalogd.store import _enrich_subagent_child_stats
 from zerg.catalogd.store import _has_durable_timeline_content
 from zerg.catalogd.store import _insert_provider_facts
 from zerg.catalogd.store import _merge_registry_lifecycle_heads
 from zerg.catalogd.store import _non_negative_int
+from zerg.catalogd.store import _parse_iso_utc
 from zerg.catalogd.store import _provider_fact_rows
 from zerg.catalogd.store import _read_snapshot
 from zerg.catalogd.store import _StageTimer
+from zerg.catalogd.store import _subagent_native_variants
 from zerg.catalogd.store import _summarize_machine_activity_rows
 from zerg.catalogd.store import _timeline_current_work_is_open
 from zerg.catalogd.store import _timeline_possibly_open_session_ids
@@ -1602,52 +1605,117 @@ class SessionsMixin:
             if parent is None:
                 return {"found": False, "session_id": session_id, "children": [], "child_references": []}
             child_limit = max(1, min(int(limit), 500))
-            rows = (
-                connection.execute(
-                    select(
-                        session_table.c.session_id,
-                        session_table.c.provider,
-                        session_table.c.provider_session_id,
-                        session_table.c.started_at,
-                        session_table.c.last_activity_at,
-                        session_table.c.ended_at,
-                        session_table.c.user_messages,
-                        session_table.c.assistant_messages,
-                        session_table.c.tool_calls,
-                        session_table.c.summary_title,
-                        session_table.c.first_user_message_preview,
-                        session_table.c.last_visible_text_preview,
-                        session_table.c.subagent_parent_provider_session_id,
-                        session_table.c.subagent_parent_tool_call_id,
-                        session_table.c.subagent_run_id,
-                    )
-                    .where(
-                        session_table.c.subagent_parent_session_id == session_id,
-                        or_(
-                            session_table.c.is_subagent == 1,
-                            primary_worker_only_clause(session_table, LiveSessionThread.__table__),
-                        ),
-                        session_table.c.owner_id == owner_id,
-                        session_table.c.machine_id == parent["machine_id"],
-                        or_(
-                            session_table.c.provider == parent["provider"],
-                            session_table.c.subagent_run_id.is_not(None),
-                            session_table.c.origin_kind == "hatch_automation",
-                        ),
-                    )
-                    .order_by(session_table.c.started_at.asc(), session_table.c.session_id.asc())
-                    .limit(child_limit)
+            alias = LiveSessionThreadAlias.__table__
+            thread = LiveSessionThread.__table__
+
+            frontier_session_ids: list[str] = [session_id]
+            frontier_native_ids: set[str] = set()
+            if parent["provider_session_id"]:
+                frontier_native_ids.add(str(parent["provider_session_id"]).strip())
+            for parent_alias in connection.execute(
+                select(alias.c.alias_value)
+                .select_from(alias.join(thread, thread.c.id == alias.c.thread_id))
+                .where(
+                    thread.c.session_id == session_id,
+                    alias.c.alias_kind == "provider_session_id",
                 )
-                .mappings()
-                .all()
-            )
+            ).scalars():
+                cleaned = str(parent_alias or "").strip()
+                if cleaned:
+                    frontier_native_ids.add(cleaned)
+            frontier_native_ids.discard("")
+
+            visited_ids: set[str] = {session_id}
+            rows: list[Mapping[str, Any]] = []
+            for _depth in range(8):
+                if (not frontier_session_ids and not frontier_native_ids) or len(rows) >= child_limit:
+                    break
+                parent_match_clauses = []
+                if frontier_session_ids:
+                    parent_match_clauses.append(session_table.c.subagent_parent_session_id.in_(frontier_session_ids))
+                if frontier_native_ids:
+                    parent_match_clauses.append(session_table.c.subagent_parent_provider_session_id.in_(sorted(frontier_native_ids)))
+                hop_rows = (
+                    connection.execute(
+                        select(
+                            session_table.c.session_id,
+                            session_table.c.provider,
+                            session_table.c.provider_session_id,
+                            session_table.c.started_at,
+                            session_table.c.last_activity_at,
+                            session_table.c.ended_at,
+                            session_table.c.user_messages,
+                            session_table.c.assistant_messages,
+                            session_table.c.tool_calls,
+                            session_table.c.summary_title,
+                            session_table.c.first_user_message_preview,
+                            session_table.c.last_visible_text_preview,
+                            session_table.c.subagent_parent_session_id,
+                            session_table.c.subagent_parent_provider_session_id,
+                            session_table.c.subagent_parent_tool_call_id,
+                            session_table.c.subagent_run_id,
+                        )
+                        .where(
+                            or_(*parent_match_clauses),
+                            or_(
+                                session_table.c.is_subagent == 1,
+                                primary_worker_only_clause(session_table, LiveSessionThread.__table__),
+                            ),
+                            session_table.c.owner_id == owner_id,
+                            session_table.c.machine_id == parent["machine_id"],
+                            or_(
+                                session_table.c.provider == parent["provider"],
+                                session_table.c.subagent_run_id.is_not(None),
+                                session_table.c.origin_kind == "hatch_automation",
+                            ),
+                            session_table.c.session_id.notin_(visited_ids),
+                        )
+                        .order_by(session_table.c.started_at.asc(), session_table.c.session_id.asc())
+                        .limit(child_limit - len(rows))
+                    )
+                    .mappings()
+                    .all()
+                )
+                if not hop_rows:
+                    break
+                next_session_ids: list[str] = []
+                next_native_ids: set[str] = set()
+                for row in hop_rows:
+                    cid = str(row["session_id"])
+                    if cid in visited_ids:
+                        continue
+                    visited_ids.add(cid)
+                    rows.append(row)
+                    next_session_ids.append(cid)
+                    if row["provider_session_id"]:
+                        cleaned_native = str(row["provider_session_id"]).strip()
+                        if cleaned_native:
+                            next_native_ids.add(cleaned_native)
+                if next_session_ids:
+                    for hop_alias in connection.execute(
+                        select(alias.c.alias_value)
+                        .select_from(alias.join(thread, thread.c.id == alias.c.thread_id))
+                        .where(
+                            thread.c.session_id.in_(next_session_ids),
+                            alias.c.alias_kind == "provider_session_id",
+                        )
+                    ).scalars():
+                        cleaned = str(hop_alias or "").strip()
+                        if cleaned:
+                            next_native_ids.add(cleaned)
+                frontier_session_ids = next_session_ids
+                frontier_native_ids = next_native_ids
+
             child_ids = [str(row["session_id"]) for row in rows]
             alias_map: dict[str, str] = {
                 str(row["session_id"]): str(row["provider_session_id"]) for row in rows if row["provider_session_id"]
             }
+            native_to_child_session_id: dict[str, str] = {}
+            for row in rows:
+                cid = str(row["session_id"])
+                for variant in _subagent_native_variants(row["provider_session_id"]):
+                    native_to_child_session_id.setdefault(variant, cid)
             if child_ids:
-                alias = LiveSessionThreadAlias.__table__
-                thread = LiveSessionThread.__table__
                 for alias_row in connection.execute(
                     select(thread.c.session_id, alias.c.alias_value)
                     .select_from(alias.join(thread, thread.c.id == alias.c.thread_id))
@@ -1656,7 +1724,12 @@ class SessionsMixin:
                         alias.c.alias_kind == "provider_session_id",
                     )
                 ).mappings():
-                    alias_map.setdefault(str(alias_row["session_id"]), str(alias_row["alias_value"]))
+                    cid = str(alias_row["session_id"])
+                    alias_map.setdefault(cid, str(alias_row["alias_value"]))
+                    for variant in _subagent_native_variants(alias_row["alias_value"]):
+                        native_to_child_session_id.setdefault(variant, cid)
+
+            enriched_by_child = _enrich_subagent_child_stats(connection, child_ids=child_ids, now=datetime.now(UTC))
             spawn_facts = _delegation_fact_rows(connection, session_id=session_id)
             references: list[dict[str, Any]] = []
             children_by_tool_call: dict[str, list[str]] = {}
@@ -1676,8 +1749,12 @@ class SessionsMixin:
                     if not native_id:
                         continue
                     metadata = child.get("metadata") if isinstance(child.get("metadata"), dict) else {}
-                    metadata_by_native.setdefault(native_id, metadata)
-                    resolved = next((child_id for child_id, value in alias_map.items() if value == native_id), None)
+                    for variant in _subagent_native_variants(native_id):
+                        metadata_by_native.setdefault(variant, metadata)
+                    resolved = next(
+                        (child_id for child_id, value in alias_map.items() if native_id in _subagent_native_variants(value)),
+                        None,
+                    )
                     if resolved is None:
                         parent_tool_call_id = str(child.get("parent_tool_call_id") or "").strip()
                         tool_candidates = children_by_tool_call.get(parent_tool_call_id, []) if parent_tool_call_id else []
@@ -1699,27 +1776,72 @@ class SessionsMixin:
                         break
                 if len(references) >= _SESSION_READ_DELEGATION_FACT_LIMIT:
                     break
-        children = [
-            {
-                "session_id": str(row["session_id"]),
-                "provider": row["provider"],
-                "provider_session_id": alias_map.get(str(row["session_id"])),
-                "parent_tool_call_id": row["subagent_parent_tool_call_id"],
-                "run_id": row["subagent_run_id"],
-                "started_at": self._iso_or_none(row["started_at"]),
-                "last_activity_at": self._iso_or_none(row["last_activity_at"]),
-                "ended_at": self._iso_or_none(row["ended_at"]),
-                "user_messages": int(row["user_messages"] or 0),
-                "assistant_messages": int(row["assistant_messages"] or 0),
-                "tool_calls": int(row["tool_calls"] or 0),
-                "title": row["summary_title"],
-                "first_user_message_preview": row["first_user_message_preview"],
-                "last_visible_text_preview": row["last_visible_text_preview"],
-                "metadata": metadata_by_native.get(alias_map.get(str(row["session_id"]), ""), {}),
-            }
-            for row in rows
-        ]
-        return {"found": True, "session_id": session_id, "children": children, "child_references": references}
+
+            children: list[dict[str, Any]] = []
+            for row in rows:
+                cid = str(row["session_id"])
+                native_key = alias_map.get(cid, "")
+                extra = enriched_by_child.get(cid) or {}
+                merged_metadata = dict(metadata_by_native.get(native_key) or {})
+                child_meta = extra.get("metadata")
+                if isinstance(child_meta, Mapping):
+                    merged_metadata.update(dict(child_meta))
+                parent_agent_id = extra.get("parent_agent_id")
+                if not isinstance(parent_agent_id, str) or not parent_agent_id.strip():
+                    raw_parent_agent = merged_metadata.get("parent_agent_id") or merged_metadata.get("parentAgentId")
+                    parent_agent_id = (
+                        str(raw_parent_agent).strip() if isinstance(raw_parent_agent, str) and raw_parent_agent.strip() else None
+                    )
+                resolved_parent_session_id = str(row["subagent_parent_session_id"] or session_id)
+                if parent_agent_id:
+                    for variant in _subagent_native_variants(parent_agent_id):
+                        candidate_parent = native_to_child_session_id.get(variant)
+                        if candidate_parent and candidate_parent != cid:
+                            resolved_parent_session_id = candidate_parent
+                            break
+                duration_ms = extra.get("duration_ms")
+                if duration_ms is None and row["started_at"] is not None and row["ended_at"] is not None:
+                    started_dt = _parse_iso_utc(row["started_at"])
+                    ended_dt = _parse_iso_utc(row["ended_at"])
+                    if started_dt is not None and ended_dt is not None:
+                        delta_ms = int(round((ended_dt - started_dt).total_seconds() * 1000))
+                        if delta_ms >= 0:
+                            duration_ms = delta_ms
+                children.append(
+                    {
+                        "session_id": cid,
+                        "provider": row["provider"],
+                        "provider_session_id": alias_map.get(cid),
+                        "parent_session_id": resolved_parent_session_id,
+                        "parent_tool_call_id": row["subagent_parent_tool_call_id"],
+                        "parent_agent_id": parent_agent_id,
+                        "run_id": row["subagent_run_id"],
+                        "agent_type": extra.get("agent_type"),
+                        "description": extra.get("description"),
+                        "model": extra.get("model"),
+                        "is_fork": extra.get("is_fork"),
+                        "spawn_depth": extra.get("spawn_depth"),
+                        "finished": extra.get("finished"),
+                        "live_status": extra.get("live_status"),
+                        "duration_ms": duration_ms,
+                        "input_tokens": extra.get("input_tokens"),
+                        "output_tokens": extra.get("output_tokens"),
+                        "total_tokens": extra.get("total_tokens"),
+                        "context_tokens": extra.get("context_tokens"),
+                        "context_window": extra.get("context_window"),
+                        "started_at": self._iso_or_none(row["started_at"]),
+                        "last_activity_at": self._iso_or_none(row["last_activity_at"]),
+                        "ended_at": self._iso_or_none(row["ended_at"]),
+                        "user_messages": int(row["user_messages"] or 0),
+                        "assistant_messages": int(row["assistant_messages"] or 0),
+                        "tool_calls": int(row["tool_calls"] or 0),
+                        "title": row["summary_title"],
+                        "first_user_message_preview": row["first_user_message_preview"],
+                        "last_visible_text_preview": row["last_visible_text_preview"],
+                        "metadata": merged_metadata,
+                    }
+                )
+            return {"found": True, "session_id": session_id, "children": children, "child_references": references}
 
     def resolve_session_alias(self, *, provider_session_id: str, owner_id: int) -> dict[str, Any]:
         """Resolve a provider-native session id alias to its Longhouse session id.

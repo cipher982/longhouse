@@ -675,3 +675,21 @@ fn golden_antigravity_items() {
         assert!(has_item(&snapshot, expected.clone()), "missing {expected}");
     }
 }
+
+#[test]
+fn golden_claude_fidelity_signals() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_test(
+        &base.join("claude_fidelity_signals.jsonl"),
+        &base.join("claude_fidelity_signals.expected.json"),
+    );
+}
+
+#[test]
+fn golden_claude_fidelity_signals_facts() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_facts_test(
+        &base.join("claude_fidelity_signals.jsonl"),
+        &base.join("claude_fidelity_signals.facts.expected.json"),
+    );
+}

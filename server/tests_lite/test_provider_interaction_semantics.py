@@ -1136,7 +1136,7 @@ def test_system_rows_without_a_reasoning_part_stay_provider_system() -> None:
 
 
 def test_reasoning_part_is_only_reasoning_on_a_system_role_row() -> None:
-    for provider in ("omp", "pi"):
+    for provider in ("claude", "omp", "pi"):
         assert (
             classify_provider_interaction(
                 provider,
@@ -1156,11 +1156,26 @@ def test_reasoning_part_is_only_reasoning_on_a_system_role_row() -> None:
             == INTERACTION_PROVIDER_REASONING
         )
 
-    # Other providers keep their own contracts: a Claude system row is not
-    # reasoning just because it is a system row.
     assert (
         classify_provider_interaction(
             "claude",
+            role="system",
+            content_text="Thinking:\n[Reasoning withheld]",
+            raw_json={
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "redacted_thinking", "data": "encrypted"}],
+                },
+            },
+        )["interaction_kind"]
+        == INTERACTION_PROVIDER_REASONING
+    )
+
+    # Providers outside REASONING_PART_PROVIDERS keep their own contracts.
+    assert (
+        classify_provider_interaction(
+            "codex",
             role="system",
             content_text="Thinking:\nreasoning",
             raw_json=_omp_reasoning_raw(),
@@ -1357,7 +1372,54 @@ def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of
         content_text="Context microcompacted",
         raw_json={"type": "system", "subtype": "microcompact_boundary", "content": "Context microcompacted"},
     )
-    assert micro["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+    assert micro["interaction_kind"] == INTERACTION_COMPACTION_BOUNDARY
+    assert micro["title_eligible"] is False
+    assert micro["starts_model_turn"] is False
+
+
+def test_claude_queue_operation_task_notifications_and_system_notifications_classify() -> None:
+    from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
+    from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+    from zerg.services.provider_interaction_semantics import classify_provider_interaction
+
+    queued_xml = (
+        "<task-notification><task-id>b99</task-id><status>completed</status>"
+        '<summary>Agent "Scout" completed</summary><result>done</result></task-notification>\n'
+        "<note>Trailing note should stay accepted after verified task-notification</note>"
+    )
+    q_class = classify_provider_interaction(
+        "claude",
+        role="system",
+        content_text='Agent "Scout" completed',
+        raw_json={"type": "queue-operation", "operation": "enqueue", "content": queued_xml},
+    )
+    assert q_class["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
+    assert q_class["starts_model_turn"] is False
+
+    # Plain user prompt quoting task-notification tags without structural origin stays a user message.
+    pasted = classify_provider_interaction(
+        "claude",
+        role="user",
+        content_text=queued_xml,
+        raw_json={"type": "user", "message": {"role": "user", "content": queued_xml}},
+    )
+    assert pasted["interaction_kind"] == INTERACTION_DURABLE_USER_MESSAGE
+
+    waiting = classify_provider_interaction(
+        "claude",
+        role="system",
+        content_text="Waiting for 2 background agents to finish",
+        raw_json={"type": "system", "subtype": "turn_duration", "durationMs": 1200, "pendingBackgroundAgentCount": 2},
+    )
+    assert waiting["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
+
+    cron = classify_provider_interaction(
+        "claude",
+        role="system",
+        content_text="Scheduled task fired",
+        raw_json={"type": "system", "subtype": "scheduled_task_fire", "content": "Check build"},
+    )
+    assert cron["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
 
 
 def test_the_classifier_imports_no_new_server_code_and_the_ingest_path_hands_it_the_fast_decoder() -> None:

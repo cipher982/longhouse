@@ -13,7 +13,7 @@
 //! Gemini files are full JSON documents rewritten in-place (not JSONL appended),
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::path::PathBuf;
@@ -300,6 +300,14 @@ struct RawLine {
     subtype: Option<String>,
     /// System-message content field.
     content: Option<Value>,
+    /// Claude `queue-operation` action (`enqueue`, `popAll`, etc.).
+    operation: Option<String>,
+    /// Claude `system/turn_duration` count of active background subagents still running.
+    #[serde(rename = "pendingBackgroundAgentCount")]
+    pending_background_agent_count: Option<u64>,
+    /// Claude `user` tool result structured metadata (contains agentId, status, etc.).
+    #[serde(rename = "toolUseResult")]
+    tool_use_result: Option<Box<RawValue>>,
     /// File-history snapshot payload.
     snapshot: Option<FileHistorySnapshot>,
     /// Claude attachment rows (hook output, queued commands, images).
@@ -739,6 +747,10 @@ struct ContentItem {
     r#type: Option<String>,
     /// Text content (for "text" items)
     text: Option<String>,
+    /// Thinking block text (Claude extended thinking)
+    thinking: Option<String>,
+    /// Cryptographic thinking signature (present even when thinking text is withheld)
+    signature: Option<String>,
     /// Tool name (for "tool_use" items)
     name: Option<String>,
     /// Tool call ID (for "tool_use" items)
@@ -752,9 +764,236 @@ struct ContentItem {
     result_content: Option<Box<RawValue>>,
     /// Error flag on tool_result items (true = tool call failed/rejected)
     is_error: Option<bool>,
-    /// Reasoning text (for "thinking" items); empty when only a signature
-    /// was kept.
-    thinking: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SubagentSidecarMeta {
+    agent_type: Option<String>,
+    description: Option<String>,
+    model: Option<String>,
+    picked_effort_model: Option<String>,
+    is_fork: Option<bool>,
+    is_built_in: Option<bool>,
+    tool_use_id: Option<String>,
+    spawn_depth: Option<u32>,
+    parent_agent_id: Option<String>,
+    finished: Option<bool>,
+    request_shape: Option<String>,
+    request_non_interactive: Option<bool>,
+}
+
+pub(crate) fn sanitize_subagent_meta_witness(raw: &str) -> Option<String> {
+    let sidecar = serde_json::from_str::<SubagentSidecarMeta>(raw).ok()?;
+    let mut map = serde_json::Map::new();
+    if let Some(id) = non_empty_trimmed(sidecar.tool_use_id.as_deref()) {
+        map.insert("toolUseId".to_string(), Value::from(bounded_text(id, 255)));
+    }
+    if let Some(agent_type) = non_empty_trimmed(sidecar.agent_type.as_deref()) {
+        map.insert(
+            "agentType".to_string(),
+            Value::from(bounded_text(agent_type, 64)),
+        );
+    }
+    if let Some(description) = non_empty_trimmed(sidecar.description.as_deref()) {
+        map.insert(
+            "description".to_string(),
+            Value::from(bounded_text(description, 255)),
+        );
+    }
+    if let Some(model) = non_empty_trimmed(sidecar.model.as_deref()) {
+        map.insert("model".to_string(), Value::from(bounded_text(model, 128)));
+    }
+    if let Some(picked) = non_empty_trimmed(sidecar.picked_effort_model.as_deref()) {
+        map.insert(
+            "pickedEffortModel".to_string(),
+            Value::from(bounded_text(picked, 128)),
+        );
+    }
+    if let Some(is_fork) = sidecar.is_fork {
+        map.insert("isFork".to_string(), Value::from(is_fork));
+    }
+    if let Some(is_built_in) = sidecar.is_built_in {
+        map.insert("isBuiltIn".to_string(), Value::from(is_built_in));
+    }
+    if let Some(spawn_depth) = sidecar.spawn_depth {
+        map.insert("spawnDepth".to_string(), Value::from(spawn_depth));
+    }
+    if let Some(parent_agent_id) = non_empty_trimmed(sidecar.parent_agent_id.as_deref()) {
+        map.insert(
+            "parentAgentId".to_string(),
+            Value::from(bounded_text(parent_agent_id, 128)),
+        );
+    }
+    if let Some(finished) = sidecar.finished {
+        map.insert("finished".to_string(), Value::from(finished));
+    }
+    if let Some(request_shape) = non_empty_trimmed(sidecar.request_shape.as_deref()) {
+        map.insert(
+            "requestShape".to_string(),
+            Value::from(bounded_text(request_shape, 64)),
+        );
+    }
+    if let Some(request_non_interactive) = sidecar.request_non_interactive {
+        map.insert(
+            "requestNonInteractive".to_string(),
+            Value::from(request_non_interactive),
+        );
+    }
+    (!map.is_empty()).then(|| Value::Object(map).to_string())
+}
+
+#[derive(Debug, Clone, Default)]
+struct ClaudeParseState {}
+
+#[derive(Debug, Clone, Default)]
+struct ParsedTaskNotification {
+    task_id: Option<String>,
+    tool_use_id: Option<String>,
+    output_file: Option<String>,
+    status: Option<String>,
+    summary: Option<String>,
+    result: Option<String>,
+    duration_ms: Option<u64>,
+    subagent_tokens: Option<u64>,
+    tool_uses: Option<u64>,
+    note: Option<String>,
+}
+
+fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|text| !text.is_empty())
+}
+
+fn claude_subagent_id_from_label(label: &str) -> Option<String> {
+    let path = Path::new(label);
+    let in_subagents = path
+        .components()
+        .any(|component| component.as_os_str() == "subagents");
+    if !in_subagents {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    let id = stem.strip_prefix("agent-")?;
+    (!id.trim().is_empty()).then(|| id.trim().to_string())
+}
+
+fn build_claude_delegation_metadata_fact(
+    meta_raw: &str,
+    metadata: &mut SessionMetadata,
+    label: &str,
+    emit_offset: Option<u64>,
+) -> Option<ParsedProviderFact> {
+    let sidecar = serde_json::from_str::<SubagentSidecarMeta>(meta_raw).ok()?;
+    if metadata.subagent_depth.is_none() {
+        metadata.subagent_depth = sidecar.spawn_depth;
+    }
+    if metadata.subagent_name.is_none() {
+        metadata.subagent_name = non_empty_trimmed(sidecar.description.as_deref())
+            .or_else(|| non_empty_trimmed(sidecar.agent_type.as_deref()))
+            .map(|text| bounded_text(text, 255));
+    }
+    if sidecar.spawn_depth.unwrap_or(0) >= 2 {
+        if let Some(parent_agent_id) = non_empty_trimmed(sidecar.parent_agent_id.as_deref()) {
+            if metadata.parent_provider_session_id.is_none() {
+                metadata.parent_provider_session_id = Some(parent_agent_id.to_string());
+            }
+        }
+    }
+    let source_offset = emit_offset?;
+    if !metadata.is_sidechain {
+        return None;
+    }
+    let child_agent_id = non_empty_trimmed(metadata.subagent_id.as_deref())
+        .map(str::to_string)
+        .or_else(|| claude_subagent_id_from_label(label))?;
+
+    let mut sidecar_meta = serde_json::Map::new();
+    if let Some(agent_type) = non_empty_trimmed(sidecar.agent_type.as_deref()) {
+        sidecar_meta.insert(
+            "agent_type".to_string(),
+            Value::from(bounded_text(agent_type, 64)),
+        );
+    }
+    if let Some(description) = non_empty_trimmed(sidecar.description.as_deref()) {
+        sidecar_meta.insert(
+            "description".to_string(),
+            Value::from(bounded_text(description, 255)),
+        );
+    }
+    if let Some(model) = non_empty_trimmed(sidecar.picked_effort_model.as_deref())
+        .or_else(|| non_empty_trimmed(sidecar.model.as_deref()))
+    {
+        sidecar_meta.insert("model".to_string(), Value::from(bounded_text(model, 128)));
+    }
+    if let Some(picked) = non_empty_trimmed(sidecar.picked_effort_model.as_deref()) {
+        sidecar_meta.insert(
+            "picked_effort_model".to_string(),
+            Value::from(bounded_text(picked, 128)),
+        );
+    }
+    if let Some(is_fork) = sidecar.is_fork {
+        sidecar_meta.insert("is_fork".to_string(), Value::from(is_fork));
+    }
+    if let Some(is_built_in) = sidecar.is_built_in {
+        sidecar_meta.insert("is_built_in".to_string(), Value::from(is_built_in));
+    }
+    if let Some(parent_agent_id) = non_empty_trimmed(sidecar.parent_agent_id.as_deref()) {
+        sidecar_meta.insert(
+            "parent_agent_id".to_string(),
+            Value::from(bounded_text(parent_agent_id, 128)),
+        );
+    }
+    if let Some(spawn_depth) = sidecar.spawn_depth {
+        sidecar_meta.insert("spawn_depth".to_string(), Value::from(spawn_depth));
+    }
+    if let Some(finished) = sidecar.finished {
+        sidecar_meta.insert("finished".to_string(), Value::from(finished));
+    }
+    if let Some(tool_use_id) = non_empty_trimmed(metadata.subagent_tool_use_id.as_deref())
+        .or_else(|| non_empty_trimmed(sidecar.tool_use_id.as_deref()))
+    {
+        sidecar_meta.insert(
+            "tool_use_id".to_string(),
+            Value::from(bounded_text(tool_use_id, 255)),
+        );
+    }
+    if let Some(request_shape) = non_empty_trimmed(sidecar.request_shape.as_deref()) {
+        sidecar_meta.insert(
+            "request_shape".to_string(),
+            Value::from(bounded_text(request_shape, 64)),
+        );
+    }
+    if let Some(request_non_interactive) = sidecar.request_non_interactive {
+        sidecar_meta.insert(
+            "request_non_interactive".to_string(),
+            Value::from(request_non_interactive),
+        );
+    }
+
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "provider_session_id".to_string(),
+        Value::from(child_agent_id),
+    );
+    if let Some(parent_provider_session_id) = metadata
+        .parent_provider_session_id
+        .as_deref()
+        .or(metadata.forked_from_session_id.as_deref())
+        .and_then(|value| non_empty_trimmed(Some(value)))
+    {
+        payload.insert(
+            "parent_provider_session_id".to_string(),
+            Value::from(parent_provider_session_id),
+        );
+    }
+    payload.insert("metadata".to_string(), Value::Object(sidecar_meta));
+    let at = metadata.started_at.unwrap_or_else(carried_clock);
+    Some(ParsedProviderFact {
+        kind: "delegation.metadata".to_string(),
+        at,
+        source_offset,
+        payload: Value::Object(payload),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +1235,25 @@ fn parse_source_clocked(
             .subagent_meta()
             .as_deref()
             .and_then(subagent_tool_use_id_from_meta);
+    }
+    if result.metadata.is_sidechain && result.metadata.subagent_id.is_none() {
+        result.metadata.subagent_id = claude_subagent_id_from_label(&source.identity().label);
+    }
+    if let Some(meta_raw) = witness.subagent_meta() {
+        let emit_offset = (offset == 0)
+            .then(|| result.source_lines.first().map(|line| line.source_offset))
+            .flatten();
+        if let Some(mut fact) = build_claude_delegation_metadata_fact(
+            &meta_raw,
+            &mut result.metadata,
+            &source.identity().label,
+            emit_offset,
+        ) {
+            if let Some(first_event) = result.events.first() {
+                fact.at = first_event.timestamp;
+            }
+            result.provider_facts.insert(0, fact);
+        }
     }
 
     let canonical_session_id = result.metadata.session_id.clone();
@@ -1859,6 +2117,7 @@ fn parse_large_file(
     let mut antigravity_pending = seed_antigravity_pending(source, offset);
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(source, offset);
+    let mut claude_state = ClaudeParseState::default();
     // Pi and OMP keep pasted images in a blob store beside their transcripts;
     // only those providers can produce a reference worth resolving.
     let blob_lookup = matches!(
@@ -1945,6 +2204,7 @@ fn parse_large_file(
             &mut provider_facts,
             &mut antigravity_pending,
             &mut codex_pending,
+            &mut claude_state,
             cursor_order_anchor,
             native_flavor,
         );
@@ -1954,6 +2214,7 @@ fn parse_large_file(
             line_offset,
             &mut provider_facts,
             &mut codex_facts,
+            &mut claude_state,
             native_flavor,
         );
     }
@@ -2006,6 +2267,7 @@ fn parse_buffered(
     let mut antigravity_pending = seed_antigravity_pending(source, offset);
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(source, offset);
+    let mut claude_state = ClaudeParseState::default();
     // See parse_large_file: only the Pi lineage keeps a blob store beside its transcripts.
     let blob_lookup = matches!(
         native_flavor,
@@ -2086,6 +2348,7 @@ fn parse_buffered(
             &mut provider_facts,
             &mut antigravity_pending,
             &mut codex_pending,
+            &mut claude_state,
             cursor_order_anchor,
             native_flavor,
         );
@@ -2095,6 +2358,7 @@ fn parse_buffered(
             line_offset,
             &mut provider_facts,
             &mut codex_facts,
+            &mut claude_state,
             native_flavor,
         );
     }
@@ -2183,15 +2447,20 @@ fn collect_metadata(
         }
     }
 
-    // Claude metadata fields
-    if meta.cwd.is_none() {
-        if let Some(ref cwd) = obj.cwd {
+    // Claude metadata fields: track dynamic cwd and git_branch across lines.
+    // Root sessions ignore inline isSidechain:true rows, while sidechain files
+    // (where the transcript itself is a sidechain) still track updates.
+    let accept_dynamic_claude_meta = meta.is_sidechain || !obj.is_sidechain.unwrap_or(false);
+    if let Some(ref cwd) = obj.cwd {
+        if !cwd.trim().is_empty() && (accept_dynamic_claude_meta || meta.cwd.is_none()) {
             meta.cwd = Some(cwd.clone());
         }
     }
-    if meta.git_branch.is_none() {
-        if let Some(ref branch) = obj.git_branch {
-            meta.git_branch = normalize_git_branch(branch);
+    if let Some(ref branch) = obj.git_branch {
+        if let Some(normalized) = normalize_git_branch(branch) {
+            if accept_dynamic_claude_meta || meta.git_branch.is_none() {
+                meta.git_branch = Some(normalized);
+            }
         }
     }
     if meta.version.is_none() {
@@ -2424,22 +2693,7 @@ fn claude_task_tag_values(body: &str, tag: &str) -> Vec<String> {
     values
 }
 
-fn claude_task_notification_summary(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    let body_and_tail = trimmed.strip_prefix("<task-notification>")?;
-    let close_tag = "</task-notification>";
-    let close = body_and_tail.find(close_tag)?;
-    let body = body_and_tail[..close].trim();
-    // Claude can append one or more provider-authored system reminders to a
-    // task envelope. Keep this allowlist narrow: arbitrary trailing prose is
-    // not enough to promote pasted XML into a provider notification.
-    let mut tail = body_and_tail[close + close_tag.len()..].trim();
-    while !tail.is_empty() {
-        let reminder = tail.strip_prefix("<system-reminder>")?;
-        let reminder_close = "</system-reminder>";
-        let end = reminder.find(reminder_close)?;
-        tail = reminder[end + reminder_close.len()..].trim();
-    }
+fn claude_task_notification_summary_from_body(body: &str) -> String {
     let task_ids = claude_task_tag_values(body, "task-id");
     if task_ids
         .iter()
@@ -2450,7 +2704,7 @@ fn claude_task_notification_summary(content: &str) -> Option<String> {
             .filter(|task_id| !task_id.starts_with("__orphan_summary__:"))
             .cloned()
             .collect::<Vec<_>>();
-        return Some(if ids.is_empty() {
+        return if ids.is_empty() {
             "Background tasks from the previous run were no longer running".to_string()
         } else {
             bounded_text(
@@ -2460,18 +2714,134 @@ fn claude_task_notification_summary(content: &str) -> Option<String> {
                 ),
                 2_000,
             )
-        });
+        };
     }
     if let Some(summary) = claude_task_tag_value(body, "summary") {
-        return Some(summary);
+        return summary;
     }
     if let Some(status) = claude_task_tag_value(body, "status") {
-        return Some(bounded_text(&format!("Background task {status}"), 2_000));
+        return bounded_text(&format!("Background task {status}"), 2_000);
     }
-    Some("Background task update".to_string())
+    "Background task update".to_string()
 }
 
-fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
+fn claude_verified_task_notification_summary(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let body_and_tail = trimmed.strip_prefix("<task-notification>")?;
+    let close = body_and_tail.find("</task-notification>")?;
+    Some(claude_task_notification_summary_from_body(
+        body_and_tail[..close].trim(),
+    ))
+}
+
+fn claude_task_tag_slice<'a>(body: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let (_, after_open) = body.split_once(&open)?;
+    let end = after_open.find(&close)?;
+    Some(after_open[..end].trim())
+}
+
+fn strip_claude_system_reminders(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<system-reminder>") {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + "<system-reminder>".len()..];
+        if let Some(end) = after_open.find("</system-reminder>") {
+            rest = &after_open[end + "</system-reminder>".len()..];
+        } else {
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+fn parse_claude_task_notifications(content: &str) -> Vec<ParsedTaskNotification> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("<task-notification>") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut remaining = trimmed;
+    while let Some(after_open) = remaining.trim_start().strip_prefix("<task-notification>") {
+        let Some(close) = after_open.find("</task-notification>") else {
+            break;
+        };
+        let body = &after_open[..close];
+        let usage_body = claude_task_tag_slice(body, "usage");
+        out.push(ParsedTaskNotification {
+            task_id: claude_task_tag_slice(body, "task-id")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 255)),
+            tool_use_id: claude_task_tag_slice(body, "tool-use-id")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 255)),
+            output_file: claude_task_tag_slice(body, "output-file")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 512)),
+            status: claude_task_tag_slice(body, "status")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 64)),
+            summary: claude_task_tag_slice(body, "summary")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 1_000)),
+            result: claude_task_tag_slice(body, "result")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 4_000)),
+            duration_ms: usage_body
+                .and_then(|u| claude_task_tag_slice(u, "duration_ms"))
+                .and_then(|s| s.parse::<u64>().ok()),
+            subagent_tokens: usage_body
+                .and_then(|u| claude_task_tag_slice(u, "total_tokens"))
+                .and_then(|s| s.parse::<u64>().ok()),
+            tool_uses: usage_body
+                .and_then(|u| claude_task_tag_slice(u, "tool_uses"))
+                .and_then(|s| s.parse::<u64>().ok()),
+            note: claude_task_tag_slice(body, "note")
+                .filter(|s| !s.is_empty())
+                .map(|s| bounded_text(s, 1_000)),
+        });
+        remaining = &after_open[close + "</task-notification>".len()..];
+    }
+    if out.is_empty() {
+        return out;
+    }
+    let cleaned_tail = strip_claude_system_reminders(remaining);
+    if !cleaned_tail.is_empty() {
+        let note = bounded_text(&cleaned_tail, 1_000);
+        for item in &mut out {
+            if item.note.is_none() {
+                item.note = Some(note.clone());
+            }
+        }
+    }
+    out
+}
+
+fn claude_task_notification_dedupe_key(notif: &ParsedTaskNotification) -> Option<(String, String)> {
+    let task_id = non_empty_trimmed(notif.task_id.as_deref())?;
+    Some((
+        task_id.to_string(),
+        notif.status.as_deref().unwrap_or("").trim().to_string(),
+    ))
+}
+
+fn claude_task_notification_content(obj: &RawLine) -> Option<String> {
+    if obj.r#type.as_deref() == Some("queue-operation") {
+        let op = obj.operation.as_deref().unwrap_or("");
+        if !matches!(op, "enqueue" | "popAll") {
+            return None;
+        }
+        return obj
+            .content
+            .as_ref()
+            .and_then(Value::as_str)
+            .filter(|text| text.trim_start().starts_with("<task-notification>"))
+            .map(str::to_string);
+    }
     let origin = obj
         .origin
         .as_ref()
@@ -2486,8 +2856,51 @@ fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
     if message.role.as_deref().is_some_and(|role| role != "user") {
         return None;
     }
-    let content = extract_text_from_raw_content(message.content.get())?;
-    claude_task_notification_summary(&content)
+    extract_text_from_raw_content(message.content.get())
+}
+
+fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
+    let content = claude_task_notification_content(obj)?;
+    claude_verified_task_notification_summary(&content)
+}
+
+fn claude_task_notification_payload(
+    notif: &ParsedTaskNotification,
+    source: &str,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(ref task_id) = notif.task_id {
+        map.insert("task_id".to_string(), Value::from(task_id.clone()));
+    }
+    if let Some(ref tool_use_id) = notif.tool_use_id {
+        map.insert("tool_use_id".to_string(), Value::from(tool_use_id.clone()));
+    }
+    if let Some(ref output_file) = notif.output_file {
+        map.insert("output_file".to_string(), Value::from(output_file.clone()));
+    }
+    if let Some(ref status) = notif.status {
+        map.insert("status".to_string(), Value::from(status.clone()));
+    }
+    if let Some(ref summary) = notif.summary {
+        map.insert("summary".to_string(), Value::from(summary.clone()));
+    }
+    if let Some(ref result) = notif.result {
+        map.insert("result".to_string(), Value::from(result.clone()));
+    }
+    if let Some(duration_ms) = notif.duration_ms {
+        map.insert("duration_ms".to_string(), Value::from(duration_ms));
+    }
+    if let Some(subagent_tokens) = notif.subagent_tokens {
+        map.insert("subagent_tokens".to_string(), Value::from(subagent_tokens));
+    }
+    if let Some(tool_uses) = notif.tool_uses {
+        map.insert("tool_uses".to_string(), Value::from(tool_uses));
+    }
+    if let Some(ref note) = notif.note {
+        map.insert("note".to_string(), Value::from(note.clone()));
+    }
+    map.insert("source".to_string(), Value::from(source));
+    Value::Object(map)
 }
 
 fn claude_native_meta_record(obj: &RawLine) -> bool {
@@ -2579,6 +2992,7 @@ fn extract_provider_facts(
     line_offset: u64,
     facts: &mut Vec<ParsedProviderFact>,
     codex: &mut CodexFactState,
+    claude: &mut ClaudeParseState,
     native_flavor: Option<NativeFlavor>,
 ) {
     if native_flavor == Some(NativeFlavor::Omp) {
@@ -2606,125 +3020,119 @@ fn extract_provider_facts(
         extract_codex_provider_facts(obj, trimmed, line_offset, facts, codex);
         return;
     }
-    let kind = match (obj.r#type.as_deref(), obj.subtype.as_deref()) {
-        (Some("system"), Some("turn_duration")) => "turn.duration",
-        (Some("system"), Some("away_summary")) => "session.recap",
-        (Some("system"), Some("api_error")) => "turn.api_error",
-        (Some("system"), Some("compact_boundary")) => "context.compaction",
-        (Some("ai-title"), _) => "session.title",
-        // One usage fact per turn, on the assistant line that ends it. Every
-        // assistant line carries usage; the turn-ending one is the context
-        // size the next prompt will start from.
-        (Some("assistant"), _)
-            if obj.message.as_ref().is_some_and(|m| {
-                m.usage.is_some() && m.stop_reason.as_deref() == Some("end_turn")
-            }) =>
+    extract_claude_provider_facts(obj, trimmed, line_offset, facts, claude);
+}
+
+#[derive(Deserialize)]
+struct ToolIntentInput {
+    description: Option<String>,
+    intent: Option<String>,
+    i: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeToolUseResultMeta {
+    agent_id: Option<String>,
+    status: Option<String>,
+    is_async: Option<bool>,
+    description: Option<String>,
+    resolved_model: Option<String>,
+    model: Option<String>,
+    output_file: Option<String>,
+    total_tokens: Option<u64>,
+    total_duration_ms: Option<u64>,
+    total_tool_use_count: Option<u64>,
+}
+
+fn push_claude_fact(
+    facts: &mut Vec<ParsedProviderFact>,
+    kind: &str,
+    at: DateTime<Utc>,
+    source_offset: u64,
+    payload: serde_json::Value,
+) {
+    facts.push(ParsedProviderFact {
+        kind: kind.to_string(),
+        at,
+        source_offset,
+        payload,
+    });
+}
+
+fn claude_user_has_interrupt_marker(obj: &RawLine) -> bool {
+    let Some(message) = obj.message.as_ref() else {
+        return false;
+    };
+    let raw = message.content.get();
+    if !raw.contains("[Request interrupted by user") {
+        return false;
+    }
+    if let Ok(text) = serde_json::from_str::<String>(raw) {
+        let trimmed = text.trim();
+        return trimmed == "[Request interrupted by user]"
+            || trimmed == "[Request interrupted by user for tool use]";
+    }
+    if let Ok(items) = serde_json::from_str::<Vec<ContentItem>>(raw) {
+        return items.iter().any(|item| {
+            item.r#type.as_deref() == Some("text")
+                && item.text.as_deref().map(str::trim).is_some_and(|t| {
+                    t == "[Request interrupted by user]"
+                        || t == "[Request interrupted by user for tool use]"
+                })
+        });
+    }
+    false
+}
+
+fn extract_claude_assistant_facts(
+    obj: &RawLine,
+    at: DateTime<Utc>,
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
+    let Some(message) = obj.message.as_ref() else {
+        return;
+    };
+
+    if let Some(usage) = message
+        .usage
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+    {
+        let mut payload = serde_json::Map::new();
+        if let Some(model) = message.model_id.as_deref() {
+            payload.insert("model".to_string(), Value::from(model));
+        }
+        if let Some(effort) = obj.effort.as_deref() {
+            payload.insert("effort".to_string(), Value::from(effort));
+        }
+        if let Some(stop_reason) = non_empty_trimmed(message.stop_reason.as_deref()) {
+            payload.insert("stop_reason".to_string(), Value::from(stop_reason));
+        }
+        for key in [
+            "input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "output_tokens",
+        ] {
+            if let Some(count) = usage.get(key).and_then(|v| v.as_u64()) {
+                payload.insert(key.to_string(), Value::from(count));
+            }
+        }
+        if let Some(thinking) = usage
+            .get("output_tokens_details")
+            .and_then(|d| d.get("thinking_tokens"))
+            .and_then(|v| v.as_u64())
         {
-            "turn.usage"
+            payload.insert("thinking_tokens".to_string(), Value::from(thinking));
         }
-        _ => return,
-    };
-    // Assistant lines are the hot path; their fact comes from the fields serde
-    // already split off, never from re-parsing the (often large) line.
-    let value = if kind == "turn.usage" {
-        serde_json::Value::Null
-    } else {
-        match serde_json::from_slice::<serde_json::Value>(trimmed) {
-            Ok(value) => value,
-            Err(_) => return,
+        for key in ["service_tier", "speed"] {
+            if let Some(text) = usage.get(key).and_then(|v| v.as_str()) {
+                payload.insert(key.to_string(), Value::from(text));
+            }
         }
-    };
-    // `ai-title` lines carry no timestamp of their own; the shipper orders
-    // facts by source position anyway, and the title has no clock semantics.
-    let at = match obj.timestamp.as_deref().and_then(parse_timestamp) {
-        Some(at) => at,
-        None if kind == "session.title" => DateTime::<Utc>::UNIX_EPOCH,
-        None => return,
-    };
-    let payload = match kind {
-        "turn.duration" => {
-            let Some(duration_ms) = value.get("durationMs").and_then(|v| v.as_u64()) else {
-                return;
-            };
-            let mut payload = serde_json::Map::new();
-            payload.insert(
-                "duration_ms".to_string(),
-                serde_json::Value::from(duration_ms),
-            );
-            if let Some(count) = value.get("messageCount").and_then(|v| v.as_u64()) {
-                payload.insert("message_count".to_string(), serde_json::Value::from(count));
-            }
-            for (wire, ours) in [
-                ("pendingBackgroundAgentCount", "pending_background_agents"),
-                ("pendingWorkflowCount", "pending_workflows"),
-            ] {
-                if let Some(count) = value.get(wire).and_then(|v| v.as_u64()) {
-                    payload.insert(ours.to_string(), serde_json::Value::from(count));
-                }
-            }
-            serde_json::Value::Object(payload)
-        }
-        "session.recap" => {
-            // "(disable recaps in /config)" is terminal chrome, not the recap.
-            let Some(text) = value
-                .get("content")
-                .and_then(|v| v.as_str())
-                .map(|t| t.trim_end_matches("(disable recaps in /config)").trim())
-                .filter(|t| !t.is_empty())
-            else {
-                return;
-            };
-            serde_json::json!({ "text": bounded_text(text, 2_000) })
-        }
-        "turn.usage" => {
-            let Some(message) = obj.message.as_ref() else {
-                return;
-            };
-            let Some(usage) = message
-                .usage
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
-            else {
-                return;
-            };
-            let mut payload = serde_json::Map::new();
-            if let Some(model) = message.model_id.as_deref() {
-                payload.insert("model".to_string(), serde_json::Value::from(model));
-            }
-            if let Some(effort) = obj.effort.as_deref() {
-                payload.insert("effort".to_string(), serde_json::Value::from(effort));
-            }
-            for key in [
-                "input_tokens",
-                "cache_read_input_tokens",
-                "cache_creation_input_tokens",
-                "output_tokens",
-            ] {
-                if let Some(count) = usage.get(key).and_then(|v| v.as_u64()) {
-                    payload.insert(key.to_string(), serde_json::Value::from(count));
-                }
-            }
-            if let Some(thinking) = usage
-                .get("output_tokens_details")
-                .and_then(|d| d.get("thinking_tokens"))
-                .and_then(|v| v.as_u64())
-            {
-                payload.insert(
-                    "thinking_tokens".to_string(),
-                    serde_json::Value::from(thinking),
-                );
-            }
-            for key in ["service_tier", "speed"] {
-                if let Some(text) = usage.get(key).and_then(|v| v.as_str()) {
-                    payload.insert(key.to_string(), serde_json::Value::from(text));
-                }
-            }
-            if !payload.contains_key("output_tokens") {
-                return;
-            }
-            // Claude's context is everything it read on this call: fresh
-            // input plus both cache classes. Named here so every provider's
-            // usage fact carries the same key for the same meaning.
+        if payload.contains_key("output_tokens") {
             let context_tokens: u64 = [
                 "input_tokens",
                 "cache_read_input_tokens",
@@ -2733,19 +3141,387 @@ fn extract_provider_facts(
             .iter()
             .filter_map(|key| payload.get(*key).and_then(|v| v.as_u64()))
             .sum();
-            payload.insert(
-                "context_tokens".to_string(),
-                serde_json::Value::from(context_tokens),
-            );
-            serde_json::Value::Object(payload)
+            payload.insert("context_tokens".to_string(), Value::from(context_tokens));
+            push_claude_fact(facts, "turn.usage", at, line_offset, Value::Object(payload));
         }
-        "turn.api_error" => {
+    }
+
+    let Ok(items) = serde_json::from_str::<Vec<ContentItem>>(message.content.get()) else {
+        return;
+    };
+
+    let mut has_non_empty_text = false;
+    let mut visible_thinking_chars = 0usize;
+    let mut visible_thinking_blocks = 0usize;
+    let mut withheld_thinking_blocks = 0usize;
+    let mut tool_intents: Vec<serde_json::Value> = Vec::new();
+
+    for item in &items {
+        match item.r#type.as_deref() {
+            Some("text") => {
+                if item.text.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+                    has_non_empty_text = true;
+                }
+            }
+            Some("thinking") => {
+                let text = item.thinking.as_deref().unwrap_or("");
+                if !text.trim().is_empty() {
+                    visible_thinking_blocks += 1;
+                    visible_thinking_chars =
+                        visible_thinking_chars.saturating_add(text.chars().count());
+                } else if item
+                    .signature
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty())
+                {
+                    withheld_thinking_blocks += 1;
+                }
+            }
+            Some("redacted_thinking") => {
+                withheld_thinking_blocks += 1;
+            }
+            Some("tool_use") => {
+                if tool_intents.len() < 32 {
+                    if let Some(raw_input) = item.input.as_deref() {
+                        if let Ok(parsed_input) =
+                            serde_json::from_str::<ToolIntentInput>(raw_input.get())
+                        {
+                            if let Some(intent) =
+                                non_empty_trimmed(parsed_input.description.as_deref())
+                                    .or_else(|| non_empty_trimmed(parsed_input.intent.as_deref()))
+                                    .or_else(|| non_empty_trimmed(parsed_input.i.as_deref()))
+                            {
+                                let mut entry = serde_json::Map::new();
+                                if let Some(id) = non_empty_trimmed(item.id.as_deref()) {
+                                    entry.insert("tool_call_id".to_string(), Value::from(id));
+                                }
+                                if let Some(name) = non_empty_trimmed(item.name.as_deref()) {
+                                    entry.insert("tool_name".to_string(), Value::from(name));
+                                }
+                                entry.insert(
+                                    "intent".to_string(),
+                                    Value::from(bounded_text(intent, 300)),
+                                );
+                                tool_intents.push(Value::Object(entry));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let total_thinking_blocks = visible_thinking_blocks + withheld_thinking_blocks;
+    if total_thinking_blocks > 0 {
+        let withheld = visible_thinking_blocks == 0 && withheld_thinking_blocks > 0;
+        push_claude_fact(
+            facts,
+            "turn.thinking",
+            at,
+            line_offset,
+            serde_json::json!({
+                "withheld": withheld,
+                "block_count": total_thinking_blocks,
+                "chars": visible_thinking_chars,
+            }),
+        );
+    }
+
+    if has_non_empty_text {
+        if let Some(stop_reason) = non_empty_trimmed(message.stop_reason.as_deref()) {
+            let phase = match stop_reason {
+                "tool_use" => Some("commentary"),
+                "end_turn" | "stop_sequence" | "max_tokens" => Some("final_answer"),
+                _ => None,
+            };
+            if let Some(phase) = phase {
+                push_claude_fact(
+                    facts,
+                    "message.phase",
+                    at,
+                    line_offset,
+                    serde_json::json!({
+                        "phase": phase,
+                        "stop_reason": stop_reason,
+                    }),
+                );
+            }
+        }
+    }
+
+    if !tool_intents.is_empty() {
+        let mut payload = serde_json::Map::new();
+        if let Some(first) = tool_intents.first().and_then(Value::as_object) {
+            for key in ["tool_call_id", "tool_name", "intent"] {
+                if let Some(v) = first.get(key) {
+                    payload.insert(key.to_string(), v.clone());
+                }
+            }
+        }
+        payload.insert("items".to_string(), Value::Array(tool_intents));
+        push_claude_fact(
+            facts,
+            "tool.intent",
+            at,
+            line_offset,
+            Value::Object(payload),
+        );
+    }
+}
+
+fn emit_claude_task_notification_facts(
+    notif_raw: &str,
+    source: &str,
+    at: DateTime<Utc>,
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+    _claude: &mut ClaudeParseState,
+) {
+    let notifications = parse_claude_task_notifications(notif_raw);
+    let mut seen_in_line = HashSet::new();
+    let mut unseen = Vec::new();
+    for notif in notifications {
+        if let Some(key) = claude_task_notification_dedupe_key(&notif) {
+            if !seen_in_line.insert(key) {
+                continue;
+            }
+        }
+        unseen.push(notif);
+    }
+    let Some(first) = unseen.first() else {
+        return;
+    };
+    let mut payload = match claude_task_notification_payload(first, source) {
+        Value::Object(map) => map,
+        _ => return,
+    };
+    if unseen.len() > 1 {
+        let extra: Vec<Value> = unseen
+            .iter()
+            .skip(1)
+            .map(|n| claude_task_notification_payload(n, source))
+            .collect();
+        payload.insert("additional_items".to_string(), Value::Array(extra));
+    }
+    push_claude_fact(
+        facts,
+        "delegation.task_notification",
+        at,
+        line_offset,
+        Value::Object(payload),
+    );
+}
+
+fn extract_claude_provider_facts(
+    obj: &RawLine,
+    trimmed: &[u8],
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+    claude: &mut ClaudeParseState,
+) {
+    let line_type = obj.r#type.as_deref().unwrap_or("");
+    let subtype = obj.subtype.as_deref();
+
+    if line_type == "assistant" {
+        let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
+            return;
+        };
+        extract_claude_assistant_facts(obj, at, line_offset, facts);
+        return;
+    }
+
+    let wanted = match (line_type, subtype) {
+        (
+            "system",
+            Some(
+                "turn_duration"
+                | "stop_hook_summary"
+                | "scheduled_task_fire"
+                | "away_summary"
+                | "api_error"
+                | "compact_boundary"
+                | "microcompact_boundary",
+            ),
+        ) => true,
+        (
+            "ai-title" | "agent-name" | "cost-state" | "permission-mode" | "worktree-state"
+            | "queue-operation",
+            _,
+        ) => true,
+        ("user", _) => {
+            obj.tool_use_result.is_some()
+                || claude_task_notification_content(obj).is_some()
+                || claude_user_has_interrupt_marker(obj)
+        }
+        _ => false,
+    };
+    if !wanted {
+        return;
+    }
+
+    let at = match obj.timestamp.as_deref().and_then(parse_timestamp) {
+        Some(at) => at,
+        None if matches!(line_type, "ai-title" | "agent-name") => DateTime::<Utc>::UNIX_EPOCH,
+        None if matches!(
+            line_type,
+            "cost-state" | "permission-mode" | "worktree-state" | "queue-operation"
+        ) =>
+        {
+            carried_clock()
+        }
+        None => return,
+    };
+
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(trimmed) else {
+        return;
+    };
+
+    match (line_type, subtype) {
+        ("system", Some("turn_duration")) => {
+            let Some(duration_ms) = value.get("durationMs").and_then(|v| v.as_u64()) else {
+                return;
+            };
+            let mut payload = serde_json::Map::new();
+            payload.insert("duration_ms".to_string(), Value::from(duration_ms));
+            if let Some(count) = value.get("messageCount").and_then(|v| v.as_u64()) {
+                payload.insert("message_count".to_string(), Value::from(count));
+            }
+            for (wire, ours) in [
+                ("pendingBackgroundAgentCount", "pending_background_agents"),
+                ("pendingWorkflowCount", "pending_workflows"),
+            ] {
+                if let Some(count) = value.get(wire).and_then(|v| v.as_u64()) {
+                    payload.insert(ours.to_string(), Value::from(count));
+                }
+            }
+            push_claude_fact(
+                facts,
+                "turn.duration",
+                at,
+                line_offset,
+                Value::Object(payload),
+            );
+            push_claude_fact(
+                facts,
+                "turn.end",
+                at,
+                line_offset,
+                serde_json::json!({
+                    "outcome": "completed",
+                    "source": "turn_duration",
+                    "duration_ms": duration_ms,
+                }),
+            );
+            if let Some(pending_bg) = value
+                .get("pendingBackgroundAgentCount")
+                .and_then(|v| v.as_u64())
+                .filter(|count| *count > 0)
+            {
+                let bg_payload = serde_json::json!({
+                    "pending_background_agents": pending_bg,
+                });
+                push_claude_fact(
+                    facts,
+                    "delegation.background",
+                    at,
+                    line_offset,
+                    bg_payload.clone(),
+                );
+                push_claude_fact(facts, "delegation.waiting", at, line_offset, bg_payload);
+            }
+        }
+        ("system", Some("stop_hook_summary")) => {
+            let prevented = value
+                .get("preventedContinuation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let outcome = if prevented {
+                "stop_hook_continued"
+            } else {
+                "stop_hook_summary"
+            };
+            let mut payload = serde_json::Map::new();
+            payload.insert("outcome".to_string(), Value::from(outcome));
+            payload.insert("source".to_string(), Value::from("stop_hook_summary"));
+            payload.insert("prevented_continuation".to_string(), Value::from(prevented));
+            if let Some(stop_reason) = value
+                .get("stopReason")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                payload.insert(
+                    "stop_reason".to_string(),
+                    Value::from(bounded_text(stop_reason, 255)),
+                );
+            }
+            if let Some(count) = value.get("hookCount").and_then(Value::as_u64) {
+                payload.insert("hook_count".to_string(), Value::from(count));
+            }
+            if let Some(has_output) = value.get("hasOutput").and_then(Value::as_bool) {
+                payload.insert("has_output".to_string(), Value::from(has_output));
+            }
+            if let Some(tool_use_id) = value
+                .get("toolUseID")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                payload.insert(
+                    "tool_use_id".to_string(),
+                    Value::from(bounded_text(tool_use_id, 255)),
+                );
+            }
+            push_claude_fact(facts, "turn.end", at, line_offset, Value::Object(payload));
+        }
+        ("system", Some("scheduled_task_fire")) => {
+            let mut payload = serde_json::Map::new();
+            for (wire, ours, cap) in [
+                ("taskId", "task_id", 255usize),
+                ("taskKind", "task_kind", 64),
+                ("cron", "cron", 128),
+                ("cronKind", "cron_kind", 64),
+                ("prompt", "prompt", 500),
+                ("content", "content", 500),
+            ] {
+                if let Some(text) = value
+                    .get(wire)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    payload.insert(ours.to_string(), Value::from(bounded_text(text, cap)));
+                }
+            }
+            if !payload.is_empty() {
+                push_claude_fact(
+                    facts,
+                    "delegation.scheduled",
+                    at,
+                    line_offset,
+                    Value::Object(payload),
+                );
+            }
+        }
+        ("system", Some("away_summary")) => {
+            if let Some(text) = value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|t| t.trim_end_matches("(disable recaps in /config)").trim())
+                .filter(|t| !t.is_empty())
+            {
+                push_claude_fact(
+                    facts,
+                    "session.recap",
+                    at,
+                    line_offset,
+                    serde_json::json!({ "text": bounded_text(text, 2_000) }),
+                );
+            }
+        }
+        ("system", Some("api_error")) => {
             let mut payload = serde_json::Map::new();
             if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
-                payload.insert(
-                    "error".to_string(),
-                    serde_json::Value::from(bounded_text(error, 500)),
-                );
+                payload.insert("error".to_string(), Value::from(bounded_text(error, 500)));
             }
             for (wire, ours) in [
                 ("retryAttempt", "retry_attempt"),
@@ -2753,55 +3529,349 @@ fn extract_provider_facts(
                 ("retryInMs", "retry_in_ms"),
             ] {
                 if let Some(count) = value.get(wire).and_then(|v| v.as_u64()) {
-                    payload.insert(ours.to_string(), serde_json::Value::from(count));
+                    payload.insert(ours.to_string(), Value::from(count));
                 }
             }
-            if payload.is_empty() {
-                return;
+            if !payload.is_empty() {
+                push_claude_fact(
+                    facts,
+                    "turn.api_error",
+                    at,
+                    line_offset,
+                    Value::Object(payload),
+                );
             }
-            serde_json::Value::Object(payload)
         }
-        "context.compaction" => {
-            let Some(meta) = value.get("compactMetadata").and_then(|v| v.as_object()) else {
+        ("system", Some(sub @ ("compact_boundary" | "microcompact_boundary"))) => {
+            let meta = value
+                .get("compactMetadata")
+                .or_else(|| value.get("microcompactMetadata"))
+                .and_then(|v| v.as_object());
+            let Some(meta) = meta else {
                 return;
             };
             let mut payload = serde_json::Map::new();
             if let Some(trigger) = meta.get("trigger").and_then(|v| v.as_str()) {
-                payload.insert("trigger".to_string(), serde_json::Value::from(trigger));
+                payload.insert("trigger".to_string(), Value::from(trigger));
             }
             for (wire, ours) in [
                 ("preTokens", "pre_tokens"),
                 ("postTokens", "post_tokens"),
                 ("durationMs", "duration_ms"),
+                ("tokensSaved", "tokens_saved"),
             ] {
                 if let Some(count) = meta.get(wire).and_then(|v| v.as_u64()) {
-                    payload.insert(ours.to_string(), serde_json::Value::from(count));
+                    payload.insert(ours.to_string(), Value::from(count));
                 }
             }
-            if payload.is_empty() {
-                return;
+            if sub == "microcompact_boundary" {
+                payload.insert("boundary_kind".to_string(), Value::from("microcompact"));
             }
-            serde_json::Value::Object(payload)
+            let has_metric = [
+                "pre_tokens",
+                "post_tokens",
+                "replacement_items",
+                "tokens_saved",
+            ]
+            .iter()
+            .any(|key| payload.contains_key(*key));
+            if has_metric {
+                push_claude_fact(
+                    facts,
+                    "context.compaction",
+                    at,
+                    line_offset,
+                    Value::Object(payload),
+                );
+            }
         }
-        "session.title" => {
-            let Some(title) = value
+        ("ai-title", _) => {
+            if let Some(title) = value
                 .get("aiTitle")
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
-            else {
-                return;
-            };
-            serde_json::json!({ "title": bounded_text(title, 255) })
+            {
+                push_claude_fact(
+                    facts,
+                    "session.title",
+                    at,
+                    line_offset,
+                    serde_json::json!({
+                        "title": bounded_text(title, 255),
+                        "source": "provider",
+                    }),
+                );
+            }
         }
-        _ => return,
-    };
-    facts.push(ParsedProviderFact {
-        kind: kind.to_string(),
-        at,
-        source_offset: line_offset,
-        payload,
-    });
+        ("agent-name", _) => {
+            if let Some(name) = value
+                .get("agentName")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
+                push_claude_fact(
+                    facts,
+                    "session.title",
+                    at,
+                    line_offset,
+                    serde_json::json!({
+                        "title": bounded_text(name, 255),
+                        "source": "user",
+                    }),
+                );
+            }
+        }
+        ("cost-state", _) => {
+            let mut payload = serde_json::Map::new();
+            if let Some(cost) = value.get("totalCostUSD").and_then(Value::as_f64) {
+                if cost.is_finite() {
+                    payload.insert("total_cost_usd".to_string(), Value::from(cost));
+                }
+            }
+            for (wire, ours) in [
+                ("totalDuration", "total_duration_ms"),
+                ("totalAPIDuration", "total_api_duration_ms"),
+                (
+                    "totalAPIDurationWithoutRetries",
+                    "total_api_duration_no_retries_ms",
+                ),
+                ("totalToolDuration", "total_tool_duration_ms"),
+                ("totalLinesAdded", "lines_added"),
+                ("totalLinesRemoved", "lines_removed"),
+            ] {
+                if let Some(count) = value.get(wire).and_then(Value::as_u64) {
+                    payload.insert(ours.to_string(), Value::from(count));
+                }
+            }
+            if let Some(unknown) = value.get("hasUnknownModelCost").and_then(Value::as_bool) {
+                payload.insert("has_unknown_model_cost".to_string(), Value::from(unknown));
+            }
+            if let Some(model_usage) = value.get("modelUsage").filter(|v| v.is_object()) {
+                if let Ok(serialized) = serde_json::to_string(model_usage) {
+                    if serialized.len() <= 4_096 {
+                        payload.insert("model_usage".to_string(), model_usage.clone());
+                    }
+                }
+            }
+            if !payload.is_empty() {
+                push_claude_fact(
+                    facts,
+                    "session.cost",
+                    at,
+                    line_offset,
+                    Value::Object(payload),
+                );
+            }
+        }
+        ("permission-mode", _) => {
+            if let Some(mode) = value
+                .get("permissionMode")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                push_claude_fact(
+                    facts,
+                    "session.permission_mode",
+                    at,
+                    line_offset,
+                    serde_json::json!({ "permission_mode": bounded_text(mode, 64) }),
+                );
+            }
+        }
+        ("worktree-state", _) => {
+            if let Some(ws) = value.get("worktreeSession") {
+                let mut payload = serde_json::Map::new();
+                if let Some(ws_obj) = ws.as_object() {
+                    payload.insert("active".to_string(), Value::from(true));
+                    for (wire, ours, cap) in [
+                        ("worktreePath", "worktree_path", 512usize),
+                        ("worktreeBranch", "worktree_branch", 255),
+                        ("worktreeName", "worktree_name", 255),
+                        ("originalCwd", "original_cwd", 512),
+                    ] {
+                        if let Some(text) = ws_obj
+                            .get(wire)
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            payload.insert(ours.to_string(), Value::from(bounded_text(text, cap)));
+                        }
+                    }
+                } else if ws.is_null() {
+                    payload.insert("active".to_string(), Value::from(false));
+                }
+                if !payload.is_empty() {
+                    push_claude_fact(
+                        facts,
+                        "session.worktree",
+                        at,
+                        line_offset,
+                        Value::Object(payload),
+                    );
+                }
+            }
+        }
+        ("queue-operation", _) => {
+            let op = obj.operation.as_deref().unwrap_or("");
+            let content_str = value.get("content").and_then(Value::as_str);
+            let has_task_notif =
+                content_str.is_some_and(|text| !parse_claude_task_notifications(text).is_empty());
+            if op == "enqueue" || has_task_notif {
+                let mut payload = serde_json::Map::new();
+                if !op.is_empty() {
+                    payload.insert("operation".to_string(), Value::from(bounded_text(op, 64)));
+                }
+                payload.insert(
+                    "absorbed_task_notification".to_string(),
+                    Value::from(has_task_notif),
+                );
+                if let Some(reason) = obj.reason.as_deref().filter(|s| !s.trim().is_empty()) {
+                    payload.insert("reason".to_string(), Value::from(bounded_text(reason, 255)));
+                }
+                if let Some(delivery_id) = value
+                    .get("deliveryId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    payload.insert(
+                        "delivery_id".to_string(),
+                        Value::from(bounded_text(delivery_id, 255)),
+                    );
+                }
+                push_claude_fact(
+                    facts,
+                    "input.queue",
+                    at,
+                    line_offset,
+                    Value::Object(payload),
+                );
+            }
+            if has_task_notif {
+                if let Some(text) = content_str {
+                    emit_claude_task_notification_facts(
+                        text,
+                        "queue_operation",
+                        at,
+                        line_offset,
+                        facts,
+                        claude,
+                    );
+                }
+            }
+        }
+        ("user", _) => {
+            if let Some(notif_raw) = claude_task_notification_content(obj) {
+                emit_claude_task_notification_facts(
+                    &notif_raw,
+                    "user_message",
+                    at,
+                    line_offset,
+                    facts,
+                    claude,
+                );
+            }
+            if let Some(raw_result) = obj.tool_use_result.as_deref() {
+                if let Ok(meta) = serde_json::from_str::<ClaudeToolUseResultMeta>(raw_result.get())
+                {
+                    if let Some(agent_id) = non_empty_trimmed(meta.agent_id.as_deref()) {
+                        let parent_tool_call_id = obj
+                            .message
+                            .as_ref()
+                            .and_then(|msg| {
+                                serde_json::from_str::<Vec<ContentItem>>(msg.content.get()).ok()
+                            })
+                            .and_then(|items| {
+                                items.into_iter().find_map(|item| {
+                                    (item.r#type.as_deref() == Some("tool_result"))
+                                        .then_some(item.tool_use_id)
+                                        .flatten()
+                                        .filter(|id| !id.trim().is_empty())
+                                })
+                            });
+                        let mut child_meta = serde_json::Map::new();
+                        child_meta.insert(
+                            "agent_id".to_string(),
+                            Value::from(bounded_text(agent_id, 128)),
+                        );
+                        if let Some(status) = non_empty_trimmed(meta.status.as_deref()) {
+                            child_meta.insert(
+                                "status".to_string(),
+                                Value::from(bounded_text(status, 64)),
+                            );
+                        }
+                        if let Some(is_async) = meta.is_async {
+                            child_meta.insert("is_async".to_string(), Value::from(is_async));
+                        }
+                        if let Some(description) = non_empty_trimmed(meta.description.as_deref()) {
+                            child_meta.insert(
+                                "description".to_string(),
+                                Value::from(bounded_text(description, 255)),
+                            );
+                        }
+                        if let Some(model) = non_empty_trimmed(meta.resolved_model.as_deref())
+                            .or_else(|| non_empty_trimmed(meta.model.as_deref()))
+                        {
+                            child_meta
+                                .insert("model".to_string(), Value::from(bounded_text(model, 128)));
+                        }
+                        if let Some(output_file) = non_empty_trimmed(meta.output_file.as_deref()) {
+                            child_meta.insert(
+                                "output_file".to_string(),
+                                Value::from(bounded_text(output_file, 512)),
+                            );
+                        }
+                        if let Some(tokens) = meta.total_tokens {
+                            child_meta.insert("total_tokens".to_string(), Value::from(tokens));
+                        }
+                        if let Some(duration_ms) = meta.total_duration_ms {
+                            child_meta
+                                .insert("total_duration_ms".to_string(), Value::from(duration_ms));
+                        }
+                        if let Some(tool_uses) = meta.total_tool_use_count {
+                            child_meta
+                                .insert("total_tool_use_count".to_string(), Value::from(tool_uses));
+                        }
+                        let mut child = serde_json::Map::new();
+                        child.insert(
+                            "provider_session_id".to_string(),
+                            Value::from(bounded_text(agent_id, 255)),
+                        );
+                        if let Some(tool_call_id) = parent_tool_call_id {
+                            child.insert(
+                                "parent_tool_call_id".to_string(),
+                                Value::from(bounded_text(&tool_call_id, 255)),
+                            );
+                        }
+                        child.insert("metadata".to_string(), Value::Object(child_meta));
+                        push_claude_fact(
+                            facts,
+                            "delegation.spawn",
+                            at,
+                            line_offset,
+                            serde_json::json!({ "children": [Value::Object(child)] }),
+                        );
+                    }
+                }
+            }
+            if claude_user_has_interrupt_marker(obj) {
+                push_claude_fact(
+                    facts,
+                    "turn.end",
+                    at,
+                    line_offset,
+                    serde_json::json!({
+                        "outcome": "interrupted",
+                        "source": "user_interrupt",
+                    }),
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 fn is_pi_line(obj: &RawLine) -> bool {
@@ -3887,6 +4957,7 @@ fn extract_events(
     facts: &mut Vec<ParsedProviderFact>,
     antigravity_pending: &mut AntigravityPending,
     codex_pending: &mut CodexPending,
+    _claude_state: &mut ClaudeParseState,
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
 ) {
@@ -4004,43 +5075,126 @@ fn extract_events(
         return;
     }
 
-    // Claude writes `turn_duration` when a turn finishes on its own; an
-    // interrupted turn writes none (it ends at the interrupt marker instead).
-    if event_type == "system" && obj.subtype.as_deref() == Some("turn_duration") {
-        events.push(turn_end_event(
-            format!("{msg_uuid}-turn-end"),
-            obj.parent_uuid.clone(),
-            session_id,
-            timestamp,
-            line_offset,
-            Some(raw_line.to_string()),
-            EndReason::Completed,
-            "claude_turn_end",
-        ));
+    // Claude's background-task completion envelope is a provider-authored
+    // status row, not a user prompt (carried on either a synthetic `user` line
+    // or a mid-turn `queue-operation`). Cross-record dedup runs at server
+    // timeline projection so parsing remains invariant to envelope boundaries.
+    if let Some(notif_raw) = claude_task_notification_content(obj) {
+        if let Some(summary) = claude_verified_task_notification_summary(&notif_raw) {
+            let notifications = parse_claude_task_notifications(&notif_raw);
+            let mut seen_in_line = HashSet::new();
+            let unseen = if notifications.is_empty() {
+                true
+            } else {
+                let mut any_unseen = false;
+                for notif in &notifications {
+                    match claude_task_notification_dedupe_key(notif) {
+                        Some(key) => {
+                            if seen_in_line.insert(key) {
+                                any_unseen = true;
+                            }
+                        }
+                        None => any_unseen = true,
+                    }
+                }
+                any_unseen
+            };
+            if unseen {
+                let event_uuid = if event_type == "queue-operation" {
+                    format!("queue-task-{}", line_offset)
+                } else {
+                    msg_uuid
+                };
+                events.push(ParsedEvent {
+                    item: Default::default(),
+                    uuid: event_uuid,
+                    parent_uuid: obj.parent_uuid.clone(),
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::System,
+                    content_text: Some(summary),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset: line_offset,
+                    raw_type: "claude_task_notification".to_string(),
+                    raw_line: Some(raw_line.to_string()),
+                });
+            }
+        }
         return;
     }
 
-    // Claude's background-task completion envelope is a provider-authored
-    // status row, not a user prompt. Keep the source line archived verbatim,
-    // but project the row as a compact system notification for clients.
-    if let Some(display_text) = claude_task_notification_display(obj) {
-        events.push(ParsedEvent {
-            item: Default::default(),
-            uuid: msg_uuid,
-            parent_uuid: obj.parent_uuid.clone(),
-            session_id: session_id.to_string(),
-            timestamp,
-            role: Role::System,
-            content_text: Some(display_text),
-            tool_name: None,
-            tool_input_json: None,
-            tool_output_text: None,
-            tool_call_id: None,
-            source_offset: line_offset,
-            raw_type: "claude_task_notification".to_string(),
-            raw_line: Some(raw_line.to_string()),
-        });
-        return;
+    if event_type == "system" {
+        match obj.subtype.as_deref() {
+            Some("turn_duration") => {
+                // Claude writes `turn_duration` when a turn finishes on its own; an
+                // interrupted turn writes none (it ends at the interrupt marker instead).
+                events.push(turn_end_event(
+                    format!("{msg_uuid}-turn-end"),
+                    obj.parent_uuid.clone(),
+                    session_id,
+                    timestamp,
+                    line_offset,
+                    Some(raw_line.to_string()),
+                    EndReason::Completed,
+                    "claude_turn_end",
+                ));
+                if let Some(count) = obj.pending_background_agent_count.filter(|c| *c > 0) {
+                    let text = if count == 1 {
+                        "Waiting for 1 background agent to finish".to_string()
+                    } else {
+                        format!("Waiting for {} background agents to finish", count)
+                    };
+                    events.push(ParsedEvent {
+                        item: Default::default(),
+                        uuid: format!("{}-waiting-bg", msg_uuid),
+                        parent_uuid: obj.parent_uuid.clone(),
+                        session_id: session_id.to_string(),
+                        timestamp,
+                        role: Role::System,
+                        content_text: Some(text),
+                        tool_name: None,
+                        tool_input_json: None,
+                        tool_output_text: None,
+                        tool_call_id: None,
+                        source_offset: line_offset,
+                        raw_type: "claude_waiting_background_agents".to_string(),
+                        raw_line: None,
+                    });
+                }
+                return;
+            }
+            Some("scheduled_task_fire") => {
+                let text = obj
+                    .content
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| bounded_text(s, 2_000))
+                    .unwrap_or_else(|| "Scheduled task fired".to_string());
+                events.push(ParsedEvent {
+                    item: Default::default(),
+                    uuid: msg_uuid,
+                    parent_uuid: obj.parent_uuid.clone(),
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::System,
+                    content_text: Some(text),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset: line_offset,
+                    raw_type: "scheduled_task_fire".to_string(),
+                    raw_line: Some(raw_line.to_string()),
+                });
+                return;
+            }
+            _ => {}
+        }
     }
 
     // Codex lifecycle/control event: {type: "event_msg", payload: {...}}
@@ -5237,6 +6391,10 @@ fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
 
     if let Some(pre_tokens) = value.get("preTokens").and_then(|v| v.as_i64()) {
         parts.push(format!("pre_tokens={}", pre_tokens));
+    }
+
+    if let Some(tokens_saved) = value.get("tokensSaved").and_then(|v| v.as_i64()) {
+        parts.push(format!("tokens_saved={}", tokens_saved));
     }
 
     if parts.is_empty() {
@@ -10839,5 +11997,77 @@ please research the steering shaft options"#;
         );
         assert!(bounded.last_good_offset <= cut);
         assert_eq!(full.last_good_offset, body.len() as u64);
+    }
+
+    #[test]
+    fn claude_nested_subagent_spawn_depth_two_and_dynamic_metadata() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let subagents_dir = dir
+            .path()
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        let transcript = subagents_dir.join("agent-child99.jsonl");
+        let meta = subagents_dir.join("agent-child99.meta.json");
+        fs::write(
+            &meta,
+            r#"{"agentType":"code-reviewer","description":"Nested grandchild","model":"claude-sonnet-4-6","pickedEffortModel":"claude-opus-5","isFork":true,"parentAgentId":"agent-parent1","spawnDepth":2,"finished":true}"#,
+        )
+        .unwrap();
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","isSidechain":true,"agentId":"child99","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-11-14T10:00:00Z","cwd":"/work/initial","gitBranch":"main","message":{"role":"user","content":"Review diff"}}"#,
+                "\n",
+                r#"{"type":"assistant","isSidechain":true,"agentId":"child99","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-11-14T10:00:05Z","cwd":"/work/worktree-a","gitBranch":"feat/subagent-fix","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"","signature":"sig123"},{"type":"text","text":"Looks good."}],"usage":{"input_tokens":10,"output_tokens":20}}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let result = parse_session_file(&transcript, 0).unwrap();
+        assert_eq!(result.metadata.cwd.as_deref(), Some("/work/worktree-a"));
+        assert_eq!(
+            result.metadata.git_branch.as_deref(),
+            Some("feat/subagent-fix")
+        );
+        assert_eq!(
+            result.metadata.parent_provider_session_id.as_deref(),
+            Some("agent-parent1")
+        );
+        assert_eq!(result.metadata.subagent_depth, Some(2));
+        assert_eq!(
+            result.metadata.subagent_name.as_deref(),
+            Some("Nested grandchild")
+        );
+
+        let meta_fact = result
+            .provider_facts
+            .iter()
+            .find(|f| f.kind == "delegation.metadata")
+            .expect("offset-0 parse should emit delegation.metadata");
+        assert_eq!(meta_fact.payload["metadata"]["agent_type"], "code-reviewer");
+        assert_eq!(meta_fact.payload["metadata"]["model"], "claude-opus-5");
+        assert_eq!(meta_fact.payload["metadata"]["is_fork"], true);
+        assert_eq!(
+            meta_fact.payload["metadata"]["parent_agent_id"],
+            "agent-parent1"
+        );
+        assert_eq!(meta_fact.payload["metadata"]["spawn_depth"], 2);
+        assert_eq!(meta_fact.payload["metadata"]["finished"], true);
+
+        let thinking_fact = result
+            .provider_facts
+            .iter()
+            .find(|f| f.kind == "turn.thinking")
+            .expect("signature-only thinking should emit withheld turn.thinking");
+        assert_eq!(thinking_fact.payload["withheld"], true);
+        assert!(result
+            .events
+            .iter()
+            .any(|ev| ev.raw_type == "claude_thinking"
+                && ev.content_text.is_none()
+                && ev.item == ItemFacts::reasoning(Visibility::Withheld)));
     }
 }

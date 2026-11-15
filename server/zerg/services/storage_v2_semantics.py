@@ -97,7 +97,13 @@ async def recover_render_interaction_kinds(
         if not _parser_asserted_kind(record)
         and (
             getattr(record, "interaction_kind", None) is None
-            or (normalized_provider == "claude" and claude_task_notification_summary(getattr(record, "content_text", None)) is not None)
+            or (
+                normalized_provider == "claude"
+                and (
+                    claude_task_notification_summary(getattr(record, "content_text", None)) is not None
+                    or str(getattr(record, "content_text", None) or "").lstrip().startswith("<task-notification>")
+                )
+            )
             or (normalized_provider == "codex" and codex_provider_system_candidate(getattr(record, "content_text", None)))
             or (
                 normalized_provider in REASONING_PART_PROVIDERS

@@ -1,0 +1,128 @@
+{
+  "event_count": 16,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "Audit the repo using subagents and summarize."
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking",
+      "content_text": "Thinking:\nInspecting git status and spawning background audit.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "Starting repository inspection now.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "tool_name": "Bash",
+      "tool_input_json": {
+        "command": "git status -s",
+        "description": "Check modified files"
+      },
+      "item": {
+        "intent": "Check modified files"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "tool",
+      "raw_type": "tool_result"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_thinking",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "Background audit launched.",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Audit backend signals\" completed"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Audit backend signals\" completed"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Agent \"Background monitor\" stopped"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_turn_end",
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      }
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_waiting_background_agents",
+      "content_text": "Waiting for 2 background agents to finish"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "scheduled_task_fire",
+      "content_text": "Running scheduled canary check"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "microcompact_boundary",
+      "content_text": "Context microcompacted [trigger=auto tokens_saved=14200]"
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "[Request interrupted by user]"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_turn_end",
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      }
+    }
+  ]
+}

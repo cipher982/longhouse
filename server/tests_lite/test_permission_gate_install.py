@@ -81,3 +81,34 @@ def test_install_collapses_preexisting_duplicate_claude_hooks(tmp_path, monkeypa
     assert sum("claude-lifecycle-hook" in entry["hooks"][0]["command"] for entry in pre_tool) == 1
     assert sum("claude-permission-gate" in entry["hooks"][0]["command"] for entry in pre_tool) == 1
     assert any("/usr/local/bin/longhouse-helper.sh" in entry["hooks"][0]["command"] for entry in session_start)
+
+
+def test_install_registers_all_14_passive_claude_hooks_and_excludes_worktree_overrides(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    actions = install_hooks("http://localhost:8080", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
+
+    settings = json.loads((claude_dir / "settings.json").read_text())
+    hooks = settings["hooks"]
+    expected = (
+        "SessionStart",
+        "SessionEnd",
+        "Stop",
+        "SubagentStart",
+        "SubagentStop",
+        "TaskCreated",
+        "TaskCompleted",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionRequest",
+        "Notification",
+        "CwdChanged",
+    )
+    for event in expected:
+        assert event in hooks, f"Missing {event} in installed Claude hooks"
+        assert sum("claude-lifecycle-hook" in entry["hooks"][0]["command"] for entry in hooks[event]) == 1
+
+    assert "WorktreeCreate" not in hooks
+    assert "WorktreeRemove" not in hooks
+    assert any("CwdChanged" in action and "TaskCreated" in action for action in actions)

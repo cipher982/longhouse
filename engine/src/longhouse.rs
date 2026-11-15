@@ -777,15 +777,19 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let lifecycle_command = format!("{engine} claude-lifecycle-hook");
     for event in [
         "SessionStart",
+        "SessionEnd",
         "Stop",
         "SubagentStart",
         "SubagentStop",
+        "TaskCreated",
+        "TaskCompleted",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
+        "CwdChanged",
     ] {
         let entries = hooks
             .entry(event)
@@ -6799,6 +6803,48 @@ mod tests {
                 ));
             },
         );
+    }
+
+    #[test]
+    fn claude_configure_registers_all_passive_hooks_and_excludes_worktree_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let engine = temp.path().join("longhouse-engine");
+        std::fs::write(&engine, "").unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_ENGINE_BIN",
+            Some(engine.display().to_string()),
+            || {
+                configure_claude_hooks(Some(claude_dir.clone())).unwrap();
+            },
+        );
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(claude_dir.join("settings.json")).unwrap())
+                .unwrap();
+        let hooks = settings["hooks"].as_object().unwrap();
+        for event in [
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "SubagentStart",
+            "SubagentStop",
+            "TaskCreated",
+            "TaskCompleted",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PermissionRequest",
+            "Notification",
+            "CwdChanged",
+        ] {
+            assert!(
+                hooks[event].to_string().contains("claude-lifecycle-hook"),
+                "missing claude-lifecycle-hook registration for {event}"
+            );
+        }
+        assert!(hooks.get("WorktreeCreate").is_none());
+        assert!(hooks.get("WorktreeRemove").is_none());
     }
 
     #[test]

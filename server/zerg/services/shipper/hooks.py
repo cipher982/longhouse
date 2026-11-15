@@ -745,12 +745,18 @@ def install_hooks(
     # Lifecycle events: sync, local-only native engine command.
     for event in (
         "SessionStart",
+        "SessionEnd",
+        "SubagentStart",
+        "SubagentStop",
+        "TaskCreated",
+        "TaskCompleted",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
+        "CwdChanged",
     ):
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []
@@ -780,8 +786,9 @@ def install_hooks(
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
     actions.append(
-        f"Updated {settings_path} with SessionStart, Stop, UserPromptSubmit, PreToolUse, "
-        "PostToolUse, PermissionRequest, and Notification hooks"
+        f"Updated {settings_path} with SessionStart, SessionEnd, Stop, SubagentStart, "
+        "SubagentStop, TaskCreated, TaskCompleted, UserPromptSubmit, PreToolUse, "
+        "PostToolUse, PostToolUseFailure, PermissionRequest, Notification, and CwdChanged hooks"
     )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)

@@ -32,6 +32,7 @@ import os
 import re
 from datetime import datetime
 from datetime import timezone
+from typing import Any
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -119,6 +120,11 @@ class DelegationTaskIn(UTCBaseModel):
     kind: str = Field(min_length=1, max_length=32)
     status: str = Field(min_length=1, max_length=32)
     description: str | None = Field(default=None, max_length=512)
+    agent_type: str | None = Field(default=None, max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+    is_fork: bool | None = None
+    parent_agent_id: str | None = Field(default=None, max_length=256)
+    spawn_depth: int | None = Field(default=None, ge=0, le=32)
     parent_tool_call_id: str | None = Field(default=None, max_length=256)
     native_child_id: str | None = Field(default=None, max_length=256)
     native_child_source_path: str | None = Field(default=None, max_length=2048)
@@ -139,14 +145,22 @@ class DelegationSnapshotIn(UTCBaseModel):
 
 
 class DelegationUpdateIn(UTCBaseModel):
-    """One native child edge, never a replacement background registry."""
+    """One native child edge or upserted task, never a replacement background registry."""
 
     operation: Literal["observe", "remove"]
-    membership: Literal["existing_exact_link_only"]
+    membership: Literal["existing_exact_link_only", "upsert"] = "existing_exact_link_only"
     item: DelegationTaskIn
     observed_at: datetime
-    source_event: Literal["SubagentStart", "SubagentStop", "PreToolUse", "PostToolUse", "PostToolUseFailure"]
-    source_agent_id: str = Field(min_length=1, max_length=256)
+    source_event: Literal[
+        "SubagentStart",
+        "SubagentStop",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "TaskCreated",
+        "TaskCompleted",
+    ]
+    source_agent_id: str | None = Field(default=None, min_length=1, max_length=256)
     source_agent_type: str | None = Field(default=None, max_length=256)
     source_agent_transcript_path: str | None = Field(default=None, max_length=2048)
 
@@ -155,7 +169,7 @@ class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
     session_id: str
-    state: str | None = None  # Absent only for independent delegation evidence.
+    state: str | None = None  # Absent only for independent delegation or metadata evidence.
     tool_name: Optional[str] = None
     cwd: Optional[str] = None
     provider: Optional[str] = "claude"
@@ -170,6 +184,11 @@ class PresenceIn(UTCBaseModel):
     # id rides along so the server can re-bind the alias without waiting for a
     # transcript ship (e.g. after an out-of-band resume rotates the native id).
     provider_session_id: Optional[str] = None
+    hook_event_name: Optional[str] = Field(default=None, max_length=64)
+    session_usage: Optional[dict[str, Any]] = None
+    session_crons: Optional[list[dict[str, Any]]] = None
+    permission_mode: Optional[str] = Field(default=None, max_length=64)
+    git_branch: Optional[str] = Field(default=None, max_length=256)
 
 
 @router.post("/presence", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
@@ -183,8 +202,24 @@ async def upsert_presence(
     if payload.state is not None and payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    if payload.state is None and payload.delegation is None and payload.delegation_update is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Presence requires phase or delegation evidence")
+    cwd_clean = str(payload.cwd or "").strip()
+    git_branch_clean = str(payload.git_branch or "").strip()
+    permission_mode_clean = str(payload.permission_mode or "").strip()
+    hook_event_clean = str(payload.hook_event_name or "").strip()
+    has_metadata = any(
+        (
+            payload.session_usage is not None,
+            payload.session_crons is not None,
+            bool(permission_mode_clean),
+            bool(git_branch_clean),
+            hook_event_clean == "CwdChanged" and bool(cwd_clean),
+        )
+    )
+    if payload.state is None and payload.delegation is None and payload.delegation_update is None and not has_metadata:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Presence requires phase, delegation, or metadata evidence",
+        )
     managed_principal = caller_principal(_token)
     if isinstance(managed_principal, ManagedSessionToken) and payload.session_id != managed_principal.session_id:
         raise HTTPException(
@@ -203,14 +238,27 @@ async def upsert_presence(
     # preserves the prior active_tool in that case, so we just pass the
     # event's tool_name as-is.
     runtime_tool_name = payload.tool_name if payload.state in {"running", "blocked"} else None
+    event_suffix = hook_event_clean or (payload.delegation_update.source_event if payload.delegation_update is not None else "-")
     runtime_dedupe_key = payload.dedupe_key or (
-        f"presence:{payload.session_id}:{payload.state}:{runtime_tool_name or '-'}:{now.isoformat()}"
+        f"presence:{payload.session_id}:{payload.state}:{event_suffix}:{runtime_tool_name or '-'}:{now.isoformat()}"
     )
-    delegation_payload = {}
+    delegation_payload: dict[str, Any] = {}
     if payload.delegation is not None:
         delegation_payload["delegation"] = payload.delegation.model_dump(mode="json", exclude_none=True)
     if payload.delegation_update is not None:
         delegation_payload["delegation_update"] = payload.delegation_update.model_dump(mode="json", exclude_none=True)
+    if hook_event_clean:
+        delegation_payload["hook_event_name"] = hook_event_clean
+    if cwd_clean:
+        delegation_payload["cwd"] = cwd_clean
+    if git_branch_clean:
+        delegation_payload["git_branch"] = git_branch_clean
+    if permission_mode_clean:
+        delegation_payload["permission_mode"] = permission_mode_clean
+    if payload.session_usage is not None:
+        delegation_payload["session_usage"] = payload.session_usage
+    if payload.session_crons is not None:
+        delegation_payload["session_crons"] = payload.session_crons
     runtime_event = RuntimeEventIngest(
         runtime_key=runtime_key,
         session_id=coerce_session_uuid(payload.session_id),

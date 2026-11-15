@@ -2592,3 +2592,211 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     assert len(result["rows"][0]["facts"]["runtime"]["pending_interaction_projection_json"]["questions"]) == 3
     assert len(detail["facts"]["runtime"]["pending_interaction_projection_json"]["questions"]) == 3
     assert len(frame) - HEADER_BYTES < MAX_PAYLOAD_BYTES
+
+
+@pytest.mark.asyncio
+async def test_nested_subagent_bfs_and_child_token_duration_enrichment(daemon_paths, monkeypatch):
+    """Nested spawnDepth >= 2 subagents enrich tokens/duration/live_status while plain non-worker forks stay excluded."""
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id = str(uuid4())
+    child_id = str(uuid4())
+    grandchild_id = str(uuid4())
+    fork_id = str(uuid4())
+
+    def _session_row(
+        sid: str,
+        *,
+        native_id: str,
+        is_subagent: int,
+        parent_sid: str | None = None,
+        parent_tool_call_id: str | None = None,
+    ) -> dict:
+        return {
+            "session_id": sid,
+            "tenant_id": "default",
+            "owner_id": "42",
+            "provider": "claude",
+            "provider_session_id": native_id,
+            "environment": "prod",
+            "machine_id": "cinder",
+            "started_at": now,
+            "last_activity_at": now,
+            "raw_state": "durable",
+            "render_state": "ready",
+            "media_state": "complete",
+            "is_subagent": is_subagent,
+            "subagent_parent_session_id": parent_sid,
+            "subagent_parent_tool_call_id": parent_tool_call_id,
+            "commit_seq": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    with engine.begin() as connection:
+        connection.execute(
+            StorageSession.__table__.insert(),
+            [
+                _session_row(parent_id, native_id="native-parent", is_subagent=0),
+                _session_row(child_id, native_id="agent-c1", is_subagent=1, parent_sid=parent_id, parent_tool_call_id="tc-c1"),
+                _session_row(grandchild_id, native_id="agent-gc2", is_subagent=1, parent_sid=child_id, parent_tool_call_id="tc-gc2"),
+                _session_row(fork_id, native_id="native-fork", is_subagent=0, parent_sid=parent_id),
+            ],
+        )
+        connection.execute(
+            SessionProviderFact.__table__.insert(),
+            [
+                {
+                    "session_id": child_id,
+                    "kind": "delegation.metadata",
+                    "at": now,
+                    "source_epoch": "e1",
+                    "source_position": 0,
+                    "payload_json": json.dumps(
+                        {
+                            "metadata": {
+                                "agent_type": "Explore",
+                                "description": "Inspect backend tree",
+                                "spawn_depth": 1,
+                                "finished": False,
+                            }
+                        }
+                    ),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+                {
+                    "session_id": child_id,
+                    "kind": "turn.usage",
+                    "at": now,
+                    "source_epoch": "e1",
+                    "source_position": 1,
+                    "payload_json": json.dumps(
+                        {
+                            "model": "claude-opus-5-5",
+                            "input_tokens": 500,
+                            "cache_read_input_tokens": 20_000,
+                            "output_tokens": 350,
+                        }
+                    ),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+                {
+                    "session_id": child_id,
+                    "kind": "turn.duration",
+                    "at": now + timedelta(seconds=1),
+                    "source_epoch": "e1",
+                    "source_position": 2,
+                    "payload_json": json.dumps({"duration_ms": 12_500}),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+                {
+                    "session_id": grandchild_id,
+                    "kind": "delegation.metadata",
+                    "at": now + timedelta(seconds=2),
+                    "source_epoch": "e2",
+                    "source_position": 0,
+                    "payload_json": json.dumps(
+                        {
+                            "metadata": {
+                                "agent_type": "general-purpose",
+                                "description": "Deep audit",
+                                "parent_agent_id": "agent-c1",
+                                "spawn_depth": 2,
+                                "finished": True,
+                            }
+                        }
+                    ),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+                {
+                    "session_id": grandchild_id,
+                    "kind": "turn.usage",
+                    "at": now + timedelta(seconds=3),
+                    "source_epoch": "e2",
+                    "source_position": 1,
+                    "payload_json": json.dumps({"model": "claude-sonnet-4-6", "context_tokens": 8000, "output_tokens": 420}),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+                {
+                    "session_id": grandchild_id,
+                    "kind": "turn.duration",
+                    "at": now + timedelta(seconds=4),
+                    "source_epoch": "e2",
+                    "source_position": 2,
+                    "payload_json": json.dumps({"duration_ms": 4_200}),
+                    "commit_seq": 1,
+                    "created_at": now,
+                },
+            ],
+        )
+        connection.execute(
+            FactHead.__table__.insert().values(
+                family="activity",
+                subject_key=f"claude:{child_id}",
+                source="native_hook",
+                source_epoch="e1",
+                session_id=child_id,
+                ordering_mode="monotone_seq",
+                source_seq=1,
+                evidence_hash="h" * 64,
+                observed_at=now,
+                valid_until=now + timedelta(hours=1),
+                value_json=json.dumps({"state": "thinking"}),
+                raw_locator="claude:hook",
+                updated_commit_seq=1,
+                received_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    monkeypatch.setattr(agents_sessions, "get_catalogd_client", lambda: client)
+    try:
+        served = await agents_sessions.list_session_subagents(
+            session_id=UUID(parent_id),
+            _auth=None,
+            _single=None,
+            owner_id=42,
+        )
+        children = {str(item.session_id): item for item in served.children}
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert set(children) == {child_id, grandchild_id}
+    assert fork_id not in children
+
+    c1 = children[child_id]
+    assert str(c1.parent_session_id) == parent_id
+    assert c1.agent_type == "Explore"
+    assert c1.description == "Inspect backend tree"
+    assert c1.spawn_depth == 1
+    assert c1.live_status == "running"
+    assert c1.context_tokens == 20_500
+    assert c1.output_tokens == 350
+    assert c1.total_tokens == 20_850
+    assert c1.context_window == 1_000_000
+    assert c1.duration_ms == 12_500
+    assert c1.finished is False
+
+    gc2 = children[grandchild_id]
+    assert str(gc2.parent_session_id) == child_id
+    assert gc2.parent_agent_id == "agent-c1"
+    assert gc2.agent_type == "general-purpose"
+    assert gc2.description == "Deep audit"
+    assert gc2.spawn_depth == 2
+    assert gc2.context_tokens == 8000
+    assert gc2.output_tokens == 420
+    assert gc2.total_tokens == 8420
+    assert gc2.context_window == 1_000_000
+    assert gc2.duration_ms == 4200
+    assert gc2.finished is True

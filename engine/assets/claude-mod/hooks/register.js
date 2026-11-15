@@ -130,17 +130,91 @@ const INTERRUPTED = '[Request interrupted by user]'
 // hook, as Stop reports an answered one.
 // Turns whose end was already reported: one Stop per turn, whatever fires twice.
 const reportedTurns = new Set()
+const MOD_SNAPSHOT_DEBOUNCE_MS = 500
+let lastSnapshotAt = 0
+let snapshotTimer
+let snapshotPending = false
 
-async function reportTurnEnd($, turn) {
+async function readModSnapshot($) {
+  let agents
+  let sessionUsage
+  try {
+    if (typeof $.agent?.list === 'function') {
+      const list = await $.agent.list()
+      if (Array.isArray(list)) agents = list
+    }
+  } catch (error) {
+    $.ui.log('longhouse: agent.list failed: ' + String(error), { to: 'debug' })
+  }
+  try {
+    if (typeof $.session?.usage === 'function') {
+      const usage = await $.session.usage()
+      if (usage && typeof usage === 'object') sessionUsage = usage
+    }
+  } catch (error) {
+    $.ui.log('longhouse: session.usage failed: ' + String(error), { to: 'debug' })
+  }
+  return { agents, sessionUsage }
+}
+
+async function emitModSnapshot($, trigger) {
+  if (!engine) return
+  const { agents, sessionUsage } = await readModSnapshot($)
+  if (agents === undefined && sessionUsage === undefined) return
+  try {
+    const payload = {
+      hook_event_name: 'ClaudeModState',
+      trigger,
+      session_id: await $.session.id(),
+      cwd: await $.session.cwd(),
+    }
+    if (agents !== undefined) payload.agents = agents
+    if (sessionUsage !== undefined) payload.session_usage = sessionUsage
+    await $.process.run([engine, 'claude-lifecycle-hook'], { stdin: JSON.stringify(payload) })
+  } catch (error) {
+    $.ui.log('longhouse: mod snapshot not reported: ' + String(error), { to: 'debug' })
+  }
+}
+
+function scheduleSnapshot($, trigger) {
+  if (!engine) return
+  if (typeof $.agent?.list !== 'function' && typeof $.session?.usage !== 'function') return
+  const now = Date.now()
+  const elapsed = now - lastSnapshotAt
+  if (lastSnapshotAt === 0 || elapsed >= MOD_SNAPSHOT_DEBOUNCE_MS) {
+    lastSnapshotAt = now
+    if (snapshotTimer) {
+      snapshotTimer.cancel?.()
+      snapshotTimer = undefined
+    }
+    snapshotPending = false
+    return emitModSnapshot($, trigger)
+  }
+  snapshotPending = true
+  if (snapshotTimer) return
+  snapshotTimer = $.clock.after(MOD_SNAPSHOT_DEBOUNCE_MS - elapsed, async () => {
+    snapshotTimer = undefined
+    if (!snapshotPending) return
+    snapshotPending = false
+    lastSnapshotAt = Date.now()
+    await emitModSnapshot($, trigger)
+  })
+}
+
+async function reportTurnEnd($, turn, aborted = false) {
   if (reportedTurns.has(turn)) return
   reportedTurns.add(turn)
   try {
+    const { agents, sessionUsage } = await readModSnapshot($)
     const payload = {
       hook_event_name: 'Stop',
       session_id: await $.session.id(),
       cwd: await $.session.cwd(),
       stop_hook_active: false,
     }
+    if (aborted) payload.aborted = true
+    if (agents !== undefined) payload.agents = agents
+    if (sessionUsage !== undefined) payload.session_usage = sessionUsage
     await $.process.run([engine, 'claude-lifecycle-hook'], { stdin: JSON.stringify(payload) })
   } catch (error) {
     $.ui.log('longhouse: turn end not reported: ' + String(error), { to: 'debug' })
@@ -328,6 +402,10 @@ export function register(on) {
   } catch (error) {}
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) {
+      void scheduleSnapshot($, 'turn.start')
+      return next(e)
+    }
     turnId = e.turnId
     for (const [id, text] of awaitingTurn) {
       if (text === e.text) {
@@ -341,7 +419,10 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     const completed = await next(e)
-    if (e.agentId !== undefined) return completed
+    if (e.agentId !== undefined) {
+      void scheduleSnapshot($, 'turn.complete')
+      return completed
+    }
     if (liveSeen) liveEnqueue($, { turn: e.turnId, done: true })
     if (e.turnId === turnId) turnId = undefined
     const ownerAborted = e.turnId === abortedByOwner
@@ -354,8 +435,21 @@ export function register(on) {
           $.ui.log('longhouse: interrupted row not recorded: ' + String(error), { to: 'debug' })
         }
       }
-      await reportTurnEnd($, e.turnId)
+      await reportTurnEnd($, e.turnId, true)
+    } else {
+      void scheduleSnapshot($, 'turn.complete')
     }
     return completed
   })
+
+  for (const event of ['session.ready', 'session.measure']) {
+    try {
+      on(event, async ($, e, next) => {
+        await scheduleSnapshot($, event)
+        return next(e)
+      })
+    } catch {
+      // Older Claude Code releases do not expose every mod event.
+    }
+  }
 }

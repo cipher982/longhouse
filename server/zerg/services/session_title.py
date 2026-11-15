@@ -184,7 +184,11 @@ def resolve_title_provenance(
     # write-once anchor column. It is still useful transcript text, but it is
     # not an AI title and must not be reported as ready.
     if sanitize_timeline_title(anchor_title) and not str(title_last_error or "").strip():
-        return "ready", ("provider" if anchor_title_source == "provider" else "ai")
+        if anchor_title_source == "user":
+            return "ready", "user"
+        if anchor_title_source == "provider":
+            return "ready", "provider"
+        return "ready", "ai"
     prompt_title = sanitize_timeline_title(first_user_message) or sanitize_timeline_title(console_prompt)
     if (user_messages or 0) > 0 or prompt_title:
         return (

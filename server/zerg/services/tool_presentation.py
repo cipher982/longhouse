@@ -11,6 +11,7 @@ import ast
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -545,3 +546,70 @@ def project_tool_presentation(
         "children": children,
         "rule_id": "codex:exec:multi-child:v1",
     }
+
+
+def extract_tool_intent(
+    tool_name: str | None,
+    tool_input_json: Any,
+    *,
+    provider: str | None = None,
+) -> str | None:
+    """Extract a clean one-line human intent label from normalized tool arguments.
+
+    Kept separate from ``project_tool_presentation`` so harness presentation
+    payload contracts remain unchanged while timeline/iOS callers can surface
+    concise action summaries (Claude ``description``, ``file_path``, ``pattern``,
+    ``query``, ``prompt``, etc.).
+    """
+    _ = provider
+    if tool_input_json is None:
+        return None
+    parsed: Any = tool_input_json
+    if isinstance(parsed, str):
+        stripped = parsed.strip()
+        if not stripped:
+            return None
+        try:
+            parsed = json.loads(stripped)
+        except Exception:
+            return None
+    if not isinstance(parsed, Mapping):
+        return None
+
+    for key in ("description", "intent", "summary", "reason"):
+        val = parsed.get(key)
+        if isinstance(val, str):
+            compact = " ".join(val.split()).strip()
+            if compact:
+                return compact[:160]
+
+    normalized_tool = str(tool_name or "").strip().lower()
+    if normalized_tool in {"read", "read_file", "edit", "write", "multiedit", "notebookedit"}:
+        path = parsed.get("file_path") or parsed.get("path") or parsed.get("notebook_path")
+        if isinstance(path, str) and path.strip():
+            parts = [p for p in path.strip().replace("\\", "/").split("/") if p]
+            return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:160])
+
+    if normalized_tool in {"grep", "search_content", "glob"}:
+        pattern = parsed.get("pattern") or parsed.get("query") or parsed.get("glob")
+        if isinstance(pattern, str) and pattern.strip():
+            return " ".join(pattern.split())[:160]
+
+    if normalized_tool in {"websearch", "webfetch", "web_search", "fetch"}:
+        target = parsed.get("query") or parsed.get("url")
+        if isinstance(target, str) and target.strip():
+            return " ".join(target.split())[:160]
+
+    if normalized_tool in {"bash", "exec", "exec_command"}:
+        cmd = parsed.get("command") or parsed.get("cmd")
+        if isinstance(cmd, str) and cmd.strip():
+            first_line = cmd.strip().splitlines()[0].strip()
+            return first_line[:160] if first_line else None
+
+    if normalized_tool in {"agent", "task", "subagent"}:
+        prompt = parsed.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            first_line = " ".join(prompt.strip().splitlines()[0].split())
+            return first_line[:160] if first_line else None
+
+    return None

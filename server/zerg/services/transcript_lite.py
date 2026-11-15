@@ -65,6 +65,12 @@ _EVENT_DEFAULTS: dict[str, Any] = {
     "provisional_complete": False,
     "reconciled_event_id": None,
     "tool_call_state": None,
+    "tool_intent": None,
+    "message_phase": None,
+    "reasoning_withheld": False,
+    "task_notification": None,
+    "waiting_background_agents": None,
+    "api_error": None,
     "media_refs": [],
     # Canonical item facts; a client hides text-less reasoning and turn-end rows by them.
     "item": None,

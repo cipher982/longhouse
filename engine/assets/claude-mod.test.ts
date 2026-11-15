@@ -10,7 +10,15 @@ let loads = 0;
 /** A fresh copy of the module (its state is per copy, as in Claude Code) and a fake $. */
 async function loadMod(
   lines: string[],
-  options: { claimExit?: number; refuse?: string; liveSocket?: string; fetch?: (init: FetchInit) => Promise<{ ok: boolean; status: number }>; noTurnStep?: boolean } = {},
+  options: {
+    claimExit?: number;
+    refuse?: string;
+    liveSocket?: string;
+    fetch?: (init: FetchInit) => Promise<{ ok: boolean; status: number }>;
+    noTurnStep?: boolean;
+    agents?: unknown[] | (() => Promise<unknown[]>);
+    sessionUsage?: unknown | (() => Promise<unknown>);
+  } = {},
 ) {
   loads += 1;
   const { register } = await import(`./claude-mod/hooks/register.js?copy=${loads}`);
@@ -87,9 +95,23 @@ async function loadMod(
         aborts.push(turnId);
       },
     },
+    agent:
+      options.agents === undefined
+        ? undefined
+        : {
+            list: async () =>
+              typeof options.agents === "function" ? options.agents() : options.agents,
+          },
     session: {
       id: async () => "provider-1",
       cwd: async () => "/work",
+      usage:
+        options.sessionUsage === undefined
+          ? undefined
+          : async () =>
+              typeof options.sessionUsage === "function"
+                ? options.sessionUsage()
+                : options.sessionUsage,
       append: async (row: unknown) => {
         appended.push(row);
         return { uuid: "row-1", message: row };
@@ -239,6 +261,7 @@ describe("Longhouse Claude mod", () => {
       session_id: "provider-1",
       cwd: "/work",
       stop_hook_active: false,
+      aborted: true,
     });
   });
 
@@ -277,6 +300,74 @@ describe("Longhouse Claude mod", () => {
     await ended.fire("session.start");
     await ended.settle();
     expect(ended.aborts).toEqual([]);
+  });
+
+  it("ignores child turn.start so main turnId stays intact and forwards agent/usage snapshots", async () => {
+    const abortMod = await loadMod([line({ id: "a-child", kind: "abort", state: "pending" })]);
+    await abortMod.fire("turn.start", { turnId: "main-turn", text: "root" });
+    await abortMod.fire("turn.start", { turnId: "child-turn", agentId: "ag-1", text: "sub" });
+    await abortMod.fire("session.start");
+    await abortMod.settle();
+    expect(abortMod.aborts).toEqual(["main-turn"]);
+
+    const mod = await loadMod([], {
+      agents: [{ id: "ag-1", type: "Explore", status: "running", description: "Check tree" }],
+      sessionUsage: {
+        startedAt: 1000,
+        context: { tokens: 42000, window: 1000000, percent: 4 },
+        cost: { usd: 1.25 },
+        rateLimits: [{ kind: "five_hour", percentUsed: 12, resetsAt: "2026-11-15T06:00:00Z" }],
+      },
+    });
+    await mod.fire("session.start");
+    await mod.settle();
+    await mod.fire("turn.start", { turnId: "child-turn", agentId: "ag-1", text: "sub" });
+    await mod.settle();
+
+    const snapshotCalls = mod.runs
+      .filter((argv) => argv[1] === "claude-lifecycle-hook")
+      .map((argv) => JSON.parse(argv[2].slice("stdin=".length)));
+    expect(snapshotCalls.length).toBeGreaterThanOrEqual(1);
+    expect(snapshotCalls[0]).toEqual({
+      hook_event_name: "ClaudeModState",
+      trigger: "turn.start",
+      session_id: "provider-1",
+      cwd: "/work",
+      agents: [{ id: "ag-1", type: "Explore", status: "running", description: "Check tree" }],
+      session_usage: {
+        startedAt: 1000,
+        context: { tokens: 42000, window: 1000000, percent: 4 },
+        cost: { usd: 1.25 },
+        rateLimits: [{ kind: "five_hour", percentUsed: 12, resetsAt: "2026-11-15T06:00:00Z" }],
+      },
+    });
+  });
+
+  it("emits throttled ClaudeModState on session.ready and session.measure and attaches snapshot to aborted Stop", async () => {
+    const mod = await loadMod([], {
+      agents: [{ id: "ag-2", type: "general-purpose", status: "waiting", description: "Waiting" }],
+      sessionUsage: { context: { tokens: 90000, window: 1000000, percent: 9 }, cost: { usd: 3.5 } },
+    });
+    await mod.fire("session.start");
+    await mod.settle();
+    await mod.fire("session.ready");
+    await mod.fire("session.measure");
+    await mod.fire("turn.start", { turnId: "main-2", text: "work" });
+    await mod.fire("turn.complete", { turnId: "main-2", reason: "aborted" });
+
+    const hookPayloads = mod.runs
+      .filter((argv) => argv[1] === "claude-lifecycle-hook")
+      .map((argv) => JSON.parse(argv[2].slice("stdin=".length)));
+    expect(hookPayloads.some((p) => p.hook_event_name === "ClaudeModState")).toBe(true);
+    // Debounce coalesces immediate session.measure right after session.ready.
+    expect(hookPayloads.filter((p) => p.hook_event_name === "ClaudeModState").length).toBe(1);
+    const stopPayload = hookPayloads.find((p) => p.hook_event_name === "Stop");
+    expect(stopPayload).toMatchObject({
+      hook_event_name: "Stop",
+      aborted: true,
+      agents: [{ id: "ag-2", type: "general-purpose", status: "waiting", description: "Waiting" }],
+      session_usage: { context: { tokens: 90000, window: 1000000, percent: 9 }, cost: { usd: 3.5 } },
+    });
   });
 });
 

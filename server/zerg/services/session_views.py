@@ -705,9 +705,12 @@ class TurnEndResponse(BaseModel):
     duration_ms: int = Field(..., description="Wall-clock milliseconds the provider reported for the turn")
     ended_at: datetime = Field(..., description="When the provider reported the turn done")
     message_count: Optional[int] = Field(None, description="Provider message count at turn end, when reported")
-    outcome: Literal["completed", "aborted"] = Field(
-        "completed", description="Whether the provider finished the turn or the user stopped it"
+    outcome: Literal["completed", "aborted", "interrupted"] = Field(
+        "completed", description="Whether the provider finished the turn, aborted, or the user interrupted it"
     )
+    stop_hook_continued: Optional[bool] = Field(None, description="Whether a stop hook prevented stopping and continued")
+    stop_hook_summary: Optional[str] = Field(None, description="Optional stop hook summary reported at turn end")
+    source: Optional[str] = Field(None, description="Signal source that closed the turn (e.g. turn_duration, stop_hook_summary)")
 
 
 class SessionRecapResponse(BaseModel):
@@ -715,6 +718,33 @@ class SessionRecapResponse(BaseModel):
 
     text: str = Field(..., description="Recap text as the provider wrote it, terminal chrome removed")
     at: datetime = Field(..., description="When the provider wrote the recap")
+
+
+class SessionRateLimitResponse(BaseModel):
+    """Latest quota bucket snapshot reported by the provider."""
+
+    kind: str = Field(..., description="Rate-limit bucket name, e.g. five_hour or seven_day")
+    percent_used: Optional[float] = Field(None, description="Percentage of quota used (0-100)")
+    resets_at: Optional[str] = Field(None, description="ISO-8601 quota reset timestamp when reported")
+
+
+class SessionCronResponse(BaseModel):
+    """Scheduled prompt registered inside the provider session."""
+
+    id: str = Field(..., description="Scheduler job id")
+    schedule: str = Field(..., description="Cron expression or interval")
+    recurring: bool = Field(False, description="Whether the schedule recurs")
+    prompt: Optional[str] = Field(None, description="Scheduled prompt preview")
+
+
+class SessionWorktreeResponse(BaseModel):
+    """Active or last provider worktree context for the session."""
+
+    name: Optional[str] = Field(None, description="Worktree name")
+    branch: Optional[str] = Field(None, description="Worktree git branch")
+    path: Optional[str] = Field(None, description="Worktree filesystem path")
+    original_cwd: Optional[str] = Field(None, description="Original working directory before entering worktree")
+    original_branch: Optional[str] = Field(None, description="Original git branch before entering worktree")
 
 
 class UsageLatestResponse(BaseModel):
@@ -730,6 +760,10 @@ class UsageLatestResponse(BaseModel):
     )
     output_tokens: int = Field(..., description="Output tokens on that response")
     thinking_tokens: Optional[int] = Field(None, description="Thinking tokens on that response, when reported")
+    used_percent: Optional[float] = Field(None, description="Context window used percentage (0-100), when reported")
+    cost_usd: Optional[float] = Field(None, description="Cumulative session cost in USD, when reported")
+    cumulative_duration_ms: Optional[int] = Field(None, description="Cumulative session duration in ms, when reported")
+    rate_limits: Optional[list[SessionRateLimitResponse]] = Field(None, description="Latest provider rate-limit snapshots")
     at: datetime = Field(..., description="When that response was written")
     label: str = Field(
         ...,
@@ -890,6 +924,26 @@ class SessionResponse(UTCBaseModel):
         None,
         description="Model, effort and context size from the provider's last turn-ending response.",
     )
+    permission_mode: Optional[str] = Field(
+        None,
+        description="Current provider permission mode reported by hooks or transcript.",
+    )
+    provider_title: Optional[str] = Field(
+        None,
+        description="Latest provider-emitted auto title.",
+    )
+    worktree: Optional[SessionWorktreeResponse] = Field(
+        None,
+        description="Active or last provider worktree metadata.",
+    )
+    session_crons: list[SessionCronResponse] = Field(
+        default_factory=list,
+        description="Scheduled crons currently active in this provider session.",
+    )
+    pending_background_agent_count: int = Field(
+        0,
+        description="Number of pending or waiting background agents reported for this session.",
+    )
     timeline_card: TimelineCardPresentationResponse = Field(
         ...,
         description="Server-derived timeline-card presentation",
@@ -966,7 +1020,7 @@ class MachineSessionResponse(UTCBaseModel):
     title: Optional[str] = Field(None, description="Resolved headline for this session")
     anchor_title: Optional[str] = Field(None, description="Frozen AI-generated headline when one exists")
     title_state: Optional[str] = Field(None, description="AI-title lifecycle: awaiting_input|pending|degraded|ready")
-    title_source: Optional[str] = Field(None, description="Title provenance: ai|provider|prompt|project")
+    title_source: Optional[str] = Field(None, description="Title provenance: user|ai|provider|prompt|project")
     hidden_from_default_timeline: bool = Field(
         False,
         description="True when canonical launch provenance excludes the session from the default timeline.",
@@ -1409,6 +1463,30 @@ class EventResponse(UTCBaseModel):
     tool_presentation: Optional[ToolPresentationResponse] = Field(
         None,
         description="Versioned read-time tool presentation with raw-provider provenance",
+    )
+    tool_intent: Optional[str] = Field(
+        None,
+        description="Normalized human-readable summary of why this tool was called",
+    )
+    message_phase: Optional[Literal["commentary", "final_answer"]] = Field(
+        None,
+        description="Assistant text phase relative to tool execution vs turn completion",
+    )
+    reasoning_withheld: bool = Field(
+        False,
+        description="True when the provider returned a signature/redacted thinking block with no visible text",
+    )
+    task_notification: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured metadata for a Claude background task-notification row",
+    )
+    waiting_background_agents: Optional[int] = Field(
+        None,
+        description="Count of pending background agents when a turn ended waiting on them",
+    )
+    api_error: Optional[dict[str, Any]] = Field(
+        None,
+        description="Provider API error and retry notice metadata when applicable",
     )
     timestamp: datetime = Field(..., description="Event timestamp")
     in_active_context: bool = Field(

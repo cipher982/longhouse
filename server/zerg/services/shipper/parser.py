@@ -347,6 +347,10 @@ def _compact_metadata_hint(metadata: object) -> str | None:
     if isinstance(pre_tokens, int):
         parts.append(f"pre_tokens={pre_tokens}")
 
+    tokens_saved = metadata.get("tokensSaved")
+    if type(tokens_saved) is int:
+        parts.append(f"tokens_saved={tokens_saved}")
+
     return " ".join(parts) if parts else None
 
 
