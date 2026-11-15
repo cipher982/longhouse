@@ -1902,8 +1902,17 @@ fn record_antigravity_provider_process(session_id: &str) {
         .unwrap_or_default();
     state.insert("provider_pid".into(), json!(pgrp));
     state.insert("provider_process_group_id".into(), json!(pgrp));
-    if let Some(started) = crate::process_identity::try_collect_process_fact(pgrp as u32) {
-        state.insert("provider_process_start_time".into(), json!(started.lstart));
+    // The engine compares this with its own process facts' `lstart`, which is
+    // `ps -o lstart=` on macOS and the same rendering from /proc on Linux.
+    let started = Command::new("ps")
+        .args(["-p", &pgrp.to_string(), "-o", "lstart="])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(started) = started {
+        state.insert("provider_process_start_time".into(), json!(started));
     }
     if let Err(error) = write_private_json(&path, &serde_json::Value::Object(state)) {
         eprintln!(

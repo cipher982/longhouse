@@ -262,7 +262,7 @@ pub async fn terminate(session_id: &str) -> Result<AntigravityTerminateOutcome> 
                 shutdown: crate::process_group::GroupShutdown::Absent.as_str(),
             })
         }
-        Some(fact) if fact.lstart != expected_start => {
+        Some(fact) if !crate::process_identity::lstart_matches_recorded(&fact, expected_start) => {
             return Err(anyhow!(
             "Antigravity provider pid {pid} now belongs to another process; refusing to signal it"
         ))
