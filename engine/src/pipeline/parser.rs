@@ -4705,17 +4705,23 @@ fn extract_antigravity_events(
     }
 
     if event_type == "ERROR_MESSAGE" {
-        // The transcript's own record of a failed model call. It has no
-        // `content`, so without this it is dropped; the retry attempt is part
-        // of the message text, not a field.
+        // The transcript's own record of a failed model call; the retry
+        // attempt is part of the message text, not a field. Older builds
+        // (2026-08) wrote only `content`, prefixed `Error: `.
         *pending = AntigravityPending::default();
-        if let Some(message) = obj
+        let message = obj
             .error
             .as_ref()
             .and_then(Value::as_str)
+            .or_else(|| {
+                obj.content
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .map(|content| content.trim().strip_prefix("Error:").unwrap_or(content))
+            })
             .map(str::trim)
-            .filter(|message| !message.is_empty())
-        {
+            .filter(|message| !message.is_empty());
+        if let Some(message) = message {
             let mut payload = serde_json::Map::new();
             payload.insert("error".to_string(), json!(bounded_text(message, 500)));
             if let Some(attempt) = antigravity_error_attempt(message) {
@@ -8842,6 +8848,41 @@ mod tests {
             Some(workspace.to_string_lossy().as_ref())
         );
         assert_eq!(result.metadata.project.as_deref(), Some("g55"));
+    }
+
+    #[test]
+    fn antigravity_error_message_without_an_error_field_reads_its_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("brain/9a0d6f0e-6d1b-4a34-9d3e-1f1c2b3a4d5e/.system_generated/logs");
+        std::fs::create_dir_all(&path).unwrap();
+        let path = path.join("transcript_full.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-08-21T19:45:00Z","content":"go"}"#,
+                "\n",
+                r#"{"step_index":1,"source":"SYSTEM","type":"ERROR_MESSAGE","status":"DONE","created_at":"2026-08-21T19:45:10Z","content":"Error: The stream was interrupted. Please continue the task you were working on."}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("antigravity")).unwrap();
+
+        let errors: Vec<_> = result
+            .provider_facts
+            .iter()
+            .filter(|fact| fact.kind == "turn.api_error")
+            .map(|fact| fact.payload["error"].clone())
+            .collect();
+        assert_eq!(
+            errors,
+            vec![serde_json::json!(
+                "The stream was interrupted. Please continue the task you were working on."
+            )]
+        );
     }
 
     #[test]

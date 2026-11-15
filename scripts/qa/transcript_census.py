@@ -268,6 +268,11 @@ def _cursor_store_shape(
         keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
         return f"store/meta/{entry.get('_census_meta_key', '?')}", keys, None, None
     if kind == "root":
+        if entry.get("_census_empty"):
+            # A zero-byte root (its id is the empty-input SHA-256): a
+            # conversation with no messages, which both readers render as
+            # nothing.
+            return "store/root/empty", [], None, None
         return "store/root", list(entry.get("_census_fields") or []), None, None
     content = entry.get("content")
     block_types: set[str] = set()
@@ -444,20 +449,61 @@ SHAPERS = {
 }
 
 
+def _omp_session_header(path: Path) -> bool:
+    """The engine's OMP rule (`omp_session::read_session_header`): the first
+    record other than a title is the `session` header. Sibling ledgers under
+    a session directory (`observation-pack/ledger.jsonl`) are not sessions."""
+    try:
+        with path.open("rb") as handle:
+            for raw in handle:
+                if not raw.strip():
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    return False
+                kind = entry.get("type") if isinstance(entry, dict) else None
+                if kind == "title":
+                    continue
+                return kind == "session"
+    except OSError:
+        return False
+    return False
+
+
+def _is_session_file(provider: str, path: Path) -> bool:
+    """A file a directory walk keeps: the engine's discovery predicate
+    (`is_provider_session_file` in engine/src/discovery.rs), so the census
+    reads what Longhouse ships and nothing beside it."""
+    name = path.name
+    if provider == "antigravity":
+        # Not `transcript.jsonl`, a truncated mirror the engine never reads
+        # (`canonical_transcript_hint`), nor the CLI's history or logs beside it.
+        return name in {"transcript_full.jsonl", "logs.json"}
+    if provider == "omp":
+        return path.suffix == ".jsonl" and _omp_session_header(path)
+    if provider == "claude" and name == "journal.jsonl":
+        # A dynamic-workflow control ledger beside its agent transcripts.
+        return not (path.parent.parent.name == "workflows" and path.parent.parent.parent.name == "subagents")
+    return True
+
+
 def iter_files(paths: list[str], provider: str) -> list[Path]:
     files: list[Path] = []
     for raw in paths:
         path = Path(raw).expanduser()
         if path.is_dir():
+            found: list[Path] = []
             if provider == "opencode":
-                files.extend(sorted(path.rglob("opencode.db")))
-                files.extend(sorted(path.rglob("*.jsonl")))
+                found.extend(sorted(path.rglob("opencode.db")))
+                found.extend(sorted(path.rglob("*.jsonl")))
             else:
-                files.extend(sorted(path.rglob("*.jsonl")))
+                found.extend(sorted(path.rglob("*.jsonl")))
                 if provider == "antigravity":
-                    files.extend(sorted(path.rglob("logs.json")))
+                    found.extend(sorted(path.rglob("logs.json")))
                 if provider == "cursor":
-                    files.extend(sorted(path.rglob("store.db")))
+                    found.extend(sorted(path.rglob("store.db")))
+            files.extend(found_path for found_path in found if _is_session_file(provider, found_path))
         elif path.is_file():
             files.append(path)
     return files
@@ -596,6 +642,7 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
                 "_census_meta_key": str(key),
             }
         binary: set[bytes | str] = set()
+        roleless: dict[bytes | str, dict[str, Any]] = {}
         listed: list[bytes] = []
         for blob_id, data in connection.execute("SELECT id, data FROM blobs"):
             raw = data if isinstance(data, bytes) else str(data).encode()
@@ -604,10 +651,19 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
             except ValueError:
                 message = None
             if isinstance(message, dict):
-                yield {**message, "_census_store": "message"}
+                if "role" in message:
+                    yield {**message, "_census_store": "message"}
+                else:
+                    # JSON content the agent stored (a file it read, a tool's
+                    # payload). The readers take messages from the root's
+                    # list, so it is a record only if the root lists it.
+                    roleless[_cursor_blob_id(blob_id)] = message
                 continue
             binary.add(_cursor_blob_id(blob_id))
             if root_id is not None and _cursor_blob_id(blob_id) == root_id:
+                if not raw:
+                    yield {"_census_store": "root", "_census_fields": [], "_census_empty": True}
+                    continue
                 parsed = _protobuf_fields(raw)
                 if parsed is None:
                     yield None
@@ -617,6 +673,8 @@ def _cursor_store_records(path: Path) -> Iterator[dict[str, Any] | None]:
         for message_id in listed:
             if message_id in binary:
                 yield None
+            elif message_id in roleless:
+                yield {**roleless[message_id], "_census_store": "message"}
     except sqlite3.Error:
         yield None
     finally:

@@ -1,6 +1,24 @@
 {
  "provider": "opencode",
  "shapes": {
+  "part/file/user": {
+   "classification": "transcript:file",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "filename",
+    "message.agent",
+    "message.model",
+    "message.role",
+    "message.summary",
+    "message.time",
+    "mime",
+    "source",
+    "type",
+    "url"
+   ]
+  },
   "part/future_text/assistant": {
    "classification": "provider_drift:unknown_text",
    "first_seen_version": "1.17.20",
@@ -11,7 +29,34 @@
     "text",
     "type"
    ],
-   "required_keys": ["type", "message.role", "text"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "text"
+   ]
+  },
+  "part/patch/assistant": {
+   "classification": "transcript:patch",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "files",
+    "hash",
+    "message.agent",
+    "message.cost",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
+    "message.role",
+    "message.time",
+    "message.tokens",
+    "message.variant",
+    "type"
+   ]
   },
   "part/reasoning/assistant": {
    "classification": "provider_internal:reasoning",
@@ -19,11 +64,29 @@
    "last_seen_version": "1.17.20",
    "entrypoints": [],
    "keys": [
+    "message.agent",
+    "message.cost",
+    "message.error",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
     "message.role",
+    "message.time",
+    "message.tokens",
+    "message.variant",
+    "metadata",
     "text",
+    "time",
     "type"
    ],
-   "required_keys": ["type", "message.role", "text"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "text"
+   ]
   },
   "part/step-finish/assistant": {
    "classification": "provider_internal:step_finish",
@@ -34,6 +97,7 @@
     "cost",
     "message.agent",
     "message.cost",
+    "message.error",
     "message.finish",
     "message.mode",
     "message.modelID",
@@ -43,11 +107,16 @@
     "message.role",
     "message.time",
     "message.tokens",
+    "message.variant",
     "reason",
+    "snapshot",
     "tokens",
     "type"
    ],
-   "required_keys": ["type", "message.role"]
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   },
   "part/step-start/assistant": {
    "classification": "provider_internal:step_start",
@@ -57,6 +126,7 @@
    "keys": [
     "message.agent",
     "message.cost",
+    "message.error",
     "message.finish",
     "message.mode",
     "message.modelID",
@@ -66,9 +136,14 @@
     "message.role",
     "message.time",
     "message.tokens",
+    "message.variant",
+    "snapshot",
     "type"
    ],
-   "required_keys": ["type", "message.role"]
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   },
   "part/text/assistant": {
    "classification": "transcript:assistant",
@@ -78,6 +153,7 @@
    "keys": [
     "message.agent",
     "message.cost",
+    "message.error",
     "message.finish",
     "message.mode",
     "message.modelID",
@@ -87,11 +163,17 @@
     "message.role",
     "message.time",
     "message.tokens",
+    "message.variant",
+    "metadata",
     "text",
     "time",
     "type"
    ],
-   "required_keys": ["type", "message.role", "text"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "text"
+   ]
   },
   "part/text/user": {
    "classification": "transcript:user",
@@ -104,10 +186,16 @@
     "message.role",
     "message.summary",
     "message.time",
+    "message.tools",
+    "message.variant",
     "text",
     "type"
    ],
-   "required_keys": ["type", "message.role", "text"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "text"
+   ]
   },
   "part/tool/assistant": {
    "classification": "provider_tool:tool",
@@ -116,12 +204,30 @@
    "entrypoints": [],
    "keys": [
     "callID",
+    "message.agent",
+    "message.cost",
+    "message.error",
+    "message.finish",
+    "message.mode",
+    "message.modelID",
+    "message.parentID",
+    "message.path",
+    "message.providerID",
     "message.role",
+    "message.time",
+    "message.tokens",
+    "message.variant",
+    "metadata",
     "state",
     "tool",
     "type"
    ],
-   "required_keys": ["type", "message.role", "tool", "state"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "tool",
+    "state"
+   ]
   }
  },
  "families": [
@@ -138,41 +244,88 @@
      },
      "reasoning": {
       "classification": "provider_internal:reasoning",
-      "keys": ["text", "type"]
+      "keys": [
+       "text",
+       "type"
+      ]
      },
      "step-finish": {
       "classification": "provider_internal:step_finish",
-      "keys": ["cost", "reason", "tokens", "type"]
+      "keys": [
+       "cost",
+       "reason",
+       "tokens",
+       "type"
+      ]
      },
      "step-start": {
       "classification": "provider_internal:step_start",
-      "keys": ["type"]
+      "keys": [
+       "type"
+      ]
      },
      "text": {
       "classification": "transcript:text",
-      "keys": ["text", "time", "type"],
-      "required_keys": ["text"]
+      "keys": [
+       "text",
+       "time",
+       "type"
+      ],
+      "required_keys": [
+       "text"
+      ]
      },
      "tool": {
       "classification": "provider_tool:tool",
-      "keys": ["callID", "state", "tool", "type"],
-      "required_keys": ["tool", "state"]
+      "keys": [
+       "callID",
+       "state",
+       "tool",
+       "type"
+      ],
+      "required_keys": [
+       "tool",
+       "state"
+      ]
      }
     },
     {
      "assistant": {
-      "keys": ["message.agent", "message.cost", "message.finish", "message.mode", "message.modelID", "message.parentID", "message.path", "message.providerID", "message.role", "message.time", "message.tokens"]
+      "keys": [
+       "message.agent",
+       "message.cost",
+       "message.finish",
+       "message.mode",
+       "message.modelID",
+       "message.parentID",
+       "message.path",
+       "message.providerID",
+       "message.role",
+       "message.time",
+       "message.tokens"
+      ]
      },
      "developer": {},
      "system": {},
      "tool": {},
      "user": {
-      "keys": ["message.agent", "message.model", "message.role", "message.summary", "message.time"]
+      "keys": [
+       "message.agent",
+       "message.model",
+       "message.role",
+       "message.summary",
+       "message.time"
+      ]
      }
     }
    ],
-   "keys": ["type"],
-   "required_keys": ["type", "message.role"]
+   "keys": [
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   }
  ]
 }

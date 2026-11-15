@@ -1,793 +1,1304 @@
 {
-  "provider": "omp",
-  "upstream": {
-    "package": "@oh-my-pi/pi-coding-agent",
-    "binary": "omp",
-    "version": "18.1.18",
-    "commit": "00085d4e7dfdcfbf302c122fa2682b410a0f43d1"
+ "provider": "omp",
+ "upstream": {
+  "package": "@oh-my-pi/pi-coding-agent",
+  "binary": "omp",
+  "version": "18.1.18",
+  "commit": "00085d4e7dfdcfbf302c122fa2682b410a0f43d1"
+ },
+ "source": {
+  "root": "$XDG_DATA_HOME/omp/sessions",
+  "layout": "<encoded-cwd>/<timestamp>_<opaque-session-id>.jsonl",
+  "title_slot_bytes": 256,
+  "profile_root": "$XDG_DATA_HOME/omp/profiles/<profile>",
+  "blob_root": "$XDG_DATA_HOME/omp/blobs"
+ },
+ "taxonomy": {
+  "message": "omp_message",
+  "tool_call": "omp_tool_call",
+  "tool_result": "omp_tool_result",
+  "title": "session.title",
+  "reset_boundary": "omp_reset_boundary",
+  "compaction": "context.compaction"
+ },
+ "shapes": {
+  "branch_summary": {
+   "classification": "state:branch",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ],
+   "keys": [
+    "details",
+    "fromId",
+    "id",
+    "parentId",
+    "runtime",
+    "summary",
+    "timestamp",
+    "type"
+   ]
   },
-  "source": {
-    "root": "$XDG_DATA_HOME/omp/sessions",
-    "layout": "<encoded-cwd>/<timestamp>_<opaque-session-id>.jsonl",
-    "title_slot_bytes": 256,
-    "profile_root": "$XDG_DATA_HOME/omp/profiles/<profile>",
-    "blob_root": "$XDG_DATA_HOME/omp/blobs"
+  "compaction": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "details",
+    "firstKeptEntryId",
+    "fromExtension",
+    "id",
+    "method",
+    "parentId",
+    "preserveData",
+    "providerReplayThroughEntryId",
+    "runtime",
+    "shortSummary",
+    "summary",
+    "timestamp",
+    "tokensAfter",
+    "tokensBefore",
+    "type",
+    "warning"
+   ],
+   "required_keys": [
+    "type",
+    "tokensBefore"
+   ]
   },
-  "taxonomy": {
-    "message": "omp_message",
-    "tool_call": "omp_tool_call",
-    "tool_result": "omp_tool_result",
-    "title": "session.title",
-    "reset_boundary": "omp_reset_boundary",
-    "compaction": "context.compaction"
+  "credential_pin": {
+   "classification": "state:credential_pin",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ],
+   "keys": [
+    "hash",
+    "id",
+    "parentId",
+    "provider",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
   },
-  "shapes": {
-    "branch_summary": {
-      "classification": "state:branch",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "compaction": {
-      "classification": "signal:context.compaction",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
+  "custom": {
+   "classification": "extension:state",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "customType",
+    "data",
+    "id",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "custom_message": {
+   "classification": "extension:message",
+   "first_seen_version": "18.1.20",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "attribution",
+    "content",
+    "customType",
+    "details",
+    "display",
+    "id",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "content",
+    "display"
+   ]
+  },
+  "label": {
+   "classification": "state:label",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "message/assistant/?": {
+   "classification": "signal:turn.api_error",
+   "first_seen_version": "18.1.17",
+   "last_seen_version": "18.9.1",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.errorClassificationMessage",
+    "message.errorId",
+    "message.errorMessage",
+    "message.errorStatus",
+    "message.model",
+    "message.provider",
+    "message.responseId",
+    "message.retryRecovery",
+    "message.role",
+    "message.stopDetails",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.stopReason"
+   ]
+  },
+  "message/assistant/text": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.1",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.elidedOutputTokens",
+    "message.errorId",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.role",
+    "message.serviceTier",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text"
+   ]
+  },
+  "message/assistant/text+thinking": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "18.1.17",
+   "last_seen_version": "18.2.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].itemId",
+    "message.content[].summary",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.elidedOutputTokens",
+    "message.errorId",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.role",
+    "message.serviceTier",
+    "message.stopDetails",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text",
+    "message.content[].thinking"
+   ]
+  },
+  "message/assistant/text+thinking+toolCall": {
+   "classification": "transcript:assistant_tool",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.2.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].customWireName",
+    "message.content[].id",
+    "message.content[].intent",
+    "message.content[].itemId",
+    "message.content[].name",
+    "message.content[].partialArgs",
+    "message.content[].streamIndex",
+    "message.content[].summary",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].thoughtSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.elidedOutputTokens",
+    "message.errorId",
+    "message.errorMessage",
+    "message.errorStatus",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.retryRecovery",
+    "message.role",
+    "message.serviceTier",
+    "message.stopDetails",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text",
+    "message.content[].thinking",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
+  },
+  "message/assistant/text+toolCall": {
+   "classification": "transcript:assistant_tool",
+   "first_seen_version": "18.1.17",
+   "last_seen_version": "18.9.1",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].id",
+    "message.content[].intent",
+    "message.content[].name",
+    "message.content[].partialArgs",
+    "message.content[].streamIndex",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].thoughtSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.errorId",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.role",
+    "message.serviceTier",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
+  },
+  "message/assistant/thinking": {
+   "classification": "transcript:thinking",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].itemId",
+    "message.content[].summary",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.errorId",
+    "message.errorMessage",
+    "message.errorStatus",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.retryRecovery",
+    "message.role",
+    "message.serviceTier",
+    "message.stopDetails",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/assistant/thinking+toolCall": {
+   "classification": "transcript:assistant_tool",
+   "first_seen_version": "18.1.17",
+   "last_seen_version": "18.1.19",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].customWireName",
+    "message.content[].id",
+    "message.content[].intent",
+    "message.content[].itemId",
+    "message.content[].name",
+    "message.content[].partialArgs",
+    "message.content[].streamIndex",
+    "message.content[].summary",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].thoughtSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.errorClassificationMessage",
+    "message.errorId",
+    "message.errorMessage",
+    "message.errorStatus",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.retryRecovery",
+    "message.role",
+    "message.serviceTier",
+    "message.stopDetails",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].thinking",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
+  },
+  "message/assistant/toolCall": {
+   "classification": "transcript:assistant_tool",
+   "first_seen_version": "18.1.20",
+   "last_seen_version": "18.8.3",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].customWireName",
+    "message.content[].id",
+    "message.content[].intent",
+    "message.content[].name",
+    "message.content[].partialArgs",
+    "message.content[].streamIndex",
+    "message.content[].thoughtSignature",
+    "message.content[].type",
+    "message.contextSnapshot",
+    "message.credentialId",
+    "message.duration",
+    "message.errorId",
+    "message.errorMessage",
+    "message.errorStatus",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.role",
+    "message.serviceTier",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.contextTokens",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.premiumRequests",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
+  },
+  "message/bashExecution/?": {
+   "classification": "transcript:bash_execution",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.cancelled",
+    "message.command",
+    "message.excludeFromContext",
+    "message.exitCode",
+    "message.output",
+    "message.role",
+    "message.timestamp",
+    "message.truncated",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/custom/string": {
+   "classification": "extension:message",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.customType",
+    "message.display",
+    "message.role",
+    "message.timestamp",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/developer/text": {
+   "classification": "provider_injection:context",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.role",
+    "message.synthetic",
+    "message.timestamp",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "evidence": "extract_pi_message_events has no developer arm: an injected system reminder, no row"
+  },
+  "message/fileMention/?": {
+   "classification": "provider_injection:context",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.files",
+    "message.role",
+    "message.timestamp",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "evidence": "attached file contents the CLI injects; no row"
+  },
+  "message/toolResult/image+text": {
+   "classification": "provider_tool:result_image + provider_tool:result",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].data",
+    "message.content[].mimeType",
+    "message.content[].text",
+    "message.content[].type",
+    "message.details",
+    "message.isError",
+    "message.prunedAt",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/toolResult/text": {
+   "classification": "provider_tool:result",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.details",
+    "message.isError",
+    "message.prunedAt",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "message.useless",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.toolCallId",
+    "message.content",
+    "message.content[].text"
+   ]
+  },
+  "message/user/image+text": {
+   "classification": "transcript:user_image + transcript:user",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.content[].data",
+    "message.content[].mimeType",
+    "message.content[].text",
+    "message.content[].type",
+    "message.role",
+    "message.steering",
+    "message.timestamp",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/user/string": {
+   "classification": "transcript:user",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.role",
+    "message.steering",
+    "message.timestamp",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/user/text": {
+   "classification": "transcript:user",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.content[].text",
+    "message.content[].type",
+    "message.role",
+    "message.steering",
+    "message.timestamp",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text"
+   ]
+  },
+  "mode_change": {
+   "classification": "state:mode",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ],
+   "keys": [
+    "data",
+    "id",
+    "mode",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "model_change": {
+   "classification": "state:model",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "model",
+    "parentId",
+    "resolvedModelIsFallback",
+    "role",
+    "runtime",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "model"
+   ]
+  },
+  "model_usage": {
+   "classification": "provider_drift:unknown_record",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "activeLeafId",
+    "api",
+    "cacheRefresh",
+    "errorMessage",
+    "id",
+    "model",
+    "parentId",
+    "provider",
+    "purpose",
+    "role",
+    "runtime",
+    "stopReason",
+    "timestamp",
+    "type",
+    "usage"
+   ],
+   "evidence": "not in is_omp_line: extract_omp_events records each line as an omp_unknown_model_usage row with no text. Side-model calls (find, title), not turn usage"
+  },
+  "reset_boundary": {
+   "classification": "state:reset_boundary",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "parentId",
+    "reason",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "service_tier_change": {
+   "classification": "state:service_tier",
+   "first_seen_version": "18.1.17",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "parentId",
+    "runtime",
+    "serviceTier",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "session": {
+   "classification": "state:session_header",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "cwd",
+    "id",
+    "parentSession",
+    "providerPromptCacheKey",
+    "timestamp",
+    "title",
+    "titleSource",
+    "type",
+    "version"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "cwd"
+   ]
+  },
+  "session_info": {
+   "classification": "state:session_info",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "session_init": {
+   "classification": "state:session_init",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "agent",
+    "id",
+    "modelRole",
+    "mountedTools",
+    "outputSchema",
+    "outputSchemaMode",
+    "parentId",
+    "perCallModel",
+    "perCallModelIdentity",
+    "perCallThinkingLevel",
+    "readOnly",
+    "readSummarize",
+    "resolvedModel",
+    "role",
+    "runtime",
+    "spawns",
+    "systemPrompt",
+    "task",
+    "timestamp",
+    "tools",
+    "type"
+   ],
+   "required_keys": [
+    "type"
+   ]
+  },
+  "thinking_level_change": {
+   "classification": "state:thinking_level",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "configured",
+    "id",
+    "parentId",
+    "runtime",
+    "thinkingLevel",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "thinkingLevel"
+   ]
+  },
+  "title": {
+   "classification": "signal:session.title",
+   "first_seen_version": "18.1.16",
+   "last_seen_version": "18.9.0",
+   "entrypoints": [],
+   "keys": [
+    "pad",
+    "source",
+    "title",
+    "type",
+    "updatedAt",
+    "v"
+   ],
+   "required_keys": [
+    "type",
+    "title"
+   ]
+  },
+  "title_change": {
+   "classification": "signal:session.title",
+   "first_seen_version": "18.9.0",
+   "last_seen_version": "18.9.1",
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "parentId",
+    "previousTitle",
+    "runtime",
+    "source",
+    "timestamp",
+    "title",
+    "trigger",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "title"
+   ]
+  },
+  "ttsr_injection": {
+   "classification": "state:ttsr_injection",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "required_keys": [
+    "type"
+   ],
+   "keys": [
+    "id",
+    "injectedRules",
+    "parentId",
+    "runtime",
+    "timestamp",
+    "type"
+   ]
+  },
+  "unknown_future_record": {
+   "classification": "provider_drift:unknown_record",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "opaque",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type"
+   ]
+  }
+ },
+ "families": [
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role user",
+   "segments": [
+    "message",
+    "user",
+    {
+     "image": {
+      "classification": "transcript:user_image",
       "keys": [
-        "id",
-        "parentId",
-        "summary",
-        "timestamp",
-        "tokensBefore",
-        "type"
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
       ],
       "required_keys": [
-        "type",
-        "tokensBefore"
+       "message.content[].type"
       ]
-    },
-    "credential_pin": {
-      "classification": "state:credential_pin",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "custom": {
-      "classification": "extension:state",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "customType",
-        "data",
-        "id",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "custom_message": {
-      "classification": "extension:message",
-      "first_seen_version": "18.1.20",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "attribution",
-        "content",
-        "customType",
-        "details",
-        "display",
-        "id",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "content",
-        "display"
-      ]
-    },
-    "label": {
-      "classification": "state:label",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "message/assistant/?": {
-      "classification": "signal:turn.api_error",
-      "first_seen_version": "18.1.17",
-      "last_seen_version": "18.9.1",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.errorId",
-        "message.errorMessage",
-        "message.model",
-        "message.provider",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.stopReason"
-      ]
-    },
-    "message/assistant/text": {
-      "classification": "transcript:assistant",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.1",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].text",
-        "message.content[].textSignature",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].text"
-      ]
-    },
-    "message/assistant/text+thinking": {
-      "classification": "transcript:assistant",
-      "first_seen_version": "18.1.17",
-      "last_seen_version": "18.2.0",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].text",
-        "message.content[].textSignature",
-        "message.content[].thinking",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.reasoningTokens",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].text",
-        "message.content[].thinking"
-      ]
-    },
-    "message/assistant/text+thinking+toolCall": {
-      "classification": "transcript:assistant_tool",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.2.0",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].arguments",
-        "message.content[].id",
-        "message.content[].intent",
-        "message.content[].name",
-        "message.content[].text",
-        "message.content[].textSignature",
-        "message.content[].thinking",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.reasoningTokens",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].text",
-        "message.content[].thinking",
-        "message.content[].name",
-        "message.content[].id",
-        "message.content[].arguments"
-      ]
-    },
-    "message/assistant/text+toolCall": {
-      "classification": "transcript:assistant_tool",
-      "first_seen_version": "18.1.17",
-      "last_seen_version": "18.9.1",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].arguments",
-        "message.content[].id",
-        "message.content[].intent",
-        "message.content[].name",
-        "message.content[].text",
-        "message.content[].textSignature",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].text",
-        "message.content[].name",
-        "message.content[].id",
-        "message.content[].arguments"
-      ]
-    },
-    "message/assistant/thinking+toolCall": {
-      "classification": "transcript:assistant_tool",
-      "first_seen_version": "18.1.17",
-      "last_seen_version": "18.1.19",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].arguments",
-        "message.content[].id",
-        "message.content[].intent",
-        "message.content[].name",
-        "message.content[].thinking",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.reasoningTokens",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].thinking",
-        "message.content[].name",
-        "message.content[].id",
-        "message.content[].arguments"
-      ]
-    },
-    "message/assistant/toolCall": {
-      "classification": "transcript:assistant_tool",
-      "first_seen_version": "18.1.20",
-      "last_seen_version": "18.8.3",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.api",
-        "message.completedAt",
-        "message.content",
-        "message.content[].arguments",
-        "message.content[].id",
-        "message.content[].intent",
-        "message.content[].name",
-        "message.content[].type",
-        "message.contextSnapshot",
-        "message.duration",
-        "message.model",
-        "message.provider",
-        "message.providerPayload",
-        "message.responseId",
-        "message.role",
-        "message.stopReason",
-        "message.timestamp",
-        "message.ttft",
-        "message.usage",
-        "message.usage.cacheRead",
-        "message.usage.cacheWrite",
-        "message.usage.cost",
-        "message.usage.input",
-        "message.usage.output",
-        "message.usage.totalTokens",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].name",
-        "message.content[].id",
-        "message.content[].arguments"
-      ]
-    },
-    "message/toolResult/text": {
-      "classification": "provider_tool:result",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "message",
-        "message.content",
-        "message.content[].text",
-        "message.content[].type",
-        "message.details",
-        "message.isError",
-        "message.role",
-        "message.timestamp",
-        "message.toolCallId",
-        "message.toolName",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "message.role",
-        "message.toolCallId",
-        "message.content",
-        "message.content[].text"
-      ]
-    },
-    "message/user/text": {
+     },
+     "string": {
       "classification": "transcript:user",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
+      "keys": []
+     },
+     "text": {
+      "classification": "transcript:user",
       "keys": [
-        "id",
-        "message",
-        "message.attribution",
-        "message.content",
-        "message.content[].text",
-        "message.content[].type",
-        "message.role",
-        "message.steering",
-        "message.timestamp",
-        "parentId",
-        "timestamp",
-        "type"
+       "message.content[].text",
+       "message.content[].textSignature",
+       "message.content[].type"
       ],
       "required_keys": [
-        "type",
-        "message.role",
-        "message.content",
-        "message.content[].type",
-        "message.content[].text"
+       "message.content[].type",
+       "message.content[].text"
       ]
-    },
-    "mode_change": {
-      "classification": "state:mode",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "model_change": {
-      "classification": "state:model",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "model",
-        "parentId",
-        "resolvedModelIsFallback",
-        "role",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "model"
-      ]
-    },
-    "reset_boundary": {
-      "classification": "state:reset_boundary",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "parentId",
-        "reason",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "service_tier_change": {
-      "classification": "state:service_tier",
-      "first_seen_version": "18.1.17",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "parentId",
-        "serviceTier",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "session": {
-      "classification": "state:session_header",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "cwd",
-        "id",
-        "parentSession",
-        "timestamp",
-        "type",
-        "version"
-      ],
-      "required_keys": [
-        "type",
-        "id",
-        "cwd"
-      ]
-    },
-    "session_info": {
-      "classification": "state:session_info",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "session_init": {
-      "classification": "state:session_init",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "parentId",
-        "role",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "thinking_level_change": {
-      "classification": "state:thinking_level",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "configured",
-        "id",
-        "parentId",
-        "thinkingLevel",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "thinkingLevel"
-      ]
-    },
-    "title": {
-      "classification": "signal:session.title",
-      "first_seen_version": "18.1.16",
-      "last_seen_version": "18.9.0",
-      "entrypoints": [],
-      "keys": [
-        "pad",
-        "source",
-        "title",
-        "type",
-        "updatedAt",
-        "v"
-      ],
-      "required_keys": [
-        "type",
-        "title"
-      ]
-    },
-    "title_change": {
-      "classification": "signal:session.title",
-      "first_seen_version": "18.9.0",
-      "last_seen_version": "18.9.1",
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "parentId",
-        "source",
-        "timestamp",
-        "title",
-        "type"
-      ],
-      "required_keys": [
-        "type",
-        "title"
-      ]
-    },
-    "ttsr_injection": {
-      "classification": "state:ttsr_injection",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "required_keys": [
-        "type"
-      ]
-    },
-    "unknown_future_record": {
-      "classification": "provider_drift:unknown_record",
-      "first_seen_version": null,
-      "last_seen_version": null,
-      "entrypoints": [],
-      "keys": [
-        "id",
-        "opaque",
-        "parentId",
-        "timestamp",
-        "type"
-      ],
-      "required_keys": [
-        "type"
-      ]
+     }
     }
+   ],
+   "keys": [
+    "id",
+    "message",
+    "message.attribution",
+    "message.content",
+    "message.role",
+    "message.steering",
+    "message.timestamp",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
   },
-  "families": [
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role assistant",
+   "segments": [
+    "message",
+    "assistant",
     {
-      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role user",
-      "segments": [
-        "message",
-        "user",
-        {
-          "image": {
-            "classification": "transcript:user_image",
-            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-            "required_keys": ["message.content[].type"]
-          },
-          "string": {
-            "classification": "transcript:user",
-            "keys": []
-          },
-          "text": {
-            "classification": "transcript:user",
-            "keys": ["message.content[].text", "message.content[].textSignature", "message.content[].type"],
-            "required_keys": ["message.content[].type", "message.content[].text"]
-          }
-        }
+     "image": {
+      "classification": "transcript:assistant_image",
+      "keys": [
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
       ],
-      "keys": ["id", "message", "message.attribution", "message.content", "message.role", "message.steering", "message.timestamp", "parentId", "timestamp", "type"],
-      "required_keys": ["type", "message.role", "message.content"]
-    },
-    {
-      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role assistant",
-      "segments": [
-        "message",
-        "assistant",
-        {
-          "image": {
-            "classification": "transcript:assistant_image",
-            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-            "required_keys": ["message.content[].type"]
-          },
-          "string": {
-            "classification": "transcript:assistant",
-            "keys": []
-          },
-          "text": {
-            "classification": "transcript:assistant",
-            "keys": ["message.content[].text", "message.content[].textSignature", "message.content[].type"],
-            "required_keys": ["message.content[].type", "message.content[].text"]
-          },
-          "thinking": {
-            "classification": "transcript:thinking",
-            "keys": ["message.content[].thinking", "message.content[].type"],
-            "required_keys": ["message.content[].type", "message.content[].thinking"]
-          },
-          "toolCall": {
-            "classification": "provider_tool:call",
-            "keys": ["message.content[].arguments", "message.content[].id", "message.content[].intent", "message.content[].name", "message.content[].type"],
-            "required_keys": ["message.content[].type", "message.content[].name", "message.content[].id", "message.content[].arguments"]
-          }
-        }
+      "required_keys": [
+       "message.content[].type"
+      ]
+     },
+     "string": {
+      "classification": "transcript:assistant",
+      "keys": []
+     },
+     "text": {
+      "classification": "transcript:assistant",
+      "keys": [
+       "message.content[].text",
+       "message.content[].textSignature",
+       "message.content[].type"
       ],
-      "keys": ["id", "message", "message.api", "message.completedAt", "message.content", "message.contextSnapshot", "message.duration", "message.errorId", "message.errorMessage", "message.model", "message.provider", "message.providerPayload", "message.responseId", "message.role", "message.stopReason", "message.timestamp", "message.ttft", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.cost", "message.usage.input", "message.usage.output", "message.usage.reasoningTokens", "message.usage.totalTokens", "parentId", "timestamp", "type"],
-      "required_keys": ["type", "message.role", "message.content"]
-    },
-    {
-      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role toolResult",
-      "segments": [
-        "message",
-        "toolResult",
-        {
-          "?": {
-            "classification": "provider_tool:result",
-            "keys": []
-          },
-          "image": {
-            "classification": "provider_tool:result_image",
-            "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-            "required_keys": ["message.content[].type"]
-          },
-          "string": {
-            "classification": "provider_tool:result",
-            "keys": []
-          },
-          "text": {
-            "classification": "provider_tool:result",
-            "keys": ["message.content[].text", "message.content[].type"],
-            "required_keys": ["message.content[].text"]
-          }
-        }
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].text"
+      ]
+     },
+     "thinking": {
+      "classification": "transcript:thinking",
+      "keys": [
+       "message.content[].thinking",
+       "message.content[].type"
       ],
-      "keys": ["id", "message", "message.content", "message.details", "message.isError", "message.role", "message.timestamp", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
-      "required_keys": ["type", "message.role", "message.toolCallId", "message.content"]
-    },
-    {
-      "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, the roles that are not a turn",
-      "segments": [
-        "message",
-        {
-          "bashExecution": {
-            "classification": "transcript:bash_execution"
-          },
-          "branchSummary": {
-            "classification": "state:branch"
-          },
-          "compactionSummary": {
-            "classification": "state:compaction_summary"
-          },
-          "custom": {
-            "classification": "extension:message"
-          },
-          "custom_message": {
-            "classification": "extension:message"
-          }
-        },
-        {
-          "?": {},
-          "string": {},
-          "text": {}
-        }
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].thinking"
+      ]
+     },
+     "toolCall": {
+      "classification": "provider_tool:call",
+      "keys": [
+       "message.content[].arguments",
+       "message.content[].id",
+       "message.content[].intent",
+       "message.content[].name",
+       "message.content[].type"
       ],
-      "required_keys": ["type", "message.role"]
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].name",
+       "message.content[].id",
+       "message.content[].arguments"
+      ]
+     }
     }
-  ]
+   ],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.completedAt",
+    "message.content",
+    "message.contextSnapshot",
+    "message.duration",
+    "message.errorId",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.providerPayload",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.ttft",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoningTokens",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
+  },
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role toolResult",
+   "segments": [
+    "message",
+    "toolResult",
+    {
+     "?": {
+      "classification": "provider_tool:result",
+      "keys": []
+     },
+     "image": {
+      "classification": "provider_tool:result_image",
+      "keys": [
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type"
+      ]
+     },
+     "string": {
+      "classification": "provider_tool:result",
+      "keys": []
+     },
+     "text": {
+      "classification": "provider_tool:result",
+      "keys": [
+       "message.content[].text",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].text"
+      ]
+     }
+    }
+   ],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.details",
+    "message.isError",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.toolCallId",
+    "message.content"
+   ]
+  },
+  {
+   "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, the roles that are not a turn",
+   "segments": [
+    "message",
+    {
+     "bashExecution": {
+      "classification": "transcript:bash_execution"
+     },
+     "branchSummary": {
+      "classification": "state:branch"
+     },
+     "compactionSummary": {
+      "classification": "state:compaction_summary"
+     },
+     "custom": {
+      "classification": "extension:message"
+     },
+     "custom_message": {
+      "classification": "extension:message"
+     }
+    },
+    {
+     "?": {},
+     "string": {},
+     "text": {}
+    }
+   ],
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
+  }
+ ]
 }

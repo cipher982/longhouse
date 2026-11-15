@@ -35,7 +35,8 @@ def test_golden_fixtures_contain_only_classified_shapes():
         "claude": (golden / "claude",),
         "codex": (golden / "codex",),
         "cursor": (golden / "cursor",),
-        "antigravity": (golden / "antigravity", golden / "antigravity_legacy_json" / "basic.json"),
+        # Named as files: a directory walk reads only `transcript_full.jsonl` and `logs.json`, as discovery does.
+        "antigravity": (*sorted((golden / "antigravity").glob("*.jsonl")), golden / "antigravity_legacy_json" / "basic.json"),
         "opencode": (golden / "opencode",),
         "pi": (golden / "pi",),
         "omp": (golden / "omp",),
@@ -294,6 +295,10 @@ def _census(provider: str, *paths: Path) -> dict:
     return json.loads(result.stdout)["shapes"]
 
 
+def _census_text(*paths: Path) -> str:
+    return json.dumps(_census("cursor", *paths))
+
+
 def _cursor_store(path: Path, *, message_id_bytes: int = 32, meta_encoding: str = "hex", root_tail: bytes = b"") -> Path:
     """A Cursor conversation store: root metadata, a protobuf root and JSON message blobs."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -452,7 +457,12 @@ def test_check_agrees_with_the_servers_reader_on_every_store_its_tests_build(tmp
             decoded = decode_store_db(store)
             result = _check("cursor", store)
             where = f"{name}: {store.relative_to(directory)}\n{result.stdout}{result.stderr}"
-            if decoded.session is None:
+            if decoded.session is None and "store/root/empty" in result.stdout + _census_text(store):
+                # A zero-byte root: a conversation with no messages. The reader
+                # has no session to ship and the census has no shape to doubt.
+                outcomes["not decoded"].append(name)
+                assert result.returncode == 0, where
+            elif decoded.session is None:
                 outcomes["not decoded"].append(name)
                 assert result.returncode == 1, where
                 # A message the root lists that is not JSON, or a root that lists no message.
@@ -587,3 +597,54 @@ def test_a_census_orders_prerelease_and_release_versions_of_one_provider(tmp_pat
         rollouts.append(rollout)
     shape = _census("codex", *rollouts)["session_meta"]
     assert (shape["first_seen_version"], shape["last_seen_version"]) == ("0.151.0", "0.163.0")
+
+
+def test_a_directory_census_reads_only_the_files_engine_discovery_ships(tmp_path: Path):
+    """A census of a provider root fingerprints the sessions Longhouse ships, not files beside them."""
+    omp = tmp_path / "omp"
+    session = omp / "bucket" / "s.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text(
+        json.dumps({"type": "session", "id": "s", "timestamp": "2026-11-15T00:00:00Z", "cwd": "/w"}) + "\n", encoding="utf-8"
+    )
+    ledger = omp / "bucket" / "s" / "observation-pack" / "ledger.jsonl"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(json.dumps({"event": "full", "id": "obs_1"}) + "\n", encoding="utf-8")
+    assert "?" not in _census("omp", omp)
+
+    logs = tmp_path / "antigravity" / "brain" / "c1" / ".system_generated" / "logs"
+    logs.mkdir(parents=True)
+    step = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE", "content": "hi"}
+    (logs / "transcript_full.jsonl").write_text(json.dumps(step) + "\n", encoding="utf-8")
+    # The truncated mirror the engine never reads.
+    (logs / "transcript.jsonl").write_text(json.dumps({**step, "source": "MODEL", "type": "VIEW_FILE"}) + "\n", encoding="utf-8")
+    assert sorted(_census("antigravity", tmp_path / "antigravity")) == ["USER_EXPLICIT/USER_INPUT"]
+
+
+def test_a_cursor_json_blob_without_a_role_is_a_message_only_when_the_root_lists_it(tmp_path: Path):
+    """Agents store JSON content (a file they read) as blobs; the readers take messages from the root's list."""
+    store = _cursor_store(tmp_path / "chats" / "workspace" / "agent-1" / "store.db")
+    with sqlite3.connect(store) as connection:
+        connection.execute("INSERT INTO blobs VALUES (?, ?)", ("e" * 64, json.dumps({"name": "pkg", "version": "1"}).encode()))
+    connection.close()
+
+    assert "store/?/?" not in _census("cursor", store)
+
+
+def test_an_empty_cursor_conversation_has_its_own_root_shape(tmp_path: Path):
+    """A zero-byte root blob is a conversation with no messages; it is not a root missing its message list."""
+    store = tmp_path / "chats" / "workspace" / "agent-1" / "store.db"
+    store.parent.mkdir(parents=True)
+    empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    with sqlite3.connect(store) as connection:
+        connection.executescript(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);"
+        )
+        meta = json.dumps({"agentId": "agent-1", "latestRootBlobId": empty, "createdAt": 1, "name": "t"})
+        connection.execute("INSERT INTO meta VALUES ('0', ?)", (meta.encode().hex(),))
+        connection.execute("INSERT INTO blobs VALUES (?, ?)", (empty, b""))
+    connection.close()
+
+    assert "store/root/empty" in _census("cursor", store)
+    result = _check("cursor", store)
+    assert result.returncode == 0, result.stdout + result.stderr

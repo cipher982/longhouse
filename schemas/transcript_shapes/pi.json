@@ -6,46 +6,127 @@
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["fromId", "id", "parentId", "summary", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "summary"]
+   "keys": [
+    "fromId",
+    "id",
+    "parentId",
+    "summary",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "summary"
+   ]
   },
   "compaction": {
    "classification": "signal:context.compaction",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["firstKeptEntryId", "id", "parentId", "summary", "timestamp", "tokensBefore", "type"],
-   "required_keys": ["type", "id", "parentId", "summary", "tokensBefore"]
+   "keys": [
+    "firstKeptEntryId",
+    "id",
+    "parentId",
+    "summary",
+    "timestamp",
+    "tokensBefore",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "summary",
+    "tokensBefore"
+   ]
   },
   "custom": {
    "classification": "extension:state",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["customType", "data", "id", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "customType"]
+   "keys": [
+    "customType",
+    "data",
+    "id",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "customType"
+   ]
   },
   "custom_message": {
    "classification": "extension:message",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["content", "customType", "display", "id", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "customType", "content"]
+   "keys": [
+    "content",
+    "customType",
+    "display",
+    "id",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "customType",
+    "content"
+   ]
   },
   "label": {
    "classification": "state:label",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "required_keys": ["type"]
+   "required_keys": [
+    "type"
+   ]
   },
   "message/assistant/?": {
    "classification": "signal:turn.api_error",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "required_keys": ["type", "message.role", "message.stopReason"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.stopReason"
+   ],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ]
   },
   "message/assistant/text": {
    "classification": "transcript:assistant",
@@ -58,6 +139,7 @@
     "message.api",
     "message.content",
     "message.content[].text",
+    "message.content[].textSignature",
     "message.content[].type",
     "message.durationMs",
     "message.model",
@@ -81,15 +163,93 @@
     "type",
     "version"
    ],
-   "required_keys": ["type", "message.role", "message.content"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
+  },
+  "message/assistant/text+thinking": {
+   "classification": "transcript:assistant + transcript:thinking",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.model",
+    "message.provider",
+    "message.rawStopReason",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoning",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ]
   },
   "message/assistant/text+thinking+toolCall": {
    "classification": "transcript:assistant_tool",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "message", "message.api", "message.content", "message.content[].arguments", "message.content[].id", "message.content[].name", "message.content[].text", "message.content[].thinking", "message.content[].type", "message.model", "message.provider", "message.role", "message.stopReason", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.input", "message.usage.output", "message.usage.totalTokens", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "message.role", "message.content", "message.content[].arguments"]
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].id",
+    "message.content[].name",
+    "message.content[].text",
+    "message.content[].textSignature",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.rawStopReason",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoning",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "message.role",
+    "message.content",
+    "message.content[].arguments"
+   ]
   },
   "message/assistant/text+toolCall": {
    "classification": "transcript:assistant_tool",
@@ -126,7 +286,85 @@
     "timestamp",
     "type"
    ],
-   "required_keys": ["type", "message.role", "message.content", "message.content[].type", "message.content[].text", "message.content[].name", "message.content[].id", "message.content[].arguments"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].text",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
+  },
+  "message/assistant/thinking": {
+   "classification": "transcript:thinking",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ]
+  },
+  "message/assistant/thinking+toolCall": {
+   "classification": "transcript:thinking + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.content[].arguments",
+    "message.content[].id",
+    "message.content[].name",
+    "message.content[].thinking",
+    "message.content[].thinkingSignature",
+    "message.content[].type",
+    "message.errorMessage",
+    "message.model",
+    "message.provider",
+    "message.rawStopReason",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoning",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type"
+   ]
   },
   "message/assistant/toolCall": {
    "classification": "transcript:assistant_tool",
@@ -163,23 +401,89 @@
     "timestamp",
     "type"
    ],
-   "required_keys": ["type", "message.role", "message.content", "message.content[].type", "message.content[].name", "message.content[].id", "message.content[].arguments"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content",
+    "message.content[].type",
+    "message.content[].name",
+    "message.content[].id",
+    "message.content[].arguments"
+   ]
   },
   "message/system/string": {
    "classification": "provider_system:system_prompt",
    "first_seen_version": "1.1.0",
    "last_seen_version": "1.1.0",
    "entrypoints": [],
-   "keys": ["id", "message", "message.content", "message.role", "message.sections", "message.timestamp", "message.toolsAdded", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "message.role"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.role",
+    "message.sections",
+    "message.timestamp",
+    "message.toolsAdded",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   },
   "message/toolResult/image": {
    "classification": "provider_tool:result_image",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "message", "message.content", "message.content[].data", "message.content[].mimeType", "message.content[].type", "message.isError", "message.role", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "message.role", "message.toolCallId", "message.content"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].data",
+    "message.content[].mimeType",
+    "message.content[].type",
+    "message.isError",
+    "message.role",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "message.role",
+    "message.toolCallId",
+    "message.content"
+   ]
+  },
+  "message/toolResult/image+text": {
+   "classification": "provider_tool:result_image + provider_tool:result",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].data",
+    "message.content[].mimeType",
+    "message.content[].text",
+    "message.content[].type",
+    "message.isError",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "timestamp",
+    "type"
+   ]
   },
   "message/toolResult/text": {
    "classification": "provider_tool:result",
@@ -192,6 +496,7 @@
     "message.content",
     "message.content[].text",
     "message.content[].type",
+    "message.details",
     "message.durationMs",
     "message.isError",
     "message.role",
@@ -202,15 +507,40 @@
     "timestamp",
     "type"
    ],
-   "required_keys": ["type", "message.role", "message.toolCallId", "message.content", "message.content[].text"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.toolCallId",
+    "message.content",
+    "message.content[].text"
+   ]
   },
   "message/user/image+text": {
    "classification": "transcript:user_with_image",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "message", "message.content", "message.content[].data", "message.content[].mimeType", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "message.role", "message.content"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.content[].data",
+    "message.content[].mimeType",
+    "message.content[].text",
+    "message.content[].type",
+    "message.role",
+    "message.timestamp",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "message.role",
+    "message.content"
+   ]
   },
   "message/user/text": {
    "classification": "transcript:user",
@@ -230,39 +560,87 @@
     "type",
     "version"
    ],
-   "required_keys": ["type", "message.role", "message.content"]
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
   },
   "model_change": {
    "classification": "state:model",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "modelId", "parentId", "provider", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "provider", "modelId"]
+   "keys": [
+    "id",
+    "modelId",
+    "parentId",
+    "provider",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "provider",
+    "modelId"
+   ]
   },
   "session": {
    "classification": "state:session_header",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["cwd", "id", "timestamp", "type", "version"],
-   "required_keys": ["type", "id", "cwd"]
+   "keys": [
+    "cwd",
+    "id",
+    "timestamp",
+    "type",
+    "version"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "cwd"
+   ]
   },
   "session_info": {
    "classification": "state:session_info",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "name", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId"]
+   "keys": [
+    "id",
+    "name",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId"
+   ]
   },
   "thinking_level_change": {
    "classification": "state:thinking_level",
    "first_seen_version": null,
    "last_seen_version": null,
    "entrypoints": [],
-   "keys": ["id", "parentId", "thinkingLevel", "timestamp", "type"],
-   "required_keys": ["type", "id", "parentId", "thinkingLevel"]
+   "keys": [
+    "id",
+    "parentId",
+    "thinkingLevel",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "id",
+    "parentId",
+    "thinkingLevel"
+   ]
   }
  },
  "families": [
@@ -278,8 +656,14 @@
      },
      "image": {
       "classification": "transcript:user_image",
-      "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-      "required_keys": ["message.content[].type"]
+      "keys": [
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type"
+      ]
      },
      "string": {
       "classification": "transcript:user",
@@ -287,13 +671,33 @@
      },
      "text": {
       "classification": "transcript:user",
-      "keys": ["message.content[].text", "message.content[].type"],
-      "required_keys": ["message.content[].type", "message.content[].text"]
+      "keys": [
+       "message.content[].text",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].text"
+      ]
      }
     }
    ],
-   "keys": ["id", "message", "message.content", "message.role", "message.timestamp", "parentId", "timestamp", "type", "version"],
-   "required_keys": ["type", "message.role", "message.content"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.role",
+    "message.timestamp",
+    "parentId",
+    "timestamp",
+    "type",
+    "version"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role assistant",
@@ -303,8 +707,14 @@
     {
      "image": {
       "classification": "transcript:assistant_image",
-      "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-      "required_keys": ["message.content[].type"]
+      "keys": [
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type"
+      ]
      },
      "string": {
       "classification": "transcript:assistant",
@@ -312,23 +722,75 @@
      },
      "text": {
       "classification": "transcript:assistant",
-      "keys": ["message.content[].text", "message.content[].type"],
-      "required_keys": ["message.content[].type", "message.content[].text"]
+      "keys": [
+       "message.content[].text",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].text"
+      ]
      },
      "thinking": {
       "classification": "transcript:thinking",
-      "keys": ["message.content[].thinking", "message.content[].type"],
-      "required_keys": ["message.content[].type", "message.content[].thinking"]
+      "keys": [
+       "message.content[].thinking",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].thinking"
+      ]
      },
      "toolCall": {
       "classification": "provider_tool:call",
-      "keys": ["message.content[].arguments", "message.content[].id", "message.content[].name", "message.content[].type"],
-      "required_keys": ["message.content[].type", "message.content[].name", "message.content[].id", "message.content[].arguments"]
+      "keys": [
+       "message.content[].arguments",
+       "message.content[].id",
+       "message.content[].name",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type",
+       "message.content[].name",
+       "message.content[].id",
+       "message.content[].arguments"
+      ]
      }
     }
    ],
-   "keys": ["id", "message", "message.api", "message.content", "message.durationMs", "message.model", "message.provider", "message.rawStopReason", "message.responseId", "message.role", "message.stopReason", "message.thinkingLevel", "message.timestamp", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.cost", "message.usage.input", "message.usage.output", "message.usage.reasoning", "message.usage.totalTokens", "parentId", "timestamp", "type", "version"],
-   "required_keys": ["type", "message.role", "message.content"]
+   "keys": [
+    "id",
+    "message",
+    "message.api",
+    "message.content",
+    "message.durationMs",
+    "message.model",
+    "message.provider",
+    "message.rawStopReason",
+    "message.responseId",
+    "message.role",
+    "message.stopReason",
+    "message.thinkingLevel",
+    "message.timestamp",
+    "message.usage",
+    "message.usage.cacheRead",
+    "message.usage.cacheWrite",
+    "message.usage.cost",
+    "message.usage.input",
+    "message.usage.output",
+    "message.usage.reasoning",
+    "message.usage.totalTokens",
+    "parentId",
+    "timestamp",
+    "type",
+    "version"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.content"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role toolResult",
@@ -342,8 +804,14 @@
      },
      "image": {
       "classification": "provider_tool:result_image",
-      "keys": ["message.content[].data", "message.content[].mimeType", "message.content[].type"],
-      "required_keys": ["message.content[].type"]
+      "keys": [
+       "message.content[].data",
+       "message.content[].mimeType",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].type"
+      ]
      },
      "string": {
       "classification": "provider_tool:result",
@@ -351,13 +819,36 @@
      },
      "text": {
       "classification": "provider_tool:result",
-      "keys": ["message.content[].text", "message.content[].type"],
-      "required_keys": ["message.content[].text"]
+      "keys": [
+       "message.content[].text",
+       "message.content[].type"
+      ],
+      "required_keys": [
+       "message.content[].text"
+      ]
      }
     }
    ],
-   "keys": ["id", "message", "message.content", "message.durationMs", "message.isError", "message.role", "message.timestamp", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "message.role", "message.toolCallId", "message.content"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.durationMs",
+    "message.isError",
+    "message.role",
+    "message.timestamp",
+    "message.toolCallId",
+    "message.toolName",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role",
+    "message.toolCallId",
+    "message.content"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, role system: the system prompt and the tool definitions, no event",
@@ -377,8 +868,22 @@
      }
     }
    ],
-   "keys": ["id", "message", "message.content", "message.role", "message.sections", "message.timestamp", "message.toolsAdded", "parentId", "timestamp", "type"],
-   "required_keys": ["type", "message.role"]
+   "keys": [
+    "id",
+    "message",
+    "message.content",
+    "message.role",
+    "message.sections",
+    "message.timestamp",
+    "message.toolsAdded",
+    "parentId",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_pi_message_events, the roles that are not a turn",
@@ -407,7 +912,10 @@
      "text": {}
     }
    ],
-   "required_keys": ["type", "message.role"]
+   "required_keys": [
+    "type",
+    "message.role"
+   ]
   }
  ]
 }

@@ -11,7 +11,10 @@
     "message.content",
     "role"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   },
   "assistant/text+tool-call": {
    "classification": "transcript:assistant",
@@ -24,7 +27,10 @@
     "role",
     "version"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   },
   "assistant/text+tool_use": {
    "classification": "transcript:assistant_tool",
@@ -36,7 +42,21 @@
     "message.content",
     "role"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
+  },
+  "assistant/tool_use": {
+   "classification": "provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role"
+   ]
   },
   "event/turn_ended": {
    "classification": "state:turn lifecycle",
@@ -48,7 +68,52 @@
     "status",
     "type"
    ],
-   "required_keys": ["type", "status"]
+   "required_keys": [
+    "type",
+    "status"
+   ]
+  },
+  "store/assistant/?": {
+   "classification": "state:empty message",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "id",
+    "role"
+   ]
+  },
+  "store/assistant/reasoning": {
+   "classification": "transcript:reasoning",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].providerOptions",
+    "content[].signature",
+    "content[].text",
+    "content[].type",
+    "id",
+    "role"
+   ]
+  },
+  "store/assistant/reasoning+redacted-reasoning+text": {
+   "classification": "transcript:reasoning + transcript:text",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].data",
+    "content[].providerOptions",
+    "content[].signature",
+    "content[].text",
+    "content[].type",
+    "id",
+    "role"
+   ]
   },
   "store/assistant/reasoning+text": {
    "classification": "transcript:assistant",
@@ -65,7 +130,117 @@
     "providerOptions",
     "role"
    ],
-   "required_keys": ["role", "content", "content[].type", "content[].text"]
+   "required_keys": [
+    "role",
+    "content",
+    "content[].type",
+    "content[].text"
+   ]
+  },
+  "store/assistant/reasoning+text+tool-call": {
+   "classification": "transcript:reasoning + transcript:text + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].providerOptions",
+    "content[].signature",
+    "content[].text",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/assistant/reasoning+tool-call": {
+   "classification": "transcript:reasoning + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].providerOptions",
+    "content[].signature",
+    "content[].text",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/assistant/redacted-reasoning": {
+   "classification": "transcript:reasoning",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].data",
+    "content[].providerOptions",
+    "content[].type",
+    "id",
+    "role"
+   ]
+  },
+  "store/assistant/redacted-reasoning+text": {
+   "classification": "transcript:reasoning + transcript:text",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].data",
+    "content[].providerOptions",
+    "content[].text",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/assistant/redacted-reasoning+text+tool-call": {
+   "classification": "transcript:reasoning + transcript:text + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].data",
+    "content[].providerOptions",
+    "content[].text",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/assistant/redacted-reasoning+tool-call": {
+   "classification": "transcript:reasoning + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].data",
+    "content[].providerOptions",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
   },
   "store/assistant/text": {
    "classification": "transcript:assistant",
@@ -80,7 +255,46 @@
     "providerOptions",
     "role"
    ],
-   "required_keys": ["role", "content", "content[].type", "content[].text"]
+   "required_keys": [
+    "role",
+    "content",
+    "content[].type",
+    "content[].text"
+   ]
+  },
+  "store/assistant/text+tool-call": {
+   "classification": "transcript:text + provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].text",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/assistant/tool-call": {
+   "classification": "provider_tool:call",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].args",
+    "content[].providerOptions",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
   },
   "store/meta/0": {
    "classification": "state:session meta",
@@ -92,14 +306,21 @@
     "approvalMode",
     "blobEncryptionKey",
     "createdAt",
+    "currentPlanUri",
     "encoding:hex",
     "isRunEverything",
+    "lastDebugServerPort",
     "lastUsedModel",
     "latestRootBlobId",
     "mode",
-    "name"
+    "name",
+    "subagentInfo"
    ],
-   "required_keys": ["agentId", "latestRootBlobId", "encoding:hex"]
+   "required_keys": [
+    "agentId",
+    "latestRootBlobId",
+    "encoding:hex"
+   ]
   },
   "store/root": {
    "classification": "state:root message order",
@@ -127,13 +348,25 @@
     "field38.wire2",
     "field39.wire0",
     "field4.wire2",
+    "field46.wire0",
     "field5.wire2",
     "field6.wire2",
     "field7.wire2",
     "field8.wire2",
     "field9.wire2"
    ],
-   "required_keys": ["field1.wire2", "field1.len32"]
+   "required_keys": [
+    "field1.wire2",
+    "field1.len32"
+   ]
+  },
+  "store/root/empty": {
+   "classification": "state:empty conversation",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [],
+   "evidence": "a zero-byte root blob: no messages, both readers render nothing"
   },
   "store/system/string": {
    "classification": "provider_system:system_prompt",
@@ -145,7 +378,45 @@
     "providerOptions",
     "role"
    ],
-   "required_keys": ["role", "content"]
+   "required_keys": [
+    "role",
+    "content"
+   ]
+  },
+  "store/tool/tool-result": {
+   "classification": "provider_tool:result",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].experimental_content",
+    "content[].providerOptions",
+    "content[].result",
+    "content[].toolCallId",
+    "content[].toolName",
+    "content[].type",
+    "id",
+    "providerOptions",
+    "role"
+   ]
+  },
+  "store/user/image+text": {
+   "classification": "transcript:user_with_image",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "content[].image",
+    "content[].mimeType",
+    "content[].providerOptions",
+    "content[].text",
+    "content[].type",
+    "providerOptions",
+    "role"
+   ],
+   "evidence": "the text block renders; the image block has no arm in either reader (engine wildcard row with empty text, server unknown_block_types), so the image is not shown"
   },
   "store/user/string": {
    "classification": "transcript:user",
@@ -157,7 +428,10 @@
     "providerOptions",
     "role"
    ],
-   "required_keys": ["role", "content"]
+   "required_keys": [
+    "role",
+    "content"
+   ]
   },
   "store/user/text": {
    "classification": "transcript:user",
@@ -171,7 +445,12 @@
     "providerOptions",
     "role"
    ],
-   "required_keys": ["role", "content", "content[].type", "content[].text"]
+   "required_keys": [
+    "role",
+    "content",
+    "content[].type",
+    "content[].text"
+   ]
   },
   "user/provider_context+text": {
    "classification": "provider_injection:context",
@@ -184,7 +463,10 @@
     "role",
     "version"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   },
   "user/text": {
    "classification": "transcript:user",
@@ -197,7 +479,10 @@
     "role",
     "version"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   },
   "user/text+user_query": {
    "classification": "transcript:user_query",
@@ -210,7 +495,10 @@
     "role",
     "version"
    ],
-   "required_keys": ["role", "message.content"]
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   }
  },
  "families": [
@@ -235,13 +523,26 @@
     {
      "reasoning": {
       "classification": "transcript:reasoning",
-      "keys": ["content[].providerOptions", "content[].signature", "content[].text", "content[].type"],
-      "required_keys": ["content[].type", "content[].text"]
+      "keys": [
+       "content[].providerOptions",
+       "content[].signature",
+       "content[].text",
+       "content[].type"
+      ],
+      "required_keys": [
+       "content[].type",
+       "content[].text"
+      ]
      },
      "redacted-reasoning": {
       "classification": "transcript:reasoning",
-      "keys": ["content[].data", "content[].type"],
-      "required_keys": ["content[].type"]
+      "keys": [
+       "content[].data",
+       "content[].type"
+      ],
+      "required_keys": [
+       "content[].type"
+      ]
      },
      "string": {
       "classification": "transcript:text",
@@ -249,21 +550,43 @@
      },
      "text": {
       "classification": "transcript:text",
-      "keys": ["content[].text", "content[].type"],
-      "required_keys": ["content[].type", "content[].text"]
+      "keys": [
+       "content[].text",
+       "content[].type"
+      ],
+      "required_keys": [
+       "content[].type",
+       "content[].text"
+      ]
      },
      "tool-call": {
       "classification": "provider_tool:call",
-      "required_keys": ["content[].type", "content[].toolCallId", "content[].toolName"]
+      "required_keys": [
+       "content[].type",
+       "content[].toolCallId",
+       "content[].toolName"
+      ]
      },
      "tool-result": {
       "classification": "provider_tool:result",
-      "required_keys": ["content[].type", "content[].toolCallId", "content[].result"]
+      "required_keys": [
+       "content[].type",
+       "content[].toolCallId",
+       "content[].result"
+      ]
      }
     }
    ],
-   "keys": ["content", "id", "providerOptions", "role"],
-   "required_keys": ["role", "content"]
+   "keys": [
+    "content",
+    "id",
+    "providerOptions",
+    "role"
+   ],
+   "required_keys": [
+    "role",
+    "content"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_cursor_events",
@@ -333,8 +656,16 @@
      }
     }
    ],
-   "keys": ["message", "message.content", "role", "version"],
-   "required_keys": ["role", "message.content"]
+   "keys": [
+    "message",
+    "message.content",
+    "role",
+    "version"
+   ],
+   "required_keys": [
+    "role",
+    "message.content"
+   ]
   },
   {
    "parser": "engine/src/storage_v2_shipper/cursor_store_source.rs cursor_message_blocks; server/zerg/services/cursor_transcript.py _map_message: no content, no rows",
@@ -352,7 +683,9 @@
      }
     }
    ],
-   "required_keys": ["role"]
+   "required_keys": [
+    "role"
+   ]
   },
   {
    "parser": "engine/src/pipeline/parser.rs extract_cursor_events: no message or no content, no events",
@@ -369,7 +702,9 @@
      }
     }
    ],
-   "required_keys": ["role"]
+   "required_keys": [
+    "role"
+   ]
   }
  ]
 }

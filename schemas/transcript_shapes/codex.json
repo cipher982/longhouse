@@ -229,6 +229,7 @@
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
    ],
@@ -658,6 +659,7 @@
    "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex_cli_rs",
+    "codex_exec",
     "longhouse_console"
    ],
    "keys": [
@@ -669,7 +671,13 @@
     "role",
     "type"
    ],
-   "required_keys": ["type", "role", "content", "content[].type", "content[].text"]
+   "required_keys": [
+    "type",
+    "role",
+    "content",
+    "content[].type",
+    "content[].text"
+   ]
   },
   "response_item/reasoning": {
    "classification": "signal:turn.thinking",
@@ -806,6 +814,7 @@
     "longhouse_console"
    ],
    "keys": [
+    "active_permission_profile",
     "approval_policy",
     "approvals_reviewer",
     "collaboration_mode",
