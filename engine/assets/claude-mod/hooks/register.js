@@ -135,24 +135,24 @@ let lastSnapshotAt = 0
 let snapshotTimer
 let snapshotPending = false
 
+// Claude Code checks a mod's source before it loads it and refuses the whole
+// module when `$.agent` or `$.session` is read as a value (Claude Code 2.1.322:
+// "$.agent is used as a value"). So no feature test here: each noun is only ever
+// called, and a Claude Code without the method throws into the catch.
 async function readModSnapshot($) {
   let agents
   let sessionUsage
   try {
-    if (typeof $.agent?.list === 'function') {
-      const list = await $.agent.list()
-      if (Array.isArray(list)) agents = list
-    }
+    const list = await $.agent.list()
+    if (Array.isArray(list)) agents = list
   } catch (error) {
-    $.ui.log('longhouse: agent.list failed: ' + String(error), { to: 'debug' })
+    $.ui.log('longhouse: agent.list unavailable: ' + String(error), { to: 'debug' })
   }
   try {
-    if (typeof $.session?.usage === 'function') {
-      const usage = await $.session.usage()
-      if (usage && typeof usage === 'object') sessionUsage = usage
-    }
+    const usage = await $.session.usage()
+    if (usage && typeof usage === 'object') sessionUsage = usage
   } catch (error) {
-    $.ui.log('longhouse: session.usage failed: ' + String(error), { to: 'debug' })
+    $.ui.log('longhouse: session.usage unavailable: ' + String(error), { to: 'debug' })
   }
   return { agents, sessionUsage }
 }
@@ -178,7 +178,6 @@ async function emitModSnapshot($, trigger) {
 
 function scheduleSnapshot($, trigger) {
   if (!engine) return
-  if (typeof $.agent?.list !== 'function' && typeof $.session?.usage !== 'function') return
   const now = Date.now()
   const elapsed = now - lastSnapshotAt
   if (lastSnapshotAt === 0 || elapsed >= MOD_SNAPSHOT_DEBOUNCE_MS) {
@@ -442,14 +441,4 @@ export function register(on) {
     return completed
   })
 
-  for (const event of ['session.ready', 'session.measure']) {
-    try {
-      on(event, async ($, e, next) => {
-        await scheduleSnapshot($, event)
-        return next(e)
-      })
-    } catch {
-      // Older Claude Code releases do not expose every mod event.
-    }
-  }
 }

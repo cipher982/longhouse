@@ -1,6 +1,7 @@
 // Contract tests for Longhouse's Claude Code mod (claude-mod/hooks/register.js)
 // against a fake mods API: what it asks the engine, and what it hands Claude.
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 
 type Hook = ($: unknown, e: Record<string, unknown>, next: (e: unknown) => Promise<unknown>) => Promise<unknown>;
 type FetchInit = { url: string; method?: string; body: string; socketPath?: string };
@@ -343,15 +344,15 @@ describe("Longhouse Claude mod", () => {
     });
   });
 
-  it("emits throttled ClaudeModState on session.ready and session.measure and attaches snapshot to aborted Stop", async () => {
+  it("emits throttled ClaudeModState on turn events and attaches snapshot to aborted Stop", async () => {
     const mod = await loadMod([], {
       agents: [{ id: "ag-2", type: "general-purpose", status: "waiting", description: "Waiting" }],
       sessionUsage: { context: { tokens: 90000, window: 1000000, percent: 9 }, cost: { usd: 3.5 } },
     });
     await mod.fire("session.start");
     await mod.settle();
-    await mod.fire("session.ready");
-    await mod.fire("session.measure");
+    await mod.fire("turn.start", { turnId: "main-1", text: "first" });
+    await mod.fire("turn.complete", { turnId: "main-1", reason: "end_turn" });
     await mod.fire("turn.start", { turnId: "main-2", text: "work" });
     await mod.fire("turn.complete", { turnId: "main-2", reason: "aborted" });
 
@@ -359,7 +360,7 @@ describe("Longhouse Claude mod", () => {
       .filter((argv) => argv[1] === "claude-lifecycle-hook")
       .map((argv) => JSON.parse(argv[2].slice("stdin=".length)));
     expect(hookPayloads.some((p) => p.hook_event_name === "ClaudeModState")).toBe(true);
-    // Debounce coalesces immediate session.measure right after session.ready.
+    // Debounce coalesces the second turn's snapshot right after the first.
     expect(hookPayloads.filter((p) => p.hook_event_name === "ClaudeModState").length).toBe(1);
     const stopPayload = hookPayloads.find((p) => p.hook_event_name === "Stop");
     expect(stopPayload).toMatchObject({
@@ -368,6 +369,28 @@ describe("Longhouse Claude mod", () => {
       agents: [{ id: "ag-2", type: "general-purpose", status: "waiting", description: "Waiting" }],
       session_usage: { context: { tokens: 90000, window: 1000000, percent: 9 }, cost: { usd: 3.5 } },
     });
+  });
+});
+
+describe("Longhouse Claude mod: source Claude Code accepts", () => {
+  // Claude Code reads a mod's source before running it and refuses the whole module, owner input and live text
+  // included, on a shape it cannot check (Claude Code 2.1.322: "$.agent is used as a value", "session.ready is not an
+  // event"). Terminal Truth failed on main for a day on exactly this. These are the rules it enforced.
+  const source = readFileSync(new URL("./claude-mod/hooks/register.js", import.meta.url), "utf8")
+    .split("\n")
+    .filter((text) => !text.trim().startsWith("//"))
+    .join("\n");
+
+  it("never reads a $ noun as a value; each is only called", () => {
+    expect(source).not.toMatch(/typeof\s+\$\./);
+    expect(source).not.toMatch(/\$\.[a-z]+\?\./);
+    expect(source).not.toMatch(/[=(,]\s*\$\.[a-z]+\s*[,)]/);
+  });
+
+  it("subscribes with a literal event name from the events Claude Code has", () => {
+    const events = [...source.matchAll(/\bon\(\s*([^,)]*)/g)].map((match) => match[1].trim());
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) expect(event).toMatch(/^'(session\.start|turn\.(start|step|complete))'$/);
   });
 });
 
