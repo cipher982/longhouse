@@ -19,6 +19,7 @@ from uuid import UUID
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_REASONING
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
@@ -251,10 +252,15 @@ def parse_render_spec(
                         raw_ordinal,
                     )
                 record_payload["interaction_kind"] = computed_kind
-                if (record_payload.get("item") or {}).get("kind") == "reasoning":
-                    # The parser asserts reasoning from the raw record it
-                    # parsed; no read-time recovery is needed to find it.
+                # The parser asserts reasoning and turn ends from the raw
+                # record it parsed. A turn end can share its raw line with a
+                # thinking part (Pi, OMP), which the shared classifier would
+                # read as reasoning.
+                item_kind = (record_payload.get("item") or {}).get("kind")
+                if item_kind == "reasoning":
                     record_payload["interaction_kind"] = INTERACTION_PROVIDER_REASONING
+                elif item_kind == "turn_end":
+                    record_payload["interaction_kind"] = INTERACTION_PROVIDER_SYSTEM
             continue
         raw_role = _raw_record_role(raw_json)
         if raw_role is not None:

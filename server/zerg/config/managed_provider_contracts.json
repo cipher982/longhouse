@@ -5023,7 +5023,7 @@
         "turn.thinking": {
           "disposition": "implemented",
           "raw_source": "message/message.content.thinking",
-          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
+          "fixture": "engine/tests/fixtures/golden/pi/items.jsonl",
           "canary": "pi_transcript_signals",
           "trigger": "turn_end"
         }
@@ -5917,7 +5917,7 @@
         "turn.thinking": {
           "disposition": "implemented",
           "raw_source": "message/message.content.thinking",
-          "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
+          "fixture": "engine/tests/fixtures/golden/omp/items.jsonl",
           "canary": "omp_transcript_signals",
           "trigger": "turn_end"
         }

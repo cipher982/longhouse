@@ -299,6 +299,7 @@ def _shapes_of(tool: ModuleType, lines) -> dict:
 CURSOR_STORE_BLOCKS = {
     "text": {"type": "text", "text": "prose"},
     "reasoning": {"type": "reasoning", "text": "thought", "providerOptions": {}},
+    "redacted-reasoning": {"type": "redacted-reasoning", "data": "sealed"},
     "tool-call": {"type": "tool-call", "toolCallId": "call-1", "toolName": "Shell", "args": {"command": "true"}},
     "tool-result": {"type": "tool-result", "toolCallId": "call-1", "toolName": "Shell", "result": "ok"},
 }
@@ -317,8 +318,7 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
 
     engine_arms = _arms("storage_v2_shipper/cursor_store_source.rs", "render_cursor_records")
     assert engine_arms == set(CURSOR_STORE_BLOCKS)
-    # The server's reader has one arm more; the engine renders that block as an empty row.
-    assert _store_reader_arms() == engine_arms | {"redacted-reasoning"}
+    assert _store_reader_arms() == engine_arms
     family = _catalog("cursor")["families"][0]
     roles = set(family["segments"][1])
     assert roles == {"system", "user", "assistant", "tool"}
@@ -335,7 +335,9 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
             messages.append({"role": role, "id": f"{role}-{len(messages)}", "content": content})
         messages.append({"role": role, "id": f"{role}-{len(messages)}", "content": []})
         messages.append({"role": role, "id": f"{role}-{len(messages)}"})
-    assert len(messages) == 4 * 18
+    # Per role: plain-string content, every non-empty block subset, empty content, no content.
+    per_role = 1 + (2 ** len(CURSOR_STORE_BLOCKS) - 1) + 2
+    assert len(messages) == 4 * per_role
     store = _write_store(tmp_path / "every-combination", agent_id="agent-1", created_at_ms=1, updated_at_ms=2, messages=messages)
 
     decoded = decode_store_db(store)
@@ -344,17 +346,18 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
 
     tool = _tool()
     observed = tool.census([store], "cursor")
-    assert len([shape for shape in observed if shape.startswith("store/") and shape not in ("store/meta/0", "store/root")]) == 4 * 17
+    assert len([shape for shape in observed if shape.startswith("store/") and shape not in ("store/meta/0", "store/root")]) == 4 * (
+        per_role - 1
+    )
     assert tool.main(["check", "--provider", "cursor", str(store)]) == 0
 
-    # A block only one reader has an arm for, and one neither has, are findings.
+    # A block neither reader has an arm for is a finding.
     odd = _write_store(
         tmp_path / "odd",
         agent_id="agent-2",
         created_at_ms=1,
         updated_at_ms=2,
         messages=[
-            {"role": "assistant", "id": "1", "content": [{"type": "redacted-reasoning", "data": "opaque"}]},
             {"role": "assistant", "id": "2", "content": [{"type": "text", "text": "x"}, {"type": "image", "image": "opaque"}]},
             # A block with no type is not an empty message: neither reader has an arm for it.
             {"role": "assistant", "id": "3", "content": [{"text": "untyped"}]},
@@ -364,7 +367,6 @@ def test_cursor_store_catalog_holds_every_block_combination_both_readers_have_a_
     catalog = _catalog("cursor")
     assert tool.unclassified(catalog, tool.census([odd], "cursor")) == [
         "store/assistant/image+text",
-        "store/assistant/redacted-reasoning",
         "store/assistant/untyped",
     ]
 

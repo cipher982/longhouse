@@ -1703,14 +1703,27 @@ mod tests {
         let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
             .unwrap()
             .unwrap();
-        let items: Vec<ItemFacts> = prepared
-            .envelope
-            .render
-            .unwrap()
-            .records
-            .into_iter()
-            .map(|record| record.item)
-            .collect();
+        let records = prepared.envelope.render.unwrap().records;
+        crate::pipeline::items::assert_item_snapshot(
+            "tests/fixtures/golden/cursor/store_items.json",
+            records
+                .iter()
+                .map(|record| {
+                    serde_json::json!({
+                        "role": record.role,
+                        "content_text": record.content_text,
+                        "tool_name": record.tool_name,
+                        "branch_kind": record.branch_kind,
+                        "item": record.item,
+                    })
+                })
+                .collect(),
+        );
+        // Redacted reasoning is a reasoning branch with no text, so it never
+        // counts as an assistant message.
+        assert_eq!(records[1].branch_kind.as_deref(), Some("reasoning"));
+        assert_eq!(records[1].content_text, None);
+        let items: Vec<ItemFacts> = records.into_iter().map(|record| record.item).collect();
         assert_eq!(
             items,
             vec![

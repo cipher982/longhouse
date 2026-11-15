@@ -1,0 +1,50 @@
+{
+  "events": [
+    {
+      "branch_kind": "reasoning",
+      "content_text": "A listing answers this.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      },
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "branch_kind": "reasoning",
+      "content_text": null,
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      },
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "branch_kind": null,
+      "content_text": "Listing the files.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "native"
+      },
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "branch_kind": null,
+      "content_text": null,
+      "item": {
+        "intent": "List the files"
+      },
+      "role": "assistant",
+      "tool_name": "Shell"
+    },
+    {
+      "branch_kind": null,
+      "content_text": null,
+      "item": {},
+      "role": "tool",
+      "tool_name": "Shell"
+    }
+  ]
+}

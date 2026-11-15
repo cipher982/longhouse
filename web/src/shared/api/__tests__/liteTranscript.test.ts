@@ -80,6 +80,26 @@ describe("hydrateLiteProjection", () => {
     expect(result.event?.lite_body).toEqual({ session_id: "s-1", cursor: "c3" });
   });
 
+  it("keeps item facts, which the timeline uses to hide a text-less reasoning row", () => {
+    const withheld = { kind: "reasoning", visibility: "withheld" } as const;
+    const page = {
+      ...lite,
+      items: [
+        ...lite.items,
+        {
+          kind: "event",
+          timestamp: "2026-10-06T12:00:03Z",
+          event: { id: "e4", cursor: "c4", role: "system", interaction_kind: "provider_reasoning", item: withheld },
+        },
+      ],
+    } as unknown as AgentSessionProjectionResponse;
+
+    const events = hydrateLiteProjection(page).items.map((item) => item.event);
+
+    expect(events[3]?.item).toEqual(withheld);
+    expect(events[0]?.item).toBeNull();
+  });
+
   it("leaves a full page untouched", () => {
     const full = { ...lite, detail: undefined } as unknown as AgentSessionProjectionResponse;
     expect(hydrateLiteProjection(full)).toBe(full);

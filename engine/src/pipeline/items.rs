@@ -116,6 +116,38 @@ impl ItemFacts {
 
 const MAX_INTENT_CHARS: usize = 500;
 
+/// Tools whose `description` argument states the call's purpose: shell calls
+/// and subagent launches. On other tools (an issue tracker, an MCP server)
+/// `description` is payload the call carries, not why it was made.
+const DESCRIPTION_IS_INTENT: &[&str] = &[
+    "bash",
+    "shell",
+    "shell_command",
+    "exec_command",
+    "run_shell_command",
+    "run_terminal_cmd",
+    "task",
+    "agent",
+];
+
+/// A tool call's intent from its `description` argument, read only on tools
+/// where that argument is the purpose.
+pub fn description_intent(tool_name: Option<&str>, input: Option<&serde_json::Value>) -> ItemFacts {
+    let purposeful = tool_name.is_some_and(|name| {
+        DESCRIPTION_IS_INTENT
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(name))
+    });
+    if !purposeful {
+        return ItemFacts::default();
+    }
+    ItemFacts::intent(
+        input
+            .and_then(|input| input.get("description"))
+            .and_then(serde_json::Value::as_str),
+    )
+}
+
 pub fn bounded_intent(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -134,6 +166,29 @@ pub fn phase_from_stop_reason(stop_reason: Option<&str>) -> Option<ItemFacts> {
         _ => return None,
     };
     Some(ItemFacts::phase(phase, PhaseSource::Derived))
+}
+
+/// Compare a fixture's item rows with its committed `<fixture>.expected.json`
+/// snapshot, which the managed provider contract reads to prove each item
+/// signal. `LONGHOUSE_UPDATE_GOLDEN=1` rewrites it.
+#[cfg(test)]
+pub(crate) fn assert_item_snapshot(fixture: &str, events: Vec<serde_json::Value>) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(fixture)
+        .with_extension("expected.json");
+    let actual =
+        serde_json::to_string_pretty(&serde_json::json!({ "events": events })).unwrap() + "\n";
+    if std::env::var_os("LONGHOUSE_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&path, &actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!(
+            "{} is missing; run with LONGHOUSE_UPDATE_GOLDEN=1",
+            path.display()
+        )
+    });
+    assert_eq!(actual, expected, "{} drifted", path.display());
 }
 
 #[cfg(test)]
@@ -171,6 +226,25 @@ mod tests {
         );
         assert!(phase_from_stop_reason(Some("max_tokens")).is_none());
         assert!(phase_from_stop_reason(None).is_none());
+    }
+
+    #[test]
+    fn description_is_intent_only_on_shell_and_subagent_tools() {
+        let input = serde_json::json!({"description": "Run the tests"});
+        assert_eq!(
+            description_intent(Some("Bash"), Some(&input))
+                .intent
+                .as_deref(),
+            Some("Run the tests")
+        );
+        assert_eq!(
+            description_intent(Some("Task"), Some(&input))
+                .intent
+                .as_deref(),
+            Some("Run the tests")
+        );
+        assert!(description_intent(Some("mcp__jira__create_issue"), Some(&input)).is_empty());
+        assert!(description_intent(None, Some(&input)).is_empty());
     }
 
     #[test]

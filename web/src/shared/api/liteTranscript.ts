@@ -74,6 +74,7 @@ function hydrateEvent(
     tool_output_truncated: false,
     tool_output_original_chars: null,
     media_refs: [],
+    item: null,
     timestamp,
     ...fields,
     tool_input_json: toolInput,

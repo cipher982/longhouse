@@ -21,7 +21,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 pub use crate::pipeline::items::ItemFacts;
-use crate::pipeline::items::{phase_from_stop_reason, EndReason, Phase, PhaseSource, Visibility};
+use crate::pipeline::items::{
+    description_intent, phase_from_stop_reason, EndReason, Phase, PhaseSource, Visibility,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -4425,11 +4427,12 @@ fn extract_cursor_events(
                     .or_else(|| block.get("id"))
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let input = block
+                let args = block
                     .get("args")
                     .or_else(|| block.get("input"))
-                    .or_else(|| block.get("arguments"))
-                    .and_then(|value| RawValue::from_string(value.to_string()).ok());
+                    .or_else(|| block.get("arguments"));
+                let intent = description_intent(tool_name.as_deref(), args);
+                let input = args.and_then(|value| RawValue::from_string(value.to_string()).ok());
                 let mut event = cursor_event(
                     event_uuid,
                     session_id,
@@ -4444,8 +4447,7 @@ fn extract_cursor_events(
                     "cursor_tool_call",
                     raw_line,
                 );
-                event.item =
-                    ItemFacts::intent(block.pointer("/args/description").and_then(Value::as_str));
+                event.item = intent;
                 events.push(event);
                 emitted = true;
             }
@@ -6483,17 +6485,15 @@ fn extract_assistant_events(
                     }
                 });
 
-                let intent = tool_input
-                    .as_ref()
-                    .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
-                    .and_then(|input| {
-                        input
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    });
+                let intent = description_intent(
+                    Some(&tool_name),
+                    tool_input
+                        .as_ref()
+                        .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                        .as_ref(),
+                );
                 events.push(ParsedEvent {
-                    item: ItemFacts::intent(intent.as_deref()),
+                    item: intent,
                     uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
                     parent_uuid: None,
                     session_id: session_id.to_string(),

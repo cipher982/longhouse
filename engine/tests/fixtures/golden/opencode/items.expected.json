@@ -1,0 +1,105 @@
+{
+  "events": [
+    {
+      "content_text": "hello OpenCode",
+      "item": {},
+      "role": "user",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {},
+      "role": "assistant",
+      "tool_name": "bash"
+    },
+    {
+      "content_text": null,
+      "item": {},
+      "role": "tool",
+      "tool_name": null
+    },
+    {
+      "content_text": "done",
+      "item": {},
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "content_text": "Run the tests.",
+      "item": {},
+      "role": "user",
+      "tool_name": null
+    },
+    {
+      "content_text": "Thinking:\nThe suite is the check.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": "Running the suite.",
+      "item": {
+        "phase": "commentary",
+        "phase_source": "derived"
+      },
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "intent": "Run the test suite"
+      },
+      "role": "assistant",
+      "tool_name": "bash"
+    },
+    {
+      "content_text": null,
+      "item": {},
+      "role": "tool",
+      "tool_name": null
+    },
+    {
+      "content_text": "All 42 tests pass.",
+      "item": {
+        "phase": "final",
+        "phase_source": "derived"
+      },
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": "Deploy it.",
+      "item": {},
+      "role": "user",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "end_reason": "interrupted",
+        "kind": "turn_end"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": "Deploying",
+      "item": {},
+      "role": "assistant",
+      "tool_name": null
+    }
+  ]
+}

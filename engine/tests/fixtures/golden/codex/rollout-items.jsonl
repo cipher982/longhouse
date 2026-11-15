@@ -7,7 +7,7 @@
 {"timestamp":"2026-11-15T11:00:06.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"build ok"}}
 {"timestamp":"2026-11-15T11:00:07.000Z","type":"response_item","payload":{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"The build succeeded."}],"content":null,"encrypted_content":"gAAAAB-withheld-2"}}
 {"timestamp":"2026-11-15T11:00:08.000Z","type":"response_item","payload":{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"The build is green."}],"phase":"final_answer"}}
-{"timestamp":"2026-11-15T11:00:08.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_1","last_agent_message":"The build is green."}}
+{"timestamp":"2026-11-15T11:00:08.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_1","last_agent_message":"The build is green.","duration_ms":8100}}
 {"timestamp":"2026-11-15T11:01:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_2"}}
 {"timestamp":"2026-11-15T11:01:00.100Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Deploy it."}]}}
 {"timestamp":"2026-11-15T11:01:02.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn_2","reason":"interrupted"}}

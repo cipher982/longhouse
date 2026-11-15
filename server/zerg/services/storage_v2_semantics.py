@@ -94,14 +94,20 @@ async def recover_render_interaction_kinds(
     selected = {
         ordinal: record
         for ordinal, record in enumerate(records)
-        if getattr(record, "interaction_kind", None) is None
-        or (normalized_provider == "claude" and claude_task_notification_summary(getattr(record, "content_text", None)) is not None)
-        or (normalized_provider == "codex" and codex_provider_system_candidate(getattr(record, "content_text", None)))
-        or (normalized_provider in REASONING_PART_PROVIDERS and provider_reasoning_content_candidate(getattr(record, "content_text", None)))
-        or provider_display_message_content_candidate(
-            normalized_provider, role=getattr(record, "role", None), content_text=getattr(record, "content_text", None)
+        if not _parser_asserted_kind(record)
+        and (
+            getattr(record, "interaction_kind", None) is None
+            or (normalized_provider == "claude" and claude_task_notification_summary(getattr(record, "content_text", None)) is not None)
+            or (normalized_provider == "codex" and codex_provider_system_candidate(getattr(record, "content_text", None)))
+            or (
+                normalized_provider in REASONING_PART_PROVIDERS
+                and provider_reasoning_content_candidate(getattr(record, "content_text", None))
+            )
+            or provider_display_message_content_candidate(
+                normalized_provider, role=getattr(record, "role", None), content_text=getattr(record, "content_text", None)
+            )
+            or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
         )
-        or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
     }
     if stats is not None:
         stats.selected_records += len(selected)
@@ -223,6 +229,14 @@ async def recover_render_interaction_kinds(
     )
 
 
+def _parser_asserted_kind(record: Any) -> bool:
+    """A row whose item facts name it reasoning or a turn end was classified by
+    the parser from its own raw record; raw replay cannot improve on that."""
+
+    item = getattr(record, "item", None)
+    return isinstance(item, Mapping) and item.get("kind") in {"reasoning", "turn_end"}
+
+
 def _claude_sequence_candidate_ordinals(*, raw_records: tuple[object, ...], records: tuple[object, ...]) -> set[int]:
     """Return projected rows that may need caveat evidence from another envelope."""
 
@@ -272,7 +286,7 @@ async def enrich_render_interaction_kinds(
             content_text=record.content_text,
             raw_json=raw_spec.records[raw_ordinal].data,
         )
-        if (
+        if not _parser_asserted_kind(record) and (
             getattr(record, "interaction_kind", None) is None
             or claude_task_notification_summary(record.content_text) is not None
             or (normalized_provider == "codex" and codex_provider_system_candidate(record.content_text))

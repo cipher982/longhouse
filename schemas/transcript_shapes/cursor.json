@@ -238,6 +238,11 @@
       "keys": ["content[].providerOptions", "content[].signature", "content[].text", "content[].type"],
       "required_keys": ["content[].type", "content[].text"]
      },
+     "redacted-reasoning": {
+      "classification": "transcript:reasoning",
+      "keys": ["content[].data", "content[].type"],
+      "required_keys": ["content[].type"]
+     },
      "string": {
       "classification": "transcript:text",
       "keys": []

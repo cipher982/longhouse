@@ -1,7 +1,9 @@
 //! The Cursor store source: prompt history, turn alignment and render records.
 
 use super::*;
-use crate::pipeline::items::{EndReason, ItemFacts, Phase, PhaseSource, Visibility};
+use crate::pipeline::items::{
+    description_intent, EndReason, ItemFacts, Phase, PhaseSource, Visibility,
+};
 
 /// Cursor writes the prompts a person actually typed to `prompt_history.json`
 /// beside `store.db`. That file is the provider's own record of human
@@ -701,6 +703,9 @@ pub(crate) fn render_cursor_records(
                     interaction_kind = kind_override;
                     (effective_role, Some(effective_text), None, None, None, None)
                 }
+                // Reasoning the provider kept: recorded, never displayed, and
+                // never counted as an assistant message.
+                "redacted-reasoning" => ("assistant".to_string(), None, None, None, None, None),
                 "tool-call" => (
                     "assistant".to_string(),
                     None,
@@ -760,7 +765,8 @@ pub(crate) fn render_cursor_records(
                 branch_kind: if abandoned {
                     Some("abandoned".to_string())
                 } else {
-                    (kind == "reasoning").then(|| "reasoning".to_string())
+                    matches!(kind, "reasoning" | "redacted-reasoning")
+                        .then(|| "reasoning".to_string())
                 },
                 parent_uuid: None,
                 interaction_kind,
@@ -800,12 +806,23 @@ fn cursor_message_phase(message: &Value) -> ItemFacts {
 /// message's phase on assistant text, a call's stated purpose.
 fn cursor_block_item(kind: &str, role: &str, block: &Value, phase: &ItemFacts) -> ItemFacts {
     match kind {
-        "reasoning" => ItemFacts::reasoning(Visibility::Full),
+        "reasoning" => ItemFacts::reasoning(
+            if block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+            {
+                Visibility::Full
+            } else {
+                Visibility::Withheld
+            },
+        ),
         "redacted-reasoning" => ItemFacts::reasoning(Visibility::Withheld),
         "text" if role == "assistant" => phase.clone(),
-        "tool-call" => {
-            ItemFacts::intent(block.pointer("/args/description").and_then(Value::as_str))
-        }
+        "tool-call" => description_intent(
+            block.get("toolName").and_then(Value::as_str),
+            block.get("args"),
+        ),
         _ => ItemFacts::default(),
     }
 }

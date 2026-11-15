@@ -66,6 +66,8 @@ _EVENT_DEFAULTS: dict[str, Any] = {
     "reconciled_event_id": None,
     "tool_call_state": None,
     "media_refs": [],
+    # Canonical item facts; a client hides text-less reasoning and turn-end rows by them.
+    "item": None,
 }
 _ITEM_DEFAULTS: dict[str, Any] = {
     "action": None,

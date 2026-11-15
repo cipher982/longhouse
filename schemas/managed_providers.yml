@@ -3098,7 +3098,7 @@ providers:
     turn.thinking:
       disposition: implemented
       raw_source: message/message.content.thinking
-      fixture: engine/tests/fixtures/golden/pi/native.jsonl
+      fixture: engine/tests/fixtures/golden/pi/items.jsonl
       canary: pi_transcript_signals
       trigger: turn_end
 - provider: omp
@@ -3514,4 +3514,4 @@ providers:
     turn.api_error: {disposition: implemented, raw_source: message/message.errorMessage+message.stopReason, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
     context.compaction: {disposition: implemented, raw_source: compaction/tokensBefore, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: slash_compact}
     input.queue: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: send_while_working, owner_action: "Add OMP managed queue authority in Phase 2"}
-    turn.thinking: {disposition: implemented, raw_source: message/message.content.thinking, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}
+    turn.thinking: {disposition: implemented, raw_source: message/message.content.thinking, fixture: engine/tests/fixtures/golden/omp/items.jsonl, canary: omp_transcript_signals, trigger: turn_end}

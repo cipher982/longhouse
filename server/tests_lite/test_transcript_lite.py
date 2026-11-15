@@ -416,6 +416,22 @@ def test_a_final_answer_keeps_its_whole_input():
     assert "tool_input_truncated" not in event
 
 
+def test_lite_keeps_item_facts_and_omits_them_when_absent():
+    """Clients hide a text-less withheld-reasoning row by its item facts, so lite must carry them."""
+    projection = {
+        "focus_session_id": "s-1",
+        "items": [
+            _item("9", role="system", interaction_kind="provider_reasoning", item={"kind": "reasoning", "visibility": "withheld"}),
+            _item("10", content_text="Done."),
+        ],
+    }
+
+    events = [item["event"] for item in lite_projection(projection)["items"]]
+
+    assert events[0]["item"] == {"kind": "reasoning", "visibility": "withheld"}
+    assert "item" not in events[1]
+
+
 def test_the_ios_lite_fixture_is_what_the_server_sends():
     """iOS decodes tests/fixtures/session-detail/lite-mobile-tail.json; keep it the server's own output."""
     import json

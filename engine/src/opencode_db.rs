@@ -22,7 +22,9 @@ use crate::config::get_longhouse_home;
 use crate::media_redaction::{
     redact_inline_image_data_url, redact_source_line_with_media, InlineImageRedaction,
 };
-use crate::pipeline::items::{phase_from_stop_reason, EndReason, ItemFacts, Visibility};
+use crate::pipeline::items::{
+    description_intent, phase_from_stop_reason, EndReason, ItemFacts, Visibility,
+};
 use crate::pipeline::parser::{
     ParseResult, ParsedEvent, ParsedMediaObject, ParsedSourceLine, Role, SessionMetadata,
 };
@@ -1688,9 +1690,7 @@ fn extract_events_from_part(
             let state = part_data.get("state").unwrap_or(&Value::Null);
             let input = state.get("input").and_then(raw_value_from_json);
             events.push(ParsedEvent {
-                item: ItemFacts::intent(
-                    state.pointer("/input/description").and_then(Value::as_str),
-                ),
+                item: description_intent(Some(&tool_name), state.get("input")),
                 uuid: stable_event_uuid(provider_session_id, &part.id, "tool_call"),
                 parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
@@ -3647,6 +3647,21 @@ mod tests {
         ] {
             assert!(items.contains(&&expected), "missing {expected:?}");
         }
+        crate::pipeline::items::assert_item_snapshot(
+            "tests/fixtures/golden/opencode/items.json",
+            result
+                .events
+                .iter()
+                .map(|event| {
+                    serde_json::json!({
+                        "role": event.role,
+                        "content_text": event.content_text,
+                        "tool_name": event.tool_name,
+                        "item": event.item,
+                    })
+                })
+                .collect(),
+        );
         // A step that stops to call tools does not end the turn.
         assert_eq!(
             items

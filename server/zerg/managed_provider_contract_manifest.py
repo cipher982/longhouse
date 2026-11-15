@@ -687,14 +687,18 @@ def _validate_signal_golden_fixtures(
             prove_item = _ITEM_SIGNAL_PROOF.get(signal_id)
             if prove_item is not None:
                 # Item signals ride on rows, not provider facts: the fixture's
-                # event snapshot, when it has one, must hold a row proving it.
+                # committed event snapshot must hold a row proving it.
                 expected_events = fixture_path.with_suffix(".expected.json")
-                if expected_events.is_file():
-                    events = json.loads(expected_events.read_text(encoding="utf-8")).get("events", [])
-                    if not any(prove_item(event.get("item") or {}) for event in events):
-                        raise ValueError(
-                            f"managed provider contract {provider}: {expected_events.relative_to(source_root)} has no row proving {signal_id}"
-                        )
+                if not expected_events.is_file():
+                    raise ValueError(
+                        f"managed provider contract {provider}: {signal_id} fixture {fixture} has no event snapshot "
+                        f"{expected_events.relative_to(source_root)}"
+                    )
+                events = json.loads(expected_events.read_text(encoding="utf-8")).get("events", [])
+                if not any(prove_item(event.get("item") or {}) for event in events):
+                    raise ValueError(
+                        f"managed provider contract {provider}: {expected_events.relative_to(source_root)} has no row proving {signal_id}"
+                    )
                 continue
             if relative.suffix == ".jsonl":
                 expected_facts = fixture_path.with_suffix(".facts.expected.json")

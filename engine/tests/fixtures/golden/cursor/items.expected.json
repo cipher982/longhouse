@@ -1,0 +1,78 @@
+{
+  "events": [
+    {
+      "content_text": "List the files.",
+      "item": {},
+      "role": "user",
+      "tool_name": null
+    },
+    {
+      "content_text": "Thinking:\nA directory listing answers this.",
+      "item": {
+        "kind": "reasoning",
+        "visibility": "full"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "kind": "reasoning",
+        "visibility": "withheld"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": "Listing them.",
+      "item": {},
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "intent": "List the files"
+      },
+      "role": "assistant",
+      "tool_name": "Shell"
+    },
+    {
+      "content_text": null,
+      "item": {},
+      "role": "tool",
+      "tool_name": "Shell"
+    },
+    {
+      "content_text": "There is one file, a.txt.",
+      "item": {},
+      "role": "assistant",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "end_reason": "completed",
+        "kind": "turn_end"
+      },
+      "role": "system",
+      "tool_name": null
+    },
+    {
+      "content_text": "Push it.",
+      "item": {},
+      "role": "user",
+      "tool_name": null
+    },
+    {
+      "content_text": null,
+      "item": {
+        "end_reason": "error",
+        "kind": "turn_end"
+      },
+      "role": "system",
+      "tool_name": null
+    }
+  ]
+}

@@ -775,6 +775,21 @@ mod equivalence {
                 || event.content_text.as_deref() != Some("opaque")));
         // Every row orders from the anchor, the turn ends included.
         assert!(parsed.events.iter().all(|event| event.timestamp == anchor));
+        crate::pipeline::items::assert_item_snapshot(
+            "tests/fixtures/golden/cursor/items.jsonl",
+            parsed
+                .events
+                .iter()
+                .map(|event| {
+                    serde_json::json!({
+                        "role": event.role,
+                        "content_text": event.content_text,
+                        "tool_name": event.tool_name,
+                        "item": event.item,
+                    })
+                })
+                .collect(),
+        );
     }
 
     fn second_line_offset(bytes: &[u8]) -> Option<u64> {

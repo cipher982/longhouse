@@ -564,6 +564,69 @@ def test_storage_wire_keeps_item_facts_and_reads_reasoning_from_the_parser():
     assert parsed.records[1].interaction_kind != "provider_reasoning"
 
 
+def test_a_pi_turn_end_sharing_a_line_with_thinking_is_not_reasoning():
+    """Pi asserts the turn end on the same raw line as the message's thinking part."""
+    raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=UUID("018f0c3a-7b2d-7f10-8a11-123456789abd"),
+        provider="pi",
+        opaque_source_id="session.jsonl",
+        source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abd"),
+        range_kind="byte_offset",
+        range_start=0,
+        range_end=200,
+        records=(
+            RawRecord(
+                source_position=0,
+                data=b'{"type":"message","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"Done."}],"stopReason":"stop"}}',
+            ),
+        ),
+    )
+    base = {
+        "order_time_us": 1,
+        "source_position": 0,
+        "raw_record_ordinal": 0,
+        "tool_name": None,
+        "tool_input_json": None,
+        "tool_output_text": None,
+        "tool_call_id": None,
+        "thread_id": None,
+        "branch_kind": None,
+    }
+    parsed = _parse_render_spec(
+        {
+            "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abd",
+            "parser_revision": "engine-parser-v3",
+            "ordering_revision": "semantic-order-v2",
+            "records": [
+                {
+                    **base,
+                    "event_id": "thinking",
+                    "event_subordinal": 0,
+                    "role": "system",
+                    "content_text": "Thinking:\nplan",
+                    "item": {"kind": "reasoning", "visibility": "full"},
+                },
+                {
+                    **base,
+                    "event_id": "turn-end",
+                    "event_subordinal": 1,
+                    "role": "system",
+                    "content_text": None,
+                    "item": {"kind": "turn_end", "end_reason": "completed"},
+                },
+            ],
+        },
+        raw_spec=raw,
+        source_envelope_id="b" * 64,
+    )
+
+    assert parsed is not None
+    assert parsed.records[0].interaction_kind == "provider_reasoning"
+    assert parsed.records[1].interaction_kind == "provider_system"
+
+
 def test_storage_wire_repairs_stale_codex_provider_context_from_raw():
     content = "<environment_context>\nPWD=/Users/davidrose/git/zerg\n</environment_context>"
     raw = RawObjectSpec(
@@ -1716,3 +1779,34 @@ def test_seal_accepts_the_full_representable_order_time_range(tmp_path, order_ti
     assert sealed.event_count == 1
     seconds, microseconds = divmod(order_time_us, 1_000_000)
     datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=microseconds)
+
+
+@pytest.mark.asyncio
+async def test_rows_the_parser_classified_skip_raw_replay():
+    """A row whose item facts name it reasoning or a turn end needs no raw companion read."""
+    from types import SimpleNamespace
+
+    records = (
+        SimpleNamespace(
+            role="system",
+            content_text="Thinking:\nplan",
+            interaction_kind="provider_reasoning",
+            item={"kind": "reasoning", "visibility": "full"},
+        ),
+        SimpleNamespace(
+            role="system", content_text=None, interaction_kind="provider_system", item={"kind": "turn_end", "end_reason": "completed"}
+        ),
+    )
+
+    recovered = await recover_render_interaction_kinds(
+        catalog=None,
+        raw_workers=None,
+        session_id="s",
+        owner_id="42",
+        provider="pi",
+        records=records,
+        source_envelope_id="c" * 64,
+        manifest_cache={},
+    )
+
+    assert recovered == {}
