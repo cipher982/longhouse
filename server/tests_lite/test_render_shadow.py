@@ -367,12 +367,13 @@ async def test_a_laptop_render_from_another_parser_revision_is_skew_not_a_mismat
             results = await _shadow(stack, worker, session_id)
         finally:
             await worker.close()
-        assert [(row["outcome"], row["detail"]) for row in results] == [("revision_skew", "laptop engine-parser-v2 host engine-parser-v3")]
+        assert [(row["outcome"], row["detail"]) for row in results] == [
+            ("revision_skew", "laptop engine-parser-v2 host engine-parser-v3+cursor-fake")
+        ]
 
 
-def test_the_host_revision_is_named_per_provider_as_laptop_generations_name_it():
-    from zerg.services.render_shadow import provider_revision
+def test_a_laptop_render_is_comparable_when_its_revision_is_either_host_parser():
+    from zerg.services.render_shadow import comparable_revisions
 
-    assert provider_revision("engine-parser-v2+cursor-store-render-v8", "claude") == "engine-parser-v2"
-    assert provider_revision("engine-parser-v2+cursor-store-render-v8", "cursor") == "cursor-store-render-v8"
-    assert provider_revision(None, "claude") is None
+    assert comparable_revisions("engine-parser-v2+cursor-store-render-v8") == {"engine-parser-v2", "cursor-store-render-v8"}
+    assert comparable_revisions(None) == frozenset()

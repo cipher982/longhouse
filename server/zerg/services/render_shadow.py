@@ -378,9 +378,9 @@ async def shadow_session(
                 result(row, "error", str(answer["error"]), per_envelope_us)
                 continue
             laptop_object = render_by_envelope.get(row["envelope_id"])
-            host_revision = provider_revision(worker.revision, provider)
-            if laptop_object is not None and host_revision is not None and laptop_object.get("parser_revision") != host_revision:
-                result(row, "revision_skew", f"laptop {laptop_object.get('parser_revision')} host {host_revision}", per_envelope_us)
+            host_revisions = comparable_revisions(worker.revision)
+            if laptop_object is not None and host_revisions and laptop_object.get("parser_revision") not in host_revisions:
+                result(row, "revision_skew", f"laptop {laptop_object.get('parser_revision')} host {worker.revision}", per_envelope_us)
                 continue
             try:
                 outcome, detail = await _compare(
@@ -414,16 +414,15 @@ class _MediaMissing(Exception):
     """A media blob the envelope references was deleted: the epoch can never be rebuilt."""
 
 
-def provider_revision(revision: str | None, provider: str) -> str | None:
-    """The host's parser revision for one provider, as a laptop generation names it.
+def comparable_revisions(revision: str | None) -> frozenset[str]:
+    """The laptop generation revisions the host's normalizer revision covers.
 
-    The worker reports `<file parser>+<cursor store parser>`; a laptop render
-    generation carries only the one that made it.
+    The worker reports `<file parser>+<cursor store parser>`. A laptop render
+    generation names the one parser that made it, and which one depends on the
+    source (a Cursor JSONL transcript goes through the file parser), so a
+    laptop render is comparable when its revision is either part.
     """
-    if not revision:
-        return None
-    file_parser, _plus, cursor_store = revision.partition("+")
-    return cursor_store if provider == "cursor" and cursor_store else file_parser
+    return frozenset(part for part in (revision or "").split("+") if part)
 
 
 async def _epoch_request(

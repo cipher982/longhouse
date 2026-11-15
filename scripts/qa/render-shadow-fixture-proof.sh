@@ -185,7 +185,7 @@ PY
 import json, sys
 text = open(sys.argv[1]).read()
 result = json.loads(text[text.index("{"):])
-print(f"  {sys.argv[2]:60} events={result.get(\"events_shipped\")} status={result.get(\"status\")}", file=sys.stderr)
+print("  %-60s events=%s status=%s" % (sys.argv[2], result.get("events_shipped"), result.get("status")), file=sys.stderr)
 print(result.get("events_shipped") or 0)
 ' "$case_root/ship-$shipped.json" "$tree/$(basename "$transcript")" || echo "?")"
     if [[ "$events" == "?" ]]; then
