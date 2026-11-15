@@ -118,10 +118,7 @@ mod tests {
                 "pi_helm_launcher.rs",
                 include_str!("../pi_helm_launcher.rs"),
             ),
-            (
-                "antigravity_acp.rs",
-                include_str!("../antigravity_acp.rs"),
-            ),
+            ("antigravity_acp.rs", include_str!("../antigravity_acp.rs")),
             (
                 "cursor_helm_launcher.rs",
                 include_str!("../cursor_helm_launcher.rs"),

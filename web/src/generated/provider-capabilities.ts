@@ -34,7 +34,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
   antigravity: {
     id: "antigravity",
     launchAndSend: true,
-    interrupt: false,
+    interrupt: true,
     steerMidTurn: false,
     resume: false,
     proven: {

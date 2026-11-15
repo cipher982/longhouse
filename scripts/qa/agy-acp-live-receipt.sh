@@ -6,6 +6,10 @@
 #
 #   scripts/ops/bench.sh run scripts/qa/agy-acp-live-receipt.sh
 #
+# Run by hand: it downloads a provider release and drives a real agy, which never runs in CI or on
+# the dev Mac; the factory's Console lifecycle producer (antigravity-parity.md step 6) is its
+# automated successor.
+#
 # The receipt lands in $BENCH_OUT (bench.sh copies it back to /tmp/agents/bench/<stamp>/).
 # Everything it starts lives under one scratch directory and is removed on exit.
 set -euo pipefail
