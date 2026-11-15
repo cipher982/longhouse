@@ -26,11 +26,11 @@ from zerg.services.session_input_links import input_origins_by_event
 from zerg.services.session_input_links import input_receipts_from_rows
 from zerg.services.session_input_links import session_input_receipts
 from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import project_session_hud
 from zerg.services.session_provider_facts import provider_facts_from_rows
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
-from zerg.services.session_provider_facts import usage_latest
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.services.transcript_lite import DETAIL_FULL
 from zerg.services.transcript_lite import DETAIL_LITE
@@ -278,7 +278,19 @@ def _workspace_envelope(
     session_json["last_turn"] = last_turn(facts, turn_ends)
     session_json["recap"] = recap(facts)
     session_json["selected_model"] = getattr(session, "selected_model", None)
-    session_json["usage_latest"] = usage_latest(facts)
+    hud = project_session_hud(
+        facts,
+        None,
+        delegation=getattr(getattr(session, "session_state", None), "delegation", None),
+        fallback_model=session_json["selected_model"],
+        base_hud=session_json,
+    )
+    session_json["usage_latest"] = hud["usage_latest"]
+    session_json["permission_mode"] = hud["permission_mode"]
+    session_json["provider_title"] = hud["provider_title"]
+    session_json["worktree"] = hud["worktree"]
+    session_json["session_crons"] = hud["session_crons"]
+    session_json["pending_background_agent_count"] = hud["pending_background_agent_count"]
     storage_session = storage.get("session") if storage is not None else None
     return {
         "session": session_json,

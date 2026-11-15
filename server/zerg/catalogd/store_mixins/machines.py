@@ -41,6 +41,7 @@ from zerg.catalogd.store import _machine_health_heartbeat_dto
 from zerg.catalogd.store import _read_snapshot
 from zerg.catalogd.store import _runtime_activity_facts
 from zerg.catalogd.store import _runtime_delegation_facts
+from zerg.catalogd.store import _runtime_meta_facts
 from zerg.catalogd.store import _settle_console_turns_from_runtime
 from zerg.catalogd.store import _StageTimer
 from zerg.catalogd.store import _write_transaction
@@ -378,6 +379,36 @@ class MachinesMixin:
                                 else:
                                     source_alias.last_seen_at = event.occurred_at or observed_at
                 console_next_turns = _settle_console_turns_from_runtime(orm, events, observed_at=observed_at)
+                for event in sorted(events, key=lambda item: _as_aware_utc(item.occurred_at) or observed_at):
+                    if event.session_id is None:
+                        continue
+                    payload = event.payload or {}
+                    if not isinstance(payload, dict):
+                        continue
+                    session_id_str = str(event.session_id)
+                    new_cwd = str(payload.get("cwd") or "").strip()[:1024]
+                    new_branch = str(payload.get("git_branch") or "").strip()[:255]
+                    if new_cwd or new_branch:
+                        catalog = orm.get(LiveSessionCatalog, session_id_str)
+                        card = orm.get(LiveTimelineCard, session_id_str)
+                        if new_cwd:
+                            if catalog is not None and catalog.cwd != new_cwd:
+                                catalog.cwd = new_cwd
+                            if card is not None and card.cwd != new_cwd:
+                                card.cwd = new_cwd
+                        if new_branch and catalog is not None and catalog.git_branch != new_branch:
+                            catalog.git_branch = new_branch
+                        if payload.get("hook_event_name") == "CwdChanged" or new_branch:
+                            storage_values: dict[str, Any] = {}
+                            if new_cwd and payload.get("hook_event_name") == "CwdChanged":
+                                storage_values["cwd"] = new_cwd
+                            if new_branch:
+                                storage_values["git_branch"] = new_branch
+                            if storage_values:
+                                orm.query(StorageSession).filter(StorageSession.session_id == session_id_str).update(
+                                    storage_values,
+                                    synchronize_session=False,
+                                )
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -395,7 +426,11 @@ class MachinesMixin:
                 connection,
                 events=events,
             )
-            all_facts = [*activity_facts, *delegation_facts]
+            meta_facts = _runtime_meta_facts(
+                connection,
+                events=events,
+            )
+            all_facts = [*activity_facts, *delegation_facts, *meta_facts]
             reduced_parts = [
                 reduce_fact_batch_setwise(
                     connection,

@@ -63,24 +63,11 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     let event = string(input, "hook_event_name").unwrap_or_default();
     let observation = observation_for_event(&event, input);
     let occurred_at = Utc::now().to_rfc3339();
-    // Stop and SubagentStop carry a complete registry scoped to the parent
-    // session. Other lifecycle events carry only one source-bound change.
-    // Keeping these lanes distinct is important: a child callback must not
-    // become a parent phase, while its parent-scoped registry is still useful.
-    let registry = if matches!(event.as_str(), "Stop" | "SubagentStop") {
-        delegation_snapshot(input, &occurred_at)
+    let cwd = if event == "CwdChanged" {
+        string(input, "new_cwd").or_else(|| string(input, "cwd"))
     } else {
-        None
+        string(input, "cwd")
     };
-    let lifecycle_update = lifecycle_update_for_event(&event, input, &occurred_at);
-    if event != "SessionEnd"
-        && observation.status.is_none()
-        && observation.edge.is_none()
-        && registry.is_none()
-        && lifecycle_update.is_none()
-    {
-        return Ok(());
-    }
     let managed_session_id = crate::managed_identity::managed_session_id_for(
         crate::managed_identity_contract::ManagedProvider::Claude,
     );
@@ -88,6 +75,51 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     let session_id = managed_session_id
         .clone()
         .or_else(|| provider_session_id.clone());
+    let monitor_descriptions = if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
+        longhouse_home()
+            .ok()
+            .zip(session_id.as_deref())
+            .map(|(home, sid)| load_monitor_descriptions(&home, sid))
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+    // Stop, SubagentStop, and ClaudeModState carry a complete registry scoped
+    // to the parent session. Other lifecycle events carry only one source-bound
+    // change. Keeping these lanes distinct is important: a child callback must
+    // not become a parent phase, while its parent-scoped registry is still useful.
+    let mut registry = if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
+        delegation_snapshot_with_monitors(input, &occurred_at, Some(&monitor_descriptions))
+    } else {
+        None
+    };
+    if event == "SessionEnd" && registry.is_none() {
+        registry = Some(empty_delegation_snapshot(&occurred_at));
+    }
+    let lifecycle_update = lifecycle_update_for_event(&event, input, &occurred_at);
+    let session_usage = extract_session_usage(input);
+    let session_crons = extract_session_crons(input);
+    let permission_mode =
+        bounded_required_task_text(input.get("permission_mode"), DELEGATION_STATUS_MAX_CHARS);
+    let git_branch = string(input, "git_branch").or_else(|| {
+        if matches!(event.as_str(), "SessionStart" | "CwdChanged") {
+            git_head_branch(cwd.as_deref())
+        } else {
+            None
+        }
+    });
+    if !matches!(event.as_str(), "SessionEnd" | "CwdChanged" | "ClaudeModState")
+        && observation.status.is_none()
+        && observation.edge.is_none()
+        && registry.is_none()
+        && lifecycle_update.is_none()
+        && session_usage.is_none()
+        && session_crons.is_none()
+        && permission_mode.is_none()
+        && git_branch.is_none()
+    {
+        return Ok(());
+    }
     let Some(session_id) = session_id else {
         return Ok(());
     };
@@ -113,7 +145,6 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     if child_origin && registry.is_none() && lifecycle_update.is_none() {
         return Ok(());
     }
-    let cwd = string(input, "cwd");
     let transcript_path = string(input, "transcript_path");
     // A bare Claude session that started before the machine's import scope is
     // not shipped, so it is not announced either: presence carries the
@@ -150,6 +181,9 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         // This is the hook's observation time, not the daemon's delivery time.
         "occurred_at": occurred_at,
     });
+    if matches!(event.as_str(), "CwdChanged" | "ClaudeModState") {
+        payload["hook_event_name"] = json!(event);
+    }
     // Child-origin lifecycle updates are source evidence only. Never carry an
     // idle/running phase from the child into the parent's activity head.
     if !child_origin {
@@ -175,6 +209,18 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // mistaken for a complete registry or renew unrelated items.
     if let Some(update) = lifecycle_update {
         payload["delegation_update"] = update;
+    }
+    if let Some(usage) = session_usage {
+        payload["session_usage"] = usage;
+    }
+    if let Some(crons) = session_crons {
+        payload["session_crons"] = crons;
+    }
+    if let Some(mode) = permission_mode {
+        payload["permission_mode"] = json!(mode);
+    }
+    if let Some(branch) = git_branch {
+        payload["git_branch"] = json!(branch);
     }
     attach_provider_session_id(
         &mut payload,
@@ -209,9 +255,19 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // the producer payload: the daemon preserves the complete snapshot while
     // reducing the exact child edge independently.
     let home = longhouse_home()?;
+    if !child_origin && event == "PreToolUse" && string(input, "tool_name").as_deref() == Some("Monitor") {
+        record_monitor_invocation(&home, &session_id, input);
+    } else if event == "SessionEnd" {
+        clear_monitor_ledger(&home, &session_id);
+    }
     if (!child_origin && observation.status.is_some())
         || payload.get("delegation").is_some()
         || payload.get("delegation_update").is_some()
+        || payload.get("session_usage").is_some()
+        || payload.get("session_crons").is_some()
+        || payload.get("permission_mode").is_some()
+        || payload.get("git_branch").is_some()
+        || matches!(event.as_str(), "CwdChanged" | "SessionEnd")
     {
         crate::hook_outbox::enqueue_presence(&home, &payload)?;
     }
@@ -352,7 +408,7 @@ fn delegation_kind(raw: &str) -> &'static str {
     match raw.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
         "shell" => "shell",
         "subagent" => "subagent",
-        "monitor" => "monitor",
+        "monitor" | "monitor_task" => "monitor",
         "workflow" => "workflow",
         "teammate" => "teammate",
         "cloud_session" => "cloud_session",
@@ -373,10 +429,22 @@ fn bounded_tool_use_id(value: Option<&Value>) -> Option<String> {
     (!value.chars().any(char::is_control)).then_some(value)
 }
 
+#[derive(Default)]
+struct AgentMeta {
+    parent_tool_call_id: Option<String>,
+    agent_type: Option<String>,
+    description: Option<String>,
+    model: Option<String>,
+    is_fork: Option<bool>,
+    parent_agent_id: Option<String>,
+    spawn_depth: Option<u64>,
+    finished: Option<bool>,
+}
+
 /// Read only the exact provider sidecar named by a lifecycle or child tool
 /// event (`Stop`, `SubagentStart`, `SubagentStop`, `PreToolUse`,
-/// `PostToolUse`, or `PostToolUseFailure`).
-fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
+/// `PostToolUse`, `PostToolUseFailure`, or `ClaudeModState`).
+fn read_agent_meta(input: &Value, task_id: &str) -> Option<AgentMeta> {
     if !matches!(
         input.get("hook_event_name").and_then(Value::as_str),
         Some(
@@ -386,6 +454,7 @@ fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
                 | "PreToolUse"
                 | "PostToolUse"
                 | "PostToolUseFailure"
+                | "ClaudeModState"
         )
     ) || !safe_task_path_component(task_id)
     {
@@ -422,7 +491,70 @@ fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
     }
     let bytes = std::fs::read(sidecar).ok()?;
     let sidecar: Value = serde_json::from_slice(&bytes).ok()?;
-    bounded_tool_use_id(sidecar.get("toolUseId"))
+    Some(AgentMeta {
+        parent_tool_call_id: bounded_tool_use_id(sidecar.get("toolUseId")),
+        agent_type: bounded_required_task_text(
+            sidecar.get("agentType"),
+            DELEGATION_STATUS_MAX_CHARS,
+        ),
+        description: bounded_task_text(sidecar.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS),
+        model: bounded_required_task_text(
+            sidecar.get("pickedEffortModel"),
+            DELEGATION_PROGRESS_TOOL_MAX_CHARS,
+        )
+        .or_else(|| {
+            bounded_required_task_text(
+                sidecar.get("model"),
+                DELEGATION_PROGRESS_TOOL_MAX_CHARS,
+            )
+        }),
+        is_fork: sidecar.get("isFork").and_then(Value::as_bool),
+        parent_agent_id: crate::claude_lifecycle_hook::task_id(sidecar.get("parentAgentId")),
+        spawn_depth: sidecar.get("spawnDepth").and_then(Value::as_u64),
+        finished: sidecar.get("finished").and_then(Value::as_bool),
+    })
+}
+
+fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
+    read_agent_meta(input, task_id).and_then(|meta| meta.parent_tool_call_id)
+}
+
+fn apply_agent_meta(item: &mut Value, meta: &AgentMeta) {
+    if item.get("parent_tool_call_id").is_none() {
+        if let Some(parent_tool_call_id) = meta.parent_tool_call_id.as_deref() {
+            item["parent_tool_call_id"] = json!(parent_tool_call_id);
+        }
+    }
+    if item.get("agent_type").is_none() {
+        if let Some(agent_type) = meta.agent_type.as_deref() {
+            item["agent_type"] = json!(agent_type);
+        }
+    }
+    if item.get("description").is_none_or(Value::is_null) {
+        if let Some(description) = meta.description.as_deref() {
+            item["description"] = json!(description);
+        }
+    }
+    if item.get("model").is_none() {
+        if let Some(model) = meta.model.as_deref() {
+            item["model"] = json!(model);
+        }
+    }
+    if item.get("is_fork").is_none() {
+        if let Some(is_fork) = meta.is_fork {
+            item["is_fork"] = json!(is_fork);
+        }
+    }
+    if item.get("parent_agent_id").is_none() {
+        if let Some(parent_agent_id) = meta.parent_agent_id.as_deref() {
+            item["parent_agent_id"] = json!(parent_agent_id);
+        }
+    }
+    if item.get("spawn_depth").is_none() {
+        if let Some(spawn_depth) = meta.spawn_depth {
+            item["spawn_depth"] = json!(spawn_depth);
+        }
+    }
 }
 
 /// A single lifecycle edge observed between complete parent registry snapshots.
@@ -514,7 +646,107 @@ fn warp_marker_for_event(
     }
 }
 
+fn safe_single_line_intent(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(DELEGATION_PROGRESS_TOOL_MAX_CHARS)
+        .collect();
+    let trimmed_cleaned = cleaned.trim();
+    (!trimmed_cleaned.is_empty()).then(|| trimmed_cleaned.to_string())
+}
+
+fn extract_tool_intent(tool_name: Option<&str>, tool_input: Option<&Value>) -> Option<String> {
+    let input = tool_input?;
+    if let Some(desc) = input.get("description").and_then(Value::as_str) {
+        if let Some(intent) = safe_single_line_intent(desc) {
+            return Some(intent);
+        }
+    }
+    let tool = tool_name?.trim();
+    match tool {
+        "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
+            let path = input
+                .get("file_path")
+                .or_else(|| input.get("notebook_path"))
+                .and_then(Value::as_str)?;
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(path);
+            safe_single_line_intent(&format!("{tool} {name}"))
+        }
+        "Grep" | "Glob" => {
+            let pattern = input.get("pattern").and_then(Value::as_str)?;
+            safe_single_line_intent(&format!("{tool} {pattern}"))
+        }
+        "WebSearch" => input
+            .get("query")
+            .and_then(Value::as_str)
+            .and_then(safe_single_line_intent),
+        _ => None,
+    }
+}
+
 fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> Option<Value> {
+    if event == "TaskCreated" {
+        let id = task_id(input.get("task_id"))?;
+        if id.chars().count() > DELEGATION_ID_MAX_CHARS || id.chars().any(char::is_control) {
+            return None;
+        }
+        let kind = if string(input, "teammate_name").is_some() {
+            "teammate"
+        } else {
+            "other"
+        };
+        let description = bounded_task_text(
+            input.get("task_subject"),
+            DELEGATION_DESCRIPTION_MAX_CHARS,
+        )
+        .or_else(|| {
+            bounded_task_text(
+                input.get("task_description"),
+                DELEGATION_DESCRIPTION_MAX_CHARS,
+            )
+        });
+        let item = json!({
+            "id": id,
+            "kind": kind,
+            "status": "running",
+            "description": description,
+        });
+        return Some(json!({
+            "operation": "observe",
+            "item": item,
+            "observed_at": observed_at,
+            "source_event": event,
+            "membership": "upsert",
+        }));
+    }
+    if event == "TaskCompleted" {
+        let id = task_id(input.get("task_id"))?;
+        if id.chars().count() > DELEGATION_ID_MAX_CHARS || id.chars().any(char::is_control) {
+            return None;
+        }
+        return Some(json!({
+            "operation": "remove",
+            "item": {
+                "id": id,
+                "kind": if string(input, "teammate_name").is_some() { "teammate" } else { "other" },
+                "status": "completed",
+                "description": Value::Null,
+            },
+            "observed_at": observed_at,
+            "source_event": event,
+            "membership": "existing_exact_link_only",
+        }));
+    }
+
+    let meta = string(input, "agent_id").and_then(|id| read_agent_meta(input, &id));
     let (operation, id, kind, status, native_progress) = match event {
         // A start proves native child identity, not background membership.
         // The consumer may enrich an already-linked item, but must not add a
@@ -526,24 +758,38 @@ fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> 
             "running",
             None,
         ),
-        "SubagentStop" => (
-            "remove",
-            string(input, "agent_id")?,
-            "subagent",
-            "completed",
-            None,
-        ),
+        "SubagentStop" => {
+            let id = string(input, "agent_id")?;
+            if meta.as_ref().and_then(|m| m.finished) == Some(false) {
+                (
+                    "observe",
+                    id,
+                    "subagent",
+                    "waiting",
+                    Some(json!({
+                        "observed_at": observed_at,
+                        "status": "waiting",
+                    })),
+                )
+            } else {
+                ("remove", id, "subagent", "completed", None)
+            }
+        }
         "PreToolUse" => {
             let id = string(input, "agent_id")?;
+            let tool = bounded_required_task_text(
+                input.get("tool_name"),
+                DELEGATION_PROGRESS_TOOL_MAX_CHARS,
+            );
             let mut progress = json!({
                 "observed_at": observed_at,
                 "status": "running",
             });
-            if let Some(tool) = bounded_required_task_text(
-                input.get("tool_name"),
-                DELEGATION_PROGRESS_TOOL_MAX_CHARS,
-            ) {
+            if let Some(tool) = tool.as_deref() {
                 progress["current_tool"] = json!(tool);
+            }
+            if let Some(intent) = extract_tool_intent(tool.as_deref(), input.get("tool_input")) {
+                progress["last_intent"] = json!(intent);
             }
             ("observe", id, "subagent", "running", Some(progress))
         }
@@ -570,13 +816,13 @@ fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> 
         "description": Value::Null,
     });
     if kind == "subagent" {
-        if let Some(parent_tool_call_id) = parent_tool_call_id(input, &id) {
-            item["parent_tool_call_id"] = json!(parent_tool_call_id);
-        }
         if let Some(agent_type) =
             bounded_required_task_text(input.get("agent_type"), DELEGATION_STATUS_MAX_CHARS)
         {
             item["agent_type"] = json!(agent_type);
+        }
+        if let Some(ref meta) = meta {
+            apply_agent_meta(&mut item, meta);
         }
         if let Some(progress) = native_progress {
             item["native_progress"] = progress;
@@ -610,61 +856,289 @@ fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> 
     Some(update)
 }
 
-fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
-    let tasks = input.get("background_tasks").and_then(Value::as_array)?;
-    if tasks.len() > DELEGATION_TASK_LIMIT {
+fn empty_delegation_snapshot(observed_at: &str) -> Value {
+    json!({
+        "count": 0,
+        "kinds": {},
+        "items": [],
+        "observed_at": observed_at,
+    })
+}
+
+fn monitor_ledger_path(home: &Path, session_id: &str) -> PathBuf {
+    let digest = Sha256::digest(session_id.as_bytes());
+    home.join("agent")
+        .join("monitors")
+        .join(format!("{digest:x}.json"))
+}
+
+fn record_monitor_invocation(home: &Path, session_id: &str, input: &Value) {
+    let Some(tool_input) = input.get("tool_input") else {
+        return;
+    };
+    let description = bounded_task_text(
+        tool_input.get("description"),
+        DELEGATION_DESCRIPTION_MAX_CHARS,
+    )
+    .or_else(|| bounded_task_text(tool_input.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS));
+    let Some(description) = description else {
+        return;
+    };
+    let ledger_path = monitor_ledger_path(home, session_id);
+    if let Some(parent) = ledger_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut entries: Vec<String> = std::fs::read(&ledger_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    if !entries.iter().any(|existing| existing == &description) {
+        entries.push(description);
+        if entries.len() > 32 {
+            let overflow = entries.len() - 32;
+            entries.drain(0..overflow);
+        }
+        if let Ok(bytes) = serde_json::to_vec(&entries) {
+            let _ = std::fs::write(&ledger_path, bytes);
+        }
+    }
+}
+
+fn load_monitor_descriptions(home: &Path, session_id: &str) -> HashSet<String> {
+    let ledger_path = monitor_ledger_path(home, session_id);
+    std::fs::read(ledger_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
+fn clear_monitor_ledger(home: &Path, session_id: &str) {
+    let _ = std::fs::remove_file(monitor_ledger_path(home, session_id));
+}
+
+fn normalize_agent_status(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "waiting" | "idle" | "paused" => "waiting",
+        "queued" | "pending" | "starting" => "queued",
+        "completed" | "stopped" | "failed" | "killed" | "finished" | "cancelled" | "canceled" => {
+            "completed"
+        }
+        _ => "running",
+    }
+}
+
+fn extract_agent_progress(agent: &Value, status: &str, observed_at: &str) -> Option<Value> {
+    let tool_count = agent
+        .get("toolCount")
+        .or_else(|| agent.get("tool_count"))
+        .and_then(Value::as_u64);
+    let context_tokens = agent
+        .get("contextTokens")
+        .or_else(|| agent.get("context_tokens"))
+        .and_then(Value::as_u64);
+    let tokens = agent.get("tokens").and_then(Value::as_u64);
+    let duration_ms = agent
+        .get("durationMs")
+        .or_else(|| agent.get("duration_ms"))
+        .and_then(Value::as_u64);
+    let last_intent = agent
+        .get("lastIntent")
+        .or_else(|| agent.get("last_intent"))
+        .and_then(Value::as_str)
+        .and_then(safe_single_line_intent);
+    let current_tool = agent
+        .get("currentTool")
+        .or_else(|| agent.get("current_tool"))
+        .and_then(|value| bounded_required_task_text(Some(value), DELEGATION_PROGRESS_TOOL_MAX_CHARS));
+    if tool_count.is_none()
+        && context_tokens.is_none()
+        && tokens.is_none()
+        && duration_ms.is_none()
+        && last_intent.is_none()
+        && current_tool.is_none()
+        && status != "waiting"
+    {
         return None;
     }
+    let mut progress = json!({
+        "observed_at": observed_at,
+        "status": status,
+    });
+    if let Some(count) = tool_count {
+        progress["tool_count"] = json!(count);
+    }
+    if let Some(ct) = context_tokens {
+        progress["context_tokens"] = json!(ct);
+    }
+    if let Some(tok) = tokens {
+        progress["tokens"] = json!(tok);
+    }
+    if let Some(dur) = duration_ms {
+        progress["duration_ms"] = json!(dur);
+    }
+    if let Some(intent) = last_intent {
+        progress["last_intent"] = json!(intent);
+    }
+    if let Some(tool) = current_tool {
+        progress["current_tool"] = json!(tool);
+    }
+    Some(progress)
+}
+
+fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
+    delegation_snapshot_with_monitors(input, observed_at, None)
+}
+
+fn delegation_snapshot_with_monitors(
+    input: &Value,
+    observed_at: &str,
+    monitor_descriptions: Option<&HashSet<String>>,
+) -> Option<Value> {
+    let aborted = input.get("aborted").and_then(Value::as_bool) == Some(true);
+    let background_tasks = match input.get("background_tasks") {
+        Some(value) => Some(value.as_array()?),
+        None => None,
+    };
+    let agents = if aborted {
+        None
+    } else {
+        input.get("agents").and_then(Value::as_array)
+    };
+    if background_tasks.is_none() && agents.is_none() {
+        return aborted.then(|| empty_delegation_snapshot(observed_at));
+    }
+
     let mut seen_ids = HashSet::new();
-    let mut items = Vec::with_capacity(tasks.len().min(DELEGATION_TASK_LIMIT));
+    let mut items = Vec::new();
     let mut kinds: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
 
-    for task in tasks {
-        // A nonempty registry is authoritative only when every entry needed
-        // to interpret it is well formed. Do not turn a malformed list into
-        // an authoritative empty/partial snapshot.
-        let Some(id) = task_id(task.get("id")) else {
-            return None;
-        };
-        let Some(status) =
-            bounded_required_task_text(task.get("status"), DELEGATION_STATUS_MAX_CHARS)
-        else {
-            return None;
-        };
-        let Some(raw_kind) = task
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return None;
-        };
-        if raw_kind.chars().count() > DELEGATION_STATUS_MAX_CHARS {
+    if let Some(tasks) = background_tasks {
+        if tasks.len() > DELEGATION_TASK_LIMIT {
             return None;
         }
-        if !seen_ids.insert(id.clone()) {
-            continue;
-        }
-
-        let kind = delegation_kind(raw_kind);
-        *kinds.entry(kind.to_string()).or_insert(0) += 1;
-        // `description` and `name` are provider labels. Deliberately do not
-        // inspect `command`, which may contain credentials or user data.
-        let description =
-            bounded_task_text(task.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
-                .or_else(|| bounded_task_text(task.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS));
-        let mut item = json!({
-            "id": id,
-            "kind": kind,
-            "status": status,
-            "description": description,
-        });
-        if kind == "subagent" {
-            if let Some(parent_tool_call_id) = parent_tool_call_id(input, &id) {
-                item["parent_tool_call_id"] = json!(parent_tool_call_id);
+        for task in tasks {
+            // A nonempty registry is authoritative only when every entry needed
+            // to interpret it is well formed. Do not turn a malformed list into
+            // an authoritative empty/partial snapshot.
+            let Some(id) = task_id(task.get("id")) else {
+                return None;
+            };
+            let Some(status) =
+                bounded_required_task_text(task.get("status"), DELEGATION_STATUS_MAX_CHARS)
+            else {
+                return None;
+            };
+            let Some(raw_kind) = task
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return None;
+            };
+            if raw_kind.chars().count() > DELEGATION_STATUS_MAX_CHARS {
+                return None;
             }
+            if !seen_ids.insert(id.clone()) {
+                continue;
+            }
+
+            // `description` and `name` are provider labels. Deliberately do not
+            // inspect `command`, which may contain credentials or user data.
+            let description =
+                bounded_task_text(task.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                    .or_else(|| {
+                        bounded_task_text(task.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                    });
+            let mut kind = delegation_kind(raw_kind);
+            if kind == "shell" {
+                if let (Some(monitors), Some(desc)) = (monitor_descriptions, description.as_deref())
+                {
+                    if monitors.contains(desc) {
+                        kind = "monitor";
+                    }
+                }
+            }
+            *kinds.entry(kind.to_string()).or_insert(0) += 1;
+            let mut item = json!({
+                "id": id,
+                "kind": kind,
+                "status": status,
+                "description": description,
+            });
+            if let Some(agent_type) =
+                bounded_required_task_text(task.get("agent_type"), DELEGATION_STATUS_MAX_CHARS)
+            {
+                item["agent_type"] = json!(agent_type);
+            }
+            if kind == "subagent" {
+                if let Some(meta) = read_agent_meta(input, &id) {
+                    apply_agent_meta(&mut item, &meta);
+                }
+            }
+            items.push(item);
         }
-        items.push(item);
+    }
+
+    if let Some(agent_list) = agents {
+        for agent in agent_list {
+            if items.len() >= DELEGATION_TASK_LIMIT {
+                break;
+            }
+            let Some(id) = task_id(agent.get("id")) else {
+                continue;
+            };
+            let raw_status = agent
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("running");
+            let status = normalize_agent_status(raw_status);
+            if status == "completed" {
+                continue;
+            }
+            if !seen_ids.insert(id.clone()) {
+                continue;
+            }
+            let agent_type =
+                bounded_required_task_text(agent.get("type"), DELEGATION_STATUS_MAX_CHARS);
+            let is_teammate = agent
+                .get("teammateId")
+                .and_then(Value::as_str)
+                .is_some_and(|v| !v.trim().is_empty())
+                || agent_type
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("teammate"));
+            let kind = if is_teammate { "teammate" } else { "subagent" };
+            *kinds.entry(kind.to_string()).or_insert(0) += 1;
+            let description =
+                bounded_task_text(agent.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                    .or_else(|| {
+                        bounded_task_text(agent.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                    });
+            let mut item = json!({
+                "id": id,
+                "kind": kind,
+                "status": status,
+                "description": description,
+            });
+            if let Some(ref at) = agent_type {
+                item["agent_type"] = json!(at);
+            }
+            if let Some(parent_id) =
+                task_id(agent.get("parentId")).or_else(|| task_id(agent.get("spawnedBy")))
+            {
+                item["parent_agent_id"] = json!(parent_id);
+            }
+            if let Some(meta) = read_agent_meta(input, &id) {
+                apply_agent_meta(&mut item, &meta);
+            }
+            if let Some(progress) = extract_agent_progress(agent, status, observed_at) {
+                item["native_progress"] = progress;
+            }
+            items.push(item);
+        }
     }
 
     Some(json!({
@@ -673,6 +1147,128 @@ fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
         "items": items,
         "observed_at": observed_at,
     }))
+}
+
+fn extract_session_usage(input: &Value) -> Option<Value> {
+    let usage = input.get("session_usage").and_then(Value::as_object)?;
+    let mut out = serde_json::Map::new();
+    if let Some(context) = usage.get("context").and_then(Value::as_object) {
+        let mut ctx = serde_json::Map::new();
+        if let Some(tokens) = context.get("tokens").and_then(Value::as_u64) {
+            ctx.insert("tokens".to_string(), json!(tokens));
+        }
+        if let Some(window) = context.get("window").and_then(Value::as_u64) {
+            ctx.insert("window".to_string(), json!(window));
+        }
+        if let Some(percent) = context.get("percent").and_then(Value::as_f64) {
+            ctx.insert("percent".to_string(), json!(percent));
+        }
+        if !ctx.is_empty() {
+            out.insert("context".to_string(), Value::Object(ctx));
+        }
+    }
+    if let Some(cost_usd) = usage
+        .get("cost")
+        .and_then(|c| c.get("usd"))
+        .and_then(Value::as_f64)
+        .or_else(|| usage.get("cost_usd").and_then(Value::as_f64))
+    {
+        out.insert("cost_usd".to_string(), json!(cost_usd));
+    }
+    if let Some(started_at) = usage
+        .get("startedAt")
+        .or_else(|| usage.get("started_at"))
+        .and_then(Value::as_u64)
+    {
+        out.insert("started_at".to_string(), json!(started_at));
+    }
+    if let Some(rate_limits) = usage
+        .get("rateLimits")
+        .or_else(|| usage.get("rate_limits"))
+        .and_then(Value::as_array)
+    {
+        let bounded: Vec<Value> = rate_limits
+            .iter()
+            .take(8)
+            .filter_map(|item| {
+                let kind = bounded_required_task_text(item.get("kind"), 64)?;
+                let percent = item
+                    .get("percentUsed")
+                    .or_else(|| item.get("percent_used"))
+                    .and_then(Value::as_f64)?;
+                let mut entry = json!({ "kind": kind, "percent_used": percent });
+                if let Some(resets) = item
+                    .get("resetsAt")
+                    .or_else(|| item.get("resets_at"))
+                    .and_then(|v| bounded_required_task_text(Some(v), 64))
+                {
+                    entry["resets_at"] = json!(resets);
+                }
+                Some(entry)
+            })
+            .collect();
+        if !bounded.is_empty() {
+            out.insert("rate_limits".to_string(), Value::Array(bounded));
+        }
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
+}
+
+fn extract_session_crons(input: &Value) -> Option<Value> {
+    let crons = input.get("session_crons").and_then(Value::as_array)?;
+    let bounded: Vec<Value> = crons
+        .iter()
+        .take(32)
+        .filter_map(|cron| {
+            let id = bounded_required_task_text(cron.get("id"), DELEGATION_ID_MAX_CHARS)?;
+            let schedule = bounded_required_task_text(cron.get("schedule"), 64)?;
+            let recurring = cron.get("recurring").and_then(Value::as_bool).unwrap_or(false);
+            let mut item = json!({
+                "id": id,
+                "schedule": schedule,
+                "recurring": recurring,
+            });
+            if let Some(prompt) = bounded_task_text(cron.get("prompt"), DELEGATION_DESCRIPTION_MAX_CHARS) {
+                item["prompt"] = json!(prompt);
+            }
+            Some(item)
+        })
+        .collect();
+    Some(Value::Array(bounded))
+}
+
+fn git_head_branch(cwd: Option<&str>) -> Option<String> {
+    let mut dir = Path::new(cwd?).to_path_buf();
+    for _ in 0..8 {
+        let dot_git = dir.join(".git");
+        let head_path = if dot_git.is_file() {
+            let content = std::fs::read_to_string(&dot_git).ok()?;
+            let gitdir = content.strip_prefix("gitdir:")?.trim();
+            let resolved = if Path::new(gitdir).is_absolute() {
+                PathBuf::from(gitdir)
+            } else {
+                dir.join(gitdir)
+            };
+            resolved.join("HEAD")
+        } else if dot_git.is_dir() {
+            dot_git.join("HEAD")
+        } else {
+            if !dir.pop() {
+                return None;
+            }
+            continue;
+        };
+        let head = std::fs::read_to_string(head_path).ok()?;
+        let line = head.trim();
+        if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
+            let branch = branch.trim();
+            if !branch.is_empty() && branch.chars().count() <= 128 && !branch.chars().any(char::is_control) {
+                return Some(branch.to_string());
+            }
+        }
+        return None;
+    }
+    None
 }
 
 fn string(input: &Value, key: &str) -> Option<String> {
@@ -2309,6 +2905,142 @@ mod tests {
         with_home(home.path(), || {
             presence_for(&old);
             assert_eq!(outbox_files(home.path()).len(), 1);
+        });
+    }
+
+    #[test]
+    fn mod_state_agents_and_session_usage_and_monitors_produce_rich_presence() {
+        let home = tempfile::tempdir().unwrap();
+        let transcript = home.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-a1.meta.json"),
+            br#"{"agentType":"Explore","description":"Scan hooks","toolUseId":"toolu_a1","pickedEffortModel":"claude-opus-5-5","isFork":true,"spawnDepth":2,"parentAgentId":"a0","finished":false}"#,
+        )
+        .unwrap();
+
+        with_managed_home(home.path(), "longhouse-rich", "run-rich", || {
+            // Monitor PreToolUse records its description for later upgrade.
+            handle_input(&json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "native-rich",
+                "tool_name": "Monitor",
+                "tool_input": { "description": "Watch canary rollout" },
+            }))
+            .unwrap();
+
+            // SubagentStop when finished=false emits observe/waiting rather than remove.
+            handle_input(&json!({
+                "hook_event_name": "SubagentStop",
+                "session_id": "native-rich",
+                "transcript_path": transcript,
+                "agent_id": "a1",
+            }))
+            .unwrap();
+
+            // Child PreToolUse populates last_intent and clears on PostToolUse.
+            handle_input(&json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "native-rich",
+                "transcript_path": transcript,
+                "agent_id": "a1",
+                "tool_name": "Read",
+                "tool_input": { "file_path": "/tmp/hooks.py" },
+            }))
+            .unwrap();
+
+            // TaskCreated upserts; TaskCompleted removes.
+            handle_input(&json!({
+                "hook_event_name": "TaskCreated",
+                "session_id": "native-rich",
+                "task_id": "task-9",
+                "task_subject": "Run verification",
+            }))
+            .unwrap();
+
+            // CwdChanged picks up new_cwd + permission_mode + session_usage + ClaudeModState.
+            handle_input(&json!({
+                "hook_event_name": "ClaudeModState",
+                "session_id": "native-rich",
+                "transcript_path": transcript,
+                "cwd": "/repo/sub",
+                "agents": [
+                    {
+                        "id": "a1",
+                        "type": "Explore",
+                        "status": "idle",
+                        "toolCount": 14,
+                        "tokens": 8200,
+                        "durationMs": 45000,
+                        "lastIntent": "Read hooks.py",
+                    }
+                ],
+                "background_tasks": [
+                    {
+                        "id": "sh-mon",
+                        "type": "shell",
+                        "status": "running",
+                        "description": "Watch canary rollout",
+                    }
+                ],
+                "session_usage": {
+                    "startedAt": 1700000000000u64,
+                    "context": { "tokens": 120000, "window": 1000000, "percent": 12 },
+                    "cost": { "usd": 14.5 },
+                    "rateLimits": [{ "kind": "five_hour", "percentUsed": 22.0, "resetsAt": "2026-11-15T08:00:00Z" }]
+                },
+                "session_crons": [{ "id": "cron-1", "schedule": "*/5 * * * *", "recurring": true, "prompt": "check" }],
+                "permission_mode": "bypassPermissions",
+            }))
+            .unwrap();
+
+            let files: Vec<Value> = std::fs::read_dir(home.path().join("agent/outbox"))
+                .unwrap()
+                .map(|entry| {
+                    let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+                    serde_json::from_slice(&bytes).unwrap()
+                })
+                .collect();
+
+            let waiting_stop = files
+                .iter()
+                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("SubagentStop")))
+                .unwrap();
+            assert_eq!(waiting_stop["delegation_update"]["operation"], "observe");
+            assert_eq!(waiting_stop["delegation_update"]["item"]["status"], "waiting");
+            assert_eq!(waiting_stop["delegation_update"]["item"]["spawn_depth"], 2);
+            assert_eq!(waiting_stop["delegation_update"]["item"]["is_fork"], true);
+
+            let child_pre = files
+                .iter()
+                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("PreToolUse")))
+                .unwrap();
+            assert_eq!(child_pre["delegation_update"]["item"]["native_progress"]["last_intent"], "Read hooks.py");
+
+            let created = files
+                .iter()
+                .find(|v| v.get("delegation_update").and_then(|u| u.get("source_event")) == Some(&json!("TaskCreated")))
+                .unwrap();
+            assert_eq!(created["delegation_update"]["membership"], "upsert");
+            assert_eq!(created["delegation_update"]["item"]["description"], "Run verification");
+
+            let mod_state = files
+                .iter()
+                .find(|v| v.get("hook_event_name") == Some(&json!("ClaudeModState")))
+                .unwrap();
+            assert_eq!(mod_state["delegation"]["count"], 2);
+            assert_eq!(mod_state["delegation"]["kinds"]["monitor"], 1);
+            assert_eq!(mod_state["delegation"]["kinds"]["subagent"], 1);
+            assert_eq!(mod_state["delegation"]["items"][0]["kind"], "monitor");
+            assert_eq!(mod_state["delegation"]["items"][1]["status"], "waiting");
+            assert_eq!(mod_state["delegation"]["items"][1]["model"], "claude-opus-5-5");
+            assert_eq!(mod_state["delegation"]["items"][1]["native_progress"]["tool_count"], 14);
+            assert_eq!(mod_state["session_usage"]["cost_usd"], 14.5);
+            assert_eq!(mod_state["session_usage"]["context"]["window"], 1000000);
+            assert_eq!(mod_state["permission_mode"], "bypassPermissions");
+            assert_eq!(mod_state["session_crons"][0]["id"], "cron-1");
         });
     }
 }

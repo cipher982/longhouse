@@ -1016,23 +1016,69 @@ def _registry_items_with_lifecycle(
                 item["parent_tool_call_id"] = tool_id
             if edge_at >= observed_at:
                 item["status"] = edge["status"]
+            for field in ("agent_type", "model", "is_fork", "parent_agent_id", "spawn_depth"):
+                if edge.get(field) is not None and (edge_at >= observed_at or item.get(field) is None):
+                    item[field] = edge[field]
             raw_progress = edge.get("native_progress")
-            if isinstance(raw_progress, Mapping):
+            source_event = value.get("source_event")
+            if isinstance(raw_progress, Mapping) or source_event == "PreToolUse":
                 existing_progress = _mapping(item.get("native_progress"))
                 existing_progress_at = _optional_wire_datetime(existing_progress.get("observed_at"), "native_progress.observed_at")
                 if existing_progress_at is None or edge_at >= existing_progress_at:
-                    item["native_progress"] = dict(raw_progress)
+                    merged_progress = dict(existing_progress)
+                    if isinstance(raw_progress, Mapping):
+                        merged_progress.update({k: v for k, v in raw_progress.items() if v is not None})
+                        if not raw_progress.get("current_tool"):
+                            merged_progress.pop("current_tool", None)
+                    else:
+                        merged_progress.pop("current_tool", None)
+                    if (not isinstance(raw_progress, Mapping) or raw_progress.get("tool_count") is None) and source_event == "PreToolUse":
+                        merged_progress["tool_count"] = int(existing_progress.get("tool_count") or 0) + 1
+                    item["native_progress"] = merged_progress
+                else:
+                    merged_progress = dict(existing_progress)
+                    changed = False
+                    if isinstance(raw_progress, Mapping) and raw_progress.get("last_intent") and not merged_progress.get("last_intent"):
+                        merged_progress["last_intent"] = raw_progress["last_intent"]
+                        changed = True
+                    if source_event == "PreToolUse" and merged_progress.get("tool_count") is None:
+                        merged_progress["tool_count"] = 1
+                        changed = True
+                    if changed:
+                        item["native_progress"] = merged_progress
             result[index] = item
     return result
 
 
 def _project_delegation_task(item: Mapping[str, Any], children: Mapping[str, Any]) -> SessionDelegationTaskResponse:
     child = _mapping(children.get(item.get("parent_tool_call_id")) or children.get(f"native:{item.get('native_child_id')}"))
+    progress_raw = dict(item["native_progress"]) if isinstance(item.get("native_progress"), Mapping) else None
+    child_tokens = child.get("tokens")
+    child_duration_ms = child.get("duration_ms")
+    if (child_tokens is not None or child_duration_ms is not None) and (
+        progress_raw is None or progress_raw.get("tokens") is None or progress_raw.get("duration_ms") is None
+    ):
+        enriched = dict(progress_raw or {})
+        if enriched.get("tokens") is None and child_tokens is not None:
+            enriched["tokens"] = int(child_tokens)
+        if enriched.get("duration_ms") is None and child_duration_ms is not None:
+            enriched["duration_ms"] = int(child_duration_ms)
+        progress_raw = enriched
+    is_fork_val = item.get("is_fork")
+    if not isinstance(is_fork_val, bool):
+        is_fork_val = child.get("is_fork") if isinstance(child.get("is_fork"), bool) else None
+    spawn_depth_raw = item.get("spawn_depth") if item.get("spawn_depth") is not None else child.get("spawn_depth")
+    spawn_depth_val = int(spawn_depth_raw) if isinstance(spawn_depth_raw, int) and not isinstance(spawn_depth_raw, bool) else None
     return SessionDelegationTaskResponse(
         id=item["id"],
         kind=item["kind"],
         status=item["status"],
         description=item.get("description"),
+        agent_type=_text(item.get("agent_type")) or _text(child.get("agent_type")),
+        model=_text(item.get("model")) or _text(child.get("model")),
+        is_fork=is_fork_val,
+        parent_agent_id=_text(item.get("parent_agent_id")) or _text(child.get("parent_agent_id")),
+        spawn_depth=spawn_depth_val,
         first_observed_at=_optional_wire_datetime(item.get("first_observed_at"), "first_observed_at"),
         started_at=_optional_wire_datetime(child.get("started_at"), "started_at"),
         last_activity_at=_optional_wire_datetime(child.get("last_activity_at"), "last_activity_at"),
@@ -1042,7 +1088,7 @@ def _project_delegation_task(item: Mapping[str, Any], children: Mapping[str, Any
         tool_calls=int(child["tool_calls"]) if child.get("tool_calls") is not None else None,
         registered_at=_optional_wire_datetime(item.get("registered_at"), "registered_at"),
         ended_at=_optional_wire_datetime(item.get("ended_at"), "ended_at"),
-        native_progress=SessionDelegationProgress(**item["native_progress"]) if item.get("native_progress") is not None else None,
+        native_progress=SessionDelegationProgress(**progress_raw) if progress_raw is not None else None,
     )
 
 

@@ -1333,3 +1333,343 @@ def test_child_tool_hooks_update_native_progress_and_stream_delta_without_resurr
     after_straggler = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
     assert after_straggler["delegation"]["state"] == "none"
     assert after_straggler["delegation"]["count"] == 0
+
+
+def test_claude_mod_state_monitors_waiting_subagents_and_hud_projection(live_catalog, live_catalog_client):
+    email = "claude-hud-owner@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, _thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+    started_ms = int((base - timedelta(seconds=65)).timestamp() * 1000)
+
+    mod_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": base.isoformat(),
+            "hook_event_name": "ClaudeModState",
+            "dedupe_key": "mod-state-hud-1",
+            "delegation": {
+                "observed_at": base.isoformat(),
+                "freshness_ms": 120_000,
+                "count": 2,
+                "kinds": {"monitor": 1, "subagent": 1},
+                "items": [
+                    {
+                        "id": "sh-mon",
+                        "kind": "monitor",
+                        "status": "running",
+                        "description": "Watch canary rollout",
+                    },
+                    {
+                        "id": "agent-w1",
+                        "kind": "subagent",
+                        "status": "waiting",
+                        "description": "Inspect hooks",
+                        "agent_type": "Explore",
+                        "model": "claude-opus-5-5",
+                        "is_fork": True,
+                        "parent_agent_id": "root-agent",
+                        "spawn_depth": 2,
+                        "native_progress": {
+                            "observed_at": base.isoformat(),
+                            "status": "waiting",
+                            "tool_count": 14,
+                            "tokens": 4200,
+                            "context_tokens": 1800,
+                            "duration_ms": 12500,
+                        },
+                    },
+                ],
+            },
+            "session_usage": {
+                "started_at": started_ms,
+                "context": {"tokens": 120_000, "window": 1_000_000, "percent": 12.0},
+                "cost_usd": 14.5,
+                "rate_limits": [{"kind": "five_hour", "percent_used": 22.0, "resets_at": "2026-11-15T08:00:00Z"}],
+            },
+            "session_crons": [{"id": "cron-1", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check"}],
+            "permission_mode": "bypassPermissions",
+        },
+    )
+    assert mod_resp.status_code == 204, mod_resp.text
+
+    cwd_ts = base + timedelta(seconds=2)
+    cwd_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "occurred_at": cwd_ts.isoformat(),
+            "hook_event_name": "CwdChanged",
+            "cwd": "/workspace/delegation-lifecycle/subdir",
+            "git_branch": "feat/claude-fidelity",
+            "dedupe_key": "cwd-changed-1",
+        },
+    )
+    assert cwd_resp.status_code == 204, cwd_resp.text
+
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner, email=email)}
+    detail = live_catalog_client.get(f"/timeline/sessions/{session_id}", cookies=cookies)
+    assert detail.status_code == 200, detail.text
+    workspace = live_catalog_client.get(f"/timeline/sessions/{session_id}/workspace", cookies=cookies)
+    assert workspace.status_code == 200, workspace.text
+    mobile_tail = live_catalog_client.get(f"/timeline/sessions/{session_id}/mobile-tail", cookies=cookies)
+    assert mobile_tail.status_code == 200, mobile_tail.text
+
+    for payload_session in (detail.json(), workspace.json()["session"], mobile_tail.json()["session"]):
+        assert payload_session["cwd"] == "/workspace/delegation-lifecycle/subdir"
+        assert payload_session["git_branch"] == "feat/claude-fidelity"
+        assert payload_session["permission_mode"] == "bypassPermissions"
+        assert payload_session["session_crons"] == [{"id": "cron-1", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check"}]
+        assert payload_session["pending_background_agent_count"] == 1
+        usage = payload_session["usage_latest"]
+        assert usage["context_tokens"] == 120_000
+        assert usage["context_window"] == 1_000_000
+        assert usage["context_window_source"] == "native"
+        assert usage["used_percent"] == 12.0
+        assert usage["cost_usd"] == 14.5
+        assert usage["cumulative_duration_ms"] >= 65_000
+        assert usage["rate_limits"] == [{"kind": "five_hour", "percent_used": 22.0, "resets_at": "2026-11-15T08:00:00Z"}]
+        delegation = payload_session["session_state"]["delegation"]
+        assert delegation["state"] == "pending"
+        assert delegation["count"] == 2
+        assert delegation["kinds"] == {"monitor": 1, "subagent": 1}
+        subagent = next(item for item in delegation["items"] if item["id"] == "agent-w1")
+        assert subagent["status"] == "waiting"
+        assert subagent["agent_type"] == "Explore"
+        assert subagent["model"] == "claude-opus-5-5"
+        assert subagent["is_fork"] is True
+        assert subagent["parent_agent_id"] == "root-agent"
+        assert subagent["spawn_depth"] == 2
+        assert subagent["native_progress"]["tool_count"] == 14
+        assert subagent["native_progress"]["tokens"] == 4200
+
+
+def test_child_post_tool_clears_tool_preserves_progress_and_waiting_stop_keeps_subagent(live_catalog, live_catalog_client):
+    email = "claude-waiting-stop@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, _thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    snap_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": base.isoformat(),
+            "hook_event_name": "ClaudeModState",
+            "dedupe_key": "snap-progress-1",
+            "delegation": {
+                "observed_at": base.isoformat(),
+                "freshness_ms": 120_000,
+                "count": 1,
+                "kinds": {"subagent": 1},
+                "items": [
+                    {
+                        "id": "a-child-1",
+                        "kind": "subagent",
+                        "status": "running",
+                        "description": "Audit hooks",
+                        "native_progress": {
+                            "observed_at": base.isoformat(),
+                            "status": "running",
+                            "tokens": 3100,
+                            "duration_ms": 4000,
+                        },
+                    }
+                ],
+            },
+        },
+    )
+    assert snap_resp.status_code == 204, snap_resp.text
+
+    t_pre = base + timedelta(seconds=2)
+    pre_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_pre.isoformat(),
+            "dedupe_key": "child-pre-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "PreToolUse",
+                "source_agent_id": "a-child-1",
+                "observed_at": t_pre.isoformat(),
+                "item": {
+                    "id": "a-child-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "native_progress": {
+                        "observed_at": t_pre.isoformat(),
+                        "status": "running",
+                        "current_tool": "Bash",
+                        "last_intent": "Run cargo test",
+                    },
+                },
+            },
+        },
+    )
+    assert pre_resp.status_code == 204, pre_resp.text
+
+    t_post = base + timedelta(seconds=4)
+    post_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_post.isoformat(),
+            "dedupe_key": "child-post-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "PostToolUse",
+                "source_agent_id": "a-child-1",
+                "observed_at": t_post.isoformat(),
+                "item": {
+                    "id": "a-child-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "native_progress": {
+                        "observed_at": t_post.isoformat(),
+                        "status": "thinking",
+                    },
+                },
+            },
+        },
+    )
+    assert post_resp.status_code == 204, post_resp.text
+    after_post = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    prog = after_post["delegation"]["items"][0]["native_progress"]
+    assert prog["current_tool"] is None
+    assert prog["last_intent"] == "Run cargo test"
+    assert prog["tool_count"] == 1
+    assert prog["tokens"] == 3100
+    assert prog["duration_ms"] == 4000
+
+    t_wait = base + timedelta(seconds=6)
+    wait_stop = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_wait.isoformat(),
+            "dedupe_key": "child-wait-stop-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "existing_exact_link_only",
+                "source_event": "SubagentStop",
+                "source_agent_id": "a-child-1",
+                "observed_at": t_wait.isoformat(),
+                "item": {
+                    "id": "a-child-1",
+                    "kind": "subagent",
+                    "status": "waiting",
+                    "agent_type": "Explore",
+                    "spawn_depth": 2,
+                    "native_progress": {
+                        "observed_at": t_wait.isoformat(),
+                        "status": "waiting",
+                    },
+                },
+            },
+        },
+    )
+    assert wait_stop.status_code == 204, wait_stop.text
+    after_wait = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_wait["delegation"]["state"] == "pending"
+    assert after_wait["delegation"]["count"] == 1
+    item = after_wait["delegation"]["items"][0]
+    assert item["status"] == "waiting"
+    assert item["agent_type"] == "Explore"
+    assert item["spawn_depth"] == 2
+    assert item["native_progress"]["tool_count"] == 1
+    assert item["native_progress"]["last_intent"] == "Run cargo test"
+
+
+def test_task_created_upserts_and_task_completed_moves_to_recent_items(live_catalog, live_catalog_client):
+    email = "claude-tasks-owner@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, _thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=15)
+
+    created = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": base.isoformat(),
+            "dedupe_key": "task-created-1",
+            "delegation_update": {
+                "operation": "observe",
+                "membership": "upsert",
+                "source_event": "TaskCreated",
+                "observed_at": base.isoformat(),
+                "item": {
+                    "id": "task-1",
+                    "kind": "other",
+                    "status": "running",
+                    "description": "Run verification",
+                },
+            },
+        },
+    )
+    assert created.status_code == 204, created.text
+    after_create = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_create["delegation"]["state"] == "pending"
+    assert after_create["delegation"]["count"] == 1
+    assert after_create["delegation"]["items"][0]["id"] == "task-1"
+    assert after_create["delegation"]["items"][0]["description"] == "Run verification"
+
+    t_done = base + timedelta(seconds=5)
+    completed = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "occurred_at": t_done.isoformat(),
+            "dedupe_key": "task-completed-1",
+            "delegation_update": {
+                "operation": "remove",
+                "membership": "existing_exact_link_only",
+                "source_event": "TaskCompleted",
+                "observed_at": t_done.isoformat(),
+                "item": {
+                    "id": "task-1",
+                    "kind": "other",
+                    "status": "completed",
+                    "description": None,
+                },
+            },
+        },
+    )
+    assert completed.status_code == 204, completed.text
+    after_done = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_done["delegation"]["state"] == "none"
+    assert after_done["delegation"]["count"] == 0
+    assert after_done["delegation"]["items"] == []
+    assert len(after_done["delegation"]["recent_items"]) == 1
+    assert after_done["delegation"]["recent_items"][0]["id"] == "task-1"
+    assert after_done["delegation"]["recent_items"][0]["status"] == "completed"
+    assert after_done["delegation"]["recent_items"][0]["description"] == "Run verification"

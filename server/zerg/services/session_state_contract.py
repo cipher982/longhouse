@@ -193,6 +193,11 @@ class SessionDelegationTaskResponse(_FrozenModel):
     kind: str
     status: str
     description: str | None = None
+    agent_type: str | None = None
+    model: str | None = None
+    is_fork: bool | None = None
+    parent_agent_id: str | None = None
+    spawn_depth: int | None = None
     first_observed_at: datetime | None = None
     started_at: datetime | None = None
     last_activity_at: datetime | None = None

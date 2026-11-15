@@ -142,6 +142,16 @@ struct PresenceOutboxPayload {
     /// The run the producing provider was launched into, when it knew one.
     #[serde(default)]
     run_id: Option<String>,
+    #[serde(default)]
+    hook_event_name: Option<String>,
+    #[serde(default)]
+    session_usage: Option<Value>,
+    #[serde(default)]
+    session_crons: Option<Value>,
+    #[serde(default)]
+    permission_mode: Option<String>,
+    #[serde(default)]
+    git_branch: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -483,6 +493,9 @@ fn collect_outbox_impl(
         (String, String, Option<String>, String),
         PendingPresenceFile,
     > = HashMap::new();
+    let mut metadata_by_session_kind: HashMap<(String, String, &'static str), PendingPresenceFile> =
+        HashMap::new();
+    let mut metadata_paths = HashSet::new();
     // Local phase observations are durable evidence for the engine's own
     // health projection. Keep them separate: they must reach SQLite but never
     // become hosted presence traffic.
@@ -545,7 +558,9 @@ fn collect_outbox_impl(
             .delegation_update
             .as_ref()
             .is_some_and(Value::is_object);
-        if state.is_empty() && !delegation_required && !update_required {
+        let metadata_kind = session_metadata_kind(&payload);
+        let metadata_required = metadata_kind.is_some();
+        if state.is_empty() && !delegation_required && !update_required && !metadata_required {
             let _ = std::fs::remove_file(&path);
             continue;
         }
@@ -560,6 +575,7 @@ fn collect_outbox_impl(
                         && !managed_binding_required
                         && !delegation_required
                         && !update_required
+                        && !metadata_required
                     {
                         let _ = std::fs::remove_file(&path);
                         continue;
@@ -646,6 +662,23 @@ fn collect_outbox_impl(
                 delegation_by_session_run.insert(delegation_key, next_file.clone());
             }
         }
+        if let Some(kind) = metadata_kind {
+            if !delegation_required {
+                metadata_paths.insert(path.clone());
+                let key = (
+                    normalize_provider(next_file.payload.provider.as_deref()).to_string(),
+                    sid.clone(),
+                    kind,
+                );
+                let replace = metadata_by_session_kind
+                    .get(&key)
+                    .map(|existing| next_file.observed_at > existing.observed_at)
+                    .unwrap_or(true);
+                if replace {
+                    metadata_by_session_kind.insert(key, next_file.clone());
+                }
+            }
+        }
         if next_file
             .payload
             .state
@@ -679,12 +712,16 @@ fn collect_outbox_impl(
                 if next_file.observed_at > existing.observed_at {
                     if !managed_binding_paths.contains(&existing.path)
                         && !has_delegation_snapshot(&existing.payload)
+                        && !metadata_paths.contains(&existing.path)
                     {
                         let _ = std::fs::remove_file(&existing.path);
                     }
                     by_session.insert(sid, next_file);
                 } else {
-                    if !managed_binding_paths.contains(&path) && !delegation_required {
+                    if !managed_binding_paths.contains(&path)
+                        && !delegation_required
+                        && !metadata_required
+                    {
                         let _ = std::fs::remove_file(&path);
                     }
                 }
@@ -701,7 +738,8 @@ fn collect_outbox_impl(
             || !local_phase_by_session.is_empty()
             || !delegation_by_session_run.is_empty()
             || !delegation_updates.is_empty()
-            || !delegation_observe_by_agent.is_empty())
+            || !delegation_observe_by_agent.is_empty()
+            || !metadata_by_session_kind.is_empty())
     {
         match crate::state::db::resolve_db_path(db_path)
             .and_then(|path| crate::state::db::open_connection(&path))
@@ -781,6 +819,7 @@ fn collect_outbox_impl(
         delegation_updates
             .iter()
             .chain(delegation_observe_by_agent.values())
+            .chain(metadata_by_session_kind.values())
             .map(|pending| pending.path.clone()),
     );
     for path in persisted_binding_paths.difference(&selected_paths) {
@@ -793,6 +832,11 @@ fn collect_outbox_impl(
             let _ = std::fs::remove_file(path);
         }
     }
+    for path in metadata_paths.difference(&selected_paths) {
+        if !managed_binding_paths.contains(path) && !delegation_paths.contains(path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 
     // One process inventory for the whole drain, collected only if a payload
     // actually needs a process lookup.
@@ -801,9 +845,13 @@ fn collect_outbox_impl(
         .values()
         .map(|pending| pending.path.clone())
         .collect();
+    let mut seen_selected_paths = ordinary_paths.clone();
     let mut selected_presence: Vec<PendingPresenceFile> = by_session.into_values().collect();
-    for pending in delegation_by_session_run.into_values() {
-        if !ordinary_paths.contains(&pending.path) {
+    for pending in delegation_by_session_run
+        .into_values()
+        .chain(metadata_by_session_kind.into_values())
+    {
+        if seen_selected_paths.insert(pending.path.clone()) {
             selected_presence.push(pending);
         }
     }
@@ -1965,6 +2013,28 @@ fn observed_at_for_payload(
 }
 fn has_delegation_snapshot(payload: &PresenceOutboxPayload) -> bool {
     payload.delegation.as_ref().is_some_and(Value::is_object)
+}
+
+fn session_metadata_kind(payload: &PresenceOutboxPayload) -> Option<&'static str> {
+    if payload.hook_event_name.as_deref() == Some("CwdChanged") {
+        Some("cwd_changed")
+    } else if payload
+        .permission_mode
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        Some("permission_mode")
+    } else if payload.session_usage.is_some()
+        || payload.session_crons.is_some()
+        || payload
+            .git_branch
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty())
+    {
+        Some("mod_metadata")
+    } else {
+        None
+    }
 }
 
 fn delegation_observed_at(pending: &PendingPresenceFile) -> DateTime<Utc> {

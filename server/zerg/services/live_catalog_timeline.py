@@ -33,6 +33,10 @@ from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.session_provider_facts import last_turn as project_last_turn
+from zerg.services.session_provider_facts import project_session_hud
+from zerg.services.session_provider_facts import provider_facts_from_rows
+from zerg.services.session_provider_facts import recap as project_recap
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
@@ -449,6 +453,13 @@ def _pending_response_from_catalog(
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
+    selected_model = _selected_model_from_thread(_primary_thread_facts(catalog_facts))
+    hud = project_session_hud(
+        catalog_facts.get("provider_facts"),
+        catalog_facts.get("runtime_meta"),
+        delegation=session_state.delegation,
+        fallback_model=selected_model,
+    )
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
         update={
@@ -482,7 +493,13 @@ def _pending_response_from_catalog(
             "active_tool": canonical_aliases["active_tool"],
             "confidence": canonical_aliases["confidence"],
             "summary": session.summary,
-            "selected_model": _selected_model_from_thread(_primary_thread_facts(catalog_facts)),
+            "selected_model": selected_model,
+            "usage_latest": hud["usage_latest"],
+            "permission_mode": hud["permission_mode"],
+            "provider_title": hud["provider_title"],
+            "worktree": hud["worktree"],
+            "session_crons": hud["session_crons"],
+            "pending_background_agent_count": hud["pending_background_agent_count"],
             "summary_title": card.summary_title or session.summary_title,
             "anchor_title": session.anchor_title,
             "timeline_title": title,
@@ -571,6 +588,14 @@ def _response_from_catalog(
     capabilities = project_compat_capabilities_from_state(capabilities, session_state, provider=session.provider)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
     title, title_state, title_source = _title_projection(session, card, catalog_facts=catalog_facts)
+    selected_model = _selected_model_from_thread(_primary_thread_facts(catalog_facts))
+    norm_provider_facts = provider_facts_from_rows(catalog_facts.get("provider_facts"))
+    hud = project_session_hud(
+        norm_provider_facts,
+        catalog_facts.get("runtime_meta"),
+        delegation=session_state.delegation,
+        fallback_model=selected_model,
+    )
     return SessionResponse(
         id=str(session.session_id),
         origin_kind=session.origin_kind,
@@ -615,7 +640,15 @@ def _response_from_catalog(
         first_user_message=card.first_user_message_preview or session.first_user_message_preview,
         thread_root_session_id=str(session.session_id),
         thread_head_session_id=str(session.session_id),
-        selected_model=_selected_model_from_thread(_primary_thread_facts(catalog_facts)),
+        selected_model=selected_model,
+        last_turn=project_last_turn(norm_provider_facts, {}) if norm_provider_facts else None,
+        recap=project_recap(norm_provider_facts) if norm_provider_facts else None,
+        usage_latest=hud["usage_latest"],
+        permission_mode=hud["permission_mode"],
+        provider_title=hud["provider_title"],
+        worktree=hud["worktree"],
+        session_crons=hud["session_crons"],
+        pending_background_agent_count=hud["pending_background_agent_count"],
         thread_continuation_count=1,
         # The live thread carries the edge from create time, which is the only
         # place a branch's parentage exists until its first ingest. The legacy

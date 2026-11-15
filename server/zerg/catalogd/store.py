@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import Collection
@@ -1806,9 +1807,18 @@ def _provider_fact_dto(row: Any) -> dict[str, Any]:
 
 _DELEGATION_FACT_KINDS = ("delegation.metadata", "delegation.spawn", "delegation.activity")
 _SESSION_READ_DELEGATION_FACT_LIMIT = 256
-# One row each: the newest recap, provider title and usage are what the
-# session chrome shows, and a long session's turn facts must never evict them.
-_SESSION_READ_LATEST_FACT_KINDS = ("session.recap", "session.title", "turn.usage")
+# One row each: the newest recap, provider title, usage, cost, permission mode,
+# worktree and waiting summary are what the session chrome shows, and a long
+# session's turn facts must never evict them.
+_SESSION_READ_LATEST_FACT_KINDS = (
+    "session.recap",
+    "session.title",
+    "turn.usage",
+    "session.cost",
+    "session.permission_mode",
+    "session.worktree",
+    "delegation.waiting",
+)
 # Every turn duration, newest first, so any loaded page can anchor its footers.
 _SESSION_READ_TURN_FACT_LIMIT = 2_000
 # The busiest real session carries a few hundred screenshots; past that the
@@ -1885,6 +1895,32 @@ def _session_read_provider_facts(connection: Connection, *, session_id: str) -> 
         .all()
     )
     return [_provider_fact_dto(row) for row in rows]
+
+
+def _latest_provider_facts_by_session(connection: Connection, *, session_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Newest HUD provider facts per session for catalog detail reads."""
+    if not session_ids:
+        return {}
+    table = SessionProviderFact.__table__
+    kinds = (*_SESSION_READ_LATEST_FACT_KINDS, "turn.duration")
+    ranked = (
+        select(
+            table,
+            func.row_number()
+            .over(
+                partition_by=(table.c.session_id, table.c.kind),
+                order_by=(table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc()),
+            )
+            .label("fact_rank"),
+        )
+        .where(table.c.session_id.in_(session_ids), table.c.kind.in_(kinds))
+        .subquery()
+    )
+    rows = connection.execute(select(ranked).where(ranked.c.fact_rank == 1)).mappings()
+    by_session: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_session.setdefault(str(row["session_id"]), []).append(_provider_fact_dto(row))
+    return by_session
 
 
 def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -2999,6 +3035,23 @@ def _assemble_session_facts(
             )
         }
 
+    runtime_meta_by_session: dict[str, dict[str, Any]] = {}
+    head_table = FactHead.__table__
+    for row in connection.execute(
+        select(head_table.c.session_id, head_table.c.value_json).where(
+            head_table.c.family == "runtime_meta",
+            head_table.c.session_id.in_(session_ids),
+        )
+    ).mappings():
+        try:
+            decoded = json.loads(row["value_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(decoded, dict):
+            runtime_meta_by_session[str(row["session_id"])] = decoded
+
+    provider_facts_by_session = _latest_provider_facts_by_session(connection, session_ids=session_ids) if not compact else {}
+
     result: list[dict[str, Any]] = []
     for session_id in session_ids:
         catalog = catalogs.get(session_id)
@@ -3056,6 +3109,7 @@ def _assemble_session_facts(
                     console_turn_by_session.get(session_id),
                     fields=frozenset({"id", "session_id", "thread_id", "run_id", "state", "origin", "created_at", "updated_at"}),
                 ),
+                "runtime_meta": runtime_meta_by_session.get(session_id),
                 **(
                     {
                         "control_leases": [
@@ -3067,6 +3121,7 @@ def _assemble_session_facts(
                             fields=_LIVE_PREVIEW_FIELDS,
                             text_limits=_LIVE_PREVIEW_TEXT_LIMITS,
                         ),
+                        "provider_facts": provider_facts_by_session.get(session_id, []),
                     }
                     if not compact
                     else {}
@@ -4838,6 +4893,61 @@ def _attach_native_delegation_children(connection, *, by_session: Mapping[str, A
         }
 
 
+def _parse_iso_utc(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return _as_aware_utc(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return _as_aware_utc(datetime.fromisoformat(value.strip().replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _copy_delegation_item_metadata(
+    target: dict[str, Any],
+    raw: Mapping[str, Any],
+    fallback: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate and copy optional subagent lineage/model fields."""
+
+    def _pick(key: str) -> Any:
+        val = raw.get(key)
+        if val is None and isinstance(fallback, Mapping):
+            return fallback.get(key)
+        return val
+
+    agent_type = _pick("agent_type")
+    if isinstance(agent_type, str) and agent_type.strip():
+        target["agent_type"] = agent_type.strip()[:64]
+    else:
+        target.pop("agent_type", None)
+
+    model = _pick("model")
+    if isinstance(model, str) and model.strip():
+        target["model"] = model.strip()[:128]
+    else:
+        target.pop("model", None)
+
+    is_fork = _pick("is_fork")
+    if isinstance(is_fork, bool):
+        target["is_fork"] = is_fork
+    else:
+        target.pop("is_fork", None)
+
+    parent_agent_id = _pick("parent_agent_id")
+    if isinstance(parent_agent_id, str) and 0 < len(parent_agent_id.strip()) <= 256:
+        target["parent_agent_id"] = parent_agent_id.strip()
+    else:
+        target.pop("parent_agent_id", None)
+
+    spawn_depth = _pick("spawn_depth")
+    if type(spawn_depth) is int and 0 <= spawn_depth <= 32:
+        target["spawn_depth"] = spawn_depth
+    else:
+        target.pop("spawn_depth", None)
+
+
 def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
     """Reduce registry observations independently of the parent's activity clock."""
     from zerg.services.session_state_contract import SessionDelegationProgress
@@ -4849,6 +4959,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
     facts: list[ReducerFact] = []
     prior_by_run: dict[tuple[str, str], dict[str, Any]] = {}
     removed_lifecycle_agents: dict[tuple[str, str, str], datetime | None] = {}
+    lifecycle_by_agent: dict[tuple[str, str, str], dict[str, Any]] = {}
     # One source observation may report a registry and an exact child edge.
     # Reduce both independently, with the edge following its own snapshot.
     for event, lane in (
@@ -4901,8 +5012,123 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             raw_item = update.get("item")
             operation = update.get("operation")
             source_event = update.get("source_event")
+            if source_event in {"TaskCreated", "TaskCompleted"}:
+                if (
+                    not isinstance(raw_item, Mapping)
+                    or not isinstance(raw_item.get("id"), str)
+                    or not 0 < len(raw_item["id"].strip()) <= 256
+                    or not isinstance(raw_item.get("kind"), str)
+                    or not 0 < len(raw_item["kind"].strip()) <= 32
+                    or not isinstance(raw_item.get("status"), str)
+                    or not 0 < len(raw_item["status"].strip()) <= 32
+                ):
+                    continue
+                if source_event == "TaskCreated" and (
+                    operation != "observe" or update.get("membership") not in {"upsert", "existing_exact_link_only"}
+                ):
+                    continue
+                if source_event == "TaskCompleted" and operation != "remove":
+                    continue
+                prior_observed = _parse_iso_utc(prior.get("observed_at"))
+                if prior_observed is not None and occurred_at < prior_observed:
+                    continue
+                task_id = raw_item["id"].strip()
+                kind = raw_item["kind"].strip()
+                task_status = raw_item["status"].strip()
+                current_items = [dict(it) for it in (prior.get("items") or []) if isinstance(it, Mapping)]
+                recent_items = [dict(it) for it in (prior.get("recent_items") or []) if isinstance(it, Mapping)]
+                if source_event == "TaskCreated":
+                    existing_idx = next((idx for idx, it in enumerate(current_items) if it.get("id") == task_id), None)
+                    prev_item = current_items[existing_idx] if existing_idx is not None else {}
+                    description = (
+                        raw_item["description"][:512] if isinstance(raw_item.get("description"), str) else prev_item.get("description")
+                    )
+                    upserted = {
+                        "id": task_id,
+                        "kind": kind,
+                        "status": task_status,
+                        "description": description,
+                        "first_observed_at": prev_item.get("first_observed_at") or occurred_at.isoformat(),
+                    }
+                    _copy_delegation_item_metadata(upserted, raw_item, prev_item)
+                    if existing_idx is not None:
+                        current_items[existing_idx] = upserted
+                    elif len(current_items) < _DELEGATION_COUNT_LIMIT:
+                        current_items.append(upserted)
+                else:
+                    matched_idx = next((idx for idx, it in enumerate(current_items) if it.get("id") == task_id), None)
+                    prev_item = current_items.pop(matched_idx) if matched_idx is not None else {}
+                    description = (
+                        raw_item["description"][:512] if isinstance(raw_item.get("description"), str) else prev_item.get("description")
+                    )
+                    terminal = {
+                        "id": task_id,
+                        "kind": prev_item.get("kind") or kind,
+                        "status": "completed",
+                        "description": description,
+                        "first_observed_at": prev_item.get("first_observed_at") or occurred_at.isoformat(),
+                        "ended_at": occurred_at.isoformat(),
+                    }
+                    _copy_delegation_item_metadata(terminal, raw_item, prev_item)
+                    recent_items = [it for it in recent_items if it.get("id") != task_id]
+                    recent_items.append(terminal)
+                    recent_items = recent_items[-_DELEGATION_COUNT_LIMIT:]
+                kinds: dict[str, int] = {}
+                for it in current_items:
+                    it_kind = str(it.get("kind") or "")
+                    if it_kind:
+                        kinds[it_kind] = kinds.get(it_kind, 0) + 1
+                valid_until = occurred_at + timedelta(milliseconds=_DELEGATION_DEFAULT_FRESHNESS_MS)
+                value = {
+                    "authority_class": "provider_runtime",
+                    "provider": str(event.provider),
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "count": len(current_items),
+                    "kinds": kinds,
+                    "items": current_items,
+                    "recent_items": recent_items or None,
+                    "source": raw_source,
+                    "observed_at": occurred_at.isoformat(),
+                    "valid_until": valid_until.isoformat(),
+                }
+                if len(canonical_value_json(value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:
+                    continue
+                prior_by_run[coordinate] = value
+                dedupe_key = hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
+                facts = [
+                    existing
+                    for existing in facts
+                    if not (
+                        existing.family == "delegation"
+                        and existing.subject_key == f"run:{run_id}"
+                        and existing.source == raw_source
+                        and existing.source_epoch == run_id
+                    )
+                ]
+                facts.append(
+                    ReducerFact(
+                        family="delegation",
+                        subject_key=f"run:{run_id}",
+                        source=raw_source,
+                        source_epoch=run_id,
+                        source_seq=None,
+                        dedupe_key=dedupe_key,
+                        evidence_hash=canonical_evidence_hash(value),
+                        value=value,
+                        observed_at=occurred_at,
+                        session_id=session_id,
+                        valid_until=valid_until,
+                        raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
+                    )
+                )
+                continue
+
             valid_source_event = (
-                source_event in {"SubagentStart", "PreToolUse", "PostToolUse", "PostToolUseFailure"}
+                (
+                    source_event in {"SubagentStart", "PreToolUse", "PostToolUse", "PostToolUseFailure"}
+                    or (source_event == "SubagentStop" and isinstance(raw_item, Mapping) and raw_item.get("status") == "waiting")
+                )
                 if operation == "observe"
                 else source_event == "SubagentStop"
             )
@@ -4926,6 +5152,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             clean_item["status"] = raw_item["status"]
             if isinstance(raw_item.get("description"), str):
                 clean_item["description"] = raw_item["description"][:512]
+            _copy_delegation_item_metadata(clean_item, raw_item)
             tool_call_id = raw_item.get("parent_tool_call_id")
             if tool_call_id is not None:
                 if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
@@ -4946,6 +5173,10 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             subject_key = f"run:{run_id}:agent:{agent_id}"
             if operation == "remove":
                 removed_lifecycle_agents[agent_coordinate] = occurred_at
+                lifecycle_by_agent[agent_coordinate] = {
+                    "operation": "remove",
+                    "observed_at": occurred_at.isoformat(),
+                }
                 facts = [
                     existing
                     for existing in facts
@@ -4955,11 +5186,11 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                         and existing.source == raw_source
                         and existing.source_epoch == run_id
                         and existing.value.get("operation") == "observe"
-                        and existing.value.get("source_event") in {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+                        and existing.value.get("source_event") in {"PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStop"}
                     )
                 ]
-            elif source_event in {"PreToolUse", "PostToolUse", "PostToolUseFailure"}:
-                if agent_coordinate not in removed_lifecycle_agents:
+            else:
+                if agent_coordinate not in lifecycle_by_agent:
                     existing_lifecycle = connection.execute(
                         select(head_table.c.value_json).where(
                             head_table.c.family == "delegation_lifecycle",
@@ -4968,29 +5199,100 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                             head_table.c.source_epoch == run_id,
                         )
                     ).scalar_one_or_none()
-                    existing_payload = json.loads(existing_lifecycle) if existing_lifecycle else {}
-                    removed_at: datetime | None = None
-                    if existing_payload.get("operation") == "remove":
-                        raw_removed_at = existing_payload.get("observed_at")
-                        if isinstance(raw_removed_at, str):
-                            try:
-                                removed_at = datetime.fromisoformat(raw_removed_at.replace("Z", "+00:00"))
-                            except ValueError:
+                    try:
+                        decoded_lifecycle = json.loads(existing_lifecycle) if existing_lifecycle else {}
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        decoded_lifecycle = {}
+                    lifecycle_by_agent[agent_coordinate] = decoded_lifecycle if isinstance(decoded_lifecycle, dict) else {}
+                existing_payload = lifecycle_by_agent[agent_coordinate]
+                if source_event in {"PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStop"}:
+                    if agent_coordinate not in removed_lifecycle_agents:
+                        removed_at: datetime | None = None
+                        if existing_payload.get("operation") == "remove":
+                            raw_removed_at = existing_payload.get("observed_at")
+                            if isinstance(raw_removed_at, str):
+                                try:
+                                    removed_at = datetime.fromisoformat(raw_removed_at.replace("Z", "+00:00"))
+                                except ValueError:
+                                    removed_at = occurred_at
+                            else:
                                 removed_at = occurred_at
-                        else:
-                            removed_at = occurred_at
-                    removed_lifecycle_agents[agent_coordinate] = removed_at
-                removed_at = removed_lifecycle_agents[agent_coordinate]
-                if removed_at is not None:
-                    prior_observed_raw = prior.get("observed_at")
-                    prior_observed: datetime | None = None
-                    if isinstance(prior_observed_raw, str):
-                        try:
-                            prior_observed = datetime.fromisoformat(prior_observed_raw.replace("Z", "+00:00"))
-                        except ValueError:
-                            prior_observed = None
-                    if prior_observed is None or prior_observed <= removed_at:
-                        continue
+                        removed_lifecycle_agents[agent_coordinate] = removed_at
+                    removed_at = removed_lifecycle_agents[agent_coordinate]
+                    if removed_at is not None:
+                        prior_observed_raw = prior.get("observed_at")
+                        prior_observed: datetime | None = None
+                        if isinstance(prior_observed_raw, str):
+                            try:
+                                prior_observed = datetime.fromisoformat(prior_observed_raw.replace("Z", "+00:00"))
+                            except ValueError:
+                                prior_observed = None
+                        if prior_observed is None or prior_observed <= removed_at:
+                            continue
+
+                existing_item = (
+                    existing_payload.get("item")
+                    if existing_payload.get("operation") == "observe" and isinstance(existing_payload.get("item"), Mapping)
+                    else {}
+                )
+                prior_item = next(
+                    (
+                        it
+                        for it in (prior.get("items") or [])
+                        if isinstance(it, Mapping) and it.get("kind") == "subagent" and it.get("id") == agent_id
+                    ),
+                    {},
+                )
+                fallback_item: dict[str, Any] = {**dict(prior_item), **dict(existing_item)}
+                if not isinstance(clean_item.get("description"), str) and isinstance(fallback_item.get("description"), str):
+                    clean_item["description"] = fallback_item["description"][:512]
+                if "parent_tool_call_id" not in clean_item and isinstance(fallback_item.get("parent_tool_call_id"), str):
+                    fallback_tci = fallback_item["parent_tool_call_id"]
+                    if 0 < len(fallback_tci) <= 256:
+                        clean_item["parent_tool_call_id"] = fallback_tci
+                _copy_delegation_item_metadata(clean_item, raw_item, fallback_item)
+
+                prior_progress = prior_item.get("native_progress") if isinstance(prior_item.get("native_progress"), Mapping) else {}
+                existing_progress = (
+                    existing_item.get("native_progress") if isinstance(existing_item.get("native_progress"), Mapping) else {}
+                )
+                merged_progress: dict[str, Any] = dict(prior_progress)
+                prior_progress_at = _parse_iso_utc(prior_progress.get("observed_at"))
+                existing_progress_at = _parse_iso_utc(existing_progress.get("observed_at"))
+                if existing_progress:
+                    if prior_progress_at is not None and existing_progress_at is not None and prior_progress_at > existing_progress_at:
+                        for key in ("current_tool", "last_intent", "tool_count"):
+                            if key in existing_progress and key not in prior_progress:
+                                merged_progress[key] = existing_progress[key]
+                    else:
+                        merged_progress.update(existing_progress)
+                raw_progress = raw_item.get("native_progress") if isinstance(raw_item.get("native_progress"), Mapping) else None
+                if raw_progress is not None and not raw_progress.get("current_tool"):
+                    merged_progress.pop("current_tool", None)
+                incoming_progress = clean_item.get("native_progress")
+                if isinstance(incoming_progress, Mapping):
+                    merged_progress.update(incoming_progress)
+                if source_event == "PreToolUse" and (raw_progress is None or raw_progress.get("tool_count") is None):
+                    prev_count = merged_progress.get("tool_count")
+                    merged_progress["tool_count"] = (prev_count if type(prev_count) is int and prev_count >= 0 else 0) + 1
+                if merged_progress:
+                    try:
+                        clean_item["native_progress"] = SessionDelegationProgress.model_validate(merged_progress).model_dump(
+                            mode="json", exclude_none=True
+                        )
+                    except ValueError:
+                        pass
+
+                facts = [
+                    existing
+                    for existing in facts
+                    if not (
+                        existing.family == "delegation_lifecycle"
+                        and existing.subject_key == subject_key
+                        and existing.source == raw_source
+                        and existing.source_epoch == run_id
+                    )
+                ]
             value = {
                 "authority_class": "provider_runtime",
                 "provider": str(event.provider),
@@ -5004,6 +5306,8 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             }
             if len(canonical_value_json(value).encode()) > MAX_VALUE_JSON_BYTES:
                 continue
+            if operation == "observe":
+                lifecycle_by_agent[agent_coordinate] = value
             dedupe_key = hashlib.sha256(f"runtime-delegation-edge:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
             facts.append(
                 ReducerFact(
@@ -5065,6 +5369,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                     "description": raw["description"][:512] if isinstance(raw.get("description"), str) else None,
                     "first_observed_at": previous_item.get("first_observed_at") or occurred_at.isoformat(),
                 }
+                _copy_delegation_item_metadata(item, raw, previous_item)
                 tool_call_id = raw.get("parent_tool_call_id")
                 if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
                     item["parent_tool_call_id"] = tool_call_id
@@ -5114,7 +5419,20 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                     continue
                 fields = {
                     key: raw[key]
-                    for key in ("id", "kind", "status", "description", "registered_at", "ended_at", "native_progress")
+                    for key in (
+                        "id",
+                        "kind",
+                        "status",
+                        "description",
+                        "agent_type",
+                        "model",
+                        "is_fork",
+                        "parent_agent_id",
+                        "spawn_depth",
+                        "registered_at",
+                        "ended_at",
+                        "native_progress",
+                    )
                     if key in raw
                 }
                 try:
@@ -5122,6 +5440,7 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 except ValueError:
                     continue
                 terminal["first_observed_at"] = occurred_at.isoformat()
+                _copy_delegation_item_metadata(terminal, raw)
                 for key, bound in (("parent_tool_call_id", 256), ("native_child_id", 256), ("native_child_source_path", 2048)):
                     if isinstance(raw.get(key), str) and 0 < len(raw[key]) <= bound:
                         terminal[key] = raw[key]
@@ -5169,6 +5488,188 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 session_id=session_id,
                 valid_until=valid_until,
                 raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
+            )
+        )
+    return facts
+
+
+def _canonical_decimal_str(value: Any) -> str | None:
+    """Format finite numbers as decimal strings so FactHead canonical JSON forbids floats cleanly."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        return None
+    formatted = f"{numeric:.6f}".rstrip("0").rstrip(".")
+    return "0" if formatted in {"", "-0"} else formatted
+
+
+def _sanitize_runtime_usage(raw: Mapping[str, Any]) -> dict[str, Any] | None:
+    out: dict[str, Any] = {}
+    raw_ctx = raw.get("context")
+    if isinstance(raw_ctx, Mapping):
+        ctx: dict[str, Any] = {}
+        if type(raw_ctx.get("tokens")) is int and raw_ctx["tokens"] >= 0:
+            ctx["tokens"] = raw_ctx["tokens"]
+        if type(raw_ctx.get("window")) is int and raw_ctx["window"] > 0:
+            ctx["window"] = raw_ctx["window"]
+        pct = _canonical_decimal_str(raw_ctx.get("percent"))
+        if pct is not None:
+            ctx["percent"] = pct
+        if ctx:
+            out["context"] = ctx
+    cost = _canonical_decimal_str(raw.get("cost_usd"))
+    if cost is not None:
+        out["cost_usd"] = cost
+    if type(raw.get("started_at")) is int and raw["started_at"] >= 0:
+        out["started_at"] = raw["started_at"]
+    if type(raw.get("cumulative_duration_ms")) is int and raw["cumulative_duration_ms"] >= 0:
+        out["cumulative_duration_ms"] = raw["cumulative_duration_ms"]
+    raw_limits = raw.get("rate_limits")
+    if isinstance(raw_limits, list):
+        limits: list[dict[str, Any]] = []
+        for item in raw_limits[:8]:
+            if not isinstance(item, Mapping):
+                continue
+            kind = str(item.get("kind") or "").strip()[:64]
+            if not kind:
+                continue
+            entry: dict[str, Any] = {"kind": kind}
+            pct_used = _canonical_decimal_str(item.get("percent_used"))
+            if pct_used is not None:
+                entry["percent_used"] = pct_used
+            resets = item.get("resets_at")
+            if isinstance(resets, str) and resets.strip():
+                entry["resets_at"] = resets.strip()[:64]
+            limits.append(entry)
+        if limits:
+            out["rate_limits"] = limits
+    return out or None
+
+
+def _sanitize_runtime_crons(raw_crons: list[Any]) -> list[dict[str, Any]]:
+    bounded: list[dict[str, Any]] = []
+    for cron in raw_crons[:32]:
+        if not isinstance(cron, Mapping):
+            continue
+        cron_id = str(cron.get("id") or "").strip()[:256]
+        schedule = str(cron.get("schedule") or "").strip()[:64]
+        if not cron_id or not schedule:
+            continue
+        item: dict[str, Any] = {
+            "id": cron_id,
+            "schedule": schedule,
+            "recurring": bool(cron.get("recurring")),
+        }
+        prompt = cron.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            item["prompt"] = prompt.strip()[:256]
+        bounded.append(item)
+    return bounded
+
+
+def _runtime_meta_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
+    """Store live session usage, crons, and permission mode without mutating branch readiness."""
+    head_table = FactHead.__table__
+    candidate_events: list[Any] = []
+    session_ids: set[str] = set()
+    for event in sorted(events, key=lambda item: _as_aware_utc(item.occurred_at) or datetime.min.replace(tzinfo=UTC)):
+        if event.session_id is None:
+            continue
+        payload = event.payload or {}
+        if not isinstance(payload, Mapping):
+            continue
+        has_usage = isinstance(payload.get("session_usage"), Mapping)
+        has_crons = isinstance(payload.get("session_crons"), list)
+        has_mode = isinstance(payload.get("permission_mode"), str) and bool(payload["permission_mode"].strip())
+        if has_usage or has_crons or has_mode:
+            candidate_events.append(event)
+            session_ids.add(str(event.session_id))
+    if not candidate_events:
+        return []
+
+    state_by_session: dict[str, dict[str, Any]] = {}
+    for row in connection.execute(
+        select(head_table.c.session_id, head_table.c.value_json).where(
+            head_table.c.family == "runtime_meta",
+            head_table.c.subject_key.in_([f"session:{sid}" for sid in session_ids]),
+            head_table.c.source == "runtime_meta",
+            head_table.c.source_epoch == "",
+        )
+    ).mappings():
+        try:
+            decoded = json.loads(row["value_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(decoded, dict):
+            state_by_session[str(row["session_id"])] = decoded
+
+    dirty: dict[str, tuple[datetime, str]] = {}
+    for event in candidate_events:
+        occurred_at = _as_aware_utc(event.occurred_at)
+        if occurred_at is None:
+            continue
+        session_id = str(event.session_id)
+        payload = event.payload or {}
+        state = dict(state_by_session.get(session_id) or {})
+        changed = False
+
+        raw_usage = payload.get("session_usage")
+        if isinstance(raw_usage, Mapping):
+            clean_usage = _sanitize_runtime_usage(raw_usage)
+            existing_usage_at = _parse_iso_utc(state.get("session_usage_at"))
+            if clean_usage is not None and (existing_usage_at is None or occurred_at >= existing_usage_at):
+                state["session_usage"] = clean_usage
+                state["session_usage_at"] = occurred_at.isoformat()
+                changed = True
+
+        raw_crons = payload.get("session_crons")
+        if isinstance(raw_crons, list):
+            clean_crons = _sanitize_runtime_crons(raw_crons)
+            existing_crons_at = _parse_iso_utc(state.get("session_crons_at"))
+            if existing_crons_at is None or occurred_at >= existing_crons_at:
+                state["session_crons"] = clean_crons
+                state["session_crons_at"] = occurred_at.isoformat()
+                changed = True
+
+        raw_mode = payload.get("permission_mode")
+        if isinstance(raw_mode, str) and raw_mode.strip():
+            clean_mode = raw_mode.strip()[:64]
+            existing_mode_at = _parse_iso_utc(state.get("permission_mode_at"))
+            if existing_mode_at is None or occurred_at >= existing_mode_at:
+                state["permission_mode"] = clean_mode
+                state["permission_mode_at"] = occurred_at.isoformat()
+                changed = True
+
+        if not changed:
+            continue
+        existing_obs = _parse_iso_utc(state.get("observed_at"))
+        latest_obs = occurred_at if existing_obs is None or occurred_at >= existing_obs else existing_obs
+        state["session_id"] = session_id
+        state["observed_at"] = latest_obs.isoformat()
+        state_by_session[session_id] = state
+        dirty[session_id] = (latest_obs, str(event.dedupe_key or "-"))
+
+    facts: list[ReducerFact] = []
+    for session_id, (observed_at, dedupe_suffix) in dirty.items():
+        value = state_by_session[session_id]
+        if len(canonical_value_json(value).encode()) > MAX_VALUE_JSON_BYTES:
+            continue
+        dedupe_key = hashlib.sha256(f"runtime-meta:{session_id}:{dedupe_suffix}:{observed_at.isoformat()}".encode()).hexdigest()
+        facts.append(
+            ReducerFact(
+                family="runtime_meta",
+                subject_key=f"session:{session_id}",
+                source="runtime_meta",
+                source_epoch="",
+                source_seq=None,
+                dedupe_key=dedupe_key,
+                evidence_hash=canonical_evidence_hash(value),
+                value=value,
+                observed_at=observed_at,
+                session_id=session_id,
+                valid_until=None,
+                raw_locator=f"runtime_meta:{session_id}:{dedupe_suffix}"[:1024],
             )
         )
     return facts
