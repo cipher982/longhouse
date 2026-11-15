@@ -2,7 +2,7 @@
 
 # Dispatch before reading dotenv: tests never inherit the operator's login.
 # Only a live invocation-scoped child record can bypass host dispatch.
-ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-shadow-proof render-canary cohort-journey qa-% provider-% ci-%,$(MAKECMDGOALS))
+ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-% ci-%,$(MAKECMDGOALS))
 ifneq ($(shell python3 scripts/qa/test_boundary.py && printf isolated),isolated)
 ifneq ($(strip $(ISOLATED_GOALS)),)
 ifneq ($(words $(ISOLATED_GOALS)),$(words $(MAKECMDGOALS)))

@@ -31,6 +31,7 @@ WAIT_SECONDS="${RENDER_SHADOW_PROOF_WAIT_SECONDS:-1200}"
 
 SCRATCH="$(mktemp -d /tmp/agents/render-shadow-proof.XXXXXX)"
 DEVICE_ID="render-shadow-proof-${RANDOM}${RANDOM}"
+UUID_MAP="$SCRATCH/uuid-map.json"
 TOKEN_ID=""
 DEVICE_TOKEN=""
 SESSION_IDS=()
@@ -67,6 +68,7 @@ FIXTURE_SETS=(
   "golden/pi pi" "golden/omp omp"
 )
 shipped=0
+ship_failures=0
 for entry in "${FIXTURE_SETS[@]}"; do
   read -r tree provider <<<"$entry"
   source_root="$ROOT_DIR/engine/tests/fixtures/$tree"
@@ -75,20 +77,101 @@ for entry in "${FIXTURE_SETS[@]}"; do
   mkdir -p "$case_root"
   # Copy the tree whole so sidecars sit where the shipper looks.
   cp -R "$source_root/." "$case_root/src"
+  # Fixture ids are fixed in their content, and a session deleted by an
+  # earlier run stays tombstoned, so every run maps each UUID to a fresh one,
+  # consistently across contents and file names. Host and laptop still read
+  # the same bytes, so the comparison is unchanged.
+  python3 - "$case_root/src" "$UUID_MAP" <<'PY'
+import json, os, re, sys, uuid
+root, map_path = sys.argv[1], sys.argv[2]
+mapping = json.load(open(map_path)) if os.path.exists(map_path) else {}
+pattern = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+def fresh(match):
+    key = match.group(0).lower()
+    mapping.setdefault(key, str(uuid.uuid4()))
+    return mapping[key]
+# Media deleted with an earlier run's session can never become present again
+# (a deliberate deletion fence), so every inline image gets this run's nonce
+# appended. The same image keeps one hash within a run.
+import base64
+nonce = mapping.setdefault("__media_nonce__", base64.b64encode(os.urandom(4)).decode())
+def is_image(node):
+    kinds = " ".join(str(node.get(key, "")) for key in ("type", "mimeType", "mime_type", "media_type"))
+    return "image" in kinds or node.get("type") == "base64"
+def walk(node):
+    changed = False
+    if isinstance(node, dict):
+        if isinstance(node.get("data"), str) and is_image(node):
+            try:
+                raw = base64.b64decode(node["data"], validate=True)
+            except ValueError:
+                raw = None
+            if raw is not None:
+                node["data"] = base64.b64encode(raw + base64.b64decode(nonce)).decode()
+                changed = True
+        for value in node.values():
+            changed |= walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            changed |= walk(value)
+    return changed
+def unique_media(text):
+    lines = []
+    for line in text.split("\n"):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            lines.append(line)
+            continue
+        lines.append(json.dumps(value, separators=(",", ":")) if walk(value) else line)
+    return "\n".join(lines)
+for directory, _dirs, files in os.walk(root, topdown=False):
+    for name in files:
+        path = os.path.join(directory, name)
+        try:
+            text = open(path, encoding="utf-8").read()
+        except UnicodeDecodeError:
+            continue
+        open(path, "w", encoding="utf-8").write(unique_media(pattern.sub(fresh, text)))
+        renamed = pattern.sub(fresh, name)
+        if renamed != name:
+            os.rename(path, os.path.join(directory, renamed))
+json.dump(mapping, open(map_path, "w"))
+PY
+  # A copy is brand new, and the shipper holds a transcript modified in the
+  # last few seconds (Antigravity's binding race), so backdate the copies.
+  find "$case_root/src" -type f -exec touch -t 202601010000 {} +
   while IFS= read -r -d '' transcript; do
+    # A fresh session id per run: fixtures without a UUID would otherwise land
+    # on an earlier run's deleted session and ship nothing.
     HOME="$case_root/home" "$ENGINE" ship --file "$transcript" --provider "$provider" \
+      --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
       --url "$API_URL" --token "$DEVICE_TOKEN" --db "$case_root/state-$shipped.db" \
       --machine-name "$DEVICE_ID" --json >"$case_root/ship-$shipped.json" 2>"$case_root/ship-$shipped.err" \
-      || { echo "ship failed: $tree/$(basename "$transcript")" >&2; cat "$case_root/ship-$shipped.err" >&2; }
+      || { echo "ship failed: $tree/$(basename "$transcript")" >&2; cat "$case_root/ship-$shipped.err" >&2; ship_failures=$((ship_failures + 1)); }
+    python3 - "$case_root/ship-$shipped.json" "$tree/$(basename "$transcript")" >&2 <<'PY' || echo "  $tree/$(basename "$transcript"): no ship result" >&2
+import json, sys
+result = json.load(open(sys.argv[1]))
+print(f"  {sys.argv[2]:60} events={result.get('events_shipped')} status={result.get('status')}")
+PY
     shipped=$((shipped + 1))
   done < <(find "$case_root/src" -type f \( -name '*.jsonl' -o -name '*.json' \) ! -name '*.expected.*' ! -name '*.meta.json' -print0 | sort -z)
 done
 echo "shipped ${shipped} fixture transcripts to ${SUBDOMAIN} as ${DEVICE_ID}" >&2
+[[ "$ship_failures" -eq 0 ]] || { echo "${ship_failures} fixture(s) failed to ship" >&2; exit 1; }
 
+# The agents session list does not return sessions from a machine with no
+# heartbeat, so read this machine's sessions from the host catalog, the same
+# place the outcomes come from.
 list_sessions() {
-  curl -sS --max-time 30 -H "X-Agents-Token: ${DEVICE_TOKEN}" \
-    "${API_URL}/api/agents/sessions?limit=200&days_back=3650&include_test=true" \
-    | python3 -c 'import json,sys; device=sys.argv[1]; data=json.load(sys.stdin); print("\n".join(s["id"] for s in data.get("sessions", []) if s.get("device_id") == device))' "$DEVICE_ID"
+  ssh "$SSH_TARGET" "docker exec -i ${CONTAINER} python3 - ${DEVICE_ID}" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect("file:/data/longhouse-live.db?mode=ro", uri=True)
+rows = db.execute(
+    "select distinct session_id from raw_objects where machine_id = ? and retired_at is null", (sys.argv[1],)
+)
+print("\n".join(row[0] for row in rows))
+PY
 }
 mapfile -t SESSION_IDS < <(list_sessions)
 echo "${#SESSION_IDS[@]} sessions to compare" >&2
