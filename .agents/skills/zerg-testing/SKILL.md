@@ -43,6 +43,33 @@ Heavy Docker-dispatched goals can go to the `ci` VM instead of the laptop lock:
 `--env K=V`, `--timeout S`). Keep `release` and `validate-build-identity` on the
 laptop and never run a provider CLI there.
 
+## Named live checks against any commit: `make prove`
+
+`make prove CELLS="claude/helm:tool pi_helm_steer_active" [SHA=<commit>]` runs
+named real-provider cells against any commit (default `HEAD`, pushed or not) on
+`cube-bench` (Linux, credential-free scripted model; never a provider CLI on
+this Mac) and prints one `PASS|FAIL <cell> <seconds> <evidence path>` line per
+cell, exit 1 on any failure. Use it for the check the pre-push gate does not run
+(a real provider cell) and before waiting on a factory tick or the Terminal
+Truth workflow.
+
+- Cells: a Terminal Truth cell `provider/mode[:scenario]` (`claude/helm`,
+  `codex/console:thinking`; scenarios `long_reply` (default), `two_message`,
+  `thinking`, `tool`, `subagent`), or a factory producer assertion id
+  (`pi_helm_steer_active`, `omp_helm_send_idle`). A producer runs its whole
+  lifecycle once; all named cells of it share that run. Producers are
+  allow-listed in `BENCH_PRODUCERS` (`scripts/ops/prove.py`) after a real run.
+- The commit is fetched (or pushed from your checkout) into a bare repo on the
+  bench; the engine and CLI come from `bin-cache` when the engine's inputs match
+  an earlier build (`ls by-sha/<sha>` on the bench says which), else one build in
+  a persistent worktree and cargo target. Providers are the CI-pinned versions
+  (`scripts/ci/terminal-truth-providers.toml`).
+- Teardown runs on success, failure, timeout and signal and the summary line says
+  `cleanup clean` or `DIRTY` (counted as a failure). Evidence is copied to
+  `/tmp/agents/prove/<run>/` and stays on the bench for 24 h.
+- `TARGET=factory` and `TARGET=wisp` are not built and refuse by name.
+  Measurements and open work: `control-plane/docs/specs/multi-agent-dev-loop-speed.md`.
+
 ## Attributing a failure first
 
 - **Running tests from inside a managed session gives false failures.**
