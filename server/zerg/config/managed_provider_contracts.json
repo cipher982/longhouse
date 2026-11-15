@@ -2,16 +2,16 @@
   "schema_version": 1,
   "transcript_signal_surfaces": {
     "message.phase": {
-      "disposition": "not_implemented",
-      "owner_action": "render commentary as step narration with the following tool rows trailing under it, and only final answers at full message weight, on Web and iOS"
+      "disposition": "implemented",
+      "surface_proof": "web/src/embeds/ios-transcript/__tests__/render.test.ts"
     },
     "turn.end": {
-      "disposition": "not_implemented",
-      "owner_action": "show why a turn ended (interrupted, error, aborted) as a timeline marker instead of inferring it from the absence of further rows"
+      "disposition": "implemented",
+      "surface_proof": "web/src/embeds/ios-transcript/__tests__/render.test.ts"
     },
     "tool.intent": {
-      "disposition": "not_implemented",
-      "owner_action": "read the normalized intent from the tool presentation on Web and iOS instead of each client parsing provider input fields"
+      "disposition": "implemented",
+      "surface_proof": "web/src/embeds/ios-transcript/__tests__/render.test.ts"
     },
     "turn.duration": {
       "disposition": "implemented",
@@ -38,28 +38,28 @@
       "surface_proof": "e2e/tests/core/signal-fidelity.spec.ts"
     },
     "turn.api_error": {
-      "disposition": "not_implemented",
-      "owner_action": "Read turn.api_error in catalogd _session_read_provider_facts and surface error markers in Web and iOS"
+      "disposition": "implemented",
+      "surface_proof": "web/src/embeds/ios-transcript/__tests__/render.test.ts"
     },
     "input.queue": {
       "disposition": "not_implemented",
       "owner_action": "Project queued input items once ingest exists across launch providers"
     },
     "delegation.spawn": {
-      "disposition": "not_implemented",
-      "owner_action": "Complete served delegation signal projection beyond internal parent-child lineage"
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
     },
     "delegation.background": {
-      "disposition": "not_implemented",
-      "owner_action": "Surface background delegation signal once ingest is implemented"
+      "disposition": "implemented",
+      "surface_proof": "web/src/embeds/ios-transcript/__tests__/render.test.ts"
     },
     "delegation.workflow": {
       "disposition": "not_implemented",
       "owner_action": "Surface workflow delegation signal once ingest is implemented"
     },
     "delegation.scheduled": {
-      "disposition": "not_implemented",
-      "owner_action": "Surface scheduled delegation signal once ingest is implemented"
+      "disposition": "implemented",
+      "surface_proof": "server/tests_lite/test_storage_v2_provider_facts.py"
     },
     "delegation.peer_message": {
       "disposition": "not_implemented",
