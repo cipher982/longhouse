@@ -87,16 +87,26 @@ A commit that spans lanes needs each lane run and verified on its own.
    diff hits. Run the focused tests for the changed behavior (a CSS change needs a
    web proof, not engine tests), then `make check-push-readiness`. Once per clone:
    `make install-precommit-autofix`.
-3. `make ship SHA=<full-sha>` pushes that exact SHA, prints CI queue load and waits
-   on the push-triggered runs (`runtime-image.yml`, `deploy-and-verify.yml`, and
-   others by touched path). Read the start banner to confirm SHA and subject, stay
-   in the foreground, and do not wrap it in a short timeout.
-4. From a topic worktree, rebase onto `origin/main` first and pass
+3. `make ship SHA=<full-sha>` pushes that exact SHA to main, registers a watch and
+   returns in seconds. Move on. The Sauron job `longhouse-ship-watch` on clifford
+   follows the SHA through CI, canary deploy and Terminal Truth and sends a message
+   to this session (`$LONGHOUSE_MANAGED_SESSION_ID`) only when a run fails or the
+   deadline (default 60 min, `DEADLINE_MIN=N`) passes with runs unfinished or never
+   started. The message carries the failing run URL and a log excerpt. Silence means
+   green or covered: a failure already fixed forward by a newer green main run that
+   contains the commit wakes nobody. The watch is the ref
+   `refs/ship/<sha>/<session>/<pushed-epoch>/<deadline-epoch>` (no workflow runs on
+   it); the job writes `refs/ship-done/<sha>` when finished and prunes both after
+   two weeks.
+4. `make ship WAIT=1 SHA=<full-sha>` keeps the old blocking behavior (foreground
+   until a verdict); use it for a release candidate or when the next step needs the
+   deployed result. From a topic worktree, rebase onto `origin/main` first and pass
    `ARGS="--branch main"`; otherwise `ship` pushes the topic branch and nothing
-   deploys. `ARGS=--json` gives one blocking verdict.
-5. Already pushed: `make ship-watch SHA=<full-sha>` (`ARGS="--poll 30"`).
-6. A non-zero exit means ship failed. Explain suspected causes, but do not report
-   it as success.
+   deploys (a topic-branch ship always blocks).
+5. Already pushed and you want to watch: `make ship-watch SHA=<full-sha>`
+   (`ARGS="--poll 30"`).
+6. Without WAIT, a zero exit means the push stood, not that CI passed. A non-zero
+   exit means ship failed; do not report it as success.
 
 Waiting rules: use a completion event or blocking wait once and move on; no
 `pgrep`/`curl` loops. For a queued GitHub run use

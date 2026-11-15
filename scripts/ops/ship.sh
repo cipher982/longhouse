@@ -7,10 +7,18 @@ LOCK_DIR="$GIT_COMMON_DIR/longhouse-ship.lock"
 
 usage() {
   cat <<'EOF' >&2
-Usage: ship.sh [--sha <commit>] [--branch <branch>] [--require-clean] [ship-monitor args...]
+Usage: ship.sh [--sha <commit>] [--branch <branch>] [--require-clean] [--wait]
+               [--deadline-min N] [ship-monitor args...]
 
-Pushes one exact commit SHA to the target branch, then waits on push-triggered
-workflow runs for that same SHA.
+Pushes one exact commit SHA to the target branch and returns. A watcher on
+clifford (Sauron job longhouse-ship-watch) follows the SHA through CI, canary
+deploy and Terminal Truth and messages this Longhouse session
+($LONGHOUSE_MANAGED_SESSION_ID) only if one fails or the deadline passes with
+runs unfinished. The push registers that watch as the ref
+refs/ship/<sha>/<session>/<pushed-epoch>/<deadline-epoch>.
+
+--wait (make ship WAIT=1) keeps the old behavior: stay in the foreground and
+follow the push-triggered runs with ship-monitor.py until a verdict.
 
 Always reports shipped-path files present in the working tree but absent from
 the shipped commit. --require-clean turns that report into a hard failure.
@@ -20,6 +28,8 @@ EOF
 SHA=""
 BRANCH=""
 REQUIRE_CLEAN=0
+WAIT=0
+DEADLINE_MIN="${SHIP_DEADLINE_MIN:-60}"
 MONITOR_ARGS=()
 
 # Paths whose contents this ship actually deploys. Anything modified here and
@@ -39,6 +49,14 @@ while [[ $# -gt 0 ]]; do
     --require-clean)
       REQUIRE_CLEAN=1
       shift
+      ;;
+    --wait)
+      WAIT=1
+      shift
+      ;;
+    --deadline-min)
+      DEADLINE_MIN="${2:-}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -117,6 +135,31 @@ fi
 
 cleanup_lock
 trap - EXIT
+
+# Register the watch. The pusher does not wait: the Sauron job
+# longhouse-ship-watch reads these refs, follows the exact SHA, and sends a
+# message to the session named in the ref only on failure or a missed deadline,
+# then writes refs/ship-done/<sha>. Refs outside refs/heads and refs/tags start
+# no workflow. A failure to register is loud, never fatal: the push itself stands.
+register_watch() {
+  local session="${LONGHOUSE_MANAGED_SESSION_ID:-none}" now deadline ref
+  [[ "$session" =~ ^[0-9A-Za-z-]{1,64}$ ]] || session="none"
+  [[ "$DEADLINE_MIN" =~ ^[1-9][0-9]*$ ]] || { echo "ship: --deadline-min must be a positive integer" >&2; return 1; }
+  now="$(date +%s)"
+  deadline=$((now + DEADLINE_MIN * 60))
+  ref="refs/ship/${SHA}/${session}/${now}/${deadline}"
+  if git -C "$ROOT" push --quiet origin "${SHA}:${ref}" 2>/dev/null; then
+    echo "Watch registered for ${SHA:0:10} (session ${session}, deadline ${DEADLINE_MIN} min). You are messaged only on failure or a missed deadline." >&2
+  else
+    echo "WARNING: could not register the watch ref ${ref}; nothing will message you about ${SHA:0:10}. Follow it with: make ship-watch SHA=${SHA}" >&2
+  fi
+}
+
+if [[ "$BRANCH" == "main" && "$WAIT" != "1" ]]; then
+  register_watch || true
+  echo "Pushed ${SHA:0:10} to ${BRANCH}; not waiting. Move on. (make ship WAIT=1 blocks; make ship-watch SHA=${SHA} follows by hand.)" >&2
+  exit 0
+fi
 
 # Say how busy CI is before waiting on it, so the agent can decide whether to
 # block here, batch its next commits, or do other work. Never fails the ship.
