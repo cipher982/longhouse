@@ -673,4 +673,83 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(a.map(\.id), b.map(\.id))
         XCTAssertEqual(a[1].id, "activity:2")
     }
+
+    func testAgentToolInputSummaryAndSubagentExclusion() {
+        let subagent = SessionSubagent(
+            sessionId: "child-1",
+            provider: "claude",
+            parentToolCallId: "toolu_agent_1",
+            runId: nil,
+            startedAt: "2026-04-18T18:00:00Z",
+            lastActivityAt: nil,
+            endedAt: "2026-04-18T18:00:30Z",
+            userMessages: 1,
+            assistantMessages: 1,
+            toolCalls: 3,
+            title: "Audit parity",
+            firstUserMessagePreview: nil,
+            lastVisibleTextPreview: nil,
+            agentType: "Explore",
+            description: "Audit parity"
+        )
+        let call = event(
+            id: 2,
+            role: "assistant",
+            tool: "Agent",
+            input: [
+                "subagent_type": .string("Explore"),
+                "description": .string("Audit parity"),
+            ],
+            callId: "toolu_agent_1"
+        )
+        let result = event(id: 3, role: "tool", output: "done", callId: "toolu_agent_1")
+        let extraRead = event(id: 4, role: "assistant", tool: "Read", callId: "toolu_read_1")
+        let extraReadOut = event(id: 5, role: "tool", output: "ok", callId: "toolu_read_1")
+
+        XCTAssertEqual(TimelineBuilder.inputSummary(for: call), "Explore: Audit parity")
+        let built = TimelineBuilder.build(
+            events: [call, result, extraRead, extraReadOut],
+            subagents: [subagent]
+        )
+        XCTAssertEqual(built.count, 2, "Agent call paired with a child subagent stays a standalone tool row")
+        guard case .tool(let firstCall, _, _) = built[0] else {
+            return XCTFail("expected standalone .tool")
+        }
+        XCTAssertEqual(firstCall.id, "2")
+    }
+
+    func testWithheldReasoningAndProviderNotificationsSurviveBuild() {
+        let withheld = SessionEvent(
+            id: 1,
+            role: "system",
+            contentText: nil,
+            interactionKind: "provider_reasoning",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
+            timestamp: "2026-04-18T18:00:00Z",
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+            reasoningWithheld: true
+        )
+        let waiting = SessionEvent(
+            id: 2,
+            role: "system",
+            contentText: "Waiting for 2 background agents to finish",
+            interactionKind: nil,
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
+            timestamp: "2026-04-18T18:00:01Z",
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+            waitingBackgroundAgents: 2
+        )
+        let built = TimelineBuilder.build(events: [withheld, waiting])
+        XCTAssertEqual(built.count, 2)
+        if case .reasoning(let e) = built[0] {
+            XCTAssertTrue(e.reasoningWithheld)
+        } else {
+            XCTFail("expected withheld reasoning row")
+        }
+        if case .providerNotification(let e) = built[1] {
+            XCTAssertEqual(e.waitingBackgroundAgents, 2)
+        } else {
+            XCTFail("expected waiting background agents notification row")
+        }
+    }
 }

@@ -143,6 +143,98 @@ struct SessionDelegationTask: Identifiable, Hashable, Codable, Sendable {
     var registeredAt: String? = nil
     var nativeProgress: SessionDelegationProgress? = nil
     var endedAt: String? = nil
+    var agentType: String? = nil
+    var model: String? = nil
+    var isFork: Bool = false
+    var parentAgentId: String? = nil
+    var spawnDepth: Int? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case status
+        case description
+        case firstObservedAt
+        case startedAt
+        case lastActivityAt
+        case sessionId
+        case userMessages
+        case assistantMessages
+        case toolCalls
+        case registeredAt
+        case nativeProgress
+        case endedAt
+        case agentType
+        case model
+        case isFork
+        case parentAgentId
+        case spawnDepth
+    }
+
+    init(
+        id: String,
+        kind: String,
+        status: String,
+        description: String?,
+        firstObservedAt: String?,
+        startedAt: String?,
+        lastActivityAt: String?,
+        sessionId: String?,
+        userMessages: Int? = nil,
+        assistantMessages: Int? = nil,
+        toolCalls: Int? = nil,
+        registeredAt: String? = nil,
+        nativeProgress: SessionDelegationProgress? = nil,
+        endedAt: String? = nil,
+        agentType: String? = nil,
+        model: String? = nil,
+        isFork: Bool = false,
+        parentAgentId: String? = nil,
+        spawnDepth: Int? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.status = status
+        self.description = description
+        self.firstObservedAt = firstObservedAt
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
+        self.sessionId = sessionId
+        self.userMessages = userMessages
+        self.assistantMessages = assistantMessages
+        self.toolCalls = toolCalls
+        self.registeredAt = registeredAt
+        self.nativeProgress = nativeProgress
+        self.endedAt = endedAt
+        self.agentType = agentType
+        self.model = model
+        self.isFork = isFork
+        self.parentAgentId = parentAgentId
+        self.spawnDepth = spawnDepth
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        kind = try container.decode(String.self, forKey: .kind)
+        status = try container.decode(String.self, forKey: .status)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        firstObservedAt = try container.decodeIfPresent(String.self, forKey: .firstObservedAt)
+        startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
+        lastActivityAt = try container.decodeIfPresent(String.self, forKey: .lastActivityAt)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        userMessages = try container.decodeIfPresent(Int.self, forKey: .userMessages)
+        assistantMessages = try container.decodeIfPresent(Int.self, forKey: .assistantMessages)
+        toolCalls = try container.decodeIfPresent(Int.self, forKey: .toolCalls)
+        registeredAt = try container.decodeIfPresent(String.self, forKey: .registeredAt)
+        nativeProgress = try container.decodeIfPresent(SessionDelegationProgress.self, forKey: .nativeProgress)
+        endedAt = try container.decodeIfPresent(String.self, forKey: .endedAt)
+        agentType = try container.decodeIfPresent(String.self, forKey: .agentType)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        isFork = try container.decodeIfPresent(Bool.self, forKey: .isFork) ?? false
+        parentAgentId = try container.decodeIfPresent(String.self, forKey: .parentAgentId)
+        spawnDepth = try container.decodeIfPresent(Int.self, forKey: .spawnDepth)
+    }
 }
 
 /// Provider-owned evidence for delegated/background work. `items == nil`
@@ -169,11 +261,15 @@ enum SessionDelegationCategory: String, CaseIterable, Hashable, Sendable {
     case other
 
     init(kind: String) {
-        switch kind {
-        case "subagent": self = .agents
-        case "shell": self = .commands
-        case "monitor": self = .monitors
-        default: self = .other
+        let normalized = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "subagent" || normalized == "agent" {
+            self = .agents
+        } else if normalized == "shell" || normalized == "bash" || normalized == "command" {
+            self = .commands
+        } else if normalized.contains("monitor") {
+            self = .monitors
+        } else {
+            self = .other
         }
     }
 

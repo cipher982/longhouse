@@ -3,9 +3,35 @@ import { escapeHtml } from "./escape";
 import { markdownToHtml } from "./markdown";
 import { mediaStrip } from "./media";
 import { thoughtProse } from "../../shared/session/model/thoughtProse";
-import { summarizeCompactionNotice, summarizeProviderNotice } from "../../shared/session/model/providerNotice";
+import {
+  summarizeApiError,
+  summarizeCompactionNotice,
+  summarizeProviderNotice,
+  summarizeTaskNotification,
+} from "../../shared/session/model/providerNotice";
 import { activityGroup, question, toolDetails } from "./toolCards";
 import type { TranscriptItem } from "./types";
+
+function renderApiErrorBlock(apiError: Record<string, unknown>, body?: string | null): string {
+  const summary = summarizeApiError(apiError, body);
+  const badgeHtml = summary.badge ? `<span class="api-error-badge">${escapeHtml(summary.badge)}</span>` : "";
+  if (summary.detail) {
+    return `
+        <details class="tool row notice api-error-notice" data-testid="session-api-error-notice">
+          <summary>
+            ${badgeHtml}
+            <span class="tool-title">${escapeHtml(summary.title)}</span>
+          </summary>
+          <div class="details-body"><pre><code>${escapeHtml(summary.detail)}</code></pre></div>
+        </details>
+      `;
+  }
+  return `
+        <div class="tool row notice static api-error-notice" data-testid="session-api-error-notice">
+          <div class="tool-head">${badgeHtml}<span class="tool-title">${escapeHtml(summary.title)}</span></div>
+        </div>
+      `;
+}
 
 export function message(item: TranscriptItem, index: number): string {
   const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
@@ -40,11 +66,17 @@ export function message(item: TranscriptItem, index: number): string {
           </div>
         `;
   }
+  const commentaryClass = item.phase === "commentary" ? " commentary" : "";
+  const phaseBadge =
+    item.phase === "commentary" ? '<div class="message-phase-row"><span class="phase-badge">Commentary</span></div>' : "";
+  const errorNotice = item.apiError ? renderApiErrorBlock(item.apiError, item.body) : "";
   return `
-        <article class="row message assistant" data-message-index="${index}">
+        <article class="row message assistant${commentaryClass}" data-message-index="${index}">
+          ${phaseBadge}
           <div class="message-content">${body}</div>
           ${media}
           ${expand}
+          ${errorNotice}
         </article>
       `;
 }
@@ -129,6 +161,39 @@ export function compaction(item: TranscriptItem): string {
 /// short server-authored prose whose last sentence may be the point, so it is
 /// shown whole, as the web timeline shows it.
 export function providerNotification(item: TranscriptItem): string {
+  if (item.taskNotification) {
+    const summary = summarizeTaskNotification(item.taskNotification, item.body);
+    const statusDot = summary.status
+      ? `<span class="task-notice-dot status-${escapeHtml(summary.status)}" aria-label="${escapeHtml(summary.status)}"></span>`
+      : "";
+    const meta = summary.meta ? `<span class="tool-subtitle">${escapeHtml(summary.meta)}</span>` : "";
+    const note = summary.note ? `<span class="task-notice-note">${escapeHtml(summary.note)}</span>` : "";
+    if (!summary.result) {
+      return `
+        <div class="tool row notice static task-notice" data-testid="session-task-notification">
+          <div class="tool-head">${statusDot}<span class="tool-title">${escapeHtml(summary.title)}</span>${meta}${note}</div>
+        </div>
+      `;
+    }
+    return `
+        <details class="tool row notice task-notice" data-testid="session-task-notification" data-open-key="${escapeHtml(item.id)}">
+          <summary>${statusDot}<span class="tool-title">${escapeHtml(summary.title)}</span>${meta}${note}</summary>
+          <div class="details-body"><pre><code>${escapeHtml(summary.result)}</code></pre></div>
+        </details>
+      `;
+  }
+  if (typeof item.waitingBackgroundAgents === "number") {
+    const count = Math.max(0, Math.round(item.waitingBackgroundAgents));
+    const unit = count === 1 ? "agent" : "agents";
+    return `
+        <div class="tool row notice static waiting-agents" data-testid="session-waiting-background-agents">
+          <div class="tool-head"><span class="waiting-agents-icon">*</span><span class="tool-title">Waiting for ${count} background ${unit} to finish</span></div>
+        </div>
+      `;
+  }
+  if (item.apiError) {
+    return renderApiErrorBlock(item.apiError, item.body);
+  }
   const wakeAttribute = item.wake ? ' data-wake="true"' : "";
   if (item.origin === "longhouse") {
     return `
@@ -160,6 +225,13 @@ export function providerNotification(item: TranscriptItem): string {
 /// tool calls (Gemini through OMP) this is the only narration, so it leads its
 /// step as readable text clamped to three lines; a tap opens the whole thought.
 export function reasoning(item: TranscriptItem): string {
+  if (item.reasoningWithheld) {
+    return `
+        <div class="reasoning row reasoning-withheld" data-testid="session-reasoning-withheld">
+          <span class="reasoning-withheld-label">Reasoning withheld</span>
+        </div>
+      `;
+  }
   const text = item.body || "";
   const prose = escapeHtml(thoughtProse(text) || "No reasoning details");
   return `
@@ -186,15 +258,20 @@ export function renderItemBody(item: TranscriptItem, index: number): string {
 export function renderItem(item: TranscriptItem, index: number): string {
   const html = renderItemBody(item, index);
   if (!html || !item.turnEnd) return html;
-  // Each item renders as one root node (retained-node reconciliation
-  // relies on it), so the footer lives inside that root.
   const template = document.createElement("template");
   template.innerHTML = html.trim();
   const root = template.content.firstElementChild;
   if (!root) return html;
-  root.insertAdjacentHTML(
-    "beforeend",
-    `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`,
-  );
+  const turnEndHtml = `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`;
+  // Never bury .turn-end inside <details>, otherwise a collapsed tool or
+  // reasoning row hides the turn duration footer. Multi-root items also emit
+  // .turn-end as a trailing sibling node (supported by reconcile.ts).
+  if (root.tagName === "DETAILS" || template.content.children.length > 1) {
+    const footerTemplate = document.createElement("template");
+    footerTemplate.innerHTML = turnEndHtml;
+    template.content.appendChild(footerTemplate.content);
+  } else {
+    root.insertAdjacentHTML("beforeend", turnEndHtml);
+  }
   return template.innerHTML;
 }

@@ -88,4 +88,70 @@ final class SubagentsTests: XCTestCase {
         )
         XCTAssertEqual(Subagents.label(for: child(sessionId: "abcdef1234")), "abcdef12")
     }
+
+    func testLabelPrefersDescriptionAndAgentType() {
+        let described = SessionSubagent(
+            sessionId: "sub-desc",
+            provider: "claude",
+            parentToolCallId: "toolu_1",
+            runId: nil,
+            startedAt: nil,
+            lastActivityAt: nil,
+            endedAt: nil,
+            userMessages: 0,
+            assistantMessages: 0,
+            toolCalls: 0,
+            title: nil,
+            firstUserMessagePreview: nil,
+            lastVisibleTextPreview: nil,
+            agentType: "Explore",
+            description: "Inspect transcript builder"
+        )
+        XCTAssertEqual(Subagents.label(for: described), "Explore: Inspect transcript builder")
+    }
+
+    func testNestedChildrenWalksParentAgentLineage() {
+        let direct = SessionSubagent(
+            sessionId: "sub-1",
+            provider: "claude",
+            parentToolCallId: "toolu_root",
+            runId: nil,
+            startedAt: "2026-08-25T03:30:00Z",
+            lastActivityAt: nil,
+            endedAt: nil,
+            userMessages: 1,
+            assistantMessages: 1,
+            toolCalls: 2,
+            title: "Root worker",
+            firstUserMessagePreview: nil,
+            lastVisibleTextPreview: nil,
+            agentType: "general-purpose",
+            spawnDepth: 1
+        )
+        let grandchild = SessionSubagent(
+            sessionId: "sub-2",
+            provider: "claude",
+            parentToolCallId: nil,
+            runId: nil,
+            startedAt: "2026-08-25T03:30:10Z",
+            lastActivityAt: nil,
+            endedAt: nil,
+            userMessages: 1,
+            assistantMessages: 1,
+            toolCalls: 1,
+            title: "Grandchild worker",
+            firstUserMessagePreview: nil,
+            lastVisibleTextPreview: nil,
+            parentAgentId: "sub-1",
+            agentType: "Explore",
+            spawnDepth: 2
+        )
+        let unrelated = child(sessionId: "sub-other", parentToolCallId: "toolu_other")
+        let nested = Subagents.nestedChildren(
+            of: [direct],
+            in: [direct, grandchild, unrelated]
+        )
+        XCTAssertEqual(nested.map(\.subagent.sessionId), ["sub-1", "sub-2"])
+        XCTAssertEqual(nested.map(\.depth), [0, 1])
+    }
 }

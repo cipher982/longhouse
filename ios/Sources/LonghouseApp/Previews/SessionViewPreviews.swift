@@ -298,6 +298,22 @@ private struct SessionScreenPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let recap = detail.recap {
+                    VStack(spacing: 0) {
+                        SessionRecapBanner(recap: recap, usage: detail.usageLatest, detail: detail)
+                        Divider()
+                    }
+                } else if detail.usageLatest != nil || detail.worktree != nil || detail.permissionMode != nil || !(detail.sessionCrons ?? []).isEmpty {
+                    VStack(spacing: 0) {
+                        SessionUsageChip(usage: detail.usageLatest, detail: detail)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 5)
+                            .background(.bar)
+                        Divider()
+                    }
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 SessionSignalField(
                     detail: detail,
@@ -1229,5 +1245,190 @@ private func updatesPausedSessionPreview() -> SessionScreenPreview {
         hostUpdateState: hostUpdateState,
         hostUpdateNow: now
     )
+}
+
+@MainActor
+private func claudeFidelityPreviewDetail() -> SessionDetail {
+    var detail = SessionDetail.mock(
+        provider: "claude",
+        project: "control-plane",
+        homeLabel: "cinder",
+        canSteer: true,
+        canQueue: true,
+        executing: true,
+        placeholder: "Steer this turn",
+        stateFactsJSON: factsJSON(
+            activity: "thinking",
+            tool: "Bash",
+            observedAt: isoDate(secondsAgo: 6),
+            validUntil: isoDate(secondsAgo: -90),
+            primaryKey: "thinking",
+            primaryLabel: "Thinking",
+            primaryTone: "thinking",
+            access: ("live_control", "Live control", "success")
+        )
+    )
+    detail.recap = SessionRecap(
+        text: "Subagents are auditing parity matrices while two background shells and four monitors watch CI.",
+        at: isoDate(secondsAgo: 12)
+    )
+    detail.usageLatest = SessionUsageLatest(
+        label: "Opus 5.5 · 126k ctx",
+        model: "claude-opus-5-5",
+        effort: "high",
+        contextTokens: 126_000,
+        contextWindow: 1_000_000,
+        contextWindowSource: "derived",
+        outputTokens: 27,
+        thinkingTokens: 320,
+        usedPercent: 12.6,
+        costUsd: 53.89,
+        cumulativeDurationMs: 28_860_000,
+        rateLimits: [SessionRateLimit(kind: "5h", percentUsed: 84, resetsAt: isoDate(secondsAgo: -3600))],
+        at: isoDate(secondsAgo: 4)
+    )
+    detail.permissionMode = "bypassPermissions"
+    detail.worktree = SessionWorktree(
+        name: "claude-fidelity",
+        branch: "feat/claude-fidelity",
+        path: "/Users/davidrose/git/_wt/longhouse-claude-fidelity",
+        originalCwd: "/Users/davidrose/git/zerg/longhouse",
+        originalBranch: "main"
+    )
+    detail.sessionCrons = [
+        SessionCron(id: "cron-qa", schedule: "*/5 * * * *", recurring: true, prompt: "Poll QA")
+    ]
+    detail.pendingBackgroundAgentCount = 2
+    detail.stateFacts.delegation = SessionDelegationFacts(
+        state: "pending",
+        count: 4,
+        kinds: ["subagent": 2, "shell": 1, "monitor": 1],
+        source: "claude_hook",
+        observedAt: isoDate(secondsAgo: 3),
+        validUntil: isoDate(secondsAgo: -90),
+        items: [
+            SessionDelegationTask(
+                id: "sub-1",
+                kind: "subagent",
+                status: "running",
+                description: "Waiting on Claude terminal-truth output",
+                firstObservedAt: isoDate(secondsAgo: 120),
+                startedAt: isoDate(secondsAgo: 120),
+                lastActivityAt: isoDate(secondsAgo: 4),
+                sessionId: "019fc50b-2222-4222-8222-222222222221",
+                userMessages: 1,
+                assistantMessages: 3,
+                toolCalls: 9,
+                registeredAt: isoDate(secondsAgo: 120),
+                nativeProgress: SessionDelegationProgress(
+                    observedAt: isoDate(secondsAgo: 4),
+                    status: "running",
+                    currentTool: "Bash",
+                    lastIntent: "Verify live hook output",
+                    toolCount: 11,
+                    requests: 5,
+                    tokens: 194_200,
+                    contextTokens: 84_000,
+                    contextWindow: 1_000_000,
+                    durationMs: 3_203_000
+                ),
+                agentType: "general-purpose",
+                model: "claude-opus-5-5",
+                isFork: true,
+                parentAgentId: nil,
+                spawnDepth: 1
+            ),
+            SessionDelegationTask(
+                id: "sub-2",
+                kind: "subagent",
+                status: "waiting",
+                description: "Checking release v0.1.80 tag",
+                firstObservedAt: isoDate(secondsAgo: 90),
+                startedAt: isoDate(secondsAgo: 90),
+                lastActivityAt: isoDate(secondsAgo: 12),
+                sessionId: "019fc50b-2222-4222-8222-222222222222",
+                userMessages: 1,
+                assistantMessages: 2,
+                toolCalls: 4,
+                registeredAt: isoDate(secondsAgo: 90),
+                nativeProgress: SessionDelegationProgress(
+                    observedAt: isoDate(secondsAgo: 12),
+                    status: "waiting",
+                    currentTool: "Read",
+                    lastIntent: "Waiting on sub-step",
+                    toolCount: 4,
+                    requests: 2,
+                    tokens: 116_500,
+                    contextTokens: 42_000,
+                    contextWindow: 1_000_000,
+                    durationMs: 1_688_000
+                ),
+                agentType: "Explore",
+                model: "claude-sonnet-4-6",
+                isFork: false,
+                parentAgentId: "sub-1",
+                spawnDepth: 2
+            ),
+            SessionDelegationTask(
+                id: "shell-1",
+                kind: "shell",
+                status: "running",
+                description: "Cargo test workspace",
+                firstObservedAt: isoDate(secondsAgo: 70),
+                startedAt: isoDate(secondsAgo: 70),
+                lastActivityAt: isoDate(secondsAgo: 8),
+                sessionId: nil
+            ),
+            SessionDelegationTask(
+                id: "monitor-1",
+                kind: "monitor",
+                status: "watching",
+                description: "Watch hosted-live-qa.yml run",
+                firstObservedAt: isoDate(secondsAgo: 60),
+                startedAt: isoDate(secondsAgo: 60),
+                lastActivityAt: isoDate(secondsAgo: 5),
+                sessionId: nil
+            ),
+        ]
+    )
+    return detail
+}
+
+#Preview("Claude Fidelity · Dark") {
+    SessionScreenPreview(
+        detail: claudeFidelityPreviewDetail(),
+        activity: claudeSparse(),
+        transcript: [
+            "Spawning background subagent workers while keeping the main loop responsive.",
+            "Main loop stays ready; subagents stream progress in the runtime dock."
+        ]
+    )
+    .preferredColorScheme(.dark)
+    .emberChrome()
+}
+
+#Preview("Claude Fidelity · Light") {
+    SessionScreenPreview(
+        detail: claudeFidelityPreviewDetail(),
+        activity: claudeSparse(),
+        transcript: [
+            "Spawning background subagent workers while keeping the main loop responsive.",
+            "Main loop stays ready; subagents stream progress in the runtime dock."
+        ]
+    )
+    .preferredColorScheme(.light)
+    .emberChrome()
+}
+
+#Preview("Claude Fidelity Sheet · Dark") {
+    let detail = claudeFidelityPreviewDetail()
+    SessionDelegationTaskSheet(
+        facts: detail.stateFacts.delegation,
+        pendingBackgroundAgentCount: detail.pendingBackgroundAgentCount,
+        asOf: Date(),
+        onOpenSubagent: { _ in }
+    )
+    .preferredColorScheme(.dark)
+    .emberChrome()
 }
 #endif

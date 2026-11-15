@@ -20,6 +20,8 @@ export interface ToolCall {
   rawInput?: string | null;
   output?: string | null;
   media?: MediaRef[] | null;
+  startedAtMs?: number | null;
+  toolIntent?: string | null;
 }
 
 export interface DiffLine {
@@ -31,6 +33,13 @@ export interface Subagent {
   sessionId: string;
   label: string;
   toolCalls: number;
+  agentType?: string | null;
+  description?: string | null;
+  liveStatus?: string | null;
+  isFork?: boolean | null;
+  depth?: number | null;
+  durationMs?: number | null;
+  totalTokens?: number | null;
 }
 
 export interface TurnEnd {
@@ -75,6 +84,20 @@ export interface TranscriptItem {
   bodyCursors?: string[] | null;
   /** "preview", "loading", "failed" or "unavailable" while bodyCursors is set. */
   bodyState?: string | null;
+  /** Assistant message phase (commentary vs final_answer). */
+  phase?: string | null;
+  /** Claude encrypted thinking block without plaintext. */
+  reasoningWithheld?: boolean | null;
+  /** Structured task notification completion payload. */
+  taskNotification?: Record<string, unknown> | null;
+  /** Count from "Waiting for N background agents to finish". */
+  waitingBackgroundAgents?: number | null;
+  /** Provider API error / retry banner metadata. */
+  apiError?: Record<string, unknown> | null;
+  /** Provider-emitted tool intent caption. */
+  toolIntent?: string | null;
+  /** Epoch milliseconds when a running tool started (for live timers). */
+  startedAtMs?: number | null;
 }
 
 export interface TranscriptPayload {

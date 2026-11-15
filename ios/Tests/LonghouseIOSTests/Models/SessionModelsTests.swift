@@ -2573,8 +2573,34 @@ struct SessionDelegationFactsTests {
     @Test
     func categoryBucketsUseCanonicalTaskKinds() {
         #expect(SessionDelegationCategory(kind: "subagent") == .agents)
+        #expect(SessionDelegationCategory(kind: "agent") == .agents)
         #expect(SessionDelegationCategory(kind: "shell") == .commands)
+        #expect(SessionDelegationCategory(kind: "bash") == .commands)
+        #expect(SessionDelegationCategory(kind: "command") == .commands)
         #expect(SessionDelegationCategory(kind: "monitor") == .monitors)
+        #expect(SessionDelegationCategory(kind: "async_monitor") == .monitors)
         #expect(SessionDelegationCategory(kind: "agentic-shell") == .other)
+    }
+
+    @Test
+    func usageLatestFormatsCostDurationAndWindowPercentage() {
+        let usage = SessionUsageLatest(
+            label: "Opus 5.5 · 126k ctx",
+            model: "claude-opus-5-5",
+            effort: "high",
+            contextTokens: 126_000,
+            contextWindow: 1_000_000,
+            contextWindowSource: "derived",
+            outputTokens: 27,
+            thinkingTokens: 320,
+            usedPercent: 12.6,
+            costUsd: 53.89,
+            cumulativeDurationMs: 28_860_000
+        )
+        #expect(usage.formattedContextPercentOfWindow == "13% of 1.0M")
+        #expect(usage.formattedCost == "$53.89")
+        #expect(usage.formattedCumulativeDuration == "8h 1m")
+        #expect(RuntimeElapsed.compactTokens(194_200) == "194.2k tok")
+        #expect(RuntimeElapsed.compactTokens(42_000) == "42k tok")
     }
 }

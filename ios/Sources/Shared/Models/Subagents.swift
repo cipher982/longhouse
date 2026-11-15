@@ -17,8 +17,151 @@ struct SessionSubagent: Codable, Hashable, Sendable, Identifiable {
     let title: String?
     let firstUserMessagePreview: String?
     let lastVisibleTextPreview: String?
+    let providerSessionId: String?
+    let parentSessionId: String?
+    let parentAgentId: String?
+    let agentType: String?
+    let description: String?
+    let model: String?
+    let isFork: Bool
+    let spawnDepth: Int?
+    let finished: Bool?
+    let liveStatus: String?
+    let durationMs: Int?
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let totalTokens: Int?
+    let contextTokens: Int?
+    let contextWindow: Int?
 
     var id: String { sessionId }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId
+        case provider
+        case parentToolCallId
+        case runId
+        case startedAt
+        case lastActivityAt
+        case endedAt
+        case userMessages
+        case assistantMessages
+        case toolCalls
+        case title
+        case firstUserMessagePreview
+        case lastVisibleTextPreview
+        case providerSessionId
+        case parentSessionId
+        case parentAgentId
+        case agentType
+        case description
+        case model
+        case isFork
+        case spawnDepth
+        case finished
+        case liveStatus
+        case durationMs
+        case inputTokens
+        case outputTokens
+        case totalTokens
+        case contextTokens
+        case contextWindow
+    }
+
+    init(
+        sessionId: String,
+        provider: String,
+        parentToolCallId: String?,
+        runId: String?,
+        startedAt: String?,
+        lastActivityAt: String?,
+        endedAt: String?,
+        userMessages: Int,
+        assistantMessages: Int,
+        toolCalls: Int,
+        title: String?,
+        firstUserMessagePreview: String?,
+        lastVisibleTextPreview: String?,
+        providerSessionId: String? = nil,
+        parentSessionId: String? = nil,
+        parentAgentId: String? = nil,
+        agentType: String? = nil,
+        description: String? = nil,
+        model: String? = nil,
+        isFork: Bool = false,
+        spawnDepth: Int? = nil,
+        finished: Bool? = nil,
+        liveStatus: String? = nil,
+        durationMs: Int? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        totalTokens: Int? = nil,
+        contextTokens: Int? = nil,
+        contextWindow: Int? = nil
+    ) {
+        self.sessionId = sessionId
+        self.provider = provider
+        self.parentToolCallId = parentToolCallId
+        self.runId = runId
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
+        self.endedAt = endedAt
+        self.userMessages = userMessages
+        self.assistantMessages = assistantMessages
+        self.toolCalls = toolCalls
+        self.title = title
+        self.firstUserMessagePreview = firstUserMessagePreview
+        self.lastVisibleTextPreview = lastVisibleTextPreview
+        self.providerSessionId = providerSessionId
+        self.parentSessionId = parentSessionId
+        self.parentAgentId = parentAgentId
+        self.agentType = agentType
+        self.description = description
+        self.model = model
+        self.isFork = isFork
+        self.spawnDepth = spawnDepth
+        self.finished = finished
+        self.liveStatus = liveStatus
+        self.durationMs = durationMs
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+        self.contextTokens = contextTokens
+        self.contextWindow = contextWindow
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        provider = try container.decode(String.self, forKey: .provider)
+        parentToolCallId = try container.decodeIfPresent(String.self, forKey: .parentToolCallId)
+        runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
+        lastActivityAt = try container.decodeIfPresent(String.self, forKey: .lastActivityAt)
+        endedAt = try container.decodeIfPresent(String.self, forKey: .endedAt)
+        userMessages = try container.decodeIfPresent(Int.self, forKey: .userMessages) ?? 0
+        assistantMessages = try container.decodeIfPresent(Int.self, forKey: .assistantMessages) ?? 0
+        toolCalls = try container.decodeIfPresent(Int.self, forKey: .toolCalls) ?? 0
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        firstUserMessagePreview = try container.decodeIfPresent(String.self, forKey: .firstUserMessagePreview)
+        lastVisibleTextPreview = try container.decodeIfPresent(String.self, forKey: .lastVisibleTextPreview)
+        providerSessionId = try container.decodeIfPresent(String.self, forKey: .providerSessionId)
+        parentSessionId = try container.decodeIfPresent(String.self, forKey: .parentSessionId)
+        parentAgentId = try container.decodeIfPresent(String.self, forKey: .parentAgentId)
+        agentType = try container.decodeIfPresent(String.self, forKey: .agentType)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        isFork = try container.decodeIfPresent(Bool.self, forKey: .isFork) ?? false
+        spawnDepth = try container.decodeIfPresent(Int.self, forKey: .spawnDepth)
+        finished = try container.decodeIfPresent(Bool.self, forKey: .finished)
+        liveStatus = try container.decodeIfPresent(String.self, forKey: .liveStatus)
+        durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
+        inputTokens = try container.decodeIfPresent(Int.self, forKey: .inputTokens)
+        outputTokens = try container.decodeIfPresent(Int.self, forKey: .outputTokens)
+        totalTokens = try container.decodeIfPresent(Int.self, forKey: .totalTokens)
+        contextTokens = try container.decodeIfPresent(Int.self, forKey: .contextTokens)
+        contextWindow = try container.decodeIfPresent(Int.self, forKey: .contextWindow)
+    }
 }
 
 struct SessionSubagentsResponse: Codable, Sendable {
@@ -71,6 +214,39 @@ enum Subagents {
         return matched.sorted { ($0.startedAt ?? "") < ($1.startedAt ?? "") }
     }
 
+    static func nestedChildren(
+        of parent: SessionSubagent,
+        in allChildren: [SessionSubagent]
+    ) -> [SessionSubagent] {
+        guard !allChildren.isEmpty else { return [] }
+        let parentKeys = Set(
+            [parent.runId, parent.providerSessionId, parent.sessionId]
+                .compactMap(normalizedAgentKey)
+        )
+        return allChildren.filter { candidate in
+            guard candidate.sessionId != parent.sessionId else { return false }
+            if candidate.parentSessionId == parent.sessionId {
+                return true
+            }
+            if let key = normalizedAgentKey(candidate.parentAgentId) {
+                return parentKeys.contains(key)
+            }
+            return false
+        }
+        .sorted { ($0.startedAt ?? "") < ($1.startedAt ?? "") }
+    }
+
+    private static func normalizedAgentKey(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        if trimmed.hasPrefix("agent-") {
+            let stripped = String(trimmed.dropFirst(6))
+            return stripped.isEmpty ? nil : stripped
+        }
+        return trimmed
+    }
+
     /// "22 agents · 4m12s" — the shape of the work, before anyone expands it.
     static func summary(_ children: [SessionSubagent]) -> String {
         guard !children.isEmpty else { return "" }
@@ -88,7 +264,10 @@ enum Subagents {
 
     /// One child's line: its own title, or the prompt it was handed.
     static func label(for child: SessionSubagent) -> String {
-        let candidate = (child.title ?? child.firstUserMessagePreview ?? "")
+        let preferred = [child.description, child.title, child.firstUserMessagePreview, child.agentType]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        let candidate = (preferred ?? "")
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if candidate.isEmpty { return String(child.sessionId.prefix(8)) }

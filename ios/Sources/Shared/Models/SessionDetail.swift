@@ -55,10 +55,22 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     /// Selected model for new per-turn inputs. This is distinct from
     /// ``usageLatest``, which describes the provider's last completed turn.
     var selectedModel: String? = nil
+    var permissionMode: String? = nil
+    var providerTitle: String? = nil
+    var worktree: SessionWorktree? = nil
+    var sessionCrons: [SessionCron]? = nil
+    var pendingBackgroundAgentCount: Int? = nil
 
     /// The server's `timeline_title`, carried in `title` by the API adapter.
     var displayTitle: String {
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty, trimmed != "Untitled session" {
+            return trimmed
+        }
+        let fallbackProviderTitle = providerTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !fallbackProviderTitle.isEmpty {
+            return fallbackProviderTitle
+        }
         return trimmed.isEmpty ? "Untitled session" : trimmed
     }
 
@@ -339,6 +351,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         copy.recap = recap ?? previous.recap
         copy.usageLatest = usageLatest ?? previous.usageLatest
         copy.selectedModel = selectedModel ?? previous.selectedModel
+        copy.permissionMode = permissionMode ?? previous.permissionMode
+        copy.providerTitle = providerTitle ?? previous.providerTitle
+        copy.worktree = worktree ?? previous.worktree
+        copy.sessionCrons = sessionCrons ?? previous.sessionCrons
+        copy.pendingBackgroundAgentCount = pendingBackgroundAgentCount ?? previous.pendingBackgroundAgentCount
         if stateFacts.delegation == nil,
            let runId = stateFacts.runId,
            previous.stateFacts.runId == runId {
@@ -383,8 +400,108 @@ struct SessionRecap: Codable, Hashable, Sendable {
 
 /// The provider's last turn-ending response as the server words it:
 /// "opus 5 · high · 501k ctx". Rendered verbatim so iOS and web cannot drift.
+struct SessionWorktree: Codable, Hashable, Sendable {
+    let name: String?
+    let branch: String?
+    let path: String?
+    let originalCwd: String?
+    let originalBranch: String?
+}
+
+struct SessionCron: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    let schedule: String
+    let recurring: Bool?
+    let prompt: String?
+}
+
+struct SessionRateLimit: Codable, Hashable, Sendable {
+    let kind: String
+    let percentUsed: Double?
+    let resetsAt: String?
+}
+
 struct SessionUsageLatest: Codable, Hashable, Sendable {
     let label: String
+    var model: String? = nil
+    var effort: String? = nil
+    var contextTokens: Int? = nil
+    var contextWindow: Int? = nil
+    var contextWindowSource: String? = nil
+    var outputTokens: Int? = nil
+    var thinkingTokens: Int? = nil
+    var usedPercent: Double? = nil
+    var costUsd: Double? = nil
+    var cumulativeDurationMs: Int? = nil
+    var rateLimits: [SessionRateLimit]? = nil
+    var at: String? = nil
+
+    init(
+        label: String,
+        model: String? = nil,
+        effort: String? = nil,
+        contextTokens: Int? = nil,
+        contextWindow: Int? = nil,
+        contextWindowSource: String? = nil,
+        outputTokens: Int? = nil,
+        thinkingTokens: Int? = nil,
+        usedPercent: Double? = nil,
+        costUsd: Double? = nil,
+        cumulativeDurationMs: Int? = nil,
+        rateLimits: [SessionRateLimit]? = nil,
+        at: String? = nil
+    ) {
+        self.label = label
+        self.model = model
+        self.effort = effort
+        self.contextTokens = contextTokens
+        self.contextWindow = contextWindow
+        self.contextWindowSource = contextWindowSource
+        self.outputTokens = outputTokens
+        self.thinkingTokens = thinkingTokens
+        self.usedPercent = usedPercent
+        self.costUsd = costUsd
+        self.cumulativeDurationMs = cumulativeDurationMs
+        self.rateLimits = rateLimits
+        self.at = at
+    }
+}
+
+extension SessionUsageLatest {
+    var formattedCost: String? {
+        guard let costUsd, costUsd.isFinite, costUsd > 0 else { return nil }
+        if costUsd >= 1.0 {
+            return String(format: "$%.2f", costUsd)
+        }
+        return String(format: "$%.3f", costUsd)
+    }
+
+    var formattedCumulativeDuration: String? {
+        guard let cumulativeDurationMs, cumulativeDurationMs > 0 else { return nil }
+        let totalSeconds = max(0, cumulativeDurationMs / 1000)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
+        if minutes > 0 { return seconds > 0 ? "\(minutes)m \(seconds)s" : "\(minutes)m" }
+        return "\(seconds)s"
+    }
+
+    var formattedContextPercentOfWindow: String? {
+        guard let usedPercent, usedPercent.isFinite else { return nil }
+        let rounded = Int(usedPercent.rounded())
+        if let contextWindow, contextWindow > 0 {
+            let windowLabel: String
+            if contextWindow >= 1_000_000 {
+                let m = Double(contextWindow) / 1_000_000.0
+                windowLabel = String(format: "%.1fM", m)
+            } else {
+                windowLabel = "\(max(1, contextWindow / 1000))k"
+            }
+            return "\(rounded)% of \(windowLabel)"
+        }
+        return "\(rounded)%"
+    }
 }
 
 /// The most recent turn the provider reported as finished, for the session chrome.

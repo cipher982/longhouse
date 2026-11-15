@@ -3,17 +3,22 @@ import SwiftUI
 
 struct SessionDelegationTaskSheet: View {
     let facts: SessionDelegationFacts?
+    let pendingBackgroundAgentCount: Int?
     let onOpenSubagent: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sheetNow: Date
 
     init(
         facts: SessionDelegationFacts?,
+        pendingBackgroundAgentCount: Int? = nil,
         asOf: Date,
         onOpenSubagent: @escaping (String) -> Void
     ) {
         self.facts = facts
+        self.pendingBackgroundAgentCount = pendingBackgroundAgentCount
         self.onOpenSubagent = onOpenSubagent
         _sheetNow = State(initialValue: asOf)
     }
@@ -51,6 +56,7 @@ struct SessionDelegationTaskSheet: View {
             }
         }
         .task(id: freshnessTaskKey) {
+            let liveTick = hasActiveTasks && !UITestHooks.holdsAmbientMotion && !reduceMotion
             while !Task.isCancelled {
                 let remaining = facts?.validUntil
                     .flatMap(LonghouseDateParser.parse)?
@@ -60,7 +66,8 @@ struct SessionDelegationTaskSheet: View {
                     sheetNow = Date()
                     return
                 }
-                let delay = min(30, max(1, remaining))
+                let maxStep: TimeInterval = liveTick ? 1 : 30
+                let delay = min(maxStep, max(1, remaining))
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 if !Task.isCancelled {
                     sheetNow = Date()
@@ -71,8 +78,12 @@ struct SessionDelegationTaskSheet: View {
         .presentationDragIndicator(.visible)
     }
 
+    private var hasActiveTasks: Bool {
+        facts?.items?.contains(where: { ($0.endedAt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) == true
+    }
+
     private var freshnessTaskKey: String {
-        "\(facts?.observedAt ?? ""):\(facts?.validUntil ?? "")"
+        "\(facts?.observedAt ?? ""):\(facts?.validUntil ?? ""):\(hasActiveTasks):\(pendingBackgroundAgentCount ?? 0)"
     }
 
     private var observationLine: String? {
@@ -89,13 +100,22 @@ struct SessionDelegationTaskSheet: View {
         if let facts, facts.isValid(asOf: sheetNow), facts.state.lowercased() != "unknown" {
             if let items = facts.items {
                 if items.isEmpty {
-                    emptyState
+                    if let pending = pendingBackgroundAgentCount, pending > 0 {
+                        waitingBackgroundAgentsCard(count: pending)
+                    } else {
+                        emptyState
+                    }
                 } else {
                     taskGroups(items)
                 }
             } else {
+                if let pending = pendingBackgroundAgentCount, pending > 0 {
+                    waitingBackgroundAgentsCard(count: pending)
+                }
                 aggregateOnlyState(facts)
             }
+        } else if facts == nil, let pending = pendingBackgroundAgentCount, pending > 0 {
+            waitingBackgroundAgentsCard(count: pending)
         } else {
             unknownState
         }
@@ -104,6 +124,22 @@ struct SessionDelegationTaskSheet: View {
                 .font(.headline)
             taskGroups(recent)
         }
+    }
+
+    private func waitingBackgroundAgentsCard(count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                "Waiting for \(count) background \(count == 1 ? "agent" : "agents") to finish",
+                systemImage: "hourglass"
+            )
+            .font(.headline)
+            .foregroundStyle(Ember.text)
+            Text("Claude reported pending background work at the end of the turn.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("session-runtime-background-waiting")
     }
 
     private var emptyState: some View {
@@ -166,23 +202,39 @@ struct SessionDelegationTaskSheet: View {
     private func taskRow(_ task: SessionDelegationTask) -> some View {
         let title = taskTitle(task)
         let sessionId = task.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let row = VStack(alignment: .leading, spacing: 5) {
+        let depth = max(1, task.spawnDepth ?? 1)
+        let leadingIndent: CGFloat = (!typeSize.isAccessibilitySize && depth >= 2)
+            ? CGFloat(min(depth - 1, 3)) * 12
+            : 0
+        let row = VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Circle()
+                    .fill(statusDotColor(for: task.status))
+                    .frame(width: 7, height: 7)
                 Text(title)
                     .font(.body.weight(.medium))
                     .foregroundStyle(Ember.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
+                if let duration = liveDurationLabel(for: task) {
+                    Text(duration)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(task.endedAt == nil ? Ember.nixie : .secondary)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
                 if sessionId != nil {
                     Image(systemName: "arrow.up.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
             }
-            Text("Status: \(task.status)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            taskMetadataStrip(for: task)
+            if let step = stepLine(for: task) {
+                Text(step)
+                    .font(.caption)
+                    .foregroundStyle(Ember.text.opacity(0.88))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let timing = timingLine(for: task) {
                 Text(timing)
                     .font(.caption2.monospacedDigit())
@@ -196,10 +248,13 @@ struct SessionDelegationTaskSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let progress = task.nativeProgress {
-                Text("Provider progress · \(nativeProgressLine(progress))")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                let statsLine = nativeProgressLine(progress)
+                if !statsLine.isEmpty {
+                    Text(statsLine)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -213,6 +268,8 @@ struct SessionDelegationTaskSheet: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Ember.border, lineWidth: 0.75)
         }
+        .padding(.leading, leadingIndent)
+
         if let sessionId {
             Button {
                 onOpenSubagent(sessionId)
@@ -227,15 +284,143 @@ struct SessionDelegationTaskSheet: View {
         }
     }
 
+    @ViewBuilder
+    private func taskMetadataStrip(for task: SessionDelegationTask) -> some View {
+        let content = Group {
+            taskPill(
+                text: statusLabel(for: task.status),
+                foreground: statusDotColor(for: task.status),
+                border: statusDotColor(for: task.status).opacity(0.45)
+            )
+            if let agentType = task.agentType?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !agentType.isEmpty {
+                taskPill(text: agentType, foreground: Ember.textSecondary, border: Ember.border)
+            }
+            if task.isFork == true {
+                taskPill(text: "fork", foreground: Ember.gold, border: Ember.gold.opacity(0.45))
+            }
+            if let model = task.model?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !model.isEmpty {
+                Text(model)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if let tokens = task.nativeProgress?.tokens, tokens > 0 {
+                Text(RuntimeElapsed.compactTokens(tokens))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) { content }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { content }
+                VStack(alignment: .leading, spacing: 4) { content }
+            }
+        }
+    }
+
+    private func taskPill(text: String, foreground: Color, border: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Ember.well.opacity(0.75)))
+            .overlay(Capsule().stroke(border, lineWidth: 0.75))
+    }
+
+    private func statusDotColor(for rawStatus: String) -> Color {
+        switch rawStatus.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "running", "watching":
+            return Ember.flame
+        case "waiting":
+            return Ember.gold
+        case "failed", "error":
+            return Ember.ember
+        default:
+            return Ember.ash
+        }
+    }
+
+    private func statusLabel(for rawStatus: String) -> String {
+        let trimmed = rawStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Unknown" }
+        return trimmed.prefix(1).uppercased() + trimmed.dropFirst().lowercased()
+    }
+
+    private func liveDurationLabel(for task: SessionDelegationTask) -> String? {
+        if let endedAt = task.endedAt, let end = LonghouseDateParser.parse(endedAt) {
+            if let start = (task.startedAt ?? task.firstObservedAt).flatMap(LonghouseDateParser.parse) {
+                return RuntimeElapsed.label(from: start, to: end, precise: true)
+            }
+            if let durationMs = task.nativeProgress?.durationMs, durationMs > 0 {
+                return RuntimeElapsed.label(seconds: Double(durationMs) / 1000.0, precise: true)
+            }
+            return nil
+        }
+        if let start = (task.startedAt ?? task.firstObservedAt).flatMap(LonghouseDateParser.parse) {
+            return RuntimeElapsed.label(from: start, to: sheetNow, precise: true)
+        }
+        if let durationMs = task.nativeProgress?.durationMs, durationMs > 0 {
+            return RuntimeElapsed.label(seconds: Double(durationMs) / 1000.0, precise: true)
+        }
+        return nil
+    }
+
+    private func stepLine(for task: SessionDelegationTask) -> String? {
+        guard let progress = task.nativeProgress else { return nil }
+        let tool = progress.currentTool?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let intent = progress.lastIntent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch (!tool.isEmpty, !intent.isEmpty) {
+        case (true, true): return "\(tool): \(intent)"
+        case (true, false): return tool
+        case (false, true): return intent
+        case (false, false): return nil
+        }
+    }
+
     private func groups(for tasks: [SessionDelegationTask]) -> [TaskGroup] {
         let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
         let grouped = Dictionary(grouping: tasks) {
             SessionDelegationCategory(kind: $0.kind)
         }
         return order.compactMap { category in
-            guard let tasks = grouped[category], !tasks.isEmpty else { return nil }
-            return TaskGroup(key: category.rawValue, title: category.title, tasks: tasks)
+            guard let categoryTasks = grouped[category], !categoryTasks.isEmpty else { return nil }
+            let ordered = category == .agents ? orderedAgentTasks(categoryTasks) : categoryTasks
+            return TaskGroup(key: category.rawValue, title: category.title, tasks: ordered)
         }
+    }
+
+    private func orderedAgentTasks(_ tasks: [SessionDelegationTask]) -> [SessionDelegationTask] {
+        let ids = Set(tasks.map(\.id))
+        let childrenByParent = Dictionary(grouping: tasks.filter { task in
+            guard let parent = task.parentAgentId else { return false }
+            return parent != task.id && ids.contains(parent)
+        }) { $0.parentAgentId ?? "" }
+        var result: [SessionDelegationTask] = []
+        var visited = Set<String>()
+
+        func appendWithChildren(_ task: SessionDelegationTask) {
+            guard visited.insert(task.id).inserted else { return }
+            result.append(task)
+            for child in childrenByParent[task.id] ?? [] {
+                appendWithChildren(child)
+            }
+        }
+
+        for task in tasks {
+            let parent = task.parentAgentId
+            if parent == nil || parent == task.id || !ids.contains(parent!) {
+                appendWithChildren(task)
+            }
+        }
+        for task in tasks where !visited.contains(task.id) {
+            appendWithChildren(task)
+        }
+        return result
     }
 
     private func taskTitle(_ task: SessionDelegationTask) -> String {
@@ -268,12 +453,8 @@ struct SessionDelegationTaskSheet: View {
            let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
             parts.append("observed \(age)")
         }
-        if let tool = progress.currentTool { parts.append(tool) }
-        if let intent = progress.lastIntent { parts.append(intent) }
         if let count = progress.toolCount { parts.append("\(count) tools") }
         if let count = progress.requests { parts.append("\(count) requests") }
-        if let count = progress.tokens { parts.append("\(count) tokens") }
-        if let duration = progress.durationMs { parts.append(String(format: "%.1fs observed", Double(duration) / 1000)) }
         return parts.joined(separator: " · ")
     }
 

@@ -753,6 +753,189 @@ summary::-webkit-details-marker {
   border-radius: 10px;
   object-fit: cover;
 }
+
+/* --- Claude Code fidelity signals & subagent tree --- */
+.message-phase-row {
+  margin-bottom: 4px;
+}
+
+.phase-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message.assistant.commentary .message-content {
+  color: var(--secondary);
+  font-size: 13.5px;
+}
+
+.reasoning-withheld {
+  padding: 4px 10px;
+  margin-left: 2px;
+  border-left: 1.5px solid var(--trace);
+  color: var(--tertiary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.tool-intent {
+  color: var(--secondary);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+
+.running-output-tail {
+  margin: 0 10px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--code);
+  padding: 5px 8px;
+  overflow-x: auto;
+}
+
+.running-output-tail pre,
+.running-output-tail pre code {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.45;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-notice-dot,
+.subagent-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--secondary);
+}
+
+.task-notice-dot.status-completed {
+  background: #67b87a;
+}
+
+.task-notice-dot.status-running,
+.subagent-dot.status-running {
+  background: #e2a452;
+}
+
+.task-notice-dot.status-failed,
+.task-notice-dot.status-killed {
+  background: var(--attention);
+}
+
+.subagent-dot.status-waiting {
+  background: var(--secondary);
+}
+
+.task-notice-note {
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.waiting-agents-icon {
+  color: #e2a452;
+  font-weight: 700;
+}
+
+.api-error-notice {
+  border-left-color: var(--attention);
+}
+
+.api-error-badge {
+  padding: 1px 6px;
+  border: 1px solid rgba(200, 80, 70, 0.4);
+  border-radius: 4px;
+  background: rgba(200, 80, 70, 0.14);
+  color: var(--attention);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: nowrap;
+}
+
+.subagents {
+  margin: 2px 0 8px 2px;
+  border-left: 1.5px solid var(--trace);
+}
+
+.subagents summary {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.subagent-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 8px 6px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.subagent-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.subagent-pill {
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--secondary);
+  font: 10.5px ui-monospace, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
+}
+
+.subagent-pill.fork {
+  color: #e2a452;
+  border-color: rgba(226, 164, 82, 0.38);
+}
+
+.subagent-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-status.waiting {
+  color: var(--secondary);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.subagent-meta {
+  color: var(--tertiary);
+  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
   </style>
 </head>
 <body>
@@ -980,6 +1163,9 @@ summary::-webkit-details-marker {
 	function ellipsize(text, maxChars) {
 		return text.length <= maxChars ? text : `${text.slice(0, maxChars).trimEnd()}…`;
 	}
+	function cleanText(text) {
+		return text.trim().replace(/\s+/g, " ");
+	}
 	function summarizeProviderNotice(text) {
 		const lines = (text ?? "").replace(/\r\n?/g, "\n").trimEnd().split("\n");
 		const headerIndex = lines.findIndex((line) => line.trim().length > 0);
@@ -1023,6 +1209,27 @@ summary::-webkit-details-marker {
 			title: "Context compacted",
 			detail: null
 		};
+		if (trimmed === "Context microcompacted") return {
+			title: "Context microcompacted",
+			detail: null
+		};
+		const microMatch = trimmed.match(/^Context microcompacted\s+\[(.+)\]$/i);
+		if (microMatch) {
+			const tokens = [];
+			for (const part of microMatch[1].split(/\s+/)) {
+				const [key, rawValue] = part.split("=", 2);
+				if (!rawValue) continue;
+				if (key === "trigger") tokens.push(rawValue.charAt(0).toUpperCase() + rawValue.slice(1));
+				else if (key === "tokens_saved" || key === "tokensSaved") tokens.push(`${formatCompactTokenCount(rawValue).replace(/\s+tokens$/, "")} saved`);
+				else if (key === "pre_tokens") tokens.push(formatCompactTokenCount(rawValue));
+				else if (key === "duration_ms") tokens.push(`${rawValue}ms`);
+				else tokens.push(`${key}=${rawValue}`);
+			}
+			return {
+				title: "Context microcompacted",
+				detail: tokens.length > 0 ? tokens.join(" · ") : null
+			};
+		}
 		const bracketMatch = trimmed.match(/^Conversation compacted\s+\[(.+)\]$/i);
 		if (bracketMatch) {
 			const tokens = [];
@@ -1045,6 +1252,94 @@ summary::-webkit-details-marker {
 			detail: firstLine ? ellipsize(firstLine, TITLE_MAX_CHARS) : null
 		};
 	}
+	function formatCompactTokenUnit(tokens) {
+		const safe = Math.max(0, Math.round(tokens));
+		if (safe >= 1e6) {
+			const m = safe / 1e6;
+			return `${m >= 10 ? Math.round(m) : m.toFixed(1)}M`;
+		}
+		if (safe >= 1e3) {
+			const k = safe / 1e3;
+			if (k >= 100) return `${Math.round(k)}k`;
+			const r = k.toFixed(1);
+			return r.endsWith(".0") ? `${r.slice(0, -2)}k` : `${r}k`;
+		}
+		return String(safe);
+	}
+	function formatDurationCompact(durationMs) {
+		const total = Math.max(0, Math.floor(durationMs / 1e3));
+		const hours = Math.floor(total / 3600);
+		const minutes = Math.floor(total % 3600 / 60);
+		const seconds = total % 60;
+		if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+		if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+		return `${seconds}s`;
+	}
+	function buildTaskNotificationEntrySummary(entry, fallbackText) {
+		const taskId = typeof entry.task_id === "string" && entry.task_id.trim() ? entry.task_id.trim() : null;
+		const status = typeof entry.status === "string" && entry.status.trim() ? entry.status.trim() : null;
+		const rawSummary = typeof entry.summary === "string" ? cleanText(entry.summary) : "";
+		const rawFallback = typeof fallbackText === "string" ? cleanText(fallbackText).split("\n")[0] ?? "" : "";
+		const summary = rawSummary || rawFallback || (status ? `Background task ${status}` : "Background task update");
+		const note = typeof entry.note === "string" && cleanText(entry.note) ? cleanText(entry.note) : null;
+		const result = typeof entry.result === "string" && entry.result.trim() ? entry.result.trim() : null;
+		const metaParts = [];
+		if (typeof entry.duration_ms === "number" && Number.isFinite(entry.duration_ms) && entry.duration_ms >= 0) metaParts.push(formatDurationCompact(entry.duration_ms));
+		const tokenCount = typeof entry.subagent_tokens === "number" && Number.isFinite(entry.subagent_tokens) ? entry.subagent_tokens : typeof entry.total_tokens === "number" && Number.isFinite(entry.total_tokens) ? entry.total_tokens : null;
+		if (tokenCount != null && tokenCount > 0) metaParts.push(`${formatCompactTokenUnit(tokenCount)} tokens`);
+		if (typeof entry.tool_uses === "number" && Number.isFinite(entry.tool_uses) && entry.tool_uses > 0) metaParts.push(`${entry.tool_uses} ${entry.tool_uses === 1 ? "tool use" : "tool uses"}`);
+		return {
+			taskId,
+			status,
+			summary,
+			meta: metaParts.length > 0 ? metaParts.join(" · ") : null,
+			note,
+			result
+		};
+	}
+	function summarizeTaskNotification(payload, contentText) {
+		const rawEntries = [payload];
+		if (Array.isArray(payload.additional_items)) {
+			for (const extra of payload.additional_items) if (extra && typeof extra === "object") rawEntries.push(extra);
+		}
+		const entries = rawEntries.map((entry, idx) => buildTaskNotificationEntrySummary(entry, idx === 0 ? contentText : null));
+		const first = entries[0];
+		if (entries.length === 1) return {
+			title: first.summary,
+			status: first.status,
+			meta: first.meta,
+			note: first.note,
+			result: first.result,
+			entries
+		};
+		const results = entries.map((entry) => entry.result ? `${entry.summary}\n${entry.result}` : null).filter((value) => value !== null);
+		return {
+			title: `${entries.length} background tasks updated`,
+			status: first.status,
+			meta: entries.map((entry) => entry.meta).filter((value) => value !== null).slice(0, 2).join(" | ") || null,
+			note: entries.map((entry) => entry.note).find((value) => value !== null) ?? null,
+			result: results.length > 0 ? results.join("\n\n---\n\n") : null,
+			entries
+		};
+	}
+	function summarizeApiError(payload, contentText) {
+		const attempt = typeof payload.retry_attempt === "number" ? payload.retry_attempt : null;
+		const maxRetries = typeof payload.max_retries === "number" ? payload.max_retries : null;
+		const statusCode = typeof payload.status_code === "number" ? payload.status_code : null;
+		const retryInMs = typeof payload.retry_in_ms === "number" ? payload.retry_in_ms : null;
+		let badge = null;
+		if (attempt != null && maxRetries != null) badge = `retry ${attempt}/${maxRetries}`;
+		else if (attempt != null) badge = `retry ${attempt}`;
+		if (statusCode != null) badge = badge ? `${badge} · HTTP ${statusCode}` : `HTTP ${statusCode}`;
+		if (retryInMs != null && retryInMs > 0) badge = badge ? `${badge} · in ${formatDurationCompact(retryInMs)}` : `retry in ${formatDurationCompact(retryInMs)}`;
+		const rawError = typeof payload.error === "string" && payload.error.trim() || typeof payload.details === "string" && payload.details.trim() || typeof contentText === "string" && contentText.trim() || "Provider API error";
+		const detail = typeof payload.details === "string" && payload.details.trim() && typeof payload.error === "string" && payload.details.trim() !== payload.error.trim() ? payload.details.trim() : null;
+		return {
+			title: ellipsize(cleanText(rawError), TITLE_MAX_CHARS),
+			badge,
+			detail
+		};
+	}
 	//#endregion
 	//#region src/embeds/ios-transcript/diffs.ts
 	function renderDiff(lines) {
@@ -1056,10 +1351,49 @@ summary::-webkit-details-marker {
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/subagents.ts
+	function formatCompactDuration(ms) {
+		const total = Math.max(0, Math.floor(ms / 1e3));
+		const hours = Math.floor(total / 3600);
+		const minutes = Math.floor(total % 3600 / 60);
+		const seconds = total % 60;
+		if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+		if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+		return `${seconds}s`;
+	}
+	function formatCompactTokens(tokens) {
+		const safe = Math.max(0, Math.round(tokens));
+		if (safe >= 1e6) {
+			const m = safe / 1e6;
+			return `${m >= 10 ? Math.round(m) : m.toFixed(1)}M tok`;
+		}
+		if (safe >= 1e3) {
+			const k = safe / 1e3;
+			if (k >= 100) return `${Math.round(k)}k tok`;
+			const r = k.toFixed(1);
+			return `${r.endsWith(".0") ? r.slice(0, -2) : r}k tok`;
+		}
+		return `${safe} tok`;
+	}
+	function formatChildMeta(child) {
+		const parts = [];
+		if (typeof child.durationMs === "number" && Number.isFinite(child.durationMs) && child.durationMs >= 0) parts.push(formatCompactDuration(child.durationMs));
+		if (typeof child.totalTokens === "number" && Number.isFinite(child.totalTokens) && child.totalTokens > 0) parts.push(formatCompactTokens(child.totalTokens));
+		parts.push(`${child.toolCalls}${child.toolCalls === 1 ? " call" : " calls"}`);
+		return parts.join(" · ");
+	}
 	function subagentNode(item) {
 		const children = item.subagents || [];
 		if (!children.length) return "";
-		const rows = children.map((child) => "<li><button type=\"button\" class=\"subagent-link\" data-subagent-session=\"" + escapeHtml(child.sessionId) + "\"><span class=\"subagent-label\">" + escapeHtml(child.label) + "</span><span class=\"subagent-meta\">" + String(child.toolCalls) + (child.toolCalls === 1 ? " call" : " calls") + "</span></button></li>").join("");
+		const rows = children.map((child) => {
+			const depth = typeof child.depth === "number" && child.depth > 0 ? Math.min(child.depth, 4) : 0;
+			const indentAttr = depth > 0 ? ` data-depth="${depth}" style="margin-left:${depth * 14}px"` : "";
+			const liveStatus = child.liveStatus?.trim();
+			const statusDot = liveStatus ? `<span class="subagent-dot status-${escapeHtml(liveStatus)}" aria-label="${escapeHtml(liveStatus)}"></span>` : "";
+			const typePill = child.agentType ? `<span class="subagent-pill">${escapeHtml(child.agentType)}</span>` : "";
+			const forkBadge = child.isFork ? "<span class=\"subagent-pill fork\">fork</span>" : "";
+			const waitTag = liveStatus === "waiting" ? "<span class=\"subagent-status waiting\">waiting</span>" : "";
+			return `<li${indentAttr}><button type="button" class="subagent-link" data-subagent-session="` + escapeHtml(child.sessionId) + "\">" + statusDot + typePill + forkBadge + "<span class=\"subagent-label\">" + escapeHtml(child.label) + "</span>" + waitTag + "<span class=\"subagent-meta\">" + escapeHtml(formatChildMeta(child)) + "</span></button></li>";
+		}).join("");
 		return "<details class=\"subagents\" data-open-key=\"" + escapeHtml(item.id) + "\"><summary>" + escapeHtml(item.subagentSummary || "") + "</summary><ul class=\"subagent-list\">" + rows + "</ul></details>";
 	}
 	function attachSubagentHandlers(scope = document) {
@@ -1089,10 +1423,39 @@ summary::-webkit-details-marker {
 		if (!(item.bodyCursors || []).length) return "";
 		return "<p class=\"body-note\" role=\"status\">" + escapeHtml(BODY_NOTES[item.bodyState || "preview"] || BODY_NOTES.preview) + "</p>";
 	}
+	function formatRunningElapsed(startedAtMs, nowMs = Date.now()) {
+		const total = Math.max(0, Math.floor((nowMs - startedAtMs) / 1e3));
+		const hours = Math.floor(total / 3600);
+		const minutes = Math.floor(total % 3600 / 60);
+		const seconds = total % 60;
+		const pad = (n) => String(n).padStart(2, "0");
+		if (hours > 0) return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+		return `${minutes}:${pad(seconds)}`;
+	}
+	function runningTailPreview(output) {
+		const lines = (output || "").replace(/\r\n?/g, "\n").split("\n").map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
+		if (!lines.length) return "";
+		return lines.slice(-2).join("\n");
+	}
+	function updateRunningTimers(scope = document, nowMs = Date.now()) {
+		const nodes = scope.querySelectorAll("[data-started-at-ms]");
+		let updated = 0;
+		for (const el of nodes) {
+			const raw = Number(el.getAttribute("data-started-at-ms"));
+			if (!Number.isFinite(raw)) continue;
+			el.textContent = formatRunningElapsed(raw, nowMs);
+			updated += 1;
+		}
+		return updated;
+	}
 	function toolDetails(item) {
 		const isFailure = !!item.failurePreview || typeof item.status === "string" && (item.status.indexOf("exit ") === 0 || item.status === "failed");
 		const meta = item.status === "running" ? "running" : item.status === "dropped" ? "dropped" : item.status === "orphan" ? "orphan" : isFailure ? "failed" : "";
-		const status = isFailure ? item.status || "failed" : item.duration || item.status || "";
+		const runningClock = item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs) ? formatRunningElapsed(item.startedAtMs) : null;
+		const status = isFailure ? item.status || "failed" : runningClock || item.duration || item.status || "";
+		const metaAttr = item.status === "running" && typeof item.startedAtMs === "number" && Number.isFinite(item.startedAtMs) ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"` : "";
+		const subtitleText = item.subtitle || item.toolIntent || "";
+		const intentNote = item.toolIntent && item.toolIntent !== subtitleText ? `<span class="tool-intent">${escapeHtml(item.toolIntent)}</span>` : "";
 		const diffHtml = renderDiff(item.diff);
 		const input = diffHtml ? diffHtml : item.input ? "<div class=\"section-label\">Input</div><pre><code>" + escapeHtml(item.input) + "</code></pre>" : "";
 		const media = mediaStrip(item.media || []);
@@ -1106,15 +1469,19 @@ summary::-webkit-details-marker {
 		else if (item.status === "running") output = "<div class=\"section-label\">Output</div><p>Running...</p>";
 		else if (item.status === "dropped") output = "<p>No result recorded, likely dropped during ingest.</p>";
 		const preview = item.failurePreview ? "<div class=\"failure-preview\" role=\"note\"><span class=\"sr-only\">Error output: </span><pre>" + escapeHtml(item.failurePreview) + "</pre></div>" : "";
+		const liveTail = item.status === "running" ? runningTailPreview(item.output) : "";
+		const runningTail = liveTail ? "<div class=\"running-output-tail\"><pre><code>" + escapeHtml(liveTail) + "</code></pre></div>" : "";
 		return `
         <details class="tool row"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
-            <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
-            <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
+            <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
+            ${intentNote}
+            <span class="tool-meta ${meta}"${metaAttr}>${escapeHtml(status)}</span>
           </summary>
           <div class="details-body">${input}${provenance}${output}${media}${bodyNote(item)}</div>
         </details>
+        ${runningTail}
         ${preview}
         ${subagentNode(item)}
       `;
@@ -1127,11 +1494,12 @@ summary::-webkit-details-marker {
 			const rawInput = call.rawInput ? "<details class=\"raw-disclosure\"><summary>Raw enclosing wrapper</summary><pre><code>" + escapeHtml(call.rawInput) + "</code></pre></details>" : "";
 			const output = call.output ? "<div class=\"section-label\">Output</div><pre><code>" + escapeHtml(call.output) + "</code></pre>" : "";
 			const media = mediaStrip(call.media || []);
+			const intent = call.toolIntent ? `<div class="tool-intent">${escapeHtml(call.toolIntent)}</div>` : "";
 			return `
           <div class="passive-call">
             <div class="passive-call-title">${escapeHtml(call.title || "Tool")}</div>
             <div class="passive-call-subtitle">${escapeHtml(call.subtitle || "")}</div>
-            ${input}${rawInput}${output}${media}
+            ${intent}${input}${rawInput}${output}${media}
           </div>
         `;
 		};
@@ -1168,6 +1536,24 @@ summary::-webkit-details-marker {
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/rows.ts
+	function renderApiErrorBlock(apiError, body) {
+		const summary = summarizeApiError(apiError, body);
+		const badgeHtml = summary.badge ? `<span class="api-error-badge">${escapeHtml(summary.badge)}</span>` : "";
+		if (summary.detail) return `
+        <details class="tool row notice api-error-notice" data-testid="session-api-error-notice">
+          <summary>
+            ${badgeHtml}
+            <span class="tool-title">${escapeHtml(summary.title)}</span>
+          </summary>
+          <div class="details-body"><pre><code>${escapeHtml(summary.detail)}</code></pre></div>
+        </details>
+      `;
+		return `
+        <div class="tool row notice static api-error-notice" data-testid="session-api-error-notice">
+          <div class="tool-head">${badgeHtml}<span class="tool-title">${escapeHtml(summary.title)}</span></div>
+        </div>
+      `;
+	}
 	function message(item, index) {
 		const body = item.role === "assistant" ? markdownToHtml(item.body || "") : escapeHtml(item.body || "");
 		const expand = item.collapsed ? `<button class="expand" data-expand-index="${index}">Show full message</button>` : "";
@@ -1190,10 +1576,12 @@ summary::-webkit-details-marker {
         `;
 		}
 		return `
-        <article class="row message assistant" data-message-index="${index}">
+        <article class="row message assistant${item.phase === "commentary" ? " commentary" : ""}" data-message-index="${index}">
+          ${item.phase === "commentary" ? "<div class=\"message-phase-row\"><span class=\"phase-badge\">Commentary</span></div>" : ""}
           <div class="message-content">${body}</div>
           ${media}
           ${expand}
+          ${item.apiError ? renderApiErrorBlock(item.apiError, item.body) : ""}
         </article>
       `;
 	}
@@ -1255,6 +1643,32 @@ summary::-webkit-details-marker {
       `;
 	}
 	function providerNotification(item) {
+		if (item.taskNotification) {
+			const summary = summarizeTaskNotification(item.taskNotification, item.body);
+			const statusDot = summary.status ? `<span class="task-notice-dot status-${escapeHtml(summary.status)}" aria-label="${escapeHtml(summary.status)}"></span>` : "";
+			const meta = summary.meta ? `<span class="tool-subtitle">${escapeHtml(summary.meta)}</span>` : "";
+			const note = summary.note ? `<span class="task-notice-note">${escapeHtml(summary.note)}</span>` : "";
+			if (!summary.result) return `
+        <div class="tool row notice static task-notice" data-testid="session-task-notification">
+          <div class="tool-head">${statusDot}<span class="tool-title">${escapeHtml(summary.title)}</span>${meta}${note}</div>
+        </div>
+      `;
+			return `
+        <details class="tool row notice task-notice" data-testid="session-task-notification" data-open-key="${escapeHtml(item.id)}">
+          <summary>${statusDot}<span class="tool-title">${escapeHtml(summary.title)}</span>${meta}${note}</summary>
+          <div class="details-body"><pre><code>${escapeHtml(summary.result)}</code></pre></div>
+        </details>
+      `;
+		}
+		if (typeof item.waitingBackgroundAgents === "number") {
+			const count = Math.max(0, Math.round(item.waitingBackgroundAgents));
+			return `
+        <div class="tool row notice static waiting-agents" data-testid="session-waiting-background-agents">
+          <div class="tool-head"><span class="waiting-agents-icon">*</span><span class="tool-title">Waiting for ${count} background ${count === 1 ? "agent" : "agents"} to finish</span></div>
+        </div>
+      `;
+		}
+		if (item.apiError) return renderApiErrorBlock(item.apiError, item.body);
 		const wakeAttribute = item.wake ? " data-wake=\"true\"" : "";
 		if (item.origin === "longhouse") return `
         <div class="tool row notice static" data-testid="session-provider-notification" data-origin="longhouse"${wakeAttribute}>
@@ -1278,6 +1692,11 @@ summary::-webkit-details-marker {
       `;
 	}
 	function reasoning(item) {
+		if (item.reasoningWithheld) return `
+        <div class="reasoning row reasoning-withheld" data-testid="session-reasoning-withheld">
+          <span class="reasoning-withheld-label">Reasoning withheld</span>
+        </div>
+      `;
 		const text = item.body || "";
 		const prose = escapeHtml(thoughtProse(text) || "No reasoning details");
 		return `
@@ -1306,7 +1725,12 @@ summary::-webkit-details-marker {
 		template.innerHTML = html.trim();
 		const root = template.content.firstElementChild;
 		if (!root) return html;
-		root.insertAdjacentHTML("beforeend", `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`);
+		const turnEndHtml = `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`;
+		if (root.tagName === "DETAILS" || template.content.children.length > 1) {
+			const footerTemplate = document.createElement("template");
+			footerTemplate.innerHTML = turnEndHtml;
+			template.content.appendChild(footerTemplate.content);
+		} else root.insertAdjacentHTML("beforeend", turnEndHtml);
 		return template.innerHTML;
 	}
 	//#endregion
@@ -1589,6 +2013,23 @@ summary::-webkit-details-marker {
 	//#region src/embeds/ios-transcript/render.ts
 	var currentItems = [];
 	var transcriptFrames = /* @__PURE__ */ new Map();
+	var runningTimerHandle = null;
+	function syncRunningTimerInterval(root) {
+		const count = updateRunningTimers(root);
+		if (count > 0 && runningTimerHandle === null) runningTimerHandle = setInterval(() => {
+			const container = document.getElementById("root");
+			if (!container || updateRunningTimers(container) === 0) {
+				if (runningTimerHandle !== null) {
+					clearInterval(runningTimerHandle);
+					runningTimerHandle = null;
+				}
+			}
+		}, 1e3);
+		else if (count === 0 && runningTimerHandle !== null) {
+			clearInterval(runningTimerHandle);
+			runningTimerHandle = null;
+		}
+	}
 	async function waitForTranscriptFrame(sequence) {
 		const frame = transcriptFrames.get(sequence);
 		if (!frame) throw new Error(`missing transcript frame ${sequence}`);
@@ -1630,6 +2071,7 @@ summary::-webkit-details-marker {
 		const root = document.getElementById("root");
 		if (!isStickingToBottom()) captureAnchor();
 		const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
+		syncRunningTimerInterval(root);
 		retargetAnchor(result.replaced);
 		settle("render");
 		const rafStartedAt = performance.now();

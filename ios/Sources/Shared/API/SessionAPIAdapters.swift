@@ -58,7 +58,12 @@ private extension APISessionDelegationTaskResponse {
                     durationMs: $0.durationMs
                 )
             },
-            endedAt: endedAt
+            endedAt: endedAt,
+            agentType: agentType,
+            model: model,
+            isFork: isFork ?? false,
+            parentAgentId: parentAgentId,
+            spawnDepth: spawnDepth
         )
     }
 }
@@ -262,7 +267,53 @@ extension APISessionResponse {
             inputReceipts: inputReceipts?.map(\.sessionInputReceipt),
             lastTurn: lastTurn?.sessionLastTurn,
             recap: recap.map { SessionRecap(text: $0.text, at: $0.at) },
-            usageLatest: usageLatest.map { SessionUsageLatest(label: $0.label) }
+            usageLatest: usageLatest.map { $0.sessionUsageLatest },
+            selectedModel: selectedModel,
+            permissionMode: permissionMode,
+            providerTitle: providerTitle,
+            worktree: worktree?.sessionWorktree,
+            sessionCrons: sessionCrons?.map(\.sessionCron),
+            pendingBackgroundAgentCount: pendingBackgroundAgentCount
+        )
+    }
+}
+
+private extension APISessionWorktreeResponse {
+    var sessionWorktree: SessionWorktree {
+        SessionWorktree(
+            name: name,
+            branch: branch,
+            path: path,
+            originalCwd: originalCwd,
+            originalBranch: originalBranch
+        )
+    }
+}
+
+private extension APISessionCronResponse {
+    var sessionCron: SessionCron {
+        SessionCron(id: id, schedule: schedule, recurring: recurring, prompt: prompt)
+    }
+}
+
+private extension APIUsageLatestResponse {
+    var sessionUsageLatest: SessionUsageLatest {
+        SessionUsageLatest(
+            label: label,
+            model: model,
+            effort: effort,
+            contextTokens: contextTokens,
+            contextWindow: contextWindow,
+            contextWindowSource: contextWindowSource,
+            outputTokens: outputTokens,
+            thinkingTokens: thinkingTokens,
+            usedPercent: usedPercent,
+            costUsd: costUsd,
+            cumulativeDurationMs: cumulativeDurationMs,
+            rateLimits: rateLimits?.map {
+                SessionRateLimit(kind: $0.kind, percentUsed: $0.percentUsed, resetsAt: $0.resetsAt)
+            },
+            at: at
         )
     }
 }
@@ -292,7 +343,13 @@ extension APIEventResponse {
             toolInputTruncated: toolInputTruncated ?? false,
             toolOutputTruncated: toolOutputTruncated ?? false,
             toolOutputOriginalChars: toolOutputOriginalChars,
-            toolOutputFailed: toolOutputFailed ?? false
+            toolOutputFailed: toolOutputFailed ?? false,
+            toolIntent: toolIntent,
+            messagePhase: messagePhase,
+            reasoningWithheld: reasoningWithheld ?? false,
+            taskNotification: taskNotification,
+            waitingBackgroundAgents: waitingBackgroundAgents,
+            apiError: apiError
         )
     }
 }
@@ -423,7 +480,15 @@ private extension JSONValue {
 
 extension APITurnEndResponse {
     var sessionTurnEnd: SessionTurnEnd {
-        SessionTurnEnd(durationMs: durationMs, endedAt: endedAt, messageCount: messageCount, outcome: outcome)
+        SessionTurnEnd(
+            durationMs: durationMs,
+            endedAt: endedAt,
+            messageCount: messageCount,
+            outcome: outcome,
+            stopHookContinued: stopHookContinued,
+            stopHookSummary: stopHookSummary,
+            source: source
+        )
     }
 }
 

@@ -52,7 +52,16 @@ final class SessionViewModel: ObservableObject {
         }
     }
     /// Workers this session spawned, attached to the tool rows that spawned them.
-    @Published var subagents: [SessionSubagent] = [] { didSet { transcriptRevision &+= 1 } }
+    @Published var subagents: [SessionSubagent] = [] {
+        didSet {
+            transcriptRevision &+= 1
+            guard oldValue != subagents else { return }
+            if pendingRealtimePreviewBuild != nil {
+                pendingRealtimePreviewBuild?.subagents = subagents
+            }
+            rebuildTimelineForSubagentsIfNeeded()
+        }
+    }
     /// Full tool bodies loaded for rows a lite page sent as previews.
     @Published private(set) var liteBodies = LiteBodyState() { didSet { transcriptRevision &+= 1 } }
     /// Blocking load error: only set when there is genuinely nothing to show
@@ -202,6 +211,7 @@ final class SessionViewModel: ObservableObject {
     /// synchronous build.
     private struct RealtimePreviewBuildRequest {
         let buildInput: [SessionProjectionItem]
+        var subagents: [SessionSubagent]
         let preview: SessionTranscriptPreview?
         let transcriptReadThrough: String?
         var buildRevision: UInt64
@@ -2524,6 +2534,21 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
+    private func rebuildTimelineForSubagentsIfNeeded() {
+        guard hasLoadedTranscript,
+              !lastWorkspaceProjectionItems.isEmpty || !lastWorkspaceEvents.isEmpty
+        else { return }
+        let buildInput = projectionItemsWithTranscriptPreview(
+            lastWorkspaceProjectionItems,
+            durableEvents: lastWorkspaceEvents,
+            preview: detail?.transcriptPreview
+        )
+        let rebuilt = TimelineBuilder.build(items: buildInput, subagents: subagents)
+        withAnimation(nil) {
+            items = rebuilt
+        }
+    }
+
     private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {
         guard activeSessionId == sessionId, !realtimePaused else { return }
         detail = detail?.replacingTranscriptPreview(preview)
@@ -2539,6 +2564,7 @@ final class SessionViewModel: ObservableObject {
                 durableEvents: lastWorkspaceEvents,
                 preview: currentPreview
             ),
+            subagents: subagents,
             preview: currentPreview,
             transcriptReadThrough: pendingTranscriptReadThrough ?? transcriptReadThrough,
             buildRevision: timelineBuildRevision,
@@ -2558,9 +2584,10 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func startRealtimePreviewBuild(_ request: RealtimePreviewBuildRequest) {
+        let subagentsSnapshot = request.subagents
         realtimePreviewBuildTask = Task { [weak self] in
             let builtItems = await Task.detached(priority: .userInitiated) {
-                TimelineBuilder.build(items: request.buildInput)
+                TimelineBuilder.build(items: request.buildInput, subagents: subagentsSnapshot)
             }.value
             guard let self else { return }
             self.finishRealtimePreviewBuild(
@@ -3016,10 +3043,11 @@ final class SessionViewModel: ObservableObject {
             }
             let buildRevision = timelineBuildRevision
             let sourceRevision = transcriptInputRevision
+            let subagentsSnapshot = subagents
             let builtItems: [TimelineItem]?
             if let buildInput {
                 builtItems = await Task.detached(priority: .userInitiated) {
-                    TimelineBuilder.build(items: buildInput)
+                    TimelineBuilder.build(items: buildInput, subagents: subagentsSnapshot)
                 }.value
             } else {
                 builtItems = nil
@@ -3424,8 +3452,9 @@ final class SessionViewModel: ObservableObject {
         )
         let buildRevision = timelineBuildRevision
         let sourceRevision = transcriptInputRevision
+        let subagentsSnapshot = subagents
         let builtItems = await Task.detached(priority: .userInitiated) {
-            TimelineBuilder.build(items: buildInput)
+            TimelineBuilder.build(items: buildInput, subagents: subagentsSnapshot)
         }.value
         guard isCurrentRoute(sessionId: sessionId, generation: generation),
               tailNextCursor == expectedCursor,
@@ -3524,8 +3553,9 @@ final class SessionViewModel: ObservableObject {
         let snapshot = restored.snapshot
         let projectionItems = snapshot.projectionItems ?? projectionItemsFromEvents(snapshot.events)
         let buildRevision = timelineBuildRevision
+        let subagentsSnapshot = subagents
         let builtItems = await Task.detached(priority: .userInitiated) {
-            TimelineBuilder.build(items: projectionItems)
+            TimelineBuilder.build(items: projectionItems, subagents: subagentsSnapshot)
         }.value
 
         guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
