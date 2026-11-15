@@ -170,6 +170,7 @@ DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provi
 # hold it to the directory by AST scan — the private factory's own
 # PRODUCER_MODULES desynced silently once for exactly this reason.
 PRODUCER_MODULES: tuple[str, ...] = (
+    "zerg.qa.antigravity_console_producer",
     "zerg.qa.antigravity_launch_hook_inbox",
     "zerg.qa.antigravity_resume_policy",
     "zerg.qa.claude_coordination_awareness_create",

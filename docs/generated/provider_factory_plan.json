@@ -2432,7 +2432,8 @@
             "live_token"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },
@@ -3313,7 +3314,8 @@
             "live_token"
           ],
           "producible_evidence": [
-            "live_token"
+            "live_token",
+            "scripted_model"
           ],
           "satisfiable": true
         },

@@ -56,6 +56,8 @@ producers:
     module: zerg.qa.codex_helm_launch_visibility
   - producer_id: provider.console_lifecycle.v1
     module: zerg.qa.provider_console_lifecycle
+  - producer_id: antigravity.console_lifecycle.v1
+    module: zerg.qa.antigravity_console_producer
   - producer_id: pi.helm_lifecycle.v1
     module: zerg.qa.pi_helm_lifecycle
   - producer_id: pi.console_tool.v1

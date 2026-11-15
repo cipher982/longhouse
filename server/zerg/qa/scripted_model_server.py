@@ -29,7 +29,10 @@ OUTPUT_TOKENS = 8
 TOTAL_TOKENS = INPUT_TOKENS + OUTPUT_TOKENS
 PROMPT_MARKER = re.compile(r'concatenate the prefix "([^"]+)" and suffix "([^"]+)"', re.IGNORECASE)
 GEMINI_GENERATE = re.compile(r"(?:^|/)models/(.+):(streamGenerateContent|generateContent|countTokens)$")
-SCRIPTED_INPUT_MARKER = re.compile(r"\b(?:LONGHOUSE_PI_PROBE_[a-f0-9]{32}|(?:OMP|PI)_HELM_[A-Z0-9_]+_[a-f0-9]{16})\b")
+# `LH_<PROVIDER>_<STEP>_<32 hex>` is the Console lifecycle's marker (provider_console_lifecycle.py).
+SCRIPTED_INPUT_MARKER = re.compile(
+    r"\b(?:LONGHOUSE_PI_PROBE_[a-f0-9]{32}|(?:OMP|PI)_HELM_[A-Z0-9_]+_[a-f0-9]{16}|LH_(?:[A-Z]+_)+[a-f0-9]{32})\b"
+)
 
 
 @dataclass(frozen=True)

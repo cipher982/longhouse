@@ -2841,11 +2841,17 @@
               "variant": "interrupt_supported",
               "scenario_id": "antigravity_console_adapter_lifecycle",
               "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
-              "minimum_scenario_revision": 24,
+              "minimum_scenario_revision": 25,
               "acceptable_evidence": [
-                "live_token"
+                "scripted_model"
               ],
               "max_age_seconds": 604800,
+              "required_evidence_classes": [
+                "scripted_model"
+              ],
+              "max_age_seconds_by_evidence_class": {
+                "scripted_model": 1800
+              },
               "assurance_priority": "sampled"
             }
           ]
@@ -2868,11 +2874,17 @@
               "id": "console_turn_steer_preserved",
               "scenario_id": "antigravity_console_adapter_lifecycle",
               "oracle_source": "server/zerg/qa/provider_console_lifecycle.py",
-              "minimum_scenario_revision": 24,
+              "minimum_scenario_revision": 25,
               "acceptable_evidence": [
-                "live_token"
+                "scripted_model"
               ],
-              "max_age_seconds": 604800,
+              "required_evidence_classes": [
+                "scripted_model"
+              ],
+              "max_age_seconds": 1800,
+              "max_age_seconds_by_evidence_class": {
+                "scripted_model": 1800
+              },
               "assurance_priority": "sampled"
             }
           ]

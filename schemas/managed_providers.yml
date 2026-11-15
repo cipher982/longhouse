@@ -1890,7 +1890,11 @@ providers:
       required_assertions:
       - <<: *console_release_interrupt_supported
         scenario_id: antigravity_console_adapter_lifecycle
-        minimum_scenario_revision: 24
+        minimum_scenario_revision: 25
+        # The CI Gemini key is free tier, so these cells run on the scripted model only (antigravity-parity.md step 6).
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
         assurance_priority: sampled
     session.turn.steer:
       disposition: implemented
@@ -1904,9 +1908,11 @@ providers:
       - id: console_turn_steer_preserved
         scenario_id: antigravity_console_adapter_lifecycle
         oracle_source: server/zerg/qa/provider_console_lifecycle.py
-        minimum_scenario_revision: 24
-        acceptable_evidence: [live_token]
-        max_age_seconds: 604800
+        minimum_scenario_revision: 25
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
         assurance_priority: sampled
     session.transcript.search:
       disposition: implemented

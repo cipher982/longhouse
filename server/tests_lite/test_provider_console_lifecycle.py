@@ -62,12 +62,14 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     registration = lifecycle.REGISTRATION.to_dict()
 
     assert registration["producer_id"] == "provider.console_lifecycle.v1"
-    assert registration["providers"] == list(lifecycle.PROVIDERS)
+    # Antigravity runs on its own scripted-model producer (antigravity_console_producer.py).
+    assert registration["providers"] == list(lifecycle.GENERIC_PROVIDERS)
+    assert "antigravity" not in registration["providers"]
     assert registration["subject_kind"] == "provider_release"
     assert registration["provider_artifact_required"] is True
     assert registration["credential_binding_ids"] == []
     assert "console_continuation_receipt" in registration["required_artifacts"]
-    for provider in lifecycle.PROVIDERS:
+    for provider in lifecycle.GENERIC_PROVIDERS:
         assert registration["credential_binding_ids_by_provider"][provider] == [
             f"{provider}_provider_token",
             "runtime_host_control",
@@ -2256,7 +2258,7 @@ def test_antigravity_console_lifecycle_tables_agree() -> None:
     assert "antigravity" in lifecycle.PROVIDERS
     assert lifecycle.ADAPTERS["antigravity"] == "antigravity_acp"
     assert lifecycle.PROVIDER_BIN_ENV["antigravity"] == "LONGHOUSE_ANTIGRAVITY_BIN"
-    assert "antigravity_console_adapter_lifecycle" in lifecycle.SCENARIO_IDS
+    assert "antigravity_console_adapter_lifecycle" not in lifecycle.SCENARIO_IDS  # its own producer runs it
     assert "antigravity" in lifecycle.STEER_VARIANTS
     assert lifecycle._VERSION_PATTERNS["antigravity"].fullmatch("1.5.9")
     claim = {"result": {"model": "gemini-4-hydrogen-low"}}

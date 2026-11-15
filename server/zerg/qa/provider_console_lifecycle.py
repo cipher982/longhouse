@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.qa import antigravity_scripted_lane
 from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.codex_auth import login_with_api_key
@@ -86,7 +87,11 @@ ASSERTION_ID = "console_adapter_release_contract_preserved"
 STEER_ASSERTION_ID = "console_turn_steer_preserved"
 STEER_PROVIDERS = frozenset({"codex", "claude", "pi", "omp", "opencode", "antigravity"})
 SUPPORTED_VARIANT = "interrupt_supported"
-SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in PROVIDERS)
+# Antigravity's cells run on its own scripted-model producer (antigravity_console_producer.py), which reuses this
+# module's lifecycle: the CI Gemini key is free tier, and a registration's credential bindings are per provider or
+# per evidence class, never both.
+GENERIC_PROVIDERS = tuple(provider for provider in PROVIDERS if provider != "antigravity")
+SCENARIO_IDS = tuple(f"{provider}_console_adapter_lifecycle" for provider in GENERIC_PROVIDERS)
 
 
 def steer_execution_variant(provider: str, scenario_id: str) -> str:
@@ -158,13 +163,14 @@ REGISTRATION = ProducerRegistration(
     # 23: a process that has exited counts as stopped before its parent collects it (live_kit.pid_dead), and the
     # steer step asks for its command in the foreground, as the interrupt step does.
     # 24: Antigravity (agy acp) joins the lifecycle: Console turn, steer and resume through the ACP adapter.
-    scenario_revision=24,
+    # 25: Antigravity moves to its own scripted-model producer (antigravity_console_producer.py); this one runs the rest.
+    scenario_revision=25,
     assertion_cells=(
         # Every Console adapter interrupts (Codex last, with turn/interrupt), so this is the cell's one variant.
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (STEER_ASSERTION_ID, None),
     ),
-    providers=PROVIDERS,
+    providers=GENERIC_PROVIDERS,
     platforms=("linux",),
     architectures=("x86_64", "aarch64"),
     modes=("console",),
@@ -172,7 +178,7 @@ REGISTRATION = ProducerRegistration(
     observed_activity=OBSERVED_ACTIVITY,
     acquisition_methods=("staged_release", "observed_install"),
     credential_binding_ids=(),
-    credential_binding_ids_by_provider={provider: (f"{provider}_provider_token", "runtime_host_control") for provider in PROVIDERS},
+    credential_binding_ids_by_provider={provider: (f"{provider}_provider_token", "runtime_host_control") for provider in GENERIC_PROVIDERS},
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
     required_artifacts=(
@@ -2721,7 +2727,9 @@ def _run_steer_step(
 ) -> dict[str, Any]:
     """Steer a running Console turn mid-tool and record what landed where."""
 
-    tag = uuid4().hex
+    # The scripted Antigravity lane writes the tool command into its fixture before the turn starts.
+    tag = antigravity_scripted_lane.steer_tag() if provider == "antigravity" else None
+    tag = tag or uuid4().hex
     # The shell computes the tool marker, so it appears only in the tool's
     # output and never in its command text: a running or cancelled tool's call
     # event cannot satisfy the completion check.
@@ -3013,7 +3021,6 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
         write_json(root / "provider-auth-receipt.json", auth_receipt)
     if provider == "claude":
         _configure_claude_hook(args, environment)
-
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     if not api_url or not token:
@@ -3069,6 +3076,14 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
     session_id: str | None = None
     cleanup_written = False
     continuation_context_recalled = provider not in {"pi", "omp"}
+    # Antigravity's scripted lane: a loopback model and a scratch profile that reaches only it, no model credential.
+    scripted_lane: antigravity_scripted_lane.ScriptedLane | None = None
+    # Antigravity's only registered class is scripted_model (antigravity_console_producer), whether or not the
+    # command line names it.
+    if provider == "antigravity" and getattr(args, "evidence_class", None) in (None, "", "scripted_model"):
+        scripted_lane = antigravity_scripted_lane.start(root, home, environment)
+        args.model = args.model or antigravity_scripted_lane.SCRIPTED_AGY_MODEL
+
     try:
         shipper = start_transcript_shipper(
             provider,
@@ -3733,6 +3748,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
             "observation": observation,
         }
     finally:
+        if scripted_lane is not None:
+            write_json(root / "scripted-model-receipt.json", scripted_lane.receipt())
+            scripted_lane.close()
         if not cleanup_written:
             _retain_failure_claim_diagnostics(root, claims, environment)
         termination_dispatch = _terminate_live_qualification_session(api_url, token, session_id) if not cleanup_written else None
