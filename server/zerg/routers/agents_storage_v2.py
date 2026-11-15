@@ -855,6 +855,8 @@ async def storage_v2_capabilities(
         # Host-normalized transcripts Phase 4: this host renders witnessed
         # envelopes from raw, so the Machine Agent need not ship its render.
         "host_render": _host_renders(),
+        # Phase 5: render records may carry canonical item facts.
+        "render_item_facts": True,
     }
 
 

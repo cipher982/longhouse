@@ -514,6 +514,7 @@ mod tests {
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             host_render: false,
+            render_item_facts: false,
         }
     }
 

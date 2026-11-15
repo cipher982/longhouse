@@ -178,9 +178,9 @@ fn wire_body(
     pending: &PendingSourceEnvelope,
     capabilities: &StorageV2Capabilities,
 ) -> Result<Vec<u8>> {
-    if capabilities.host_render {
+    if capabilities.host_render || !capabilities.render_item_facts {
         let stored = decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?;
-        if let Some(body) = without_host_rendered_render(&stored)? {
+        if let Some(body) = rewritten_for_host(&stored, capabilities)? {
             let body = if capabilities.accepts_text_records() {
                 body
             } else {
@@ -219,35 +219,58 @@ fn wire_body(
 /// fixture test proves this list (`single_envelope_mismatches`).
 pub(super) const HOST_RENDERS_ALONE: &[&str] = &["claude"];
 
-/// The stored envelope without its render, when a host that renders from raw
-/// can build it alone: a provider in `HOST_RENDERS_ALONE` and a capture
-/// witness at the envelope's own start (a reconciled suffix keeps the
-/// witness of the range it was cut from, so it ships its render). The render
-/// stays in the stored envelope for the engine's own bookkeeping.
-fn without_host_rendered_render(body: &[u8]) -> Result<Option<Vec<u8>>> {
+/// The stored envelope as this host takes it, or `None` when the stored bytes
+/// already fit. A host that renders from raw gets no render when it can build
+/// it alone (`host_renders_alone`); a host that predates item facts gets the
+/// render records without them. The stored envelope keeps both for the
+/// engine's own bookkeeping.
+fn rewritten_for_host(
+    body: &[u8],
+    capabilities: &StorageV2Capabilities,
+) -> Result<Option<Vec<u8>>> {
     let mut envelope: serde_json::Value =
         serde_json::from_slice(body).context("reading stored storage-v2 envelope")?;
+    let mut changed = false;
+    if capabilities.host_render && host_renders_alone(&envelope) {
+        envelope["render"] = serde_json::Value::Null;
+        changed = true;
+    }
+    if !capabilities.render_item_facts {
+        if let Some(records) = envelope["render"]["records"].as_array_mut() {
+            for record in records
+                .iter_mut()
+                .filter_map(serde_json::Value::as_object_mut)
+            {
+                changed |= record.remove("item").is_some();
+            }
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    serde_json::to_vec(&envelope)
+        .map(Some)
+        .context("encoding storage-v2 envelope for its host")
+}
+
+/// A provider in `HOST_RENDERS_ALONE` with a capture witness at the
+/// envelope's own start (a reconciled suffix keeps the witness of the range it
+/// was cut from, so it ships its render).
+fn host_renders_alone(envelope: &serde_json::Value) -> bool {
     let provider = envelope["provider"]
         .as_str()
         .unwrap_or_default()
         .to_ascii_lowercase();
     if envelope["render"].is_null() || !HOST_RENDERS_ALONE.contains(&provider.as_str()) {
-        return Ok(None);
+        return false;
     }
     let range_start = envelope["range_start"].as_u64();
-    let witnessed = envelope["facts"].as_array().is_some_and(|facts| {
+    envelope["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
             fact["kind"] == crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND
                 && fact["source_position"].as_u64() == range_start
         })
-    });
-    if !witnessed {
-        return Ok(None);
-    }
-    envelope["render"] = serde_json::Value::Null;
-    serde_json::to_vec(&envelope)
-        .map(Some)
-        .context("encoding storage-v2 envelope for a host that renders")
+    })
 }
 
 /// Rewrite an envelope body so every raw record is `data_b64`, leaving every
@@ -782,6 +805,7 @@ mod tests {
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             host_render: false,
+            render_item_facts: false,
         }
     }
 
@@ -1265,6 +1289,7 @@ mod tests {
         let pending = pending::pending_candidate(&path.to_string_lossy(), &prepared).unwrap();
         let mut host = capabilities();
         host.host_render = true;
+        host.render_item_facts = true;
         let sent: serde_json::Value = serde_json::from_slice(
             &decode_zstd(&wire_body(&pending, &host).unwrap(), "body")
                 .unwrap_or_else(|_| wire_body(&pending, &host).unwrap()),
@@ -1283,6 +1308,42 @@ mod tests {
         )
         .unwrap();
         assert!(!older["render"].is_null());
+    }
+
+    #[test]
+    fn a_host_that_predates_item_facts_gets_render_records_without_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"assistant\",\"uuid\":\"019c638d-0000-0000-0000-0000000000ac\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}],\"stop_reason\":\"end_turn\"},\"cwd\":\"/tmp/proj\"}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        let pending = pending::pending_candidate(&path.to_string_lossy(), &prepared).unwrap();
+        let sent = |host: &StorageV2Capabilities| -> serde_json::Value {
+            let body = wire_body(&pending, host).unwrap();
+            serde_json::from_slice(&decode_zstd(&body, "body").unwrap_or(body)).unwrap()
+        };
+        let items = |envelope: &serde_json::Value| {
+            envelope["render"]["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|record| record.get("item").is_some())
+                .count()
+        };
+        let mut current = capabilities();
+        current.render_item_facts = true;
+        assert_eq!(items(&sent(&current)), 1, "the answer's phase is shipped");
+        assert_eq!(
+            items(&sent(&capabilities())),
+            0,
+            "an older host gets no item field"
+        );
     }
 
     #[test]

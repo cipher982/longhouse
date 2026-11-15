@@ -46,6 +46,11 @@ pub struct StorageV2Capabilities {
     /// not carry the laptop's render. Absent on older hosts.
     #[serde(default)]
     pub host_render: bool,
+    /// The host validates and serves canonical item facts on render records
+    /// (host-normalized-transcripts Phase 5). An older host rejects the
+    /// field, so the engine strips it there.
+    #[serde(default)]
+    pub render_item_facts: bool,
 }
 
 impl StorageV2Capabilities {
@@ -573,6 +578,7 @@ mod tests {
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             host_render: false,
+            render_item_facts: false,
             ..older_host
         };
         assert_eq!(
@@ -629,6 +635,7 @@ mod tests {
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             host_render: false,
+            render_item_facts: false,
         }
     }
 
@@ -710,6 +717,7 @@ mod tests {
             envelope_record_encodings: vec!["utf8".to_string(), "base64".to_string()],
             source_resume_path: None,
             host_render: false,
+            render_item_facts: false,
         };
         valid.validate("cinder").unwrap();
         let mut drift = valid;
