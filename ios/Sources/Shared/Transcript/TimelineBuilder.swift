@@ -280,7 +280,7 @@ enum TimelineBuilder {
         if call.turnEnd != nil || result?.turnEnd != nil {
             return false
         }
-        if !SubagentLinking.children(
+        if !Subagents.children(
             from: subagents,
             toolCallId: call.toolCallId,
             toolOutputText: result?.toolOutputText

@@ -208,8 +208,8 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
         let timeline = TimelineBuilder.build(events: events, subagents: subagents)
         let payload = WebTranscriptView.payloadItems(
             timelineItems: timeline,
-            submittedInputs: [],
-            subagents: subagents
+            subagents: subagents,
+            submittedInputs: []
         )
 
         XCTAssertEqual(payload.count, 7)
@@ -224,7 +224,7 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
         XCTAssertNotNil(payload[3].taskNotification)
         XCTAssertEqual(payload[4].waitingBackgroundAgents, 2)
         XCTAssertNotNil(payload[5].apiError)
-        XCTAssertEqual(payload[6].turnEnd?.stopHookSummary, "All clean")
+        XCTAssertTrue(payload[6].turnEnd?.doneAt.contains("All clean") == true)
     }
 
     // MARK: - Fixture loading (mirrors SharedProjectionFixtureTests)
