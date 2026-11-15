@@ -303,6 +303,52 @@ def test_a_second_release_refuses_while_one_is_in_flight() -> None:
         f.close()
 
 
+def test_heavy_build_lock_reports_holder_and_times_out() -> None:
+    import os, shutil, subprocess, tempfile, time
+
+    if shutil.which("lockf") is None:
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lock_path = Path(tmpdir) / "heavy-build.lock"
+        holder = subprocess.Popen(
+            ["lockf", "-k", str(lock_path), "sleep", "30"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                probe = subprocess.run(
+                    ["lockf", "-k", "-t", "0", str(lock_path), "true"],
+                    capture_output=True,
+                )
+                if probe.returncode != 0:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("lockf holder did not acquire lock in time")
+
+            env = os.environ.copy()
+            env["LONGHOUSE_HEAVY_BUILD_LOCK"] = str(lock_path)
+            env["LONGHOUSE_HEAVY_BUILD_LOCK_TIMEOUT_SECS"] = "1"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f"source {ROOT / 'scripts/lib/heavy-build-lock.sh'} && lh_run_heavy true",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 75, (result.returncode, result.stdout, result.stderr)
+            assert "Timed out after 1s waiting for" in result.stderr, result.stderr
+            assert f"{holder.pid}" in result.stderr or "sleep 30" in result.stderr, result.stderr
+        finally:
+            holder.terminate()
+            holder.wait(timeout=5)
+
+
 if __name__ == "__main__":
     test_full_validation_gates_candidate_push()
     test_the_lock_is_kept_like_every_other_holder()
@@ -318,4 +364,5 @@ if __name__ == "__main__":
     test_release_runs_from_a_disposable_checkout_pushes_the_bump_and_tags_that_exact_sha()
     test_a_failed_validation_cleans_up_and_a_rerun_resumes_the_same_candidate()
     test_a_second_release_refuses_while_one_is_in_flight()
+    test_heavy_build_lock_reports_holder_and_times_out()
     print("release tests passed")

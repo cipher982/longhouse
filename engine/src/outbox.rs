@@ -493,6 +493,10 @@ fn collect_outbox_impl(
         (String, String, Option<String>, String),
         PendingPresenceFile,
     > = HashMap::new();
+    let mut delegation_sync_agents_by_session_run: HashMap<
+        (String, String, Option<String>),
+        PendingPresenceFile,
+    > = HashMap::new();
     let mut metadata_by_session_kind: HashMap<(String, String, &'static str), PendingPresenceFile> =
         HashMap::new();
     let mut metadata_paths = HashSet::new();
@@ -597,6 +601,14 @@ fn collect_outbox_impl(
         };
 
         if update_required {
+            let sync_agents = !delegation_required
+                && next_file
+                    .payload
+                    .delegation_update
+                    .as_ref()
+                    .is_some_and(|u| {
+                        u.get("operation").and_then(Value::as_str) == Some("sync_agents")
+                    });
             let pure_observe_agent = if !delegation_required {
                 next_file
                     .payload
@@ -616,7 +628,43 @@ fn collect_outbox_impl(
             } else {
                 None
             };
-            if let Some(agent_id) = pure_observe_agent {
+            if sync_agents {
+                let key = (
+                    normalize_provider(next_file.payload.provider.as_deref()).to_string(),
+                    sid.clone(),
+                    next_file.payload.run_id.clone(),
+                );
+                match delegation_sync_agents_by_session_run.get(&key) {
+                    Some(existing) => {
+                        let existing_meta = session_metadata_kind(&existing.payload);
+                        if next_file.observed_at >= existing.observed_at {
+                            let metadata_safe_to_drop =
+                                existing_meta.is_none() || existing_meta == metadata_kind;
+                            if metadata_safe_to_drop {
+                                if !managed_binding_paths.contains(&existing.path) {
+                                    let _ = std::fs::remove_file(&existing.path);
+                                }
+                            } else {
+                                delegation_updates.push(existing.clone());
+                            }
+                            delegation_sync_agents_by_session_run.insert(key, next_file);
+                        } else {
+                            let metadata_safe_to_drop =
+                                metadata_kind.is_none() || metadata_kind == existing_meta;
+                            if metadata_safe_to_drop {
+                                if !managed_binding_paths.contains(&path) {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            } else {
+                                delegation_updates.push(next_file);
+                            }
+                        }
+                    }
+                    None => {
+                        delegation_sync_agents_by_session_run.insert(key, next_file);
+                    }
+                }
+            } else if let Some(agent_id) = pure_observe_agent {
                 let key = (
                     normalize_provider(next_file.payload.provider.as_deref()).to_string(),
                     sid.clone(),
@@ -739,6 +787,7 @@ fn collect_outbox_impl(
             || !delegation_by_session_run.is_empty()
             || !delegation_updates.is_empty()
             || !delegation_observe_by_agent.is_empty()
+            || !delegation_sync_agents_by_session_run.is_empty()
             || !metadata_by_session_kind.is_empty())
     {
         match crate::state::db::resolve_db_path(db_path)
@@ -819,6 +868,7 @@ fn collect_outbox_impl(
         delegation_updates
             .iter()
             .chain(delegation_observe_by_agent.values())
+            .chain(delegation_sync_agents_by_session_run.values())
             .chain(metadata_by_session_kind.values())
             .map(|pending| pending.path.clone()),
     );
@@ -857,6 +907,7 @@ fn collect_outbox_impl(
     }
     selected_presence.extend(delegation_updates);
     selected_presence.extend(delegation_observe_by_agent.into_values());
+    selected_presence.extend(delegation_sync_agents_by_session_run.into_values());
     selected_presence.sort_by_key(|pending| pending.observed_at);
     for pending in selected_presence {
         let PendingPresenceFile {
@@ -2541,6 +2592,61 @@ mod tests {
         assert!(
             !older_pre.exists(),
             "superseded child tool observe outbox file should be removed during coalescing"
+        );
+    }
+
+    #[test]
+    fn sync_agents_coalesces_per_run_without_dropping_stop_shell_snapshot() {
+        let dir = make_outbox();
+        let stop_shell = write_presence_payload(
+            dir.path(),
+            "prs.stop-shell.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:00Z",
+                "delegation": {
+                    "count": 1,
+                    "kinds": {"shell": 1},
+                    "observed_at": "2026-09-30T15:00:00Z",
+                    "items": [{"id": "sh-1", "kind": "shell", "status": "running", "description": "Watch build"}]
+                }
+            }),
+        );
+        let older_mod = write_presence_payload(
+            dir.path(),
+            "prs.mod-1.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:01Z",
+                "delegation_update": {
+                    "operation": "sync_agents",
+                    "source_event": "ClaudeModState",
+                    "observed_at": "2026-09-30T15:00:01Z",
+                    "items": [{"id": "a1", "kind": "subagent", "status": "running"}]
+                }
+            }),
+        );
+        let newer_mod = write_presence_payload(
+            dir.path(),
+            "prs.mod-2.json",
+            json!({
+                "session_id": "parent", "provider": "claude", "run_id": "run",
+                "occurred_at": "2026-09-30T15:00:02Z",
+                "delegation_update": {
+                    "operation": "sync_agents",
+                    "source_event": "ClaudeModState",
+                    "observed_at": "2026-09-30T15:00:02Z",
+                    "items": []
+                }
+            }),
+        );
+
+        let drained = collect_outbox_impl(dir.path(), None, false);
+        let paths: Vec<_> = drained.posts.iter().map(|post| post.path.clone()).collect();
+        assert_eq!(paths, vec![stop_shell, newer_mod]);
+        assert!(
+            !older_mod.exists(),
+            "superseded sync_agents outbox file should be removed during coalescing"
         );
     }
 

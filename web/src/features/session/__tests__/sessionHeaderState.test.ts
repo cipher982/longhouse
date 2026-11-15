@@ -163,6 +163,28 @@ describe("getSessionHeaderState", () => {
     expect(state).toEqual({ tone: "live", text: "Waiting on 1 background agent" });
   });
 
+  it("shows passive background command as cool tone rather than live or uncertain", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        observedAt: "2026-04-15T16:20:00Z",
+        validUntil: "2026-04-15T16:25:00Z",
+        delegation: {
+          state: "pending",
+          count: 1,
+          kinds: { shell: 1 },
+          valid_until: "2026-04-15T16:35:00Z",
+        },
+        primaryTone: "idle",
+        primaryKey: "delegated_work",
+        primaryLabel: "Background · 1 command",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "cool", text: "Background · 1 command" });
+  });
+
   it("does not name a tool for a thinking activity that still carries one", () => {
     // A finished tool leaves its name on the activity fact, so a non-empty
     // `tool` is not evidence that one is running. Without the gate this read

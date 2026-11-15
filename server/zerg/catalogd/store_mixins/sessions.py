@@ -60,6 +60,7 @@ from zerg.catalogd.store import _non_negative_int
 from zerg.catalogd.store import _parse_iso_utc
 from zerg.catalogd.store import _provider_fact_rows
 from zerg.catalogd.store import _read_snapshot
+from zerg.catalogd.store import _reconcile_delegation_from_task_notifications
 from zerg.catalogd.store import _StageTimer
 from zerg.catalogd.store import _subagent_native_variants
 from zerg.catalogd.store import _summarize_machine_activity_rows
@@ -174,15 +175,27 @@ class SessionsMixin:
         """Facts for bytes the catalog already holds: replay or backfill. Idempotent."""
         timer = _StageTimer("insert_session_provider_facts")
         with _write_transaction(self.engine, timer=timer) as connection:
+            now = datetime.now(UTC)
             inserted = _insert_provider_facts(
                 connection,
                 session_id=session_id,
                 source_epoch=source_epoch,
                 provider_facts=provider_facts,
                 commit_seq=int(_current_commit_seq(connection)),
-                now=datetime.now(UTC),
+                now=now,
             )
-            return {"inserted": inserted, "commit_seq": str(_current_commit_seq(connection))}
+            reconciled = _reconcile_delegation_from_task_notifications(
+                connection,
+                session_id=session_id,
+                provider_facts=provider_facts,
+                commit_seq=None,
+                now=now,
+            )
+            return {
+                "inserted": inserted,
+                "delegation_reconciled": reconciled,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
 
     def list_session_timeline(
         self,

@@ -1104,6 +1104,41 @@ class _CommitTimer:
         logger.warning("storage_envelope_commit took %.0fms: %s lane=%s", total_ms, breakdown, lane)
 
 
+def _publish_storage_ingest_wake(
+    *,
+    session_id: str,
+    provider: str,
+    events_inserted: int,
+    parent_session_id: str | None = None,
+) -> None:
+    """Wake the focused session and timeline subscribers after state-changing ingest work."""
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
+    payload = {
+        "session_id": session_id,
+        "kind": "ingest",
+        "events_inserted": events_inserted,
+        "provider": provider,
+        "source": "storage_v2",
+        "server_fanout_at_ms": int(datetime.now(UTC).timestamp() * 1000),
+    }
+    bus = get_pubsub()
+    bus.publish(topic_session(session_id), payload)
+    if parent_session_id and parent_session_id != session_id:
+        bus.publish(
+            topic_session(parent_session_id),
+            {
+                **payload,
+                "session_id": parent_session_id,
+                "kind": "ingest_dependency",
+                "dependency_session_id": session_id,
+            },
+        )
+    bus.publish(TOPIC_TIMELINE, payload)
+
+
 async def _commit_admitted_envelope(
     request: Request,
     auth_token: DeviceToken | object | None,
@@ -1161,7 +1196,7 @@ async def _commit_admitted_envelope(
                 # The bytes are already durable; facts a pre-facts engine never
                 # shipped (or a backfill re-sends) still need their rows, and
                 # a provider title among them still names the session.
-                await catalogd.call(
+                replay_facts_result = await catalogd.call(
                     "session.provider_facts.insert.v2",
                     {
                         "session_id": str(spec.session_id),
@@ -1170,6 +1205,12 @@ async def _commit_admitted_envelope(
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
+                if int((replay_facts_result or {}).get("delegation_reconciled") or 0) > 0:
+                    _publish_storage_ingest_wake(
+                        session_id=str(spec.session_id),
+                        provider=spec.provider,
+                        events_inserted=0,
+                    )
                 replayed_title = _select_provider_title(parsed["provider_facts"])
                 if replayed_title is not None:
                     await _apply_provider_title(
@@ -1358,38 +1399,13 @@ async def _commit_admitted_envelope(
         # unrelated commit happened to wake the page. An exact replay changes
         # nothing, so it stays silent.
         if committed.get("created") is True:
-            from zerg.services.session_pubsub import TOPIC_TIMELINE
-            from zerg.services.session_pubsub import get_pubsub
-            from zerg.services.session_pubsub import topic_session
-
-            payload = {
-                "session_id": str(spec.session_id),
-                "kind": "ingest",
-                "events_inserted": int(render_manifest["event_count"] or 0) if render_manifest is not None else 0,
-                "provider": spec.provider,
-                "source": "storage_v2",
-                "server_fanout_at_ms": int(datetime.now(UTC).timestamp() * 1000),
-            }
-            bus = get_pubsub()
-            # Storage-v2 is the durable archive path for managed providers. It
-            # must wake the focused workspace as well as the global timeline;
-            # otherwise a detail page attached to an empty shell never
-            # refetches the render events that just became durable.
-            bus.publish(topic_session(str(spec.session_id)), payload)
             parent_session_id = committed.get("delegation_parent_session_id")
-            if isinstance(parent_session_id, str) and parent_session_id and parent_session_id != str(spec.session_id):
-                # A child archive commit changes the parent's exact task
-                # enrichment without changing the parent's own activity clock.
-                bus.publish(
-                    topic_session(parent_session_id),
-                    {
-                        **payload,
-                        "session_id": parent_session_id,
-                        "kind": "ingest_dependency",
-                        "dependency_session_id": str(spec.session_id),
-                    },
-                )
-            bus.publish(TOPIC_TIMELINE, payload)
+            _publish_storage_ingest_wake(
+                session_id=str(spec.session_id),
+                provider=spec.provider,
+                events_inserted=int(render_manifest["event_count"] or 0) if render_manifest is not None else 0,
+                parent_session_id=parent_session_id if isinstance(parent_session_id, str) and parent_session_id else None,
+            )
         timer.log_if_slow(lane)
         return committed_receipt
     except CatalogRemoteError as exc:

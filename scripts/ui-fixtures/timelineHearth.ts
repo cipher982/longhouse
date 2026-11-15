@@ -164,6 +164,65 @@ function buildCards(n: number): Card[] {
       },
     },
   );
+  const passiveBackground = withState(
+    makeTimelineCard({
+      id: "hearth-passive-shell",
+      thread_root_session_id: "hearth-passive-shell",
+      thread_head_session_id: "hearth-passive-shell",
+      provider: "claude",
+      project: "zerg",
+      started_at: minutesBefore(28),
+      last_activity_at: minutesBefore(2),
+      timeline_anchor_at: minutesBefore(2),
+      tool_calls: 41,
+      assistant_messages: 18,
+      user_messages: 4,
+      summary_title: "Wait for QA deploy then run Phase 4 proof",
+      anchor_title: "Wait for QA deploy then run Phase 4 proof",
+      timeline_title: "Wait for QA deploy then run Phase 4 proof",
+      summary: "Shell watcher waiting for QA image promotion.",
+      first_user_message: "Wait for QA deploy then run Phase 4 proof.",
+      origin_label: "cinder",
+      ...live(null),
+      presence_state: "idle",
+      presence_updated_at: minutesBefore(2),
+    } as never),
+    {
+      working_set: "open",
+      activity: {
+        state: "quiescent",
+        tool: null,
+        observed_at: minutesBefore(2),
+        valid_until: minutesAfter(2),
+      },
+      delegation: {
+        state: "pending",
+        count: 1,
+        kinds: { shell: 1 },
+        source: "claude_hook",
+        observed_at: minutesBefore(2),
+        valid_until: minutesAfter(5),
+        items: [
+          {
+            id: "task-shell-only",
+            kind: "shell",
+            status: "running",
+            description: "Wait for QA deploy",
+            first_observed_at: minutesBefore(4),
+            last_activity_at: minutesBefore(2),
+          },
+        ],
+      },
+      presentation: {
+        primary: {
+          key: "delegated_work",
+          label: "Background · 1 command",
+          tone: "idle",
+          observed_at: minutesBefore(2),
+        },
+      },
+    },
+  );
   const waitingBase = makeTimelineCard({
     id: "hearth-waiting",
     thread_root_session_id: "hearth-waiting",
@@ -245,7 +304,7 @@ function buildCards(n: number): Card[] {
     status: "completed",
     origin_label: "cinder",
   } as never);
-  return [busy, working, waiting, idleRecent, idleWarm, idleHours, ended];
+  return [busy, passiveBackground, working, waiting, idleRecent, idleWarm, idleHours, ended];
 }
 
 export function buildTimelineHearthFixture() {

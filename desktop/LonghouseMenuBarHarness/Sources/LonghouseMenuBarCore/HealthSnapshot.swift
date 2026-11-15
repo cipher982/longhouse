@@ -2621,6 +2621,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
 
     var menuBarAttentionKind: ManagedAttentionKind { menuBarAttentionKind(asOf: Date()) }
 
+    func hasPassiveDelegatedWork(asOf now: Date) -> Bool {
+        menuBarAttentionKind(asOf: now) == .idle && presentation?.primary?.key == "delegated_work"
+    }
+
     /// The served attention axis on this Mac's clock. The Runtime Host decides
     /// working / attention / quiet; the menu bar only retires a claim whose
     /// `valid_until` has passed, and splits attention into an explicit
@@ -2630,8 +2634,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         let key = presentation.primary?.key
         let unknownReason = key == nil || key == "activity_unknown" ? "activity unknown" : key!
         guard let signal = presentation.signal else { return .unknown(unknownReason) }
-        if signal.state == "working" || signal.state == "attention",
-           let deadline = signal.validUntil.flatMap(HealthSnapshot.parseISO8601),
+        if let deadline = signal.validUntil.flatMap(HealthSnapshot.parseISO8601),
            now >= deadline {
             return .unknown("activity unknown")
         }

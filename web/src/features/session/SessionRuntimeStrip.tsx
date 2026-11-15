@@ -374,7 +374,7 @@ export function buildSessionLedgerState(
       ? `${typeof input?.command === "string" ? "$ " : ""}${inputDetail.trim().split(/\r?\n/, 1)[0]}`
       : null;
   const delegatedDetail =
-    facts.presentation.primary?.key === "delegated_work" && tone === "working"
+    facts.presentation.primary?.key === "delegated_work" && (tone === "working" || tone === "quiet")
       ? delegatedWorkDetail(backgroundInspector)
       : null;
   const detail =

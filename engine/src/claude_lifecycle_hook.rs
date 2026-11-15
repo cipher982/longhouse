@@ -75,21 +75,23 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     let session_id = managed_session_id
         .clone()
         .or_else(|| provider_session_id.clone());
-    let monitor_descriptions =
-        if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
-            longhouse_home()
-                .ok()
-                .zip(session_id.as_deref())
-                .map(|(home, sid)| load_monitor_descriptions(&home, sid))
-                .unwrap_or_default()
-        } else {
-            HashSet::new()
-        };
-    // Stop, SubagentStop, and ClaudeModState carry a complete registry scoped
-    // to the parent session. Other lifecycle events carry only one source-bound
-    // change. Keeping these lanes distinct is important: a child callback must
-    // not become a parent phase, while its parent-scoped registry is still useful.
-    let mut registry = if matches!(event.as_str(), "Stop" | "SubagentStop" | "ClaudeModState") {
+    // Stop and SubagentStop carry a complete registry scoped to the parent
+    // session. ClaudeModState only carries a complete registry when the sender
+    // explicitly includes `background_tasks`; otherwise `$.agent.list()` covers
+    // subagents/teammates only and must sync via `delegation_update` so active
+    // shell/monitor tasks are never wiped.
+    let is_complete_registry = matches!(event.as_str(), "Stop" | "SubagentStop")
+        || (event == "ClaudeModState" && input.get("background_tasks").is_some());
+    let monitor_descriptions = if is_complete_registry {
+        longhouse_home()
+            .ok()
+            .zip(session_id.as_deref())
+            .map(|(home, sid)| load_monitor_descriptions(&home, sid))
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+    let mut registry = if is_complete_registry {
         delegation_snapshot_with_monitors(input, &occurred_at, Some(&monitor_descriptions))
     } else {
         None
@@ -696,6 +698,29 @@ fn extract_tool_intent(tool_name: Option<&str>, tool_input: Option<&Value>) -> O
 }
 
 fn lifecycle_update_for_event(event: &str, input: &Value, observed_at: &str) -> Option<Value> {
+    if event == "ClaudeModState" {
+        if input.get("background_tasks").is_some() {
+            return None;
+        }
+        let agent_list = input.get("agents").and_then(Value::as_array)?;
+        let mut seen_ids = HashSet::new();
+        let mut items = Vec::new();
+        let mut kinds = std::collections::BTreeMap::new();
+        collect_agent_items(
+            input,
+            agent_list,
+            observed_at,
+            &mut seen_ids,
+            &mut items,
+            &mut kinds,
+        );
+        return Some(json!({
+            "operation": "sync_agents",
+            "items": items,
+            "observed_at": observed_at,
+            "source_event": event,
+        }));
+    }
     if event == "TaskCreated" {
         let id = task_id(input.get("task_id"))?;
         if id.chars().count() > DELEGATION_ID_MAX_CHARS || id.chars().any(char::is_control) {
@@ -991,6 +1016,79 @@ fn extract_agent_progress(agent: &Value, status: &str, observed_at: &str) -> Opt
     Some(progress)
 }
 
+fn collect_agent_items(
+    input: &Value,
+    agent_list: &[Value],
+    observed_at: &str,
+    seen_ids: &mut HashSet<String>,
+    items: &mut Vec<Value>,
+    kinds: &mut std::collections::BTreeMap<String, u64>,
+) {
+    for agent in agent_list {
+        if items.len() >= DELEGATION_TASK_LIMIT {
+            break;
+        }
+        let Some(id) = task_id(agent.get("id")) else {
+            continue;
+        };
+        let raw_status = agent
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("running");
+        let meta = read_agent_meta(input, &id);
+        let normalized_raw = raw_status.trim().to_ascii_lowercase();
+        let mut status = normalize_agent_status(raw_status);
+        if status == "completed" {
+            let explicit_terminal = matches!(
+                normalized_raw.as_str(),
+                "failed" | "killed" | "stopped" | "cancelled" | "canceled"
+            );
+            if !explicit_terminal && meta.as_ref().and_then(|m| m.finished) == Some(false) {
+                status = "waiting";
+            } else {
+                continue;
+            }
+        }
+        if !seen_ids.insert(id.clone()) {
+            continue;
+        }
+        let agent_type = bounded_required_task_text(agent.get("type"), DELEGATION_STATUS_MAX_CHARS);
+        let is_teammate = agent
+            .get("teammateId")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty())
+            || agent_type
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case("teammate"));
+        let kind = if is_teammate { "teammate" } else { "subagent" };
+        *kinds.entry(kind.to_string()).or_insert(0) += 1;
+        let description =
+            bounded_task_text(agent.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                .or_else(|| bounded_task_text(agent.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS));
+        let mut item = json!({
+            "id": id,
+            "kind": kind,
+            "status": status,
+            "description": description,
+        });
+        if let Some(ref at) = agent_type {
+            item["agent_type"] = json!(at);
+        }
+        if let Some(parent_id) =
+            task_id(agent.get("parentId")).or_else(|| task_id(agent.get("spawnedBy")))
+        {
+            item["parent_agent_id"] = json!(parent_id);
+        }
+        if let Some(ref meta) = meta {
+            apply_agent_meta(&mut item, meta);
+        }
+        if let Some(progress) = extract_agent_progress(agent, status, observed_at) {
+            item["native_progress"] = progress;
+        }
+        items.push(item);
+    }
+}
+
 fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
     delegation_snapshot_with_monitors(input, observed_at, None)
 }
@@ -1087,62 +1185,14 @@ fn delegation_snapshot_with_monitors(
     }
 
     if let Some(agent_list) = agents {
-        for agent in agent_list {
-            if items.len() >= DELEGATION_TASK_LIMIT {
-                break;
-            }
-            let Some(id) = task_id(agent.get("id")) else {
-                continue;
-            };
-            let raw_status = agent
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("running");
-            let status = normalize_agent_status(raw_status);
-            if status == "completed" {
-                continue;
-            }
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
-            let agent_type =
-                bounded_required_task_text(agent.get("type"), DELEGATION_STATUS_MAX_CHARS);
-            let is_teammate = agent
-                .get("teammateId")
-                .and_then(Value::as_str)
-                .is_some_and(|v| !v.trim().is_empty())
-                || agent_type
-                    .as_deref()
-                    .is_some_and(|t| t.eq_ignore_ascii_case("teammate"));
-            let kind = if is_teammate { "teammate" } else { "subagent" };
-            *kinds.entry(kind.to_string()).or_insert(0) += 1;
-            let description =
-                bounded_task_text(agent.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
-                    .or_else(|| {
-                        bounded_task_text(agent.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS)
-                    });
-            let mut item = json!({
-                "id": id,
-                "kind": kind,
-                "status": status,
-                "description": description,
-            });
-            if let Some(ref at) = agent_type {
-                item["agent_type"] = json!(at);
-            }
-            if let Some(parent_id) =
-                task_id(agent.get("parentId")).or_else(|| task_id(agent.get("spawnedBy")))
-            {
-                item["parent_agent_id"] = json!(parent_id);
-            }
-            if let Some(meta) = read_agent_meta(input, &id) {
-                apply_agent_meta(&mut item, &meta);
-            }
-            if let Some(progress) = extract_agent_progress(agent, status, observed_at) {
-                item["native_progress"] = progress;
-            }
-            items.push(item);
-        }
+        collect_agent_items(
+            input,
+            agent_list,
+            observed_at,
+            &mut seen_ids,
+            &mut items,
+            &mut kinds,
+        );
     }
 
     Some(json!({
@@ -3081,6 +3131,66 @@ mod tests {
             assert_eq!(mod_state["session_usage"]["context"]["window"], 1000000);
             assert_eq!(mod_state["permission_mode"], "bypassPermissions");
             assert_eq!(mod_state["session_crons"][0]["id"], "cron-1");
+        });
+    }
+
+    #[test]
+    fn claude_mod_state_without_background_tasks_syncs_agents_without_emitting_full_snapshot() {
+        let home = tempfile::tempdir().unwrap();
+        let transcript = home.path().join("sess-sync.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        let subagents = home.path().join("sess-sync/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-a1.meta.json"),
+            json!({
+                "agentType": "Explore",
+                "description": "Waiting on reply",
+                "finished": false,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        with_managed_home(home.path(), "longhouse-sync", "run-sync", || {
+            handle_input(&json!({
+                "hook_event_name": "ClaudeModState",
+                "session_id": "sess-sync",
+                "transcript_path": transcript,
+                "agents": [
+                    {
+                        "id": "a1",
+                        "type": "Explore",
+                        "status": "completed",
+                    },
+                    {
+                        "id": "a2",
+                        "type": "general-purpose",
+                        "status": "completed",
+                    }
+                ],
+            }))
+            .unwrap();
+
+            let files: Vec<Value> = std::fs::read_dir(home.path().join("agent/outbox"))
+                .unwrap()
+                .map(|entry| {
+                    let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+                    serde_json::from_slice(&bytes).unwrap()
+                })
+                .collect();
+            assert_eq!(files.len(), 1);
+            let payload = &files[0];
+            assert!(payload.get("delegation").is_none());
+            assert_eq!(payload["delegation_update"]["operation"], "sync_agents");
+            assert_eq!(
+                payload["delegation_update"]["source_event"],
+                "ClaudeModState"
+            );
+            let items = payload["delegation_update"]["items"].as_array().unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0]["id"], "a1");
+            assert_eq!(items[0]["status"], "waiting");
         });
     }
 }

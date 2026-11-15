@@ -11,6 +11,7 @@ import time
 from collections.abc import Collection
 from collections.abc import Iterable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
@@ -5313,6 +5314,287 @@ def _copy_delegation_item_metadata(
         target.pop("spawn_depth", None)
 
 
+_TERMINAL_TASK_NOTIFICATION_STATUSES = frozenset(
+    {"completed", "failed", "killed", "stopped", "cancelled", "canceled", "aborted", "timed_out"}
+)
+
+
+def _normalize_task_notification_terminal_status(raw_status: Any) -> str | None:
+    """Return normalized terminal status or None for intermediate streaming notifications."""
+    if not isinstance(raw_status, str):
+        return None
+    cleaned = raw_status.strip().lower()
+    if cleaned not in _TERMINAL_TASK_NOTIFICATION_STATUSES:
+        return None
+    if cleaned == "completed":
+        return "completed"
+    if cleaned in {"failed", "timed_out"}:
+        return "failed"
+    return "cancelled"
+
+
+def _extract_terminal_task_notifications(
+    provider_facts: Sequence[Mapping[str, Any]],
+    *,
+    default_at: datetime,
+) -> list[tuple[str | None, str | None, str, str | None, datetime]]:
+    entries: list[tuple[str | None, str | None, str, str | None, datetime]] = []
+    for fact in provider_facts:
+        if fact.get("kind") != "delegation.task_notification":
+            continue
+        payload = _delegation_payload(fact)
+        if not isinstance(payload, Mapping):
+            continue
+        fact_at = _parse_iso_utc(fact.get("at")) or default_at
+        candidates: list[Mapping[str, Any]] = [payload]
+        additional = payload.get("additional_items")
+        if isinstance(additional, list):
+            candidates.extend(item for item in additional if isinstance(item, Mapping))
+        for item in candidates:
+            norm_status = _normalize_task_notification_terminal_status(item.get("status"))
+            if norm_status is None:
+                continue
+            raw_task_id = item.get("task_id")
+            task_id = raw_task_id.strip() if isinstance(raw_task_id, str) and raw_task_id.strip() else None
+            raw_tool_use_id = item.get("tool_use_id")
+            tool_use_id = raw_tool_use_id.strip() if isinstance(raw_tool_use_id, str) and raw_tool_use_id.strip() else None
+            if not task_id and not tool_use_id:
+                continue
+            raw_summary = item.get("summary")
+            summary = raw_summary.strip()[:512] if isinstance(raw_summary, str) and raw_summary.strip() else None
+            entries.append((task_id, tool_use_id, norm_status, summary, fact_at))
+    return entries
+
+
+def _recent_terminal_task_notifications(
+    connection: Connection,
+    *,
+    session_id: str,
+) -> tuple[dict[str, tuple[datetime, str, str | None]], dict[str, tuple[datetime, str, str | None]]]:
+    table = SessionProviderFact.__table__
+    rows = (
+        connection.execute(
+            select(table.c.at, table.c.payload_json)
+            .where(table.c.session_id == session_id, table.c.kind == "delegation.task_notification")
+            .order_by(table.c.at.desc(), table.c.id.desc())
+            .limit(64)
+        )
+        .mappings()
+        .all()
+    )
+    if not rows:
+        return {}, {}
+    now = datetime.now(UTC)
+    entries = _extract_terminal_task_notifications(
+        [{"kind": "delegation.task_notification", "at": row["at"], "payload": row["payload_json"]} for row in rows],
+        default_at=now,
+    )
+    by_task_id: dict[str, tuple[datetime, str, str | None]] = {}
+    by_tool_use_id: dict[str, tuple[datetime, str, str | None]] = {}
+    for task_id, tool_use_id, status, summary, fact_at in entries:
+        if task_id and (task_id not in by_task_id or fact_at > by_task_id[task_id][0]):
+            by_task_id[task_id] = (fact_at, status, summary)
+        if tool_use_id and (tool_use_id not in by_tool_use_id or fact_at > by_tool_use_id[tool_use_id][0]):
+            by_tool_use_id[tool_use_id] = (fact_at, status, summary)
+    return by_task_id, by_tool_use_id
+
+
+def _lookup_terminal_task_notification(
+    item: Mapping[str, Any],
+    *,
+    by_task_id: Mapping[str, tuple[datetime, str, str | None]],
+    by_tool_use_id: Mapping[str, tuple[datetime, str, str | None]],
+) -> tuple[datetime, str, str | None] | None:
+    hit: tuple[datetime, str, str | None] | None = None
+    item_id = item.get("id")
+    if isinstance(item_id, str) and item_id in by_task_id:
+        hit = by_task_id[item_id]
+    tool_call_id = item.get("parent_tool_call_id")
+    if hit is None and isinstance(tool_call_id, str) and tool_call_id in by_tool_use_id:
+        hit = by_tool_use_id[tool_call_id]
+    if hit is None:
+        return None
+    notif_at = hit[0]
+    registered_at = _parse_iso_utc(item.get("registered_at"))
+    if registered_at is not None and notif_at < registered_at - timedelta(seconds=5):
+        return None
+    return hit
+
+
+def _terminal_delegation_record(
+    item: Mapping[str, Any],
+    *,
+    status: str,
+    ended_at: datetime,
+    fallback_description: str | None = None,
+) -> dict[str, Any]:
+    raw_desc = item.get("description")
+    description = (
+        raw_desc[:512] if isinstance(raw_desc, str) and raw_desc.strip() else (fallback_description[:512] if fallback_description else None)
+    )
+    record: dict[str, Any] = {
+        "id": item["id"],
+        "kind": item["kind"],
+        "status": status,
+        "description": description,
+        "first_observed_at": item.get("first_observed_at") or ended_at.isoformat(),
+        "ended_at": ended_at.isoformat(),
+    }
+    _copy_delegation_item_metadata(record, item)
+    for key, bound in (
+        ("parent_tool_call_id", 256),
+        ("native_child_id", 256),
+        ("native_child_source_path", 2048),
+        ("registered_at", 128),
+    ):
+        value = item.get(key)
+        if isinstance(value, str) and 0 < len(value) <= bound:
+            record[key] = value
+    if isinstance(item.get("native_progress"), Mapping):
+        record["native_progress"] = dict(item["native_progress"])
+    return record
+
+
+def _merge_recent_delegation_items(*groups: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
+    merged: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    # Keep newest occurrence when the same id appears in multiple groups.
+    for group in reversed(groups):
+        for raw in reversed(group):
+            if not isinstance(raw, Mapping):
+                continue
+            item_id = raw.get("id")
+            if not isinstance(item_id, str) or not item_id or item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            merged.append(dict(raw))
+    merged.reverse()
+    if not merged:
+        return None
+    return merged[-_DELEGATION_COUNT_LIMIT:]
+
+
+def _reconcile_delegation_from_task_notifications(
+    connection: Connection,
+    *,
+    session_id: str,
+    provider_facts: Sequence[Mapping[str, Any]],
+    commit_seq: int | None,
+    now: datetime,
+) -> int:
+    """Retire active delegation items whose transcript carries a terminal task-notification."""
+    entries = _extract_terminal_task_notifications(provider_facts, default_at=now)
+    if not entries:
+        return 0
+    by_task_id: dict[str, tuple[datetime, str, str | None]] = {}
+    by_tool_use_id: dict[str, tuple[datetime, str, str | None]] = {}
+    for task_id, tool_use_id, status, summary, fact_at in entries:
+        if task_id and (task_id not in by_task_id or fact_at > by_task_id[task_id][0]):
+            by_task_id[task_id] = (fact_at, status, summary)
+        if tool_use_id and (tool_use_id not in by_tool_use_id or fact_at > by_tool_use_id[tool_use_id][0]):
+            by_tool_use_id[tool_use_id] = (fact_at, status, summary)
+
+    head_table = FactHead.__table__
+    head_rows = (
+        connection.execute(
+            select(head_table).where(
+                head_table.c.session_id == session_id,
+                head_table.c.family == "delegation",
+            )
+        )
+        .mappings()
+        .all()
+    )
+    if not head_rows:
+        return 0
+
+    reducer_facts: list[ReducerFact] = []
+    for row in head_rows:
+        try:
+            prior = json.loads(row["value_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(prior, dict) or not isinstance(prior.get("items"), list) or not prior["items"]:
+            continue
+        remaining_items: list[dict[str, Any]] = []
+        retired_records: list[dict[str, Any]] = []
+        matched_ats: list[datetime] = []
+        for raw in prior["items"]:
+            if not isinstance(raw, Mapping):
+                continue
+            hit = _lookup_terminal_task_notification(raw, by_task_id=by_task_id, by_tool_use_id=by_tool_use_id)
+            if hit is None:
+                remaining_items.append(dict(raw))
+                continue
+            notif_at, norm_status, summary = hit
+            matched_ats.append(notif_at)
+            retired_records.append(
+                _terminal_delegation_record(
+                    raw,
+                    status=norm_status,
+                    ended_at=notif_at,
+                    fallback_description=summary,
+                )
+            )
+        if not retired_records:
+            continue
+
+        prior_observed = _parse_iso_utc(prior.get("observed_at")) or _parse_iso_utc(row["observed_at"]) or now
+        next_observed = max([prior_observed, *matched_ats])
+        if next_observed <= prior_observed:
+            next_observed = prior_observed + timedelta(microseconds=1)
+        prior_valid_until = _parse_iso_utc(prior.get("valid_until")) or _parse_iso_utc(row["valid_until"])
+        fresh_valid_until = next_observed + timedelta(milliseconds=_DELEGATION_DEFAULT_FRESHNESS_MS)
+        next_valid_until = max(prior_valid_until, fresh_valid_until) if prior_valid_until is not None else fresh_valid_until
+
+        kinds: dict[str, int] = {}
+        for item in remaining_items:
+            kind = str(item.get("kind") or "")
+            if kind:
+                kinds[kind] = kinds.get(kind, 0) + 1
+        prior_recent = [dict(it) for it in (prior.get("recent_items") or []) if isinstance(it, Mapping)]
+        recent_items = _merge_recent_delegation_items(prior_recent, retired_records)
+
+        next_value = {
+            **prior,
+            "count": len(remaining_items),
+            "kinds": kinds,
+            "items": remaining_items,
+            "recent_items": recent_items,
+            "observed_at": next_observed.isoformat(),
+            "valid_until": next_valid_until.isoformat(),
+        }
+        if len(canonical_value_json(next_value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:
+            continue
+        evidence_hash = canonical_evidence_hash(next_value)
+        dedupe_key = hashlib.sha256(f"task-notif:{session_id}:{row['subject_key']}:{row['source']}:{evidence_hash}".encode()).hexdigest()
+        reducer_facts.append(
+            ReducerFact(
+                family="delegation",
+                subject_key=str(row["subject_key"]),
+                source=str(row["source"]),
+                source_epoch=str(row["source_epoch"]),
+                source_seq=None,
+                dedupe_key=dedupe_key,
+                evidence_hash=evidence_hash,
+                value=next_value,
+                observed_at=next_observed,
+                session_id=session_id,
+                valid_until=next_valid_until,
+                raw_locator=f"provider_fact:delegation.task_notification:{session_id}"[:1024],
+            )
+        )
+    if not reducer_facts:
+        return 0
+    reduced = reduce_fact_batch_setwise(
+        connection,
+        reducer_facts,
+        received_at=now,
+        commit_seq_override=commit_seq,
+    )
+    return reduced.changed_heads
+
+
 def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
     """Reduce registry observations independently of the parent's activity clock."""
     from zerg.services.session_state_contract import SessionDelegationProgress
@@ -5325,6 +5607,114 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
     prior_by_run: dict[tuple[str, str], dict[str, Any]] = {}
     removed_lifecycle_agents: dict[tuple[str, str, str], datetime | None] = {}
     lifecycle_by_agent: dict[tuple[str, str, str], dict[str, Any]] = {}
+    terminal_notifs_by_session: dict[
+        str, tuple[dict[str, tuple[datetime, str, str | None]], dict[str, tuple[datetime, str, str | None]]]
+    ] = {}
+
+    def _session_terminal_notifs(
+        sid: str,
+    ) -> tuple[dict[str, tuple[datetime, str, str | None]], dict[str, tuple[datetime, str, str | None]]]:
+        cached = terminal_notifs_by_session.get(sid)
+        if cached is None:
+            cached = _recent_terminal_task_notifications(connection, session_id=sid)
+            terminal_notifs_by_session[sid] = cached
+        return cached
+
+    def _normalize_delegation_item(
+        raw: Mapping[str, Any],
+        *,
+        occurred_at: datetime,
+        previous_items: Mapping[tuple[str, str], Mapping[str, Any]],
+        allowed_kinds: frozenset[str] | None = None,
+    ) -> dict[str, Any] | None:
+        task_id, kind, task_status = raw.get("id"), raw.get("kind"), raw.get("status")
+        if (
+            not isinstance(task_id, str)
+            or not task_id.strip()
+            or len(task_id) > 256
+            or not isinstance(kind, str)
+            or not kind.strip()
+            or len(kind) > 32
+            or not isinstance(task_status, str)
+            or not task_status.strip()
+            or len(task_status) > 32
+        ):
+            return None
+        if allowed_kinds is not None and kind not in allowed_kinds:
+            return None
+        previous_item = previous_items.get((kind, task_id), {})
+        registered_at = raw.get("registered_at")
+        if registered_at != previous_item.get("registered_at") and registered_at is not None:
+            previous_item = {}
+        item: dict[str, Any] = {
+            "id": task_id,
+            "kind": kind,
+            "status": task_status,
+            "description": raw["description"][:512] if isinstance(raw.get("description"), str) else None,
+            "first_observed_at": previous_item.get("first_observed_at") or occurred_at.isoformat(),
+        }
+        _copy_delegation_item_metadata(item, raw, previous_item)
+        tool_call_id = raw.get("parent_tool_call_id")
+        if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
+            item["parent_tool_call_id"] = tool_call_id
+        native_child_id = raw.get("native_child_id")
+        if isinstance(native_child_id, str) and 0 < len(native_child_id) <= 256:
+            item["native_child_id"] = native_child_id
+        native_child_source_path = raw.get("native_child_source_path")
+        if isinstance(native_child_source_path, str) and 0 < len(native_child_source_path) <= 2048:
+            item["native_child_source_path"] = native_child_source_path
+        if isinstance(registered_at, str):
+            item["registered_at"] = registered_at
+        progress = raw.get("native_progress")
+        if isinstance(progress, Mapping):
+            item["native_progress"] = SessionDelegationProgress.model_validate(progress).model_dump(mode="json", exclude_none=True)
+        elif previous_item.get("native_progress") is not None:
+            item["native_progress"] = previous_item["native_progress"]
+        return item
+
+    def _append_delegation_head_fact(
+        *,
+        coordinate: tuple[str, str],
+        value: dict[str, Any],
+        raw_source: str,
+        run_id: str,
+        session_id: str,
+        occurred_at: datetime,
+        valid_until: datetime,
+        dedupe_key: str,
+        raw_locator: str,
+    ) -> None:
+        nonlocal facts
+        if len(canonical_value_json(value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:
+            return
+        prior_by_run[coordinate] = value
+        facts = [
+            existing
+            for existing in facts
+            if not (
+                existing.family == "delegation"
+                and existing.subject_key == f"run:{run_id}"
+                and existing.source == raw_source
+                and existing.source_epoch == run_id
+            )
+        ]
+        facts.append(
+            ReducerFact(
+                family="delegation",
+                subject_key=f"run:{run_id}",
+                source=raw_source,
+                source_epoch=run_id,
+                source_seq=None,
+                dedupe_key=dedupe_key,
+                evidence_hash=canonical_evidence_hash(value),
+                value=value,
+                observed_at=occurred_at,
+                session_id=session_id,
+                valid_until=valid_until,
+                raw_locator=raw_locator[:1024],
+            )
+        )
+
     # One source observation may report a registry and an exact child edge.
     # Reduce both independently, with the edge following its own snapshot.
     for event, lane in (
@@ -5377,6 +5767,111 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             raw_item = update.get("item")
             operation = update.get("operation")
             source_event = update.get("source_event")
+            if source_event == "ClaudeModState" and operation == "sync_agents":
+                raw_agent_items = update.get("items")
+                if not isinstance(raw_agent_items, list) or len(raw_agent_items) > _DELEGATION_COUNT_LIMIT:
+                    continue
+                prior_observed = _parse_iso_utc(prior.get("observed_at"))
+                if prior_observed is not None and occurred_at < prior_observed:
+                    continue
+                if prior_observed is not None and occurred_at == prior_observed:
+                    occurred_at = prior_observed + timedelta(microseconds=1)
+                previous_items = {
+                    (item.get("kind"), item.get("id")): item for item in prior.get("items", []) or [] if isinstance(item, dict)
+                }
+                by_task_id, by_tool_use_id = _session_terminal_notifs(session_id)
+                incoming_agents: list[dict[str, Any]] = []
+                retired_agents: list[dict[str, Any]] = []
+                seen_ids: set[str] = set()
+                invalid_sync = False
+                for raw in raw_agent_items:
+                    if not isinstance(raw, Mapping):
+                        invalid_sync = True
+                        break
+                    try:
+                        item = _normalize_delegation_item(
+                            raw,
+                            occurred_at=occurred_at,
+                            previous_items=previous_items,
+                            allowed_kinds=frozenset({"subagent", "teammate"}),
+                        )
+                    except ValueError:
+                        invalid_sync = True
+                        break
+                    if item is None:
+                        invalid_sync = True
+                        break
+                    if item["id"] in seen_ids:
+                        continue
+                    seen_ids.add(item["id"])
+                    hit = _lookup_terminal_task_notification(item, by_task_id=by_task_id, by_tool_use_id=by_tool_use_id)
+                    if hit is not None:
+                        notif_at, norm_status, summary = hit
+                        retired_agents.append(
+                            _terminal_delegation_record(
+                                item,
+                                status=norm_status,
+                                ended_at=notif_at,
+                                fallback_description=summary,
+                            )
+                        )
+                    else:
+                        incoming_agents.append(item)
+                if invalid_sync:
+                    continue
+                prior_items = [dict(it) for it in (prior.get("items") or []) if isinstance(it, Mapping)]
+                preserved_non_agents = [it for it in prior_items if it.get("kind") not in {"subagent", "teammate"}]
+                prior_agents = [it for it in prior_items if it.get("kind") in {"subagent", "teammate"}]
+                retired_agent_ids = {it["id"] for it in retired_agents}
+                for pa in prior_agents:
+                    pa_id = pa.get("id")
+                    if not isinstance(pa_id, str) or pa_id in seen_ids or pa_id in retired_agent_ids:
+                        continue
+                    reg_or_first = _parse_iso_utc(pa.get("registered_at")) or _parse_iso_utc(pa.get("first_observed_at"))
+                    if reg_or_first is not None and reg_or_first > occurred_at:
+                        incoming_agents.append(pa)
+                    else:
+                        retired_agents.append(_terminal_delegation_record(pa, status="completed", ended_at=occurred_at))
+                merged_items = preserved_non_agents + incoming_agents
+                if not merged_items and not prior_items and not retired_agents:
+                    continue
+                prior_recent = [dict(it) for it in (prior.get("recent_items") or []) if isinstance(it, Mapping)]
+                recent_items = _merge_recent_delegation_items(prior_recent, retired_agents)
+                kinds: dict[str, int] = {}
+                for it in merged_items:
+                    it_kind = str(it.get("kind") or "")
+                    if it_kind:
+                        kinds[it_kind] = kinds.get(it_kind, 0) + 1
+                fresh_valid_until = occurred_at + timedelta(milliseconds=_DELEGATION_DEFAULT_FRESHNESS_MS)
+                prior_valid_until = _parse_iso_utc(prior.get("valid_until"))
+                valid_until = (
+                    max(prior_valid_until, fresh_valid_until) if merged_items and prior_valid_until is not None else fresh_valid_until
+                )
+                value = {
+                    "authority_class": "provider_runtime",
+                    "provider": str(event.provider),
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "count": len(merged_items),
+                    "kinds": kinds,
+                    "items": merged_items,
+                    "recent_items": recent_items,
+                    "source": raw_source,
+                    "observed_at": occurred_at.isoformat(),
+                    "valid_until": valid_until.isoformat(),
+                }
+                _append_delegation_head_fact(
+                    coordinate=coordinate,
+                    value=value,
+                    raw_source=raw_source,
+                    run_id=run_id,
+                    session_id=session_id,
+                    occurred_at=occurred_at,
+                    valid_until=valid_until,
+                    dedupe_key=hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest(),
+                    raw_locator=f"runtime:{raw_source}:{event.dedupe_key}",
+                )
+                continue
             if source_event in {"TaskCreated", "TaskCompleted"}:
                 if (
                     not isinstance(raw_item, Mapping)
@@ -5397,6 +5892,8 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 prior_observed = _parse_iso_utc(prior.get("observed_at"))
                 if prior_observed is not None and occurred_at < prior_observed:
                     continue
+                if prior_observed is not None and occurred_at == prior_observed:
+                    occurred_at = prior_observed + timedelta(microseconds=1)
                 task_id = raw_item["id"].strip()
                 kind = raw_item["kind"].strip()
                 task_status = raw_item["status"].strip()
@@ -5416,7 +5913,20 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                         "first_observed_at": prev_item.get("first_observed_at") or occurred_at.isoformat(),
                     }
                     _copy_delegation_item_metadata(upserted, raw_item, prev_item)
-                    if existing_idx is not None:
+                    by_task_id, by_tool_use_id = _session_terminal_notifs(session_id)
+                    hit = _lookup_terminal_task_notification(upserted, by_task_id=by_task_id, by_tool_use_id=by_tool_use_id)
+                    if hit is not None:
+                        notif_at, norm_status, summary = hit
+                        if existing_idx is not None:
+                            current_items.pop(existing_idx)
+                        terminal = _terminal_delegation_record(
+                            upserted,
+                            status=norm_status,
+                            ended_at=notif_at,
+                            fallback_description=summary,
+                        )
+                        recent_items = _merge_recent_delegation_items(recent_items, [terminal]) or []
+                    elif existing_idx is not None:
                         current_items[existing_idx] = upserted
                     elif len(current_items) < _DELEGATION_COUNT_LIMIT:
                         current_items.append(upserted)
@@ -5457,35 +5967,16 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                     "observed_at": occurred_at.isoformat(),
                     "valid_until": valid_until.isoformat(),
                 }
-                if len(canonical_value_json(value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:
-                    continue
-                prior_by_run[coordinate] = value
-                dedupe_key = hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
-                facts = [
-                    existing
-                    for existing in facts
-                    if not (
-                        existing.family == "delegation"
-                        and existing.subject_key == f"run:{run_id}"
-                        and existing.source == raw_source
-                        and existing.source_epoch == run_id
-                    )
-                ]
-                facts.append(
-                    ReducerFact(
-                        family="delegation",
-                        subject_key=f"run:{run_id}",
-                        source=raw_source,
-                        source_epoch=run_id,
-                        source_seq=None,
-                        dedupe_key=dedupe_key,
-                        evidence_hash=canonical_evidence_hash(value),
-                        value=value,
-                        observed_at=occurred_at,
-                        session_id=session_id,
-                        valid_until=valid_until,
-                        raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
-                    )
+                _append_delegation_head_fact(
+                    coordinate=coordinate,
+                    value=value,
+                    raw_source=raw_source,
+                    run_id=run_id,
+                    session_id=session_id,
+                    occurred_at=occurred_at,
+                    valid_until=valid_until,
+                    dedupe_key=hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest(),
+                    raw_locator=f"runtime:{raw_source}:{event.dedupe_key}",
                 )
                 continue
 
@@ -5693,12 +6184,14 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
         previous_items = {(item.get("kind"), item.get("id")): item for item in prior.get("items", []) or [] if isinstance(item, dict)}
         kinds: dict[str, int] = {}
         items: list[dict[str, Any]] | None = None
+        retired_snapshot_items: list[dict[str, Any]] = []
         raw_items = snapshot.get("items")
         if isinstance(raw_items, list):
             # Reject an oversized or malformed registry rather than manufacture
             # an authoritative empty observation from an invalid producer.
             if len(raw_items) > _DELEGATION_COUNT_LIMIT:
                 continue
+            by_task_id, by_tool_use_id = _session_terminal_notifs(session_id)
             items = []
             seen: set[str] = set()
             invalid = False
@@ -5706,59 +6199,31 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 if not isinstance(raw, Mapping):
                     invalid = True
                     break
-                task_id, kind, task_status = raw.get("id"), raw.get("kind"), raw.get("status")
-                if (
-                    not isinstance(task_id, str)
-                    or not task_id.strip()
-                    or len(task_id) > 256
-                    or not isinstance(kind, str)
-                    or not kind.strip()
-                    or len(kind) > 32
-                    or not isinstance(task_status, str)
-                    or not task_status.strip()
-                    or len(task_status) > 32
-                ):
+                try:
+                    item = _normalize_delegation_item(raw, occurred_at=occurred_at, previous_items=previous_items)
+                except ValueError:
                     invalid = True
                     break
-                if task_id in seen:
+                if item is None:
+                    invalid = True
+                    break
+                if item["id"] in seen:
                     continue
-                seen.add(task_id)
-                previous_item = previous_items.get((kind, task_id), {})
-                registered_at = raw.get("registered_at")
-                if registered_at != previous_item.get("registered_at") and registered_at is not None:
-                    previous_item = {}
-                item = {
-                    "id": task_id,
-                    "kind": kind,
-                    "status": task_status,
-                    "description": raw["description"][:512] if isinstance(raw.get("description"), str) else None,
-                    "first_observed_at": previous_item.get("first_observed_at") or occurred_at.isoformat(),
-                }
-                _copy_delegation_item_metadata(item, raw, previous_item)
-                tool_call_id = raw.get("parent_tool_call_id")
-                if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
-                    item["parent_tool_call_id"] = tool_call_id
-                native_child_id = raw.get("native_child_id")
-                if isinstance(native_child_id, str) and 0 < len(native_child_id) <= 256:
-                    item["native_child_id"] = native_child_id
-                native_child_source_path = raw.get("native_child_source_path")
-                if isinstance(native_child_source_path, str) and 0 < len(native_child_source_path) <= 2048:
-                    item["native_child_source_path"] = native_child_source_path
-                if isinstance(registered_at, str):
-                    item["registered_at"] = registered_at
-                progress = raw.get("native_progress")
-                if isinstance(progress, Mapping):
-                    try:
-                        item["native_progress"] = SessionDelegationProgress.model_validate(progress).model_dump(
-                            mode="json", exclude_none=True
+                seen.add(item["id"])
+                hit = _lookup_terminal_task_notification(item, by_task_id=by_task_id, by_tool_use_id=by_tool_use_id)
+                if hit is not None:
+                    notif_at, norm_status, summary = hit
+                    retired_snapshot_items.append(
+                        _terminal_delegation_record(
+                            item,
+                            status=norm_status,
+                            ended_at=notif_at,
+                            fallback_description=summary,
                         )
-                    except ValueError:
-                        invalid = True
-                        break
-                elif previous_item.get("native_progress") is not None:
-                    item["native_progress"] = previous_item["native_progress"]
+                    )
+                    continue
                 items.append(item)
-                kinds[kind] = kinds.get(kind, 0) + 1
+                kinds[item["kind"]] = kinds.get(item["kind"], 0) + 1
             if invalid:
                 continue
             count = len(items)
@@ -5812,6 +6277,8 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
                 recent_items.append(terminal)
             if raw_recent and not recent_items:
                 recent_items = None
+        if retired_snapshot_items:
+            recent_items = _merge_recent_delegation_items(recent_items or [], retired_snapshot_items)
         raw_freshness = snapshot.get("freshness_ms")
         freshness_ms = (
             raw_freshness

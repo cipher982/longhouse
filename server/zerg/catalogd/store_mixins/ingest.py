@@ -52,6 +52,7 @@ from zerg.catalogd.store import _raw_object_matches
 from zerg.catalogd.store import _raw_object_receipt
 from zerg.catalogd.store import _read_snapshot
 from zerg.catalogd.store import _recompute_render_generation_projection
+from zerg.catalogd.store import _reconcile_delegation_from_task_notifications
 from zerg.catalogd.store import _render_order_columns
 from zerg.catalogd.store import _resolve_session_id_by_provider_session_id
 from zerg.catalogd.store import _resolve_session_id_by_source_path
@@ -448,14 +449,23 @@ class IngestMixin:
                 if not _raw_object_matches(existing, replay_identity):
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 # An exact replay may carry facts a pre-facts engine never
-                # shipped; keep them without moving the raw receipt.
+                # shipped; keep them without moving the raw receipt, while
+                # retiring any open delegation matched by a terminal notification.
+                replay_now = datetime.now(UTC)
                 _insert_provider_facts(
                     connection,
                     session_id=session_key,
                     source_epoch=str(source_epoch),
                     provider_facts=provider_facts,
                     commit_seq=int(_current_commit_seq(connection)),
-                    now=datetime.now(UTC),
+                    now=replay_now,
+                )
+                _reconcile_delegation_from_task_notifications(
+                    connection,
+                    session_id=session_key,
+                    provider_facts=provider_facts,
+                    commit_seq=None,
+                    now=replay_now,
                 )
                 existing_storage = (
                     connection.execute(select(storage_session).where(storage_session.c.session_id == session_key)).mappings().first()
@@ -1644,6 +1654,13 @@ class IngestMixin:
                 connection,
                 session_id=session_key,
                 source_epoch=str(source_epoch),
+                provider_facts=provider_facts,
+                commit_seq=commit_seq,
+                now=commit_time,
+            )
+            _reconcile_delegation_from_task_notifications(
+                connection,
+                session_id=session_key,
                 provider_facts=provider_facts,
                 commit_seq=commit_seq,
                 now=commit_time,

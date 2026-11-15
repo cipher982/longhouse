@@ -193,9 +193,8 @@ function rowFromCard(
     hearth: hearthSnapshotFromSession(session, hearthModeForLamp(status.lampState), nowMs),
     detail: needsUser
       ? pendingInteractionLabel(session.session_state)
-      : status.lampState === "working"
-        ? (delegatedWorkLabel(session.session_state, nowMs) ?? workingStatusLabel(session.session_state))
-        : undefined,
+      : delegatedWorkLabel(session.session_state, nowMs) ??
+        (status.lampState === "working" ? workingStatusLabel(session.session_state) : undefined),
   };
 }
 
@@ -237,7 +236,10 @@ export function buildRailRows(
       needsUser,
       group,
       hearth: listed?.hearth ? { ...listed.hearth, mode: hearthModeForLamp(lamp) } : undefined,
-      detail: lamp === "working" || needsUser ? active.stateText : undefined,
+      detail:
+        lamp === "working" || needsUser || active.statusKey === "delegated_work"
+          ? active.stateText
+          : undefined,
     };
   };
   const index = rows.findIndex((row) => row.id === active.id);

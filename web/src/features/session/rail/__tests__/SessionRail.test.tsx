@@ -640,6 +640,45 @@ describe("rail rows follow the Timeline's tiers", () => {
     expect(railStatusFlag(failed)).toBe("Failed");
     expect(railStatusFlag(question)).toBe("Needs you");
   });
+
+  it("keeps cool tone while preserving delegated work detail for passive background waits", () => {
+    const now = Date.parse("2026-10-06T12:30:00Z");
+    const passiveCard = card("passive-bg", { working_set: "open" }, { activity: "idle" });
+    passiveCard.head.session_state.delegation = {
+      state: "pending",
+      count: 1,
+      kinds: { shell: 1 },
+      observed_at: "2026-10-06T12:29:00Z",
+      valid_until: "2026-10-06T12:40:00Z",
+      items: [{ id: "sh-1", kind: "shell", status: "running", description: "Tail QA" }],
+    };
+    passiveCard.head.session_state.presentation.primary = {
+      key: "delegated_work",
+      label: "Background · 1 command",
+      tone: "idle",
+      observed_at: "2026-10-06T12:29:00Z",
+    };
+    passiveCard.head.session_state.presentation.signal = {
+      state: "quiet",
+      valid_until: "2026-10-06T12:40:00Z",
+    };
+
+    const rows = buildRailRows([passiveCard], now, {
+      id: "passive-bg",
+      title: "Passive bg",
+      provider: "claude",
+      host: "cinder",
+      stateText: "Background · 1 command",
+      tone: "cool",
+      statusKey: "delegated_work",
+    });
+    expect(rows[0].tone).toBe("cool");
+    expect(rows[0].detail).toBe("Background · 1 command");
+
+    const listedOnly = buildRailRows([passiveCard], now, null);
+    expect(listedOnly[0].tone).toBe("cool");
+    expect(listedOnly[0].detail).toBe("Background · 1 command");
+  });
 });
 
 describe("rail resizing", () => {

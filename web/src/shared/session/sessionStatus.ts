@@ -41,7 +41,7 @@ function signalWindowPassed(signal: ServedSignal, nowMs: number): boolean {
 export function workClaimExpired(facts: StatusFacts, nowMs: number): boolean {
   const signal = facts.presentation.signal;
   if (!signal) return true;
-  return (signal.state === "working" || signal.state === "attention") && signalWindowPassed(signal, nowMs);
+  return signalWindowPassed(signal, nowMs);
 }
 
 

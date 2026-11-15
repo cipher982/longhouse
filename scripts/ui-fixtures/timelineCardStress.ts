@@ -365,6 +365,8 @@ export function withServedSignal<T>(state: T): T {
           ? (facts.activity?.valid_until ?? null)
           : null,
     };
+  } else if (primary.key === "delegated_work" && primary.tone === "idle") {
+    signal = { state: "quiet", valid_until: facts.delegation?.valid_until ?? null };
   } else if (primary.key === "idle" || primary.key === "ready" || primary.key === "ended") {
     signal = { state: "quiet", valid_until: null };
   } else signal = { state: "unknown", valid_until: null };

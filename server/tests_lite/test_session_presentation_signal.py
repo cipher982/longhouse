@@ -18,6 +18,7 @@ from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
 from zerg.services.session_state_contract import SessionDelegationFacts
+from zerg.services.session_state_contract import SessionDelegationTaskResponse
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionLaunchFacts
@@ -191,8 +192,67 @@ def test_delegated_work_uses_the_delegation_clock():
         ),
     )
     assert primary.key == "delegated_work"
+    assert primary.tone == "active"
     assert signal.state == "working"
     assert signal.valid_until == delegation_deadline
+
+
+@pytest.mark.parametrize("kind", ["shell", "monitor"])
+def test_passive_background_delegation_serves_quiet_with_delegation_clock(kind):
+    delegation_deadline = NOW + timedelta(minutes=10)
+    primary, signal = _signal(
+        run=_running_run(),
+        activity=SessionActivityFacts(state="quiescent", valid_until=LATER),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=1,
+            kinds={kind: 1},
+            items=[SessionDelegationTaskResponse(id=f"{kind}-1", kind=kind, status="running", description="Wait on job")],
+            valid_until=delegation_deadline,
+        ),
+    )
+    assert primary.key == "delegated_work"
+    assert primary.tone == "idle"
+    assert signal.state == "quiet"
+    assert signal.valid_until == delegation_deadline
+
+
+def test_waiting_subagent_serves_quiet_while_running_subagent_and_shell_serves_working():
+    delegation_deadline = NOW + timedelta(minutes=10)
+    waiting_primary, waiting_signal = _signal(
+        run=_running_run(),
+        activity=SessionActivityFacts(state="quiescent", valid_until=LATER),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=1,
+            kinds={"subagent": 1},
+            items=[SessionDelegationTaskResponse(id="ag-wait", kind="subagent", status="waiting", description="Waiting on child")],
+            valid_until=delegation_deadline,
+        ),
+    )
+    assert waiting_primary.key == "delegated_work"
+    assert waiting_primary.tone == "idle"
+    assert waiting_signal.state == "quiet"
+    assert waiting_signal.valid_until == delegation_deadline
+
+    mixed_primary, mixed_signal = _signal(
+        run=_running_run(),
+        activity=SessionActivityFacts(state="quiescent", valid_until=LATER),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=2,
+            kinds={"subagent": 1, "shell": 1},
+            items=[
+                SessionDelegationTaskResponse(id="sh-1", kind="shell", status="running", description="Tail logs"),
+                SessionDelegationTaskResponse(id="ag-run", kind="subagent", status="running", description="Review patch"),
+            ],
+            valid_until=delegation_deadline,
+        ),
+    )
+    assert mixed_primary.key == "delegated_work"
+    assert mixed_primary.tone == "active"
+    assert mixed_signal.state == "working"
+    assert mixed_signal.valid_until == delegation_deadline
 
 
 def test_starting_is_working_with_no_clock():

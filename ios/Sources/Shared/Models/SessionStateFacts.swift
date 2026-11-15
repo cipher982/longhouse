@@ -50,10 +50,10 @@ extension SessionStateFacts {
     }
 
     /// The first clock boundary that can retire the served claim: the
-    /// signal's own `valid_until`, for a working or attention claim.
+    /// signal's own `valid_until`, when present.
     var workClaimValidUntil: String? {
-        guard let signal, signal.state == "working" || signal.state == "attention" else { return nil }
-        return signal.validUntil
+        guard let signal, let validUntil = signal.validUntil, !validUntil.isEmpty else { return nil }
+        return validUntil
     }
 
     /// Has the served claim outlived its window on this device's clock?

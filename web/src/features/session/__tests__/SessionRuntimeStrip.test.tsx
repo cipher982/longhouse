@@ -726,4 +726,48 @@ describe("SessionRuntimeStrip background registry", () => {
     const capped = buildSessionLedgerState(current, interaction, start + 10_000, true);
     expect(capped.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+3 more)");
   });
+
+  it("shows passive shell command detail in quiet tone without animating work", () => {
+    const start = Date.parse("2026-09-09T19:00:00Z");
+    const current = session("passive-shell-detail", {
+      activity: "quiescent",
+      terminalAttached: true,
+      observedAt: new Date(start).toISOString(),
+      activityValidUntil: new Date(start + 5_000).toISOString(),
+    });
+    current.session_state.delegation = {
+      state: "pending",
+      count: 1,
+      kinds: { shell: 1 },
+      observed_at: new Date(start).toISOString(),
+      valid_until: new Date(start + 60_000).toISOString(),
+      items: [
+        {
+          id: "shell-1",
+          kind: "shell",
+          status: "running",
+          description: "Wait for QA deploy",
+          first_observed_at: new Date(start).toISOString(),
+        },
+      ],
+    };
+    const primary = {
+      key: "delegated_work",
+      label: "Background · 1 command",
+      tone: "idle",
+      observed_at: new Date(start).toISOString(),
+    };
+    current.session_state.presentation = {
+      primary,
+      signal: mirrorServedSignal(primary, {
+        delegation: current.session_state.delegation,
+      }),
+      access: current.session_state.presentation.access,
+    };
+    const state = buildSessionLedgerState(current, interaction, start + 10_000, true);
+    expect(state.tone).toBe("quiet");
+    expect(state.animateWork).toBe(false);
+    expect(state.detailKind).toBe("delegated");
+    expect(state.detail).toBe("Wait for QA deploy");
+  });
 });

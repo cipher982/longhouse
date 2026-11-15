@@ -110,6 +110,11 @@ export function getSessionHeaderState(
     };
   }
 
+  const passiveDelegated = delegatedWorkLabel(facts, nowMs);
+  if (!closed && passiveDelegated) {
+    return { tone: "cool", text: passiveDelegated };
+  }
+
   // No fresh activity claim is not the same as no evidence. The server keeps
   // an at-rest verdict when other evidence settles it: a Console run that
   // ended (Console work only happens inside a run), a Console slot ready for

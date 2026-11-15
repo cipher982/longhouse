@@ -129,6 +129,31 @@ describe("sessionStatus", () => {
     expect(sessionIsWorking(makeSessionStateFacts({ activity: "executing", closed: true }), NOW)).toBe(false);
   });
 
+  it("keeps passive delegated work quiet with label until its claim expires", () => {
+    const facts = makeSessionStateFacts({ activity: "quiescent", activityValidUntil: iso(10_000) });
+    facts.presentation.primary = {
+      key: "delegated_work",
+      label: "Background · 1 command",
+      tone: "idle",
+    };
+    facts.delegation = {
+      state: "pending",
+      count: 1,
+      kinds: { shell: 1 },
+      valid_until: iso(60_000),
+    } as never;
+    reserve(facts);
+
+    expect(servedSignal(facts, NOW)).toBe("quiet");
+    expect(sessionIsWorking(facts, NOW)).toBe(false);
+    expect(workClaimExpired(facts, NOW)).toBe(false);
+    expect(delegatedWorkLabel(facts, NOW)).toBe("Background · 1 command");
+
+    expect(workClaimExpired(facts, NOW + 60_000)).toBe(true);
+    expect(servedSignal(facts, NOW + 60_000)).toBe("unknown");
+    expect(delegatedWorkLabel(facts, NOW + 60_000)).toBeNull();
+  });
+
 
   it("names a tool only while one is executing", () => {
     expect(executingToolName({ state: "executing", tool: " Bash " })).toBe("Bash");

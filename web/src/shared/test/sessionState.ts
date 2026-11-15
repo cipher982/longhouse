@@ -51,6 +51,9 @@ export function mirrorServedSignal(
         : null;
     return { state: "working", valid_until: validUntil };
   }
+  if (primary.key === "delegated_work" && primary.tone === "idle") {
+    return { state: "quiet", valid_until: evidence.delegation?.valid_until ?? null };
+  }
   if (primary.key === "idle" || primary.key === "ready") {
     return { state: "quiet", valid_until: null };
   }

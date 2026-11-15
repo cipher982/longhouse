@@ -40,6 +40,9 @@ extension SessionStateFacts {
             }
             return SessionStateSignal(state: "working", validUntil: validUntil)
         }
+        if primary.key == "delegated_work" && primary.tone == "idle" {
+            return SessionStateSignal(state: "quiet", validUntil: delegationValidUntil)
+        }
         if ["idle", "ready"].contains(primary.key) {
             return SessionStateSignal(state: "quiet", validUntil: nil)
         }

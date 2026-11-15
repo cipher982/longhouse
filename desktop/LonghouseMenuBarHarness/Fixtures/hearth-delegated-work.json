@@ -56,7 +56,7 @@
     "recent_window_minutes": 15
   },
   "managed_summary": {
-    "attached_count": 3,
+    "attached_count": 4,
     "detached_count": 0,
     "degraded_count": 0,
     "orphan_bridge_count": 0,
@@ -94,7 +94,7 @@
         "primary": {
           "key": "delegated_work",
           "label": "Background · 2 agents · 1 command",
-          "tone": "neutral"
+          "tone": "active"
         },
         "signal": {
           "state": "working",
@@ -146,6 +146,70 @@
             "kind": "shell",
             "status": "running",
             "description": "make ship-watch",
+            "session_id": null,
+            "native_progress": null
+          }
+        ]
+      }
+    },
+    {
+      "session_id": "sess-passive-shell",
+      "provider": "claude",
+      "workspace_label": "zerg",
+      "branch": "main",
+      "timeline_title": "Audit chat message spacing and tool collapse",
+      "state": "attached",
+      "ui_presence": "foreground_tui",
+      "last_activity_at": "2026-04-21T18:30:12Z",
+      "bridge_status": "running",
+      "bridge_pid": 27009,
+      "bridge_heartbeat_at": "2026-04-21T18:34:59Z",
+      "reason_codes": [],
+      "authority": "runtime_host",
+      "control": {
+        "ownership": "managed",
+        "connection": "connected",
+        "control_plane": "runtime_host",
+        "actions": {
+          "terminate": {
+            "state": "available"
+          },
+          "reattach": {
+            "state": "unavailable"
+          }
+        }
+      },
+      "presentation": {
+        "primary": {
+          "key": "delegated_work",
+          "label": "Background · 1 command",
+          "tone": "idle"
+        },
+        "signal": {
+          "state": "quiet",
+          "valid_until": "2026-04-21T19:05:00Z"
+        }
+      },
+      "activity": {
+        "state": "idle",
+        "raw_kind": "idle",
+        "tool": null,
+        "observed_at": "2026-04-21T18:30:12Z"
+      },
+      "delegation": {
+        "state": "pending",
+        "count": 1,
+        "kinds": {
+          "shell": 1
+        },
+        "observed_at": "2026-04-21T18:30:12Z",
+        "valid_until": "2026-04-21T19:05:00Z",
+        "items": [
+          {
+            "id": "shell-qa-proof",
+            "kind": "shell",
+            "status": "running",
+            "description": "Wait for QA deploy then run the Phase 4 proof",
             "session_id": null,
             "native_progress": null
           }

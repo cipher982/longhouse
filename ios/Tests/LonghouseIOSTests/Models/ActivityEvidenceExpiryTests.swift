@@ -119,6 +119,24 @@ struct ActivityEvidenceExpiryTests {
         )
         interaction.delegation = facts.delegation
         #expect(interaction.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .attention)
+
+        let passivePrimary = SessionStateLabel(
+            key: "delegated_work", label: "Background · 1 command", tone: "idle", observedAt: nil
+        )
+        var passiveFacts = makeSessionStateFacts(
+            activity: "quiescent",
+            activityValidUntil: "2026-08-23T12:01:00Z",
+            primaryOverride: passivePrimary
+        )
+        passiveFacts.delegation = SessionDelegationFacts(
+            state: "pending", count: 1, kinds: ["shell": 1], source: "claude_hook",
+            observedAt: "2026-08-23T12:00:00Z", validUntil: "2026-08-23T12:30:00Z", items: nil
+        )
+        passiveFacts = passiveFacts.withMirroredSignal()
+        #expect(passiveFacts.servedSignal(asOf: at("2026-08-23T12:05:00Z")) == .quiet)
+        #expect(passiveFacts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .quiet)
+        #expect(passiveFacts.servedSignal(asOf: at("2026-08-23T12:30:00Z")) == .unknown)
+        #expect(passiveFacts.ledgerEvidence(asOf: at("2026-08-23T12:30:00Z")) == .uncertain)
     }
 
     @Test

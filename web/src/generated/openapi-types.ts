@@ -4446,21 +4446,23 @@ export interface components {
         };
         /**
          * DelegationUpdateIn
-         * @description One native child edge or upserted task, never a replacement background registry.
+         * @description One native child edge, upserted task, or subagent/teammate sync, never a shell-wiping registry.
          */
         DelegationUpdateIn: {
             /**
              * Operation
              * @enum {string}
              */
-            operation: "observe" | "remove";
+            operation: "observe" | "remove" | "sync_agents";
             /**
              * Membership
              * @default existing_exact_link_only
              * @enum {string}
              */
             membership: "existing_exact_link_only" | "upsert";
-            item: components["schemas"]["DelegationTaskIn"];
+            item?: components["schemas"]["DelegationTaskIn"] | null;
+            /** Items */
+            items?: components["schemas"]["DelegationTaskIn"][] | null;
             /**
              * Observed At
              * Format: date-time
@@ -4470,7 +4472,7 @@ export interface components {
              * Source Event
              * @enum {string}
              */
-            source_event: "SubagentStart" | "SubagentStop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "TaskCreated" | "TaskCompleted";
+            source_event: "SubagentStart" | "SubagentStop" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "TaskCreated" | "TaskCompleted" | "ClaudeModState";
             /** Source Agent Id */
             source_agent_id?: string | null;
             /** Source Agent Type */

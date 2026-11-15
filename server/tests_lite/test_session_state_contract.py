@@ -32,6 +32,7 @@ from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
 from zerg.services.session_state_contract import SessionDelegationFacts
+from zerg.services.session_state_contract import SessionDelegationTaskResponse
 from zerg.services.session_views import build_compat_runtime_display_response
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
@@ -1665,3 +1666,76 @@ def test_typed_provider_auth_failures_keep_the_sign_in_presentation(terminal_rea
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "provider_auth_required"
     assert facts.presentation.primary.label == "Provider authentication required"
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_label"),
+    [
+        ("shell", "Background · 1 command"),
+        ("monitor", "Background · 1 monitor"),
+    ],
+)
+def test_passive_shell_or_monitor_delegation_stays_open_with_idle_tone_and_quiet_signal(kind, expected_label):
+    delegation_until = NOW + timedelta(minutes=5)
+    facts = _facts(
+        runtime=_runtime(phase="idle", confidence="live"),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=1,
+            kinds={kind: 1},
+            items=[SessionDelegationTaskResponse(id=f"{kind}-1", kind=kind, status="running", description="Wait on build")],
+            observed_at=NOW - timedelta(seconds=5),
+            valid_until=delegation_until,
+        ),
+    )
+
+    assert facts.working_set == "open"
+    assert facts.delegation.state == "pending"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "delegated_work"
+    assert facts.presentation.primary.label == expected_label
+    assert facts.presentation.primary.tone == "idle"
+    assert facts.presentation.signal.state == "quiet"
+    assert facts.presentation.signal.valid_until == delegation_until
+
+
+def test_waiting_subagent_is_idle_quiet_and_running_subagent_with_shell_is_active_working():
+    delegation_until = NOW + timedelta(minutes=5)
+    waiting_facts = _facts(
+        runtime=_runtime(phase="idle", confidence="live"),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=1,
+            kinds={"subagent": 1},
+            items=[SessionDelegationTaskResponse(id="ag-wait", kind="subagent", status="waiting", description="Paused")],
+            observed_at=NOW - timedelta(seconds=5),
+            valid_until=delegation_until,
+        ),
+    )
+    assert waiting_facts.working_set == "open"
+    assert waiting_facts.presentation.primary is not None
+    assert waiting_facts.presentation.primary.key == "delegated_work"
+    assert waiting_facts.presentation.primary.tone == "idle"
+    assert waiting_facts.presentation.signal.state == "quiet"
+    assert waiting_facts.presentation.signal.valid_until == delegation_until
+
+    mixed_facts = _facts(
+        runtime=_runtime(phase="idle", confidence="live"),
+        delegation=SessionDelegationFacts(
+            state="pending",
+            count=2,
+            kinds={"subagent": 1, "shell": 1},
+            items=[
+                SessionDelegationTaskResponse(id="sh-1", kind="shell", status="running", description="Tail logs"),
+                SessionDelegationTaskResponse(id="ag-run", kind="subagent", status="running", description="Audit"),
+            ],
+            observed_at=NOW - timedelta(seconds=5),
+            valid_until=delegation_until,
+        ),
+    )
+    assert mixed_facts.working_set == "open"
+    assert mixed_facts.presentation.primary is not None
+    assert mixed_facts.presentation.primary.key == "delegated_work"
+    assert mixed_facts.presentation.primary.tone == "active"
+    assert mixed_facts.presentation.signal.state == "working"
+    assert mixed_facts.presentation.signal.valid_until == delegation_until

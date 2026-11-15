@@ -662,7 +662,8 @@ public struct MenuBarPanelView: View {
                     }
                 )
             }
-        let delegatedSummary = kind == .working ? session.delegatedWorkSummary(asOf: presentationDate) : nil
+        let showsDelegatedDetail = kind == .working || kind == .background
+        let delegatedSummary = showsDelegatedDetail ? session.delegatedWorkSummary(asOf: presentationDate) : nil
         return HearthSessionEntry(
             id: session.id,
             provider: provider.isEmpty ? "unknown" : provider,
@@ -670,10 +671,10 @@ public struct MenuBarPanelView: View {
             kind: kind,
             heat: session.hearthHeat(asOf: presentationDate),
             subtitle: hearthSubtitle(session, kind: kind),
-            detail: kind == .working ? session.delegatedWorkDetail(asOf: presentationDate) : nil,
+            detail: showsDelegatedDetail ? session.delegatedWorkDetail(asOf: presentationDate) : nil,
             detailLead: delegatedSummary?.lead,
             detailSuffix: delegatedSummary?.suffix,
-            helpText: kind == .working ? session.delegatedWorkTooltip(asOf: presentationDate) : nil,
+            helpText: showsDelegatedDetail ? session.delegatedWorkTooltip(asOf: presentationDate) : nil,
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             seed: Self.stableSeed(session.id),
             openAction: managedOpenAction(for: session),
@@ -688,6 +689,12 @@ public struct MenuBarPanelView: View {
             hash = (hash ^ UInt32(byte)) &* 16_777_619
         }
         return Int(hash % 997)
+    }
+
+    private func hearthStatusSubtitle(_ session: ManagedSessionSnapshot, workspace: String, status: String) -> String {
+        let workspaceOnly = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let context = status.count > 18 && !workspaceOnly.isEmpty ? workspaceOnly : workspace
+        return compactDetailParts([context, status])
     }
 
     func hearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
@@ -708,9 +715,10 @@ public struct MenuBarPanelView: View {
             let isExecuting = session.activity?.state == "executing"
             let tool = isExecuting ? session.activity?.tool?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
             let status = tool?.isEmpty == false ? tool! : (label ?? "Working")
-            let workspaceOnly = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let context = status.count > 18 && !workspaceOnly.isEmpty ? workspaceOnly : workspace
-            return compactDetailParts([context, status])
+            return hearthStatusSubtitle(session, workspace: workspace, status: status)
+        case .background:
+            let status = label?.isEmpty == false ? label! : "Background"
+            return hearthStatusSubtitle(session, workspace: workspace, status: status)
         case .lostControl:
             return managedSessionDetail(session)
         case .quiet:

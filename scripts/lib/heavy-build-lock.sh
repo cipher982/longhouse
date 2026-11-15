@@ -8,6 +8,22 @@
 # would deadlock on ourselves), so that is detected and the command just runs.
 # Without lockf (Linux guests) it just runs too.
 HEAVY_BUILD_LOCK="${LONGHOUSE_HEAVY_BUILD_LOCK:-/tmp/agents/longhouse-heavy-build.lock}"
+HEAVY_BUILD_LOCK_TIMEOUT="${LONGHOUSE_HEAVY_BUILD_LOCK_TIMEOUT_SECS:-2700}"
+
+_lh_describe_heavy_lock_holder() {
+  local pids=""
+  if command -v lsof >/dev/null 2>&1 && [[ -e "$HEAVY_BUILD_LOCK" ]]; then
+    pids="$(lsof -Fp "$HEAVY_BUILD_LOCK" 2>/dev/null | sed -n 's/^p//p' | tr '\n' ',' | sed 's/,$//' || true)"
+  fi
+  if [[ -z "$pids" ]] && command -v pgrep >/dev/null 2>&1; then
+    pids="$(pgrep -f "$HEAVY_BUILD_LOCK" 2>/dev/null | grep -vx "$$" | tr '\n' ',' | sed 's/,$//' || true)"
+  fi
+  if [[ -n "$pids" ]]; then
+    ps -o pid=,etime=,command= -p "$pids" 2>/dev/null | sed 's/^/  holder: /' || true
+  else
+    echo "  holder: unavailable (no open lock descriptor or matching process for $HEAVY_BUILD_LOCK)"
+  fi
+}
 
 heavy_lock_held_by_ancestor() {
   local pid=$$ command first
@@ -27,6 +43,19 @@ lh_run_heavy() {
     return
   fi
   mkdir -p "$(dirname "$HEAVY_BUILD_LOCK")"
-  echo "Waiting for the heavy-build lock ($HEAVY_BUILD_LOCK) if another build holds it..."
-  lockf -k "$HEAVY_BUILD_LOCK" "$@"
+  if ! lockf -k -t 0 "$HEAVY_BUILD_LOCK" true >/dev/null 2>&1; then
+    echo "Waiting for the heavy-build lock ($HEAVY_BUILD_LOCK) held by another process..." >&2
+    _lh_describe_heavy_lock_holder >&2
+  fi
+  if [[ "${HEAVY_BUILD_LOCK_TIMEOUT:-0}" =~ ^[0-9]+$ && "${HEAVY_BUILD_LOCK_TIMEOUT:-0}" -gt 0 ]]; then
+    local rc=0
+    lockf -k -t "$HEAVY_BUILD_LOCK_TIMEOUT" "$HEAVY_BUILD_LOCK" "$@" || rc=$?
+    if [[ "$rc" -eq 75 ]]; then
+      echo "ERROR: Timed out after ${HEAVY_BUILD_LOCK_TIMEOUT}s waiting for $HEAVY_BUILD_LOCK" >&2
+      _lh_describe_heavy_lock_holder >&2
+    fi
+    return "$rc"
+  else
+    lockf -k "$HEAVY_BUILD_LOCK" "$@"
+  fi
 }

@@ -1673,3 +1673,278 @@ def test_task_created_upserts_and_task_completed_moves_to_recent_items(live_cata
     assert after_done["delegation"]["recent_items"][0]["id"] == "task-1"
     assert after_done["delegation"]["recent_items"][0]["status"] == "completed"
     assert after_done["delegation"]["recent_items"][0]["description"] == "Run verification"
+
+
+def test_task_notification_provider_fact_retires_open_monitor_and_populates_recent_items(live_catalog, live_catalog_client):
+    email = "task-notif-retire@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="stop-monitor-1",
+            items=[_task("mon-1", "monitor", "running", "Wait for QA deploy")],
+            snapshot_observed_at=base,
+        ),
+    )
+    opened = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert opened["delegation"]["state"] == "pending"
+    assert opened["delegation"]["count"] == 1
+
+    t_done = base + timedelta(seconds=8)
+    result = live_catalog.rpc(
+        "session.provider_facts.insert.v2",
+        {
+            "session_id": str(session_id),
+            "source_epoch": str(uuid4()),
+            "provider_facts": [
+                {
+                    "kind": "delegation.task_notification",
+                    "at": t_done.isoformat(),
+                    "source_position": 1,
+                    "payload": {
+                        "task_id": "mon-1",
+                        "status": "completed",
+                        "summary": "QA deploy green",
+                    },
+                }
+            ],
+        },
+    )
+    assert result["delegation_reconciled"] == 1
+
+    retired = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert retired["delegation"]["state"] == "none"
+    assert retired["delegation"]["count"] == 0
+    assert retired["delegation"]["items"] == []
+    assert retired["delegation"]["recent_items"][0]["id"] == "mon-1"
+    assert retired["delegation"]["recent_items"][0]["status"] == "completed"
+
+
+def test_intermediate_monitor_tick_without_terminal_status_keeps_monitor_open(live_catalog, live_catalog_client):
+    email = "monitor-tick-open@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="stop-monitor-tick-1",
+            items=[_task("mon-1", "monitor", "running", "Watch CI build")],
+            snapshot_observed_at=base,
+        ),
+    )
+
+    result = live_catalog.rpc(
+        "session.provider_facts.insert.v2",
+        {
+            "session_id": str(session_id),
+            "source_epoch": str(uuid4()),
+            "provider_facts": [
+                {
+                    "kind": "delegation.task_notification",
+                    "at": (base + timedelta(seconds=4)).isoformat(),
+                    "source_position": 1,
+                    "payload": {
+                        "task_id": "mon-1",
+                        "summary": "still polling",
+                    },
+                }
+            ],
+        },
+    )
+    assert result["delegation_reconciled"] == 0
+
+    state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert state["delegation"]["state"] == "pending"
+    assert state["delegation"]["count"] == 1
+    assert state["delegation"]["items"][0]["id"] == "mon-1"
+
+
+def test_terminal_task_notification_arriving_before_delayed_stop_retires_item_immediately(live_catalog, live_catalog_client):
+    email = "notif-before-stop@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    live_catalog.rpc(
+        "session.provider_facts.insert.v2",
+        {
+            "session_id": str(session_id),
+            "source_epoch": str(uuid4()),
+            "provider_facts": [
+                {
+                    "kind": "delegation.task_notification",
+                    "at": (base + timedelta(seconds=5)).isoformat(),
+                    "source_position": 1,
+                    "payload": {
+                        "task_id": "sh-1",
+                        "status": "completed",
+                        "summary": "make test-frontend finished",
+                    },
+                }
+            ],
+        },
+    )
+
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="delayed-stop-sh-1",
+            items=[_task("sh-1", "shell", "running", "make test-frontend")],
+            snapshot_observed_at=base,
+        ),
+    )
+
+    state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert state["delegation"]["state"] == "none"
+    assert state["delegation"]["count"] == 0
+    assert state["delegation"]["recent_items"][0]["id"] == "sh-1"
+    assert state["delegation"]["recent_items"][0]["status"] == "completed"
+
+
+def test_claude_mod_state_sync_agents_empty_preserves_running_shell(live_catalog, live_catalog_client):
+    email = "mod-sync-preserves-shell@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="stop-shell-keep",
+            items=[_task("sh-1", "shell", "running", "lockf build")],
+            snapshot_observed_at=base,
+        ),
+    )
+
+    t_sync = base + timedelta(seconds=3)
+    sync_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "hook_event_name": "ClaudeModState",
+            "occurred_at": t_sync.isoformat(),
+            "dedupe_key": "mod-sync-empty-1",
+            "delegation_update": {
+                "operation": "sync_agents",
+                "source_event": "ClaudeModState",
+                "observed_at": t_sync.isoformat(),
+                "items": [],
+            },
+        },
+    )
+    assert sync_resp.status_code == 204, sync_resp.text
+
+    state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert state["delegation"]["state"] == "pending"
+    assert state["delegation"]["count"] == 1
+    assert state["delegation"]["items"][0]["id"] == "sh-1"
+
+
+def test_claude_mod_state_sync_agents_retires_subagent_while_preserving_shell(live_catalog, live_catalog_client):
+    email = "mod-sync-mixed@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=20)
+
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=base,
+            dedupe_key="stop-shell-mixed",
+            items=[_task("sh-1", "shell", "running", "lockf build")],
+            snapshot_observed_at=base,
+        ),
+    )
+
+    t_add = base + timedelta(seconds=2)
+    add_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "hook_event_name": "ClaudeModState",
+            "occurred_at": t_add.isoformat(),
+            "dedupe_key": "mod-sync-add-1",
+            "delegation_update": {
+                "operation": "sync_agents",
+                "source_event": "ClaudeModState",
+                "observed_at": t_add.isoformat(),
+                "items": [
+                    {
+                        "id": "ag-1",
+                        "kind": "subagent",
+                        "status": "running",
+                        "description": "Audit spacing",
+                    }
+                ],
+            },
+        },
+    )
+    assert add_resp.status_code == 204, add_resp.text
+    after_add = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_add["delegation"]["count"] == 2
+
+    t_clear = base + timedelta(seconds=6)
+    clear_resp = live_catalog_client.post(
+        "/agents/presence",
+        headers={"X-Agents-Token": token},
+        json={
+            "session_id": str(session_id),
+            "provider": PROVIDER,
+            "run_id": run_id,
+            "hook_event_name": "ClaudeModState",
+            "occurred_at": t_clear.isoformat(),
+            "dedupe_key": "mod-sync-clear-1",
+            "delegation_update": {
+                "operation": "sync_agents",
+                "source_event": "ClaudeModState",
+                "observed_at": t_clear.isoformat(),
+                "items": [],
+            },
+        },
+    )
+    assert clear_resp.status_code == 204, clear_resp.text
+    after_clear = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after_clear["delegation"]["count"] == 1
+    assert after_clear["delegation"]["items"][0]["id"] == "sh-1"
+    assert after_clear["delegation"]["recent_items"][0]["id"] == "ag-1"
+    assert after_clear["delegation"]["recent_items"][0]["status"] == "completed"

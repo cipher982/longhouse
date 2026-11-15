@@ -165,6 +165,7 @@ extension HealthSnapshot {
         let sessions = currentManagedSessions
         var needsUser = 0
         var working = 0
+        var background = 0
         var blocked = 0
         var unavailable = 0
         var unknown = 0
@@ -176,6 +177,8 @@ extension HealthSnapshot {
             switch attention {
             case .working:
                 working += 1
+            case .idle where session.hasPassiveDelegatedWork(asOf: referenceDate):
+                background += 1
             case .blocked where !explicitlyNeedsUser:
                 blocked += 1
             case .phaseUnavailable:
@@ -188,7 +191,7 @@ extension HealthSnapshot {
                 break
             }
         }
-        let idle = max(0, sessions.count - needsUser - working - blocked - degraded - unavailable - unknown)
+        let idle = max(0, sessions.count - needsUser - working - background - blocked - degraded - unavailable - unknown)
 
         let repairReasons: Set<String> = [
             "storage_v2_outbox_unreadable",
@@ -341,8 +344,12 @@ extension HealthSnapshot {
                 return "Local status is stale"
             case .unavailable:
                 return "Current local status unavailable"
+            case .normal where working > 0 && background > 0:
+                return "\(working) agent\(working == 1 ? "" : "s") working · \(background) background"
             case .normal where working > 0:
                 return "\(working) agent\(working == 1 ? "" : "s") working"
+            case .normal where background > 0:
+                return "\(background) session\(background == 1 ? "" : "s") waiting on background"
             case .normal where !sessions.isEmpty:
                 // "Idle" only when every session is observed idle; missing
                 // phase evidence is not idleness.

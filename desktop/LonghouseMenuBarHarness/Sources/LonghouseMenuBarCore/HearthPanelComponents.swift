@@ -6,8 +6,10 @@ enum HearthSessionKind: Int, Comparable {
     case needsYou
     /// Blocked or stalled: waiting on something the user may need to clear.
     case blocked
-    /// Thinking, executing, starting.
+    /// Thinking, executing, starting, or active delegated subagents.
     case working
+    /// Waiting on passive background work (shells, monitors, waiting subagents): unlit coal bed.
+    case background
     /// Longhouse lost its control path (terminal detached, bridge degraded).
     case lostControl
     /// Idle, ended, unknown or without live status: folded into one line.
@@ -28,6 +30,7 @@ extension ManagedSessionSnapshot {
         if attention == .blocked { return .blocked }
         if needsManagedSessionAttention { return .lostControl }
         if attention == .working { return .working }
+        if hasPassiveDelegatedWork(asOf: now) { return .background }
         return .quiet
     }
 
@@ -39,6 +42,7 @@ extension ManagedSessionSnapshot {
         switch hearthKind(asOf: now) {
         case .needsYou: return 0.26
         case .blocked: return 0.16
+        case .background: return 0.08
         case .lostControl, .quiet: return 0.04
         case .working:
             switch presentation?.primary?.key {

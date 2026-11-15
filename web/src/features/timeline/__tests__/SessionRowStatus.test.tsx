@@ -121,4 +121,43 @@ describe("SessionRow status label", () => {
     expect(activity).toHaveAttribute("data-signal", "closed");
     expect(row).toHaveAttribute("data-closed", "true");
   });
+
+  it("renders passive background shell as quiet signal with Background label until delegation window expires", () => {
+    const facts = makeSessionStateFacts({
+      activity: "quiescent",
+      observedAt: "2026-05-19T15:59:00Z",
+      activityValidUntil: "2026-05-19T16:05:00Z",
+    });
+    facts.delegation = {
+      state: "pending",
+      count: 1,
+      kinds: { shell: 1 },
+      observed_at: "2026-05-19T15:59:00Z",
+      valid_until: "2026-05-19T16:10:00Z",
+      items: [
+        {
+          id: "shell-1",
+          kind: "shell",
+          status: "running",
+          description: "Wait on QA",
+          first_observed_at: "2026-05-19T15:59:00Z",
+        },
+      ],
+    };
+    facts.presentation.primary = {
+      key: "delegated_work",
+      label: "Background · 1 command",
+      tone: "idle",
+      observed_at: "2026-05-19T15:59:00Z",
+    };
+    facts.presentation.signal = mirrorServedSignal(facts.presentation.primary, {
+      delegation: facts.delegation,
+    });
+    renderRow(card(facts));
+
+    const row = screen.getByTestId("session-row");
+    const activity = row.querySelector(".inbox-row-activity");
+    expect(activity).toHaveTextContent("Background · 1 command");
+    expect(activity).toHaveAttribute("data-signal", "quiet");
+  });
 });

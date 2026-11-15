@@ -44,6 +44,7 @@ from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from pydantic import Field
+from pydantic import model_validator
 from sqlalchemy.orm import Session
 
 from zerg.auth.caller import caller_principal
@@ -145,11 +146,12 @@ class DelegationSnapshotIn(UTCBaseModel):
 
 
 class DelegationUpdateIn(UTCBaseModel):
-    """One native child edge or upserted task, never a replacement background registry."""
+    """One native child edge, upserted task, or subagent/teammate sync, never a shell-wiping registry."""
 
-    operation: Literal["observe", "remove"]
+    operation: Literal["observe", "remove", "sync_agents"]
     membership: Literal["existing_exact_link_only", "upsert"] = "existing_exact_link_only"
-    item: DelegationTaskIn
+    item: DelegationTaskIn | None = None
+    items: list[DelegationTaskIn] | None = Field(default=None, max_length=256)
     observed_at: datetime
     source_event: Literal[
         "SubagentStart",
@@ -159,10 +161,25 @@ class DelegationUpdateIn(UTCBaseModel):
         "PostToolUseFailure",
         "TaskCreated",
         "TaskCompleted",
+        "ClaudeModState",
     ]
     source_agent_id: str | None = Field(default=None, min_length=1, max_length=256)
     source_agent_type: str | None = Field(default=None, max_length=256)
     source_agent_transcript_path: str | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def _validate_operation_shape(self) -> DelegationUpdateIn:
+        if self.operation == "sync_agents":
+            if self.source_event != "ClaudeModState":
+                raise ValueError("sync_agents requires source_event='ClaudeModState'")
+            if self.items is None or self.item is not None:
+                raise ValueError("sync_agents requires items and must not include item")
+        else:
+            if self.source_event == "ClaudeModState":
+                raise ValueError("ClaudeModState delegation_update must use operation='sync_agents'")
+            if self.item is None or self.items is not None:
+                raise ValueError(f"{self.operation} requires item and must not include items")
+        return self
 
 
 class PresenceIn(UTCBaseModel):

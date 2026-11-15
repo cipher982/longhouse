@@ -1110,6 +1110,22 @@ def _delegation_label(delegation: SessionDelegationFacts) -> str:
     return "Background · " + (" · ".join(parts) if parts else fallback)
 
 
+_ACTIVE_AGENT_KINDS = frozenset({"subagent", "teammate"})
+_PASSIVE_OR_TERMINAL_DELEGATION_STATUSES = frozenset(
+    {"waiting", "completed", "failed", "killed", "stopped", "cancelled", "canceled", "aborted", "timed_out"}
+)
+
+
+def _delegation_has_active_agent(delegation: SessionDelegationFacts) -> bool:
+    """Whether any delegated task is an actively working subagent/teammate rather than a passive wait."""
+    if delegation.items is not None:
+        return any(
+            item.kind in _ACTIVE_AGENT_KINDS and item.status.strip().lower() not in _PASSIVE_OR_TERMINAL_DELEGATION_STATUSES
+            for item in delegation.items
+        )
+    return any(delegation.kinds.get(kind, 0) > 0 for kind in _ACTIVE_AGENT_KINDS)
+
+
 def helm_idle_persists(
     *,
     mode: SessionMode,
@@ -1217,7 +1233,7 @@ def _primary(
         return SessionPresentationLabel(
             key="delegated_work",
             label=_delegation_label(delegation),
-            tone="active",
+            tone="active" if _delegation_has_active_agent(delegation) else "idle",
             observed_at=delegation.observed_at,
         )
 
@@ -1351,6 +1367,8 @@ def _signal(
         else:
             valid_until = None
         return SessionPresentationSignal(state="working", valid_until=valid_until)
+    if primary.key == "delegated_work" and primary.tone == "idle":
+        return SessionPresentationSignal(state="quiet", valid_until=delegation.valid_until)
     if primary.key in _QUIET_PRIMARY_KEYS:
         return SessionPresentationSignal(state="quiet")
     return SessionPresentationSignal(state="unknown")

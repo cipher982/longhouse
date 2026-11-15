@@ -4031,13 +4031,22 @@ struct LonghouseMenuBarCoreTests {
             "Monitoring terminal-truth.yml CI run",
         ])
 
+        let passive = try #require(entries.first { $0.id == "sess-passive-shell" })
+        #expect(passive.kind == .background)
+        #expect(passive.heat <= 0.12)
+        #expect(passive.subtitle == "zerg · Background · 1 command")
+        #expect(passive.detail == "Wait for QA deploy then run the Phase 4 proof")
+        #expect(snapshot.menuBarPresentation(relativeTo: collectedAt).headline == "2 agents working · 1 background")
+
         let expiredAt = try #require(HealthSnapshot.parseISO8601("2026-04-21T19:06:00Z"))
-        let expiredEntry = panel(snapshot, presentationDate: expiredAt)
-            .hearthEntries
-            .first { $0.id == "sess-ux-progress" }
+        let expiredEntries = panel(snapshot, presentationDate: expiredAt).hearthEntries
+        let expiredEntry = expiredEntries.first { $0.id == "sess-ux-progress" }
         #expect(expiredEntry?.detail == nil)
         #expect(expiredEntry?.helpText == nil)
         #expect(expiredEntry?.subagentLinks.isEmpty == true)
+        let expiredPassive = expiredEntries.first { $0.id == "sess-passive-shell" }
+        #expect(expiredPassive?.kind == .quiet)
+        #expect(expiredPassive?.detail == nil)
     }
 
     @Test
@@ -4433,6 +4442,79 @@ struct LonghouseMenuBarCoreTests {
         )
         #expect(unsignalled.menuBarAttentionKind(asOf: now) == .unknown("executing"))
         #expect(session("idle", "quiet").menuBarAttentionKind(asOf: now) == .idle)
+
+        let passiveDelegation = session("delegated_work", "quiet", validUntil: "2026-10-07T12:01:00Z")
+        #expect(passiveDelegation.menuBarAttentionKind(asOf: now) == .idle)
+        #expect(passiveDelegation.hasPassiveDelegatedWork(asOf: now))
+        #expect(passiveDelegation.hearthKind(asOf: now) == .background)
+        #expect(
+            session("delegated_work", "quiet", validUntil: "2026-10-07T11:59:00Z").menuBarAttentionKind(asOf: now)
+                == .unknown("activity unknown")
+        )
+    }
+
+    @Test
+    func menuBarHeadlineSeparatesPassiveBackgroundSessionsFromWorkingAgents() throws {
+        let now = try #require(HealthSnapshot.parseISO8601("2026-10-07T12:00:00Z"))
+        let json = """
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_sessions": [
+            {
+              "session_id": "sess-passive",
+              "provider": "claude",
+              "workspace_label": "zerg",
+              "branch": "main",
+              "state": "attached",
+              "ui_presence": "foreground_tui",
+              "last_activity_at": "2026-10-07T11:59:30Z",
+              "reason_codes": [],
+              "authority": "runtime_host",
+              "presentation": {
+                "primary": {
+                  "key": "delegated_work",
+                  "label": "Background · 1 command",
+                  "tone": "idle"
+                },
+                "signal": {
+                  "state": "quiet",
+                  "valid_until": "2026-10-07T12:30:00Z"
+                }
+              }
+            },
+            {
+              "session_id": "sess-idle",
+              "provider": "claude",
+              "workspace_label": "zerg",
+              "branch": "main",
+              "state": "attached",
+              "ui_presence": "foreground_tui",
+              "last_activity_at": "2026-10-07T11:50:00Z",
+              "reason_codes": [],
+              "authority": "runtime_host",
+              "presentation": {
+                "primary": {
+                  "key": "idle",
+                  "label": "Idle",
+                  "tone": "neutral"
+                },
+                "signal": {
+                  "state": "quiet",
+                  "valid_until": null
+                }
+              }
+            }
+          ]
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let snapshot = try decoder.decode(HealthSnapshot.self, from: Data(json.utf8))
+        #expect(snapshot.menuBarPresentation(relativeTo: now).headline == "1 session waiting on background")
     }
 
     @Test
