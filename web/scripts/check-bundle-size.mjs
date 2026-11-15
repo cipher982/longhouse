@@ -41,11 +41,19 @@ const distAssetsDir = path.join(distDir, 'assets');
 // only into prerendered docs pages): 141.1 KiB, index -15.7, ui -0.2, and a
 // 0.5 KiB shared useScrollActivity chunk. Budget unchanged; new docs pages now
 // grow the docs chunk, not the entry.
+//
+// Re-measured 2026-11-15 (CI run 43749210147, bc230586f): 490.5 KiB JS total
+// gzip (+4.8 KiB over green run 43745121419 at 485.7 KiB on 7e30dc650),
+// 141.7 KiB entry JS (+0.1 KiB), 57.2 KiB CSS (+1.0 KiB), 547.7 KiB combined
+// (+5.9 KiB). Zero dependency changes; growth sits in lazy session-detail and
+// workspace chunks for Claude fidelity UI (SessionDetailPage ~83.1 KiB gz,
+// SessionsPage ~23.7 KiB gz locally). Margin rule: jsTotalGzip 490.5 + 16.6 =
+// 507.1 -> 510 KiB; totalGzip 547.7 + 16.6 = 564.3 -> 565 KiB.
 const budgets = {
-  jsTotalGzip: 490 * 1024,
+  jsTotalGzip: 510 * 1024,
   entryGzip: 160 * 1024,
   cssTotalGzip: 70 * 1024,
-  totalGzip: 550 * 1024,
+  totalGzip: 565 * 1024,
   largestJsGzip: 280 * 1024,
 };
 
