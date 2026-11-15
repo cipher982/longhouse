@@ -236,7 +236,13 @@ fn rewritten_for_host(
         changed = true;
     }
     if !capabilities.render_item_facts {
-        if let Some(records) = envelope["render"]["records"].as_array_mut() {
+        // `get_mut`, never IndexMut: indexing a null render mutably would
+        // turn it into `{"records": null}`.
+        if let Some(records) = envelope
+            .get_mut("render")
+            .and_then(|render| render.get_mut("records"))
+            .and_then(serde_json::Value::as_array_mut)
+        {
             for record in records
                 .iter_mut()
                 .filter_map(serde_json::Value::as_object_mut)
@@ -1343,6 +1349,16 @@ mod tests {
             items(&sent(&capabilities())),
             0,
             "an older host gets no item field"
+        );
+        // A Phase 4 host renders a witnessed Claude envelope itself: it gets
+        // no render at all, not an empty one.
+        let mut phase_four = capabilities();
+        phase_four.host_render = true;
+        let to_phase_four = sent(&phase_four);
+        assert!(
+            to_phase_four["render"].is_null(),
+            "{}",
+            to_phase_four["render"]
         );
     }
 
