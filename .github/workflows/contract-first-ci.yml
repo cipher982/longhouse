@@ -588,3 +588,11 @@ jobs:
         if: ${{ !cancelled() && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') }}
         timeout-minutes: 15
         run: make test-web-transcript-stability
+
+      # Sends a message through the web SessionDetailPage under recorded
+      # orderings of the server facts that follow a send, and fails when the
+      # message blanks, shows twice, remounts, changes shape or moves.
+      - name: Replay a send's handoff from outbox to transcript on the web
+        if: ${{ !cancelled() && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') }}
+        timeout-minutes: 10
+        run: make test-web-send-handoff

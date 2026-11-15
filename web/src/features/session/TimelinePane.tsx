@@ -61,7 +61,9 @@ import { useScrollToLoad } from "./useScrollToLoad";
 import { CodeFence, detectLanguage } from "./CodeFence";
 import { EditDiffView } from "./EditDiffView";
 import { MarkdownBody } from "./MarkdownBody";
-import { OutboxRow, type OutboxEntry } from "./OutboxRow";
+import { OUTBOX_STATE_LABEL, OutboxRow, type OutboxEntry } from "./OutboxRow";
+import { matchReceiptsToTranscript } from "./chat/unrecordedInputs";
+import type { QueuedInputSummary } from "@/shared/api/sessionChat";
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 import { errorDetails } from "@/shared/ui/errorDetails";
@@ -143,6 +145,11 @@ function timelineItemTimeMs(item: TimelineItem): number {
             ? item.group.timestamp
             : item.event.timestamp;
   return parseUTC(timestamp).getTime();
+}
+
+/** The React key a send and its transcript echo share. */
+function sendKey(clientRequestId: string): string {
+  return `send:${clientRequestId}`;
 }
 
 function outboxTimeMs(entry: OutboxEntry): number {
@@ -474,14 +481,26 @@ function withoutImageTokenLines(text: string): string {
   return text.replace(IMAGE_TOKEN_LINE_RE, "").trim();
 }
 
+/**
+ * A transcript message. A user's send in flight renders through this same
+ * component (`send` set, a stand-in event built from the outbox entry) under
+ * the same React key its transcript echo will get, so the echo fills in the
+ * row the user is already looking at instead of replacing it.
+ */
 const MessageRow = memo(function MessageRow({
   event,
   renderMedia,
   provider,
+  send = null,
+  viaLonghouse = false,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
   renderMedia: boolean;
   provider: string | null;
+  /** Delivery state of a send the transcript has not echoed yet. */
+  send?: OutboxEntry | null;
+  /** The row echoes a Longhouse send the server did not stamp with its origin. */
+  viaLonghouse?: boolean;
 }) {
   const isUser = event.role === "user";
   const split = isUser ? splitAttachmentsBlock(getTimelineMessagePreview(event)) : null;
@@ -492,7 +511,8 @@ const MessageRow = memo(function MessageRow({
   const preview = isUser && showsImages ? withoutImageTokenLines(basePreview) : basePreview;
   const outside = isOutsideActiveContext(event);
   const isAssistant = event.role === "assistant";
-  const isLonghouseAuthored = event.input_origin?.authored_via === "longhouse";
+  const isLonghouseAuthored =
+    event.input_origin?.authored_via === "longhouse" || viaLonghouse || Boolean(send);
   const isLong = messageLineCount(preview) > MESSAGE_COLLAPSE_LINE_LIMIT;
   const [expanded, setExpanded] = useState(false);
   const visible = isLong && !expanded
@@ -501,11 +521,13 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <div
-      id={`event-${event.id}`}
-      data-testid="session-timeline-row"
+      id={send ? undefined : `event-${event.id}`}
+      data-testid={send ? "session-outbox-row" : "session-timeline-row"}
       data-row-kind="message"
       data-message-role={event.role}
-      className={`tl-msg tl-msg--${event.role}`}
+      data-outbox-state={send?.state}
+      aria-busy={send?.state === "sending" || undefined}
+      className={`tl-msg tl-msg--${event.role}${send ? ` tl-msg--outbox tl-msg--outbox-${send.state}` : ""}`}
     >
       <div className="tl-msg__head">
         {isAssistant || isUser ? (
@@ -522,7 +544,7 @@ const MessageRow = memo(function MessageRow({
             className="tl-msg__who"
             {...{ elementtiming: "longhouse-session-timeline-row" }}
           >
-            You asked at {formatTime(event.timestamp)}
+            {event.timestamp ? `You asked at ${formatTime(event.timestamp)}` : "You"}
           </span>
         ) : (
           <span
@@ -541,7 +563,31 @@ const MessageRow = memo(function MessageRow({
             Longhouse
           </span>
         ) : null}
+        {send ? (
+          <span className="tl-msg__outbox-status" role="status">
+            {OUTBOX_STATE_LABEL[send.state]}
+            {send.detail ? (
+              <span className="tl-msg__outbox-detail"> — {send.detail}</span>
+            ) : null}
+          </span>
+        ) : null}
+        {send?.actions?.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className="tl-msg__outbox-action"
+            onClick={action.onClick}
+            disabled={action.disabled}
+          >
+            {action.label}
+          </button>
+        ))}
       </div>
+      {send?.warning ? (
+        <div className="tl-msg__outbox-warning" role="note">
+          {send.warning}
+        </div>
+      ) : null}
       <div className="tl-msg__body">
         {isAssistant || isUser ? (
           <MarkdownBody content={visible} />
@@ -550,6 +596,15 @@ const MessageRow = memo(function MessageRow({
         )}
         {isUser && (attachmentUrls.length > 0 || (split?.imageCount ?? 0) > 0) ? (
           <AttachedImages urls={attachmentUrls} count={Math.max(split?.imageCount ?? 0, attachmentUrls.length)} />
+        ) : null}
+        {send?.attachments && send.attachments.length > 0 ? (
+          <div className="tl-msg__outbox-attachments" aria-label="Attachments">
+            {send.attachments.map((attachment) => (
+              <span key={`${attachment.filename}:${attachment.byteSize ?? ""}`}>
+                {attachment.filename}
+              </span>
+            ))}
+          </div>
         ) : null}
         <MediaStrip mediaRefs={mediaRefs} />
         {isLong ? (
@@ -1634,12 +1689,57 @@ export const TimelinePane = memo(function TimelinePane({
     livePreviewStart -= 1;
   }
   const hasLivePreview = livePreviewStart < filteredItems.length;
-  const tailOutbox = visibleOutbox.filter((entry) => !entry.at);
+
+  // One send, one row. A send's row and its transcript echo share the React
+  // key `send:<client_request_id>`, and in the render where the loaded rows
+  // show the echo the outbox row is dropped. The echo is found by the
+  // request id the server stamps on it, or by the same text match the chat
+  // uses for echoes the server could not link; a row matched by text keeps
+  // that key for as long as this pane lives.
+  const sendKeyByEventRef = useRef(new Map<string, string>());
+  const echoedSendKeys = useMemo(() => {
+    const echoed = new Set<string>();
+    const sends = outbox.filter(
+      (entry) => entry.clientRequestId && entry.origin !== "wake" && entry.origin !== "longhouse",
+    );
+    if (sends.length === 0) return echoed;
+    const asReceipts = new Map<QueuedInputSummary, OutboxEntry>();
+    for (const entry of sends) {
+      asReceipts.set(
+        {
+          client_request_id: entry.clientRequestId,
+          text: entry.text,
+          intent: "auto",
+          status: "delivered",
+          created_at: entry.at ?? entry.sentAt ?? null,
+        },
+        entry,
+      );
+    }
+    for (const [receipt, eventId] of matchReceiptsToTranscript([...asReceipts.keys()], filteredItems)) {
+      const entry = asReceipts.get(receipt);
+      if (!entry?.clientRequestId) continue;
+      const key = sendKey(entry.clientRequestId);
+      echoed.add(key);
+      sendKeyByEventRef.current.set(String(eventId), key);
+    }
+    return echoed;
+  }, [filteredItems, outbox]);
+  const isShownSend = (entry: OutboxEntry) =>
+    !entry.clientRequestId || !echoedSendKeys.has(sendKey(entry.clientRequestId));
+
+  // The live preview is the provider answering now, so a send it answers came
+  // before it: sending, sent and unconfirmed sends render above the preview
+  // rows, where the transcript echo will land. Queued sends wait for the next
+  // turn and failed ones sit by the composer, so those stay at the tail.
+  const tailOutbox = visibleOutbox.filter((entry) => !entry.at && isShownSend(entry));
+  const answersThisTurn = (entry: OutboxEntry) =>
+    entry.state === "sending" || entry.state === "sent" || entry.state === "unconfirmed";
   const outboxBeforePreview = hasLivePreview
-    ? tailOutbox.filter((entry) => entry.state === "sent")
+    ? tailOutbox.filter(answersThisTurn)
     : EMPTY_OUTBOX;
   const outboxAfterPreview = hasLivePreview
-    ? tailOutbox.filter((entry) => entry.state !== "sent")
+    ? tailOutbox.filter((entry) => !answersThisTurn(entry))
     : tailOutbox;
   // A settled input the transcript does not show stands at the time it was
   // sent. One older than the loaded page waits for that page: placing it at
@@ -1655,6 +1755,7 @@ export const TimelinePane = memo(function TimelinePane({
       ? outbox
       : EMPTY_OUTBOX;
   const placedOutbox = placedSource
+    .filter(isShownSend)
     .filter((entry) => {
       const at = outboxTimeMs(entry);
       if (!Number.isFinite(at)) return false;
@@ -1668,15 +1769,61 @@ export const TimelinePane = memo(function TimelinePane({
     for (const item of durableItems) {
       const itemMs = timelineItemTimeMs(item);
       while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
-        const entry = placedOutbox[next++];
-        rows.push(<OutboxRow key={entry.key} entry={entry} />);
+        rows.push(renderOutboxEntry(placedOutbox[next++]));
       }
       rows.push(renderTimelineItem(item));
     }
     for (const entry of placedOutbox.slice(next)) {
-      rows.push(<OutboxRow key={entry.key} entry={entry} />);
+      rows.push(renderOutboxEntry(entry));
     }
     return rows;
+  }
+
+  // Every row in one array: a send moving from the tail into the durable
+  // rows keeps its key, so React moves its DOM node instead of remounting it.
+  function renderRows(): ReactNode[] {
+    return [
+      ...renderDurableRows(),
+      ...outboxBeforePreview.map(renderOutboxEntry),
+      ...filteredItems.slice(livePreviewStart).map(renderTimelineItem),
+      ...outboxAfterPreview.map(renderOutboxEntry),
+    ];
+  }
+
+  function renderOutboxEntry(entry: OutboxEntry): ReactNode {
+    if (entry.origin === "wake" || entry.origin === "longhouse") {
+      return <OutboxRow key={entry.key} entry={entry} />;
+    }
+    const key = entry.clientRequestId ? sendKey(entry.clientRequestId) : entry.key;
+    return (
+      <MessageRow
+        key={key}
+        event={{
+          id: key,
+          role: "user",
+          content_text: entry.text,
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: entry.at ?? entry.sentAt ?? "",
+          input_origin: {
+            authored_via: "longhouse",
+            client_request_id: entry.clientRequestId ?? null,
+          },
+        }}
+        renderMedia={false}
+        provider={provider}
+        send={entry}
+      />
+    );
+  }
+
+  function messageRowKey(event: AgentEvent): string | number {
+    if (event.role !== "user" || event.is_head_branch === false) return event.id;
+    const requestId = event.input_origin?.client_request_id;
+    if (requestId) return sendKey(requestId);
+    return sendKeyByEventRef.current.get(String(event.id)) ?? event.id;
   }
 
   const renderTimelineItem = (item: TimelineItem) => {
@@ -1725,7 +1872,16 @@ export const TimelinePane = memo(function TimelinePane({
         );
       }
 
-      return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} provider={provider} />;
+      const key = messageRowKey(item.event);
+      return (
+        <MessageRow
+          key={key}
+          event={item.event}
+          renderMedia={renderMedia}
+          provider={provider}
+          viaLonghouse={typeof key === "string" && key.startsWith("send:")}
+        />
+      );
     }
 
     if (item.kind === "tool") {
@@ -1955,14 +2111,7 @@ export const TimelinePane = memo(function TimelinePane({
           // normal (non-scrolling) block, so its height is the true content
           // height and the line spans the whole transcript.
           <div className="timeline-pane__rows">
-          {renderDurableRows()}
-          {outboxBeforePreview.map((entry) => (
-            <OutboxRow key={entry.key} entry={entry} />
-          ))}
-          {filteredItems.slice(livePreviewStart).map(renderTimelineItem)}
-          {outboxAfterPreview.map((entry) => (
-            <OutboxRow key={entry.key} entry={entry} />
-          ))}
+          {renderRows()}
           </div>
         )}
         {rail ? <div className="timeline-pane__rail-anchor">{rail}</div> : null}

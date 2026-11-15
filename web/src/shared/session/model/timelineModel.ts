@@ -780,7 +780,9 @@ function isLivePreviewEvent(event: AgentEvent | null | undefined): boolean {
 }
 
 export function isLivePreviewTimelineItem(item: TimelineItem): boolean {
-  if (item.kind === "message") return isLivePreviewEvent(item.event);
+  // A live thinking preview renders as a reasoning row; it is the provider
+  // answering now just as a live reply is.
+  if (item.kind === "message" || item.kind === "reasoning") return isLivePreviewEvent(item.event);
   if (item.kind === "tool") return isLivePreviewEvent(item.interaction.callEvent);
   return false;
 }

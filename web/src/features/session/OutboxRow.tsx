@@ -1,7 +1,10 @@
 /**
  * One managed input operation owned by the client until the server-authoritative
- * receipt settles it. It renders at the tail of the transcript so text and
- * attachment summaries have one visible owner while delivery is unresolved.
+ * receipt settles it. A user's send renders through the transcript's own
+ * message row (TimelinePane), keyed by its client request id, so the row the
+ * user sees while it is sending is the same element the transcript later
+ * fills in: no remount, no second shape. Wake and Longhouse notices render
+ * here.
  */
 
 /** `sent` is a brief Runtime Host delivery confirmation, independent of transcript echo. */
@@ -26,6 +29,11 @@ export interface OutboxEntryAction {
 
 export interface OutboxEntry {
   key: string;
+  /** The send's idempotency key; the transcript row that echoes it carries
+   *  the same id in input_origin, and both render under one React key. */
+  clientRequestId?: string | null;
+  /** When the user sent it (client clock), for the "You asked at" label. */
+  sentAt?: string | null;
   text: string;
   attachments?: OutboxAttachmentSummary[];
   state: OutboxEntryState;
@@ -42,7 +50,7 @@ export interface OutboxEntry {
   at?: string | null;
 }
 
-const STATE_LABEL: Record<OutboxEntryState, string> = {
+export const OUTBOX_STATE_LABEL: Record<OutboxEntryState, string> = {
   sending: "Sending…",
   sent: "Sent",
   queued: "Queued · sends after this turn",
@@ -50,6 +58,7 @@ const STATE_LABEL: Record<OutboxEntryState, string> = {
   failed: "Not delivered",
 };
 
+/** A wake or Longhouse notice; user sends render as transcript message rows. */
 export function OutboxRow({ entry }: { entry: OutboxEntry }) {
   if (entry.origin === "wake" || entry.origin === "longhouse") {
     return (
@@ -68,53 +77,5 @@ export function OutboxRow({ entry }: { entry: OutboxEntry }) {
     );
   }
 
-  return (
-    <div
-      className={`tl-msg tl-msg--user tl-msg--outbox tl-msg--outbox-${entry.state}`}
-      data-testid="session-outbox-row"
-      data-outbox-state={entry.state}
-      aria-busy={entry.state === "sending" || undefined}
-    >
-      <div className="tl-msg__head">
-        <span className="tl-msg__node" aria-hidden="true">
-          <span className="tl-msg__node-ring" />
-        </span>
-        <span className="tl-msg__who">You</span>
-        <span className="tl-msg__outbox-status" role="status">
-          {STATE_LABEL[entry.state]}
-          {entry.detail ? (
-            <span className="tl-msg__outbox-detail"> — {entry.detail}</span>
-          ) : null}
-        </span>
-        {entry.actions?.map((action) => (
-          <button
-            key={action.label}
-            type="button"
-            className="tl-msg__outbox-action"
-            onClick={action.onClick}
-            disabled={action.disabled}
-          >
-            {action.label}
-          </button>
-        ))}
-      </div>
-      {entry.warning ? (
-        <div className="tl-msg__outbox-warning" role="note">
-          {entry.warning}
-        </div>
-      ) : null}
-      {entry.text ? (
-        <div className="tl-msg__body tl-msg__plain-ask">{entry.text}</div>
-      ) : null}
-      {entry.attachments && entry.attachments.length > 0 ? (
-        <div className="tl-msg__outbox-attachments" aria-label="Attachments">
-          {entry.attachments.map((attachment) => (
-            <span key={`${attachment.filename}:${attachment.byteSize ?? ""}`}>
-              {attachment.filename}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
+  return null;
 }

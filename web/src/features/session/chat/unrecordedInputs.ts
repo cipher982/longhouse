@@ -1,5 +1,6 @@
 import type { QueuedInputSummary } from "@/shared/api/sessionChat";
 import { parseUTC } from "@/shared/lib/dateUtils";
+import type { AgentEventId } from "@/shared/api/agents";
 import type { TimelineItem } from "@/shared/session/model/types";
 
 /**
@@ -68,7 +69,15 @@ export function receiptsShownByTranscript(
   rows: readonly QueuedInputSummary[],
   items: readonly TimelineItem[] | null | undefined,
 ): Set<QueuedInputSummary> {
-  const shown = new Set<QueuedInputSummary>();
+  return new Set(matchReceiptsToTranscript(rows, items).keys());
+}
+
+/** The same matching, naming the transcript row that shows each receipt. */
+export function matchReceiptsToTranscript(
+  rows: readonly QueuedInputSummary[],
+  items: readonly TimelineItem[] | null | undefined,
+): Map<QueuedInputSummary, AgentEventId> {
+  const shown = new Map<QueuedInputSummary, AgentEventId>();
   if (!items?.length || rows.length === 0) return shown;
   const byRequestId = new Map<string, QueuedInputSummary>();
   const byInputId = new Map<number, QueuedInputSummary>();
@@ -97,7 +106,7 @@ export function receiptsShownByTranscript(
       const owner =
         (requestId ? byRequestId.get(requestId) : undefined) ??
         (inputId != null ? byInputId.get(inputId) : undefined);
-      if (owner) shown.add(owner);
+      if (owner) shown.set(owner, event.id);
       continue;
     }
     const text = normalizeInputText(event.content_text);
@@ -109,7 +118,7 @@ export function receiptsShownByTranscript(
         candidate.text === text &&
         candidate.at <= eventAt + LINK_SKEW_MS,
     );
-    if (match) shown.add(match.row);
+    if (match) shown.set(match.row, event.id);
   }
   return shown;
 }

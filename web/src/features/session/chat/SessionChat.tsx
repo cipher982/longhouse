@@ -70,11 +70,14 @@ import {
   isSettledDelivery,
   receiptsShownByTranscript,
 } from "./unrecordedInputs";
+import { parseUTC } from "@/shared/lib/dateUtils";
 import "./session-chat.css";
 
 interface PendingManagedLocalInput {
   text: string;
   clientRequestId: string;
+  /** When the user sent it (ISO, client clock): the row's "You asked at". */
+  sentAt: string;
   serverInputId: number | null;
   serverLiveInputId?: string | null;
   intent: "auto" | "queue" | "steer";
@@ -605,6 +608,22 @@ function inTranscript(row: { durable_event_id?: string | null } | null | undefin
   return Boolean(row?.durable_event_id);
 }
 
+// A receipt linked to its transcript event says the transcript has the
+// message, but this browser may not have loaded that row yet: the server
+// links the receipt and ingests the row in a race, and the read that brings
+// the row in takes time. Until the loaded rows show it, the receipt keeps the
+// user's row on screen, for at most this long.
+const LINKED_RECEIPT_BRIDGE_MS = 60_000;
+
+function linkedReceiptBridgeEndsAt(row: QueuedInputSummary): number | null {
+  if (!inTranscript(row) || !row.created_at) return null;
+  if (row.origin === "wake" || row.origin === "longhouse" || row.turn?.origin === "wake") {
+    return null;
+  }
+  const created = parseUTC(row.created_at).getTime();
+  return Number.isFinite(created) ? created + LINKED_RECEIPT_BRIDGE_MS : null;
+}
+
 const NONTERMINAL_CONSOLE_TURN_STATES = new Set([
   "queued",
   "starting",
@@ -741,6 +760,9 @@ export function SessionChat({
             return {
               text: metadata.text,
               clientRequestId: metadata.clientRequestId,
+              sentAt: new Date(
+                Number.isFinite(metadata.createdAt) ? metadata.createdAt : Date.now(),
+              ).toISOString(),
               serverInputId: null,
               serverLiveInputId: null,
               intent: metadata.intent,
@@ -1049,6 +1071,28 @@ export function SessionChat({
       })
       .map((pending) => pending.clientRequestId);
     if (linkedIds.length === 0) return;
+    // The receipt row takes over from the pending row in this same render.
+    // Give the receipt list the freshest copy (the exact poll often answers
+    // first) so the row does not fall back to an older state for a frame.
+    const fresher = linkedIds
+      .map((clientRequestId) => exactInputRows.get(clientRequestId))
+      .filter((row): row is QueuedInputSummary => Boolean(row));
+    if (fresher.length > 0) {
+      queryClient.setQueryData<QueuedInputSummary[]>(
+        ["session-inputs", session.id],
+        (current) => {
+          const rows = current ?? [];
+          const byId = new Map(fresher.map((row) => [row.client_request_id, row]));
+          const merged = rows.map((row) => byId.get(row.client_request_id) ?? row);
+          for (const row of fresher) {
+            if (!rows.some((existing) => existing.client_request_id === row.client_request_id)) {
+              merged.push(row);
+            }
+          }
+          return merged;
+        },
+      );
+    }
     for (const clientRequestId of linkedIds) {
       clearInputOutbox(session.id, clientRequestId);
     }
@@ -1058,6 +1102,7 @@ export function SessionChat({
   }, [
     exactInputRows,
     pendingManagedLocalInputs,
+    queryClient,
     queuedInputsQuery.data,
     session.id,
     timelineItems,
@@ -1341,6 +1386,7 @@ export function SessionChat({
       const nextPending: PendingManagedLocalInput = {
         text: message,
         clientRequestId,
+        sentAt: new Date().toISOString(),
         serverInputId: null,
         serverLiveInputId: null,
         intent,
@@ -1356,7 +1402,9 @@ export function SessionChat({
         );
         return existing
           ? current.map((pending) =>
-              pending.clientRequestId === clientRequestId ? nextPending : pending,
+              pending.clientRequestId === clientRequestId
+                ? { ...nextPending, sentAt: pending.sentAt }
+                : pending,
             )
           : [...current, nextPending];
       });
@@ -2188,11 +2236,37 @@ export function SessionChat({
       hostResumeRetryWaitersRef.current.set(pending.clientRequestId, cancel);
     }
   }, [pendingManagedLocalInputs]);
+  // The listed receipts, with each send's own receipt (polled by request id)
+  // taking precedence: it is often the fresher of the two.
+  const receiptRows = useMemo<QueuedInputSummary[]>(() => {
+    const listed = queuedInputsQuery.data ?? [];
+    const merged = listed.map((row) =>
+      (row.client_request_id && exactInputRows.get(row.client_request_id)) || row,
+    );
+    const listedIds = new Set(listed.map((row) => row.client_request_id));
+    for (const [clientRequestId, row] of exactInputRows) {
+      if (!listedIds.has(clientRequestId)) merged.push(row);
+    }
+    return merged;
+  }, [exactInputRows, queuedInputsQuery.data]);
+  // Re-render when a linked receipt's bridge window closes.
+  const [bridgeClock, setBridgeClock] = useState(0);
+  useEffect(() => {
+    const now = Date.now();
+    const next = Math.min(
+      ...receiptRows
+        .map(linkedReceiptBridgeEndsAt)
+        .filter((at): at is number => at != null && at > now),
+    );
+    if (!Number.isFinite(next)) return;
+    const timer = setTimeout(() => setBridgeClock((tick) => tick + 1), next - now + 50);
+    return () => clearTimeout(timer);
+  }, [bridgeClock, receiptRows]);
   const outboxEntries = useMemo<OutboxEntry[]>(() => {
     if (!isManagedLocal) return [];
-    const rows = queuedInputsQuery.data ?? [];
+    const rows = receiptRows;
+    const now = Date.now();
     const receiptFor = (clientRequestId: string) =>
-      exactInputRows.get(clientRequestId) ??
       rows.find((row) => row.client_request_id === clientRequestId);
     const pendingIds = new Set(
       pendingManagedLocalInputs.map((pending) => pending.clientRequestId),
@@ -2210,8 +2284,11 @@ export function SessionChat({
     const shownByTranscript = receiptsShownByTranscript(rows, timelineItems);
     for (const row of rows) {
       const clientRequestId = row.client_request_id;
+      // A linked receipt the loaded rows do not show yet stays, so the
+      // user's row never blanks between the link and the transcript read.
+      const bridgeEndsAt = linkedReceiptBridgeEndsAt(row);
       if (
-        inTranscript(row) ||
+        (inTranscript(row) && !(bridgeEndsAt != null && now < bridgeEndsAt)) ||
         shownByTranscript.has(row) ||
         (clientRequestId &&
           (pendingIds.has(clientRequestId) || dismissedReceipts.has(clientRequestId)))
@@ -2234,6 +2311,8 @@ export function SessionChat({
       if (origin !== "user") {
         inFlight.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: "sent",
@@ -2244,6 +2323,8 @@ export function SessionChat({
       if (hasUnknownDeliveryError(row.last_error)) {
         inFlight.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: "unconfirmed",
@@ -2258,6 +2339,8 @@ export function SessionChat({
       ) {
         inFlight.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: row.status === "delivered" ? "sent" : "unconfirmed",
@@ -2266,6 +2349,8 @@ export function SessionChat({
       } else if (turnState === "queued") {
         queued.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: "queued",
@@ -2275,12 +2360,14 @@ export function SessionChat({
         turnState &&
         NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)
       ) {
-        inFlight.push({ key, text: row.text, attachments, state: "sent" });
+        inFlight.push({ key, clientRequestId, sentAt: row.created_at ?? null, text: row.text, attachments, state: "sent" });
       } else if (row.status === "delivering") {
-        inFlight.push({ key, text: row.text, attachments, state: "sending" });
+        inFlight.push({ key, clientRequestId, sentAt: row.created_at ?? null, text: row.text, attachments, state: "sending" });
       } else if (row.status === "queued") {
         queued.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: "queued",
@@ -2294,6 +2381,8 @@ export function SessionChat({
         const lost = failedBeforeRecorded(row);
         placed.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           at: row.created_at,
@@ -2316,6 +2405,8 @@ export function SessionChat({
       ) {
         failed.push({
           key,
+          clientRequestId,
+          sentAt: row.created_at ?? null,
           text: row.text,
           attachments,
           state: "failed",
@@ -2338,6 +2429,8 @@ export function SessionChat({
       const receipt = receiptFor(pending.clientRequestId);
       const base = {
         key,
+        clientRequestId: pending.clientRequestId,
+        sentAt: pending.sentAt,
         text: pending.text,
         attachments:
           pending.attachmentSummaries ??
@@ -2431,12 +2524,14 @@ export function SessionChat({
       });
     }
     return [...placed, ...failed, ...inFlight, ...queued];
+    // bridgeClock: recompute when a linked receipt's bridge window closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    exactInputRows,
+    bridgeClock,
     isManagedLocal,
     isSubmitting,
     pendingManagedLocalInputs,
-    queuedInputsQuery.data,
+    receiptRows,
     session.id,
     timelineItems,
     turnEndedDraft,

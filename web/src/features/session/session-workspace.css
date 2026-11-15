@@ -1490,10 +1490,9 @@
 }
 
 /* --- Outbox: one visible owner for a managed input operation. ---
-     Same place, measure, and type as the durable ask it becomes, while the
-     delivery state and attachment summary remain explicit. */
-.tl-msg--outbox .tl-msg__body {
-  white-space: pre-wrap;
+     The same row element as the durable ask it becomes (same component and
+     key); only the delivery state and attachment summary are added. */
+.tl-msg--user .tl-msg__body {
   transition: opacity 240ms ease;
 }
 .tl-msg__outbox-status {

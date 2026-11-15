@@ -23,6 +23,7 @@ adds a served field, add it to the fixtures so the captured frame shows it.
 | iOS chat opening on real data | `scripts/qa/ios_open_film.py --udid <sim> --session <id>` after `sim.sh deploy` | bench | Video, time to first content and settle, big-jump count, contact sheet |
 | One web page or scene | `make ui-capture PAGE=<page> SCENE=<scene>` | here, fixture scenes need nothing running | PNG plus accessibility snapshot |
 | Every web page and state | `make ui-gallery` (`ONLY=` narrows) | here | One `index.html` sheet under `/tmp/agents/ui-gallery/<stamp>/` at 1440x900, 2000x1200 and phone |
+| A sent message on the web (optimistic row to transcript row) | `make web-send-handoff` (`ONLY=`, `SWEEP=1` for 72 generated orderings); CI runs the recorded ones | here, scripted server, no provider | Per frame: blank, doubled, remounted, reshaped or moved. Add each new send glitch as a scenario in `scripts/qa/web-send-handoff.ts` with the host and session it came from |
 | Every menu, popover and dialog | `make ui-sweep` (`ONLY=`, `JOBS=`); CI runs it | here | Fails when an overlay lands off-screen, covered or clipped. `ui-capture ... --sweep` checks one scene (`SWEEP_SHOTS=1` saves a PNG per overlay). A control that exists in only one session mode needs a fixture scene |
 
 Look at more than one when the change spans surfaces: the simulator shot proves

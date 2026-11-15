@@ -1532,6 +1532,103 @@ describe("TimelinePane outbox", () => {
     expect(screen.getAllByTestId("session-outbox-row")[0]).toHaveTextContent("Sent");
   });
 
+  describe("one send, one row", () => {
+    const paneProps = {
+      totalEntries: 1,
+      loadedEntries: 1,
+      abandonedEvents: 0,
+      showAbandonedBranches: false,
+      onShowAbandonedBranchesChange: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+      onFetchPreviousPage: vi.fn(),
+      selectedKey: null,
+      onSelectKey: vi.fn(),
+    };
+    const earlier = makeTimelineMessage(1, "earlier turn");
+    const send = {
+      key: "pending:req-1",
+      clientRequestId: "req-1",
+      sentAt: "2026-03-19T16:50:00Z",
+      text: "keep it provider neutral",
+      state: "sent" as const,
+    };
+    const echo = (origin: boolean): TimelineItem => ({
+      kind: "message",
+      event: {
+        ...messageItem.event,
+        id: 7,
+        role: "user",
+        content_text: "keep it provider neutral",
+        timestamp: "2026-03-19T16:50:01Z",
+        input_origin: origin
+          ? { authored_via: "longhouse", client_request_id: "req-1" }
+          : null,
+      },
+    });
+    const rowsWithText = () =>
+      [...document.querySelectorAll(".tl-msg--user")].filter((node) =>
+        node.textContent?.includes("keep it provider neutral"),
+      );
+
+    it("renders the send in the transcript's own shape before its echo lands", () => {
+      render(<TimelinePane {...paneProps} items={[earlier]} outbox={[send]} />);
+      const row = screen.getByTestId("session-outbox-row");
+      expect(row).toHaveClass("tl-msg--user");
+      expect(row).toHaveTextContent("You asked at");
+      expect(row).toHaveTextContent("Longhouse");
+      expect(row).toHaveTextContent("Sent");
+    });
+
+    it("keeps the same DOM node when the echo replaces the send, and never shows both", () => {
+      const { rerender } = render(<TimelinePane {...paneProps} items={[earlier]} outbox={[send]} />);
+      const before = rowsWithText();
+      expect(before).toHaveLength(1);
+
+      // The echo is loaded while the chat still holds the send: one row.
+      rerender(<TimelinePane {...paneProps} items={[earlier, echo(true)]} outbox={[send]} />);
+      const during = rowsWithText();
+      expect(during).toHaveLength(1);
+      expect(during[0]).toBe(before[0]);
+      expect(during[0]).toHaveAttribute("data-testid", "session-timeline-row");
+
+      // The chat drops the send: still the same node.
+      rerender(<TimelinePane {...paneProps} items={[earlier, echo(true)]} outbox={[]} />);
+      expect(rowsWithText()).toEqual(before);
+    });
+
+    it("matches an echo without a request id by its text, and keeps the node", () => {
+      const { rerender } = render(<TimelinePane {...paneProps} items={[earlier]} outbox={[send]} />);
+      const before = rowsWithText();
+      rerender(<TimelinePane {...paneProps} items={[earlier, echo(false)]} outbox={[send]} />);
+      expect(rowsWithText()).toEqual(before);
+      rerender(<TimelinePane {...paneProps} items={[earlier, echo(false)]} outbox={[]} />);
+      expect(rowsWithText()).toEqual(before);
+      expect(before[0]).toHaveTextContent("Longhouse");
+    });
+
+    it("puts a send still on its way above the live thinking it started", () => {
+      const thinking: TimelineItem = {
+        kind: "reasoning",
+        event: { ...messageItem.event, id: -1_000_000_004, content_text: "Thinking:\nreading the turn list" },
+      };
+      render(
+        <TimelinePane
+          {...paneProps}
+          items={[earlier, thinking]}
+          outbox={[{ ...send, state: "sending" as const }]}
+        />,
+      );
+      const rows = [...document.querySelectorAll(".timeline-pane__rows > *")];
+      const sendIndex = rows.findIndex((node) => node.getAttribute("data-testid") === "session-outbox-row");
+      const thinkingIndex = rows.findIndex(
+        (node) => node.getAttribute("data-testid") === "session-timeline-reasoning",
+      );
+      expect(sendIndex).toBeGreaterThan(-1);
+      expect(thinkingIndex).toBeGreaterThan(sendIndex);
+    });
+  });
+
   it("places a settled receipt the transcript lacks at the time it was sent", () => {
     const at = (id: number, timestamp: string): TimelineItem => {
       const item = makeTimelineMessage(id, `row ${id}`);
