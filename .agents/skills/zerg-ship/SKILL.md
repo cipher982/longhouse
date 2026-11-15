@@ -5,9 +5,67 @@ description: Land and ship a Longhouse change (the `cowbell` flow) - push an exa
 
 # Ship a change
 
-The workspace `AGENTS.md` owns the ring table and the landing flow (worktree,
-`make validate`, `check-push-readiness`). This skill owns which command moves
-which surface and how to read the result.
+Longhouse has no users, so landing is the whole job and downtime on a hosted
+surface costs nothing but time. This skill owns the rings, how to land in the
+shared checkout, which command moves which surface and how to read the result.
+
+## Rings
+
+| Ring | Surface | Moves when |
+|---|---|---|
+| Canary | `release-canary-a` | every `main` push touching runtime paths (`server/`, `web/`, `engine/`, `config/`, runtime Dockerfile) |
+| QA (not a ring) | `hosted-qa-a` | Hosted Live QA deploys each published commit, one run at a time |
+| Dogfood | the maintainer's own tenant | every published runtime image of `main`, automatically (Promote Rings) |
+| Production | other hosted tenants and the new-tenant image | the exact image dogfood serves, once its gates pass; no tag needed |
+| Laptops | Mac app, CLI, engine | only from `make release VERSION=vX.Y.Z` |
+
+Promote Rings (`.github/workflows/promote-rings.yml`) runs after every image,
+archive, canary, QA and CI completion, and on a Sauron wake every 10 minutes
+while a ring trails. It never moves backwards. Its decision per ring is a commit
+status (`longhouse/dogfood`, `longhouse/production`); `make promote-rings` runs
+it now. Sauron pages when David's machines stop shipping after a dogfood
+cutover, and when production trails dogfood for 8 hours. Promote Rings is the
+only automatic writer of dogfood and production; `make release` and by-hand
+promotions take an expiring ring lock (`python3 scripts/ops/ring_lock.py
+status`). Before cutting a release, check `origin/main` still equals the
+candidate SHA.
+
+## Landing in the shared checkout
+
+David and several agents work in `~/git/zerg/longhouse` at once.
+
+- Make code changes in a worktree:
+  `git -C ~/git/zerg/longhouse worktree add ~/git/_wt/longhouse-<name> -b <name> origin/main`,
+  and `touch .wt-keep` while it is live.
+- Land with
+  `git fetch && git rebase origin/main && make validate && make check-push-readiness && git push origin HEAD:main`.
+  Chain gates with `&&`, never `;`, and never pipe a gate into `tail` or `grep`
+  before `&&` (the pipe hides its exit status). Then remove `.wt-keep`, the
+  worktree and the branch.
+- `git status` first; commit explicit paths (`git commit -o <paths>`), never
+  `git add .` or `-A`. Never reset or force-push `main`; roll forward.
+- Pre-commit fixes mechanical problems (format, whitespace, the provider
+  contract digest and census) and stages the fix into the same commit; `git show
+  --stat HEAD` shows what it added. It refuses when the file also has unstaged
+  changes. It never autofixes lint.
+- Never run a `--fix` linter over a directory (it deletes pytest fixtures it
+  thinks are unused); format only files you edited. `rustfmt <file>` follows
+  `mod` declarations, so check `git status` after it.
+- CI is shared and runs on David's runners (Linux lanes on `ci-*`, iOS on
+  `wisp`). Prove changes locally with the smallest test; never push or rerun just
+  to see whether CI passes. When `make ship` reports the queue SATURATED, batch
+  commits. A rare `TLS handshake timeout` on a cube runner is usually the home
+  WAN, not Longhouse (`control-plane/docs/runbooks/hosted-operations.md`).
+- A newer push supersedes queued runs; Deploy and Verify then stands down green
+  naming the covering commit.
+- While `main` is red, one agent claims the fix, lands it and posts the SHA;
+  nobody else reruns. Diagnose a failing check before owning it.
+- Anchor every CI and deploy claim to an exact SHA, run id and live surface;
+  "latest" may belong to another agent.
+- Call out schema changes and new required environment variables. For catalog,
+  storage or transport changes, prove the deploy on a real user route
+  (machines, timeline, detail), not just health.
+- Message other sessions only for a real conflict, blocker or handoff.
 
 ## Which lane a change needs
 
@@ -56,7 +114,8 @@ Reading the result:
 - Hosted Live QA (`hosted-live-qa.yml`) is dispatched per qualified SHA and runs
   daily at 10:41 UTC. It deploys the exact commit to its own instance and records
   a verdict per SHA. "Did QA pass this SHA" is that verdict; a passed,
-  non-superseded verdict gates production. Dispatch command: workspace Rings table.
+  non-superseded verdict gates production. Dispatch by hand with
+  `gh workflow run hosted-live-qa.yml -f source_sha=<full-sha>`.
 - `make qa-live` is not a developer command; it refuses personal and dogfood
   targets and needs a dedicated QA instance and token.
 - To state what a host runs: `make deploy-status` or
@@ -69,7 +128,9 @@ Reading the result:
 ## Promoting by hand
 
 Promote Rings does this automatically. By hand only to roll back or unstick a
-ring, and the targets refuse while a Promote Rings run is active.
+ring, and the targets refuse while a Promote Rings run is active. Both need
+`CONTROL_PLANE_ADMIN_TOKEN` (`control-plane/docs/runbooks/hosted-operations.md`). State the full
+SHA and the commits it sweeps in.
 
 - `make promote-dogfood SHA=<full-sha> [FAST_LANE=1] [SUBDOMAIN=...]` needs a
   canary-qualified Deploy and Verify run for the SHA. The fast lane is allowed
@@ -91,8 +152,10 @@ ring, and the targets refuse while a Promote Rings run is active.
 `make release VERSION=vX.Y.Z` publishes the native pair (`longhouse`,
 `longhouse-engine`), `Longhouse.app` and the PyPI wheel. Existing users get it by
 rerunning `scripts/install.sh` or `uv tool upgrade longhouse`. It is independent
-of production promotion and runs from any checkout (details in AGENTS.md
-"Shipping").
+of production promotion and runs from any checkout (details in
+[RELEASE.md](../../../RELEASE.md)). It runs from a disposable checkout of
+`origin/main`, holds the release ring lock, validates the bump commit under the
+heavy-build lock, waits for the exact-SHA gates and notarizes; a rerun resumes.
 
 `make launch-readiness SHA=<full-sha>` is the stricter exact-SHA check after the
 hosted and release lanes ran: it also compares the latest release and PyPI build
@@ -105,7 +168,9 @@ demo is retired, so pass that flag (`release.sh` always does).
 dispatches `ios-testflight.yml` on wisp (archive, upload, wait for processing).
 `INTERNAL_ONLY=1` skips the public group and Beta App Review; `DRY_RUN=1` archives
 and exports only. `make testflight-status` shows builds, review state and the
-public link (needs `ASC_API_*` in the environment). Public publishing fails when
+public link, https://testflight.apple.com/join/CmEd5kY7 (needs `ASC_API_*` in
+the environment, and the iOS 26 SDK to build; spec
+`control-plane/docs/specs/ios-testflight-distribution.md`). Public publishing fails when
 the group's link differs from the one in
 `web/src/features/marketing/landing/links.ts`. If `ios/` changed: build, look at a
 rendered simulator frame (`zerg-ui`), then `make phone-deploy` as the last step. Do
@@ -124,7 +189,8 @@ launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
 Then confirm the machine still ships (`longhouse-server sessions list --limit 1`
 shows fresh activity). Skip it for web-only, docs-only, test-only and
 hosted-runtime-only changes. Python-CLI-only edits under `server/zerg/cli/` can use
-`cd server && uv tool install -e .` instead.
+`cd server && uv tool install -e .` instead. After the refresh, check this Mac
+still ships.
 
 ## Report
 

@@ -11,8 +11,10 @@ installs the provider CLI; Longhouse wraps, observes and steers it.
 - Mode definitions (Shadow, Helm, Console): `ARCHITECTURE.md`, "Session modes".
 - What each provider supports and how proven it is: `schemas/managed_providers.yml`
   (read the provider's cell before investigating a gap).
-- Never run a provider CLI on the maintainer's Mac, even with a scratch `HOME`
-  (workspace `AGENTS.md`, "Providers and the factory"). Use fixture lanes
+- Never run a provider CLI (`claude`, `codex`, `cursor-agent`, `opencode`, `omp`,
+  `agy`, ...) on the maintainer's Mac, even with a scratch `HOME`. His Machine
+  Agent ships real state from that machine, and keychain-backed CLIs pop blocking
+  modals. Use fixture lanes
   (`make test-*`), the bench (`scripts/ops/bench.sh run ...`) or the factory. On
   the bench, a `cursor-agent` with a relocated `HOME` needs
   `AGENT_CLI_CREDENTIAL_STORE=file`.
@@ -225,6 +227,35 @@ working tree).
 - Keep `live`, `reattachable`, `phase-known` and `running` separate, and keep
   `control_path`, `liveness_model` and `state` separate in local-health JSON.
 - Do not name constants or paths as if Longhouse owns a provider binary.
+
+## Provider factory and assurance
+
+The factory runs targeted live proofs of one Longhouse revision against one
+provider build on disposable Runtime Hosts and keeps its evidence in
+`factory.sqlite3`. It is not a release matrix: no version matrices, prerelease
+lanes or autonomous repair without a product decision. Boundary:
+`control-plane/docs/specs/provider-assurance-system.md`, then
+`control-plane/provider_factory/README.md` (read its "Deploy and epoch rules"
+before touching deploys, health or epochs).
+
+- Report provider work in three milestones: implementation (code and focused
+  tests), dogfood (real Shadow, Helm and Console receipts), factory assurance
+  (exact image, promotion and qualification evidence). Assurance blocks product
+  code only when the deliverable claims certification.
+- The verifier (`server/zerg/qa/**`) is pinned by digest and the subject follows
+  `main`. Only a verifier change needs an epoch advance, which is David's call:
+  `control-plane/scripts/deploy/ship_factory.py --epoch --message "why"`
+  (`--dry-run` first; without `--epoch` it ships main's newest image).
+- A new release-gate row is registered in control-plane `PRODUCER_MODULES`, then
+  listed in `schemas/factory_producers.yml`, then gated; keep it `ordinary_ci` or
+  `sampled` until both land. `make validate-factory-registration` guards coverage.
+- Verifier and subject never import each other (`server/zerg/qa/**` vs the rest
+  of `server/zerg/`) except edges in `scripts/ci/verifier-boundary.allow`, a list
+  that only shrinks (`make validate-verifier-boundary`).
+- Provider CLI versions have no single owner: cinder runs the vendors'
+  self-updating installers, cube-bench runs Nix pins
+  (`~/git/me/domains/mytech/workbench/nix/`), and the factory's release discovery
+  is not connected to either.
 
 ## Fallbacks
 

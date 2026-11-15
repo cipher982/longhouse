@@ -8,7 +8,8 @@ description: Look at a rendered frame of a Longhouse UI change (web fixture capt
 A UI change is not done until you have looked at a rendered frame. Tests prove an
 element exists, not that "fable 5 1" should read "fable 5.1", that a banner has no
 bottom edge over scrolling text, or that a preview rendered blank. `Read` a PNG and
-you see it. Say what you saw in the handoff, with the artifact path.
+you see it. Say what you saw in the handoff, with the artifact path. When a change
+adds a served field, add it to the fixtures so the captured frame shows it.
 
 ## Pick the render path
 
@@ -36,8 +37,7 @@ targets exist only after that download.
 
 ## Own the QA lifecycle
 
-AGENTS.md ("QA ownership and cleanup") and `zerg-testing` ("Proof-run cleanup") set
-the rules. For UI work specifically:
+`zerg-testing` ("Proof-run cleanup") sets the rules. For UI work specifically:
 
 - Before launching, record simulator UDIDs and boot state, owned processes and
   ports, browser tabs and scratch roots. Put teardown in `finally` or an exit trap

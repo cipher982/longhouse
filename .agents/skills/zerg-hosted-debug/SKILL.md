@@ -7,18 +7,22 @@ description: Debug a live hosted Longhouse tenant (a hosted Runtime Host): a ses
 
 For managed-session latency and badge questions start with `managed-session-debug`.
 Longhouse history is the product: never prune archived session data as a recovery
-shortcut unless David approves the loss.
+shortcut unless the maintainer approves the loss. Data tiers (Source, Facts, Reconstruction
+base, Ephemeral) are in `control-plane/docs/specs/production-storage-lifecycle.md`.
 
 ## Where things run
 
-The workspace `AGENTS.md` (private) names the hosts, ssh aliases and compose
-directories. In this skill `<runtime-host>` is the ssh alias of the host that runs
-tenant containers (`longhouse-<tenant>`, data under
-`/var/app-data/longhouse/<tenant>`, mounted at `/data`). The control plane runs on a
-separate host and drives tenant containers through that host's host agent.
-Canary and QA tenants (`release-canary-a`, `hosted-qa-a`) run on the same host. Its
-`/tmp` is a small RAM disk, so keep scratch elsewhere, and `rg` is not installed;
-use `grep` in remote commands.
+Host names, ssh aliases, tenant names, compose directories and credential routes
+are private and live in `control-plane/docs/runbooks/hosted-operations.md`
+(including the rule that the dogfood tenant carries no test traffic,
+how to get the control-plane admin token, and alpha-tester commands). In this
+skill `<runtime-host>` is the ssh alias of the host that runs tenant containers
+(`longhouse-<tenant>`, data under `/var/app-data/longhouse/<tenant>`, mounted at
+`/data`). The control plane runs on a separate host and drives tenant containers
+through the runtime host's host agent. Canary and QA tenants run on the runtime
+host too. Its `/tmp` is a small RAM disk, so keep scratch elsewhere, and `rg` is
+not installed; use `grep` in remote commands. Read what a host runs from
+`curl -sL https://<host>/api/health` (`build.commit`) or `make deploy-status`.
 
 Tenant files in `/data`: `longhouse-live.db` (the live catalog, the authoritative
 served-state store and by far the largest file), `longhouse.db` (archive database,
@@ -39,7 +43,7 @@ read-only over ssh, summarizes the session's `live_sessions`, `live_runtime_stat
 `live_interaction_requests`, `live_timeline_cards` and client-render observations
 (a database without live tables falls back to the legacy tables), and summarizes
 WriteSerializer pressure and request counts from tenant logs. It needs
-`CONTROL_PLANE_ADMIN_TOKEN` or `ADMIN_TOKEN` (Infisical, workspace `AGENTS.md`) and
+`CONTROL_PLANE_ADMIN_TOKEN` or `ADMIN_TOKEN` (Infisical, see the hosted-operations runbook) and
 ssh to the runtime host (`HOSTED_SESSION_DEBUG_SSH_TARGET`). Pass `--subdomain`
 or set `LONGHOUSE_DEFAULT_SUBDOMAIN`. Prefer it over
 hand-written `ssh` plus guessed DB paths. Auth helpers are in
@@ -119,4 +123,4 @@ process health (the API must stop returning `branch_projection_pending`).
 - No broad startup backfills. Startup may create tables, add columns, create indexes
   and verify FTS.
 - Change nothing on the runtime host from a diagnosis session beyond the commands above; deploys
-  and promotions go through Promote Rings (workspace `AGENTS.md`).
+  and promotions go through Promote Rings (`zerg-ship`).

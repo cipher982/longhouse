@@ -5,9 +5,19 @@ description: Run, debug or stabilize Longhouse tests - backend, frontend, Rust e
 
 # Longhouse testing
 
-`AGENTS.md` ("Build and test", "QA ownership and cleanup") owns the rules: Make
-targets only, smallest test that proves the invariant, one heavy build at a time,
-cleanup is part of acceptance. This skill adds the mechanics.
+Use Make targets rather than raw runners, and run the smallest test that proves
+the invariant. `test-ci`, full E2E, visual suites and long Rust builds run in CI;
+run them locally only to diagnose, during a CI outage or when David asks.
+Cleanup is part of acceptance (see "Proof-run cleanup" below).
+
+Backend tests live in `server/tests_lite/`: no shared conftest, one SQLite
+database per test, HTTP overrides on `api_app` (not `app`), no environment or
+settings read at import time. A bare `pytest tests_lite` must pass.
+
+One heavy build at a time on this Mac (cargo, xcodebuild, Docker, release
+validation): wrap it in `lockf /tmp/agents/longhouse-heavy-build.lock <command>`.
+Each worktree builds its own cargo target; if cargo refuses a stale build
+identity, run `python3 scripts/build/generate_build_identity.py`.
 
 ## Targets
 
@@ -62,6 +72,13 @@ laptop and never run a provider CLI there.
 
 ## iOS lanes
 
+Agents own iOS build, test and evaluation; Xcode.app is never in the loop. Local
+lanes run on the bench (`scripts/ops/bench.sh run <cmd>`); `make ios-unit` is the
+local unit loop. Use the simulator first and a real device only for device-only
+behavior. iOS CI does not gate deploys, so check the iOS job yourself when you
+touch `ios/`. David's iPhone is not a test device; install there last
+(`make phone-deploy`).
+
 `make test-ios`, `ios-previews`, `ios-ui-shot`, `simlab-run` and `menubar-harness`
 dispatch to the wisp runner (one job at a time under the bench lock, scratch
 `HOME`). They need an authenticated `gh`, ssh to `wisp`, and a clean, pushed
@@ -93,8 +110,14 @@ revision; a dirty worktree is refused and there is no local fallback.
 
 ## Proof-run cleanup
 
-AGENTS.md sets the ownership rule. The specifics:
+Whoever starts a server, engine, provider process, poll loop, browser tab,
+simulator, scratch `HOME`, hosted test tenant or proof session owns it through
+teardown on success, failure, timeout and cancellation, including what a
+subagent or child agent started. Preserve the maintainer's own simulators and services.
+The specifics:
 
+- Give every background loop a completion condition and a cap. Never `curl -L`
+  a `longhouse.ai` URL in a loop (redirects make it spin).
 - Create every test or QA session with an explicit hidden `launch_surface`; never
   rely on a human-looking title. Launch-hidden is not timeline-hidden.
 - A QA cleanup receipt passes only after each run-owned Runtime Host session is
@@ -107,7 +130,7 @@ AGENTS.md sets the ownership rule. The specifics:
   parent PID 1) are still yours. Stop them through the ownership record and
   re-read the inventory after the controller exits.
 - Provider probes run on the bench or the factory, never on this Mac
-  (`managed-provider-cli`), with `--no-session` or a disposable `--session-dir`.
+  (`managed-provider-cli`, which says why), with `--no-session` or a disposable `--session-dir`.
   If a protocol ignores that, record the native session path and remove it in
   `finally`.
 - Cleanup never depends on a downstream archive, backup or ingest worker.
@@ -118,4 +141,13 @@ AGENTS.md sets the ownership rule. The specifics:
   report anything retained with its owner and cleanup command. A screenshot does
   not replace closing the window, tab or simulator it came from.
 - Before declaring done, re-read `git status --short`, the owned process
-  inventory, the hosted session inventory and `xcrun simctl list devices`.
+  inventory, the hosted session inventory and `xcrun simctl list devices`. A
+  green test or an exited wrapper is not proof. Report what you kept on purpose
+  and who owns it.
+- Hosted test tenants: deprovision and erase them, and undo any allowlist or
+  credential change (`control-plane/docs/runbooks/hosted-operations.md`).
+- Test sessions declare a hidden `launch_surface` (`test`, `e2e`, `product-e2e`,
+  `qa`, `ci`, `canary`, `factory_assurance`) on `POST /api/agents/sessions`; read
+  them back with `include_test=true`. Hidden is not cleanup: retire the session
+  (`ended_at`, no owned runs, absent from inventory) and prove provider and
+  Machine Agent processes are dead.
