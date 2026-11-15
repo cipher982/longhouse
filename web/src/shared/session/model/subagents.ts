@@ -47,6 +47,16 @@ function normalizeAgentKey(id: string | null | undefined): string | null {
   return trimmed.startsWith("agent-") ? trimmed.slice(6) : trimmed;
 }
 
+/** Every id a child may be named by: the provider's agent id, its run, its session (matches iOS). */
+function agentKeys(child: SubagentChild): Set<string> {
+  const keys = new Set<string>();
+  for (const id of [child.provider_session_id, child.run_id, child.session_id]) {
+    const key = normalizeAgentKey(id);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
 export function childrenForToolCall(
   children: readonly SubagentChild[],
   { toolCallId, toolOutputText }: { toolCallId: string | null | undefined; toolOutputText: string | null | undefined },
@@ -64,14 +74,13 @@ export function childrenForToolCall(
   const queue = [...direct];
   while (queue.length > 0) {
     const parent = queue.shift()!;
-    const parentAgentKey = normalizeAgentKey(parent.provider_session_id);
+    const parentAgentKeys = agentKeys(parent);
     for (const candidate of children) {
       if (seen.has(candidate.session_id)) continue;
       const matchesParentSession =
         Boolean(candidate.parent_session_id) && candidate.parent_session_id === parent.session_id;
       const candidateAgentKey = normalizeAgentKey(candidate.parent_agent_id);
-      const matchesParentAgent =
-        Boolean(parentAgentKey) && Boolean(candidateAgentKey) && candidateAgentKey === parentAgentKey;
+      const matchesParentAgent = candidateAgentKey !== null && parentAgentKeys.has(candidateAgentKey);
       if (matchesParentSession || matchesParentAgent) {
         seen.add(candidate.session_id);
         collected.push(candidate);
@@ -94,9 +103,8 @@ export function buildSubagentTree(children: readonly SubagentChild[]): SubagentT
   const byAgentKey = new Map<string, SubagentChild>();
   for (const child of children) {
     bySessionId.set(child.session_id, child);
-    const agentKey = normalizeAgentKey(child.provider_session_id);
-    if (agentKey && !byAgentKey.has(agentKey)) {
-      byAgentKey.set(agentKey, child);
+    for (const agentKey of agentKeys(child)) {
+      if (!byAgentKey.has(agentKey)) byAgentKey.set(agentKey, child);
     }
   }
 

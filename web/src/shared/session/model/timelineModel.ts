@@ -277,6 +277,7 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
 export function isActivityEligible(interaction: ToolInteraction): boolean {
+  if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
   if ((interaction.children?.length ?? 0) > 0) return false;
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
@@ -285,6 +286,9 @@ export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (isLivePreviewEvent(interaction.callEvent)) return false;
   if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
   if (isToolInteractionFailed(interaction)) return false;
+  // A turn-end footer rides on the call or its result; folding that row into a
+  // group would hide the footer (matches iOS).
+  if (interaction.callEvent?.turn_end || interaction.resultEvent?.turn_end) return false;
   const identity = normalizedInteractionIdentity(interaction);
   const exactNames = [interaction.toolName, interaction.presentation?.tool_name]
     .filter(Boolean)
@@ -535,7 +539,7 @@ export function parseLonghouseOutput(
     index += 1;
   }
 
-  const exitMatch = lines[index]?.match(/^Process exited with code (\d+)$/);
+  const exitMatch = lines[index]?.match(/^Process exited with code (-?\d+)$/);
   if (exitMatch) {
     sawWrapperMetadata = true;
     exitCode = parseInt(exitMatch[1], 10);
@@ -917,6 +921,25 @@ function finalAnswerText(interaction: ToolInteraction): string | null {
   return formatFinalAnswer(interactionInput(interaction));
 }
 
+/** A system row that carries a structured provider notice worth showing. */
+function isSystemNotice(event: AgentEvent): boolean {
+  return (
+    event.role === "system" &&
+    (Boolean(event.task_notification) ||
+      (event.waiting_background_agents != null && event.waiting_background_agents > 0) ||
+      Boolean(event.api_error))
+  );
+}
+
+function hasVisibleMessageContent(event: AgentEvent): boolean {
+  if (event.role === "user") return true;
+  return (
+    (event.content_text ?? "").trim().length > 0 ||
+    (event.media_refs?.length ?? 0) > 0 ||
+    Boolean(event.turn_end)
+  );
+}
+
 export function buildTimelineModel(
   projectionItems: AgentSessionProjectionItem[],
   subagents: readonly SubagentChild[] = [],
@@ -993,7 +1016,7 @@ export function buildTimelineModel(
       eventIdToSelectionKey.set(event.id, `reasoning:${event.id}`);
     } else if (event.interaction_kind === "compaction_boundary") {
       eventIdToSelectionKey.set(event.id, `compaction:${event.id}`);
-    } else if (event.interaction_kind === "provider_notification") {
+    } else if (event.interaction_kind === "provider_notification" || isSystemNotice(event)) {
       eventIdToSelectionKey.set(event.id, `provider_notification:${event.id}`);
     } else {
       eventIdToSelectionKey.set(event.id, `message:${event.id}`);
@@ -1025,6 +1048,9 @@ export function buildTimelineModel(
     if (event.item?.kind === "turn_end" && !event.content_text) continue;
     if (event.item?.kind === "reasoning" && !event.content_text && !isWithheldReasoning) continue;
     if (event.interaction_kind === "provider_reasoning") {
+      // Older rows carry no `item`: an empty thought with no withheld mark is
+      // noise whether or not the host stamped its kind (matches iOS).
+      if (!isWithheldReasoning && !(event.content_text ?? "").replace(/^Thinking:/, "").trim()) continue;
       items.push({ kind: "reasoning", event });
       continue;
     }
@@ -1036,7 +1062,13 @@ export function buildTimelineModel(
       items.push({ kind: "provider_notification", event });
       continue;
     }
-    if (event.role === "system") continue;
+    // A system row carrying a structured notice (task notification, waiting
+    // agents, API error) is a provider notification even when the parser left
+    // `interaction_kind` unset; every other system row stays hidden.
+    if (event.role === "system") {
+      if (isSystemNotice(event)) items.push({ kind: "provider_notification", event });
+      continue;
+    }
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
     if (event.role === "user") {
@@ -1111,6 +1143,9 @@ export function buildTimelineModel(
       continue;
     }
 
+    // An assistant row with no text, no media and no turn footer reads as a
+    // blank bubble; drop it (matches iOS). A row that carries any of those stays.
+    if (!hasVisibleMessageContent(event)) continue;
     items.push({ kind: "message", event });
   }
 
