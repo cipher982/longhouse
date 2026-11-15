@@ -225,6 +225,7 @@ def orchestrate(args: argparse.Namespace) -> int:
             f"timeout -k 30 {int(args.deadline)} python3 $HOME/{tools} --on-bench --run-id {run_id} --sha {sha} "
             f"--cells {shlex.quote(' '.join(cells))} --deadline {int(args.deadline)}"
             + (" --keep" if args.keep else "")
+            + (f" --cell-timeout {int(args.cell_timeout)}" if args.cell_timeout else "")
         )
         child = subprocess.Popen(
             ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=20", BENCH_HOST, remote],
@@ -269,7 +270,7 @@ def orchestrate(args: argparse.Namespace) -> int:
 
 
 class Bench:
-    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int) -> None:
+    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0) -> None:
         self.run_id, self.sha, self.keep = run_id, sha, keep
         self.base = Path.home() / BENCH_BASE
         self.repo = self.base / "repo.git"
@@ -278,6 +279,7 @@ class Bench:
         self.tree = self.base / "trees" / f"run-{run_id}"
         self.venv = self.run_dir / "venv"
         self.scratch = Path("/dev/shm") / f"prove-{secrets.token_hex(3)}"
+        self.cell_timeout = cell_timeout
         self.started = time.monotonic()
         self.deadline_at = self.started + deadline - 60  # leave time to tear down before `timeout` fires
         self.phases: dict[str, float] = {}
@@ -477,7 +479,7 @@ class Bench:
         for cell in cells:
             argv += ["--cell", cell["key"]]
         t0 = time.monotonic()
-        code = self.run(argv, cwd=self.tree, env=self.py_env(), log_path=self.out / f"tt-{label}.log", timeout=CELL_TIMEOUT_S * max(1, len(cells)), label=f"terminal truth {label}")
+        code = self.run(argv, cwd=self.tree, env=self.py_env(), log_path=self.out / f"tt-{label}.log", timeout=(self.cell_timeout or CELL_TIMEOUT_S) * max(1, len(cells)), label=f"terminal truth {label}")
         seconds = time.monotonic() - t0
         rows = {}
         if out_json.is_file():
@@ -530,7 +532,7 @@ class Bench:
             "--provider-version", pins[provider]["version"], "--model", model,
         ]  # fmt: skip
         t0 = time.monotonic()
-        code = self.run(argv, cwd=self.tree, env=self.py_env(), log_path=driver_log, timeout=PRODUCER_TIMEOUT_S, label=producer_id)
+        code = self.run(argv, cwd=self.tree, env=self.py_env(), log_path=driver_log, timeout=self.cell_timeout or PRODUCER_TIMEOUT_S, label=producer_id)
         seconds = time.monotonic() - t0
         result_path = evidence / "result.json"
         result = None
@@ -550,8 +552,9 @@ class Bench:
                 verdicts[cell["name"]] = {"verdict": "PASS", "reason": "", "seconds": seconds, "evidence": rel}
             else:
                 why = "assertion false" if value is False else "assertion not reached"
-                extra = result.get("failure_code") or (result.get("error") if isinstance(result.get("error"), str) else "") or result.get("status")
-                verdicts[cell["name"]] = {"verdict": "FAIL", "reason": f"{why} (producer status {extra})", "seconds": seconds, "evidence": rel}
+                error = result.get("error") if isinstance(result.get("error"), str) else ""
+                extra = error[:200] or result.get("failure_code") or result.get("status")
+                verdicts[cell["name"]] = {"verdict": "FAIL", "reason": f"{why}: {extra}", "seconds": seconds, "evidence": rel}
                 any_fail = True
         if any_fail:
             self.keep_scratch_evidence(producer_id)
@@ -571,6 +574,7 @@ class Bench:
                     os.kill(pid, signal.SIGKILL)
             time.sleep(0.5)
         remaining = self.stray_processes()
+        self.reap_semaphores()
         if not self.keep:
             shutil.rmtree(self.scratch, ignore_errors=True)
             shutil.rmtree(self.venv, ignore_errors=True)
@@ -588,6 +592,24 @@ class Bench:
         if leftovers:
             detail += f" (killed {len(leftovers)} stray process(es): {leftovers[:3]})"
         return {"state": state, "detail": detail.strip(), "killed_strays": len(leftovers)}
+
+    def reap_semaphores(self) -> None:
+        """A process that is killed leaves its multiprocessing semaphores in /dev/shm (30 per killed host, 2026-11-15).
+
+        Remove the ones this user owns, that were created during this run and that no live process maps."""
+
+        shm = Path("/dev/shm")
+        mapped: set[str] = set()
+        for entry in Path("/proc").iterdir():
+            if entry.name.isdigit():
+                with contextlib.suppress(OSError):
+                    mapped.update(line.split()[-1] for line in (entry / "maps").read_text().splitlines() if "/dev/shm/sem." in line)
+        started_wall = time.time() - (time.monotonic() - self.started) - 5
+        for path in shm.glob("sem.mp-*"):
+            with contextlib.suppress(OSError):
+                info = path.stat()
+                if info.st_uid == os.getuid() and info.st_mtime >= started_wall and str(path) not in mapped:
+                    path.unlink()
 
     def stray_processes(self) -> list[tuple[int, str]]:
         """Processes that belong to this run: they carry its marker, or live in or run from its scratch, venv or worktree."""
@@ -715,7 +737,7 @@ def sweep_old_runs(base: Path, keep_id: str) -> None:
 
 
 def on_bench(args: argparse.Namespace) -> int:
-    bench = Bench(args.run_id, args.sha, args.keep, args.deadline)
+    bench = Bench(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout)
     bench.run_dir.mkdir(parents=True, exist_ok=True)
     sweep_old_runs(bench.base, args.run_id)
 
@@ -835,6 +857,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sha", default=os.environ.get("SHA") or "HEAD")
     parser.add_argument("--target", default=os.environ.get("TARGET") or "bench", help="bench (default); factory and wisp are not built")
     parser.add_argument("--deadline", type=int, default=DEFAULT_DEADLINE_S, help="seconds the whole run may take, teardown included")
+    parser.add_argument("--cell-timeout", type=int, default=0, help="seconds one cell (or producer run) may take; default %d for a Terminal Truth cell, %d for a producer" % (CELL_TIMEOUT_S, PRODUCER_TIMEOUT_S))
     parser.add_argument("--keep", action="store_true", help="leave the bench's scratch, venv and worktree for debugging (swept after 6 h)")
     parser.add_argument("--on-bench", action="store_true", help="internal: the bench half")
     parser.add_argument("--run-id")
