@@ -271,6 +271,12 @@ def _scripted_model_fixture(family: Family, proof_file: Path | None) -> tuple[li
         reply="{{history}} {{input_marker}}",
         reply_from_history={"pattern": SCRIPTED_CONTEXT_PHRASE},
     )
+    if provider == "omp":
+        # OMP 18.20 follows a turn with title requests that carry no `<title-request>` tag: the system prompt names the
+        # task and the user message is `<user>...</user>`, holding the prompt and then the reply. A request that holds a
+        # turn's prompt or marker matches that turn above; the replacement reply (the recalled phrase and its marker, no
+        # prompt text) matched nothing and failed the receipt. Last, so every real turn wins first.
+        add("title-fallback", "<user>\n", reply="<title/>", expected_request=False)
     return turns, frozenset(expected)
 
 

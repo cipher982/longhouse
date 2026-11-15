@@ -755,3 +755,28 @@ def test_abort_oracle_and_scripted_fixture_handle_pi_abort_error_and_omp_steer_s
     )
     assert plan is not None
     assert plan.turn_id == "omp-steer-settled"
+
+
+def test_omp_scripted_fixture_answers_the_title_requests_that_follow_the_replacement_turn():
+    """OMP 18.20.2 names a session with `<user>...</user>` requests carrying the prompt, then the reply alone.
+
+    Captured from a live OMP 18.20.2 run: the second one holds only the recalled phrase and the marker, so no turn's
+    prompt text is in it and the receipt used to fail on an unmatched request.
+    """
+
+    from zerg.qa import omp_helm_lifecycle
+    from zerg.qa import pi_family_helm
+    from zerg.qa import scripted_model_server
+
+    turns, expected = pi_family_helm._scripted_model_fixture(omp_helm_lifecycle.FAMILY, None)
+    marker = "OMP_HELM_REPLACEMENT_f593b656b79ddaae"
+    prompt = f"Remember this context phrase for later: sable-harbor-729. Reply with exactly {marker} and no other text."
+    matched = [
+        scripted_model_server._scripted_plan({"messages": [{"role": "user", "content": content}]}, turns)
+        for content in (
+            f"<user>\n{prompt}\n</user>",
+            f"<user>\nsable-harbor-729 {marker}\n</user>",
+        )
+    ]
+    assert [plan.turn_id for plan in matched if plan] == ["omp-replacement", "omp-title-fallback"]
+    assert "omp-title-fallback" not in expected
