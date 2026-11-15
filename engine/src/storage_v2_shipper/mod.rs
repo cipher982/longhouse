@@ -178,6 +178,20 @@ fn wire_body(
     pending: &PendingSourceEnvelope,
     capabilities: &StorageV2Capabilities,
 ) -> Result<Vec<u8>> {
+    if capabilities.host_render {
+        let stored = decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?;
+        if let Some(body) = without_host_rendered_render(&stored)? {
+            let body = if capabilities.accepts_text_records() {
+                body
+            } else {
+                base64_record_body(&body)?
+            };
+            return match capabilities.envelope_body_encoding() {
+                StorageV2BodyEncoding::Zstd => encode_zstd(&body, "storage-v2 request body"),
+                StorageV2BodyEncoding::Identity => Ok(body),
+            };
+        }
+    }
     let stored_is_wire_ready = capabilities.accepts_text_records();
     match (capabilities.envelope_body_encoding(), stored_is_wire_ready) {
         (StorageV2BodyEncoding::Zstd, true) => Ok(pending.request_body_zstd.clone()),
@@ -195,6 +209,43 @@ fn wire_body(
             }
         }
     }
+}
+
+/// Providers whose render the Runtime Host builds from one envelope's raw
+/// records and its capture witness alone. Codex, Pi and OMP read their file
+/// header from earlier in the epoch, so the host needs their render shipped
+/// until it keeps parser state per epoch.
+pub(super) const HOST_RENDERS_ALONE: &[&str] = &["claude", "antigravity"];
+
+/// The stored envelope without its render, when a host that renders from raw
+/// can build it alone: a provider in `HOST_RENDERS_ALONE` and a capture
+/// witness at the envelope's own start (a reconciled suffix keeps the
+/// witness of the range it was cut from, so it ships its render). The render
+/// stays in the stored envelope for the engine's own bookkeeping.
+fn without_host_rendered_render(body: &[u8]) -> Result<Option<Vec<u8>>> {
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(body).context("reading stored storage-v2 envelope")?;
+    let provider = envelope["provider"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if envelope["render"].is_null() || !HOST_RENDERS_ALONE.contains(&provider.as_str()) {
+        return Ok(None);
+    }
+    let range_start = envelope["range_start"].as_u64();
+    let witnessed = envelope["facts"].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND
+                && fact["source_position"].as_u64() == range_start
+        })
+    });
+    if !witnessed {
+        return Ok(None);
+    }
+    envelope["render"] = serde_json::Value::Null;
+    serde_json::to_vec(&envelope)
+        .map(Some)
+        .context("encoding storage-v2 envelope for a host that renders")
 }
 
 /// Rewrite an envelope body so every raw record is `data_b64`, leaving every
@@ -1203,25 +1254,32 @@ mod tests {
         )
         .unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        // The engine keeps its render for its own bookkeeping.
+        assert!(prepared.envelope.render.is_some());
+        let pending = pending::pending_candidate(&path.to_string_lossy(), &prepared).unwrap();
         let mut host = capabilities();
         host.host_render = true;
-        let prepared = prepare_next_envelope(&mut conn, &host, &path, "claude", None)
+        let sent: serde_json::Value = serde_json::from_slice(
+            &decode_zstd(&wire_body(&pending, &host).unwrap(), "body")
+                .unwrap_or_else(|_| wire_body(&pending, &host).unwrap()),
+        )
+        .unwrap();
+        assert!(sent["render"].is_null());
+        assert!(sent["facts"]
+            .as_array()
             .unwrap()
-            .unwrap();
-        assert!(prepared.envelope.render.is_none());
-        assert!(prepared
-            .envelope
-            .facts
             .iter()
-            .any(|fact| fact.kind == crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND));
-
+            .any(|fact| fact["kind"] == crate::pipeline::source::CAPTURE_WITNESS_FACT_KIND));
         // An older host still gets the laptop render.
-        let other = dir.path().join("other.jsonl");
-        fs::copy(&path, &other).unwrap();
-        let laptop = prepare_next_envelope(&mut conn, &capabilities(), &other, "claude", None)
-            .unwrap()
-            .unwrap();
-        assert!(laptop.envelope.render.is_some());
+        let older: serde_json::Value = serde_json::from_slice(
+            &decode_zstd(&wire_body(&pending, &capabilities()).unwrap(), "body")
+                .unwrap_or_else(|_| wire_body(&pending, &capabilities()).unwrap()),
+        )
+        .unwrap();
+        assert!(!older["render"].is_null());
     }
 
     #[test]

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 356,
+  "file_count": 357,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1928,6 +1928,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_render_shadow.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_resume_assurance.py",
       "providers": [
         "claude",
@@ -2786,6 +2793,7 @@
     {
       "path": "server/zerg/services/host_render.py",
       "providers": [
+        "antigravity",
         "claude",
         "cursor"
       ]

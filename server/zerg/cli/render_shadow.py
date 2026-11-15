@@ -66,7 +66,7 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
     raw_workers = RawObjectWorkerPool(storage_v2_root())
     render_workers = RenderObjectWorkerPool(storage_v2_root(), repair_workers=1)
     worker = NormalizerWorker()
-    totals = {"sessions": len(sessions), "compared": 0, "equal": 0, "skipped": 0, "current": 0, "differences": []}
+    totals = {"sessions": len(sessions), "compared": 0, "equal": 0, "skipped": 0, "current": 0, "unrebuilt_epochs": 0, "differences": []}
     try:
         for session_id in sessions:
             try:
@@ -83,6 +83,7 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
                 typer.echo(json.dumps({"session_id": session_id, "skipped": str(exc)}))
                 continue
             totals["current"] += int(bool(result.get("current")))
+            totals["unrebuilt_epochs"] += int(result.get("unrebuilt_epochs") or 0)
             if not apply:
                 totals["compared"] += result["compared"]
                 totals["equal"] += result["equal"]
@@ -94,5 +95,6 @@ async def _host_rebuild(sessions: list[str], *, apply: bool, limit: int | None, 
         await render_workers.close()
         await raw_workers.close()
     typer.echo(json.dumps(totals, indent=2, sort_keys=True))
-    if not apply and totals["compared"] != totals["equal"]:
+    # A check that compared nothing, or left an epoch unrebuilt, proves nothing.
+    if totals["unrebuilt_epochs"] or (not apply and (totals["compared"] == 0 or totals["compared"] != totals["equal"])):
         raise typer.Exit(1)

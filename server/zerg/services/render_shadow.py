@@ -130,6 +130,13 @@ class NormalizerWorker:
             except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError, asyncio.LimitOverrunError, ValueError):
                 await self._kill()
                 raise
+            except asyncio.CancelledError:
+                # A request written but not answered would hand its answer to
+                # the next caller: drop the process instead.
+                process, self._process = self._process, None
+                if process is not None and process.returncode is None:
+                    process.kill()
+                raise
             self._sample_rss()
             if not line:
                 await self._kill()

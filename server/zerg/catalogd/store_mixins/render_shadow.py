@@ -21,7 +21,6 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from zerg.catalogd.fact_reducer import _advance_commit_seq
 from zerg.catalogd.models import MediaObject
-from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import RawObject
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
@@ -36,6 +35,7 @@ from zerg.catalogd.store import _read_snapshot
 from zerg.catalogd.store import _recompute_render_generation_projection
 from zerg.catalogd.store import _render_order_columns
 from zerg.catalogd.store import _write_transaction
+from zerg.catalogd.store import storage_projectors_for_provider
 
 # A session this large is rebuilt by Phase 4's incremental path, not sampled.
 MAX_SHADOW_RAW_OBJECTS = 20_000
@@ -157,8 +157,9 @@ class RenderShadowMixin:
                     render.c.object_path,
                     render.c.object_hash,
                     render.c.event_count,
+                    render.c.render_source,
+                    func.coalesce(render.c.object_parser_revision, generations.c.parser_revision).label("parser_revision"),
                     generations.c.generation_id,
-                    generations.c.parser_revision,
                     generations.c.commit_seq,
                 )
                 .select_from(render.join(generations, generations.c.generation_id == render.c.generation_id))
@@ -228,7 +229,6 @@ class RenderShadowMixin:
         render = RenderObject.__table__
         raw = RawObject.__table__
         tombstones = SessionTombstone.__table__
-        projectors = ProjectorState.__table__
         with _write_transaction(self.engine) as connection:
             if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id == session_id)).first() is not None:
                 return {"session_deleted": True}
@@ -272,6 +272,20 @@ class RenderShadowMixin:
                     )
                 ).mappings()
             }
+            # Check every object before writing any, so a conflict commits nothing.
+            plan: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+            for item in objects:
+                envelope_id = str(item["source_envelope_id"])
+                if envelope_id not in live:
+                    continue
+                previous = held.get(envelope_id)
+                if previous is not None and str(previous["object_id"]) == item["object_id"]:
+                    continue
+                if connection.execute(select(render.c.object_id).where(render.c.object_id == item["object_id"])).first() is not None:
+                    # Objects are content-addressed and carry their generation,
+                    # so the same id elsewhere means a different envelope.
+                    return {"conflict": True, "reason": "render object already belongs to another envelope"}
+                plan.append((item, previous))
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
             if generation is None:
@@ -290,51 +304,46 @@ class RenderShadowMixin:
                         updated_at=commit_time,
                     )
                 )
-            written = 0
-            for item in objects:
-                envelope_id = str(item["source_envelope_id"])
-                if envelope_id not in live:
-                    continue
-                previous = held.get(envelope_id)
-                if previous is not None and str(previous["object_id"]) == item["object_id"]:
-                    continue
+            for item, previous in plan:
+                values = {
+                    "object_id": item["object_id"],
+                    "object_hash": item["object_hash"],
+                    "payload_hash": item["payload_hash"],
+                    "object_path": item["object_path"],
+                    "uncompressed_size": item["uncompressed_size"],
+                    "compressed_size": item["compressed_size"],
+                    "event_count": item["event_count"],
+                    "user_messages": item["user_messages"],
+                    "assistant_messages": item["assistant_messages"],
+                    "tool_calls": item["tool_calls"],
+                    "abandoned_events": item.get("abandoned_events"),
+                    "first_user_message_preview": item["first_user_message_preview"],
+                    "last_visible_text_preview": item["last_visible_text_preview"],
+                    "user_turns": item.get("user_turns"),
+                    "semantic_projection_version": item.get("semantic_projection_version", 0),
+                    "render_source": item["render_source"],
+                    "object_parser_revision": item.get("object_parser_revision") or parser_revision,
+                    "first_order_key": item["first_order_key"],
+                    "last_order_key": item["last_order_key"],
+                    **_render_order_columns(item["first_order_key"], item["last_order_key"]),
+                    "commit_seq": commit_seq,
+                }
                 if previous is not None:
-                    connection.execute(update(render).where(render.c.object_id == previous["object_id"]).values(retired_at=commit_time))
-                if connection.execute(select(render.c.object_id).where(render.c.object_id == item["object_id"])).first() is not None:
-                    # The same content already sealed for another generation:
-                    # objects are content-addressed and carry their generation,
-                    # so this cannot be the same object.
-                    return {"conflict": True, "reason": "render object already belongs to another generation"}
-                connection.execute(
-                    render.insert().values(
-                        object_id=item["object_id"],
-                        generation_id=generation_id,
-                        session_id=session_id,
-                        source_envelope_id=envelope_id,
-                        object_hash=item["object_hash"],
-                        payload_hash=item["payload_hash"],
-                        object_path=item["object_path"],
-                        uncompressed_size=item["uncompressed_size"],
-                        compressed_size=item["compressed_size"],
-                        event_count=item["event_count"],
-                        user_messages=item["user_messages"],
-                        assistant_messages=item["assistant_messages"],
-                        tool_calls=item["tool_calls"],
-                        abandoned_events=item.get("abandoned_events"),
-                        first_user_message_preview=item["first_user_message_preview"],
-                        last_visible_text_preview=item["last_visible_text_preview"],
-                        user_turns=item.get("user_turns"),
-                        semantic_projection_version=item.get("semantic_projection_version", 0),
-                        render_source=item["render_source"],
-                        object_parser_revision=item.get("object_parser_revision") or parser_revision,
-                        first_order_key=item["first_order_key"],
-                        last_order_key=item["last_order_key"],
-                        **_render_order_columns(item["first_order_key"], item["last_order_key"]),
-                        commit_seq=commit_seq,
-                        created_at=commit_time,
+                    # One object per (generation, envelope): the host's
+                    # replaces the laptop's in the same row, which also moves
+                    # its commit_seq so projectors read the new one.
+                    connection.execute(update(render).where(render.c.object_id == previous["object_id"]).values(**values))
+                else:
+                    connection.execute(
+                        render.insert().values(
+                            **values,
+                            generation_id=generation_id,
+                            session_id=session_id,
+                            source_envelope_id=str(item["source_envelope_id"]),
+                            created_at=commit_time,
+                        )
                     )
-                )
-                written += 1
+            written = len(plan)
             was_current = session["current_render_generation"] is not None and str(session["current_render_generation"]) == generation_id
             current = was_current
             if was_current and written:
@@ -345,11 +354,24 @@ class RenderShadowMixin:
                 current = _promote_generation_if_covering(
                     connection, session_id=session_id, candidate=generation_id, commit_seq=commit_seq, commit_time=commit_time
                 )
-            if current and (written or not was_current):
+            if written:
+                # An envelope committed raw-only now has its render.
                 connection.execute(
-                    update(projectors)
-                    .where(projectors.c.session_id == session_id)
-                    .values(desired_revision=func.max(projectors.c.desired_revision, commit_seq), desired_at=commit_time)
+                    update(raw)
+                    .where(raw.c.envelope_id.in_([str(item["source_envelope_id"]) for item, _previous in plan]))
+                    .values(render_state="ready")
+                )
+            if current and (written or not was_current):
+                # The projectors a render feeds, registered as ingest does, so
+                # a render that arrived after its raw is indexed too.
+                from zerg.catalogd.store_mixins.ingest import _ADVANCE_PROJECTOR_DESIRED_REVISION
+
+                connection.execute(
+                    _ADVANCE_PROJECTOR_DESIRED_REVISION,
+                    [
+                        {"p_projector": projector, "p_session_id": session_id, "p_revision": commit_seq, "p_at": commit_time}
+                        for projector in storage_projectors_for_provider(session["provider"])
+                    ],
                 )
         return {"written": written, "current": current, "promoted": current and not was_current, "commit_seq": str(commit_seq)}
 

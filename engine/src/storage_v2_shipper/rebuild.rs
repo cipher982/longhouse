@@ -1186,11 +1186,37 @@ mod tests {
         envelopes: &[StorageV2Envelope],
         media: &HashMap<String, Vec<u8>>,
     ) -> Vec<String> {
+        worker_mismatches_in(envelopes, media, false)
+    }
+
+    /// Each envelope sent to the worker by itself, as the host's ingest does,
+    /// for the providers the Machine Agent stops shipping a render for: their
+    /// render must not need the epoch's earlier records.
+    fn single_envelope_mismatches(
+        envelopes: &[StorageV2Envelope],
+        media: &HashMap<String, Vec<u8>>,
+    ) -> Vec<String> {
+        let alone: Vec<StorageV2Envelope> = envelopes
+            .iter()
+            .filter(|envelope| super::HOST_RENDERS_ALONE.contains(&envelope.provider.as_str()))
+            .cloned()
+            .collect();
+        worker_mismatches_in(&alone, media, true)
+            .into_iter()
+            .map(|problem| format!("alone: {problem}"))
+            .collect()
+    }
+
+    fn worker_mismatches_in(
+        envelopes: &[StorageV2Envelope],
+        media: &HashMap<String, Vec<u8>>,
+        alone: bool,
+    ) -> Vec<String> {
         let mut epochs: Vec<Vec<&StorageV2Envelope>> = Vec::new();
         for envelope in envelopes {
             match epochs
                 .iter_mut()
-                .find(|epoch| epoch[0].source_epoch == envelope.source_epoch)
+                .find(|epoch| !alone && epoch[0].source_epoch == envelope.source_epoch)
             {
                 Some(epoch) => epoch.push(envelope),
                 None => epochs.push(vec![envelope]),
@@ -1383,6 +1409,10 @@ mod tests {
                     for problem in rebuild_mismatches(&shipped)
                         .into_iter()
                         .chain(worker_mismatches(&shipped.envelopes, &shipped.media))
+                        .chain(single_envelope_mismatches(
+                            &shipped.envelopes,
+                            &shipped.media,
+                        ))
                     {
                         failures.push(format!(
                             "{tree}/{} (batch {batch_bytes}): {problem}",

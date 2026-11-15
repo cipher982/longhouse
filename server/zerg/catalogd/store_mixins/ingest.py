@@ -1458,13 +1458,29 @@ class IngestMixin:
                     if existing_session is not None and existing_session.get("current_render_generation") is not None
                     else None
                 )
-                # A host generation (minted by the Runtime Host from raw) joins
-                # what is served only once it covers the current generation's
-                # native envelopes; see _promote_generation_if_covering. A
-                # laptop generation keeps "last ready wins": a laptop re-ship
-                # from a new source replaces what an older source served.
-                host_generation = render_manifest.get("host_generation") is True
-                publish_render = render_state == "ready" and (not host_generation or current_key in (None, generation_key))
+                # A render joins what is served at once unless it would replace
+                # the current generation with one that may be partial:
+                # - a host generation replacing another engine-normalized one
+                #   (a host revision bump) waits until it covers the current
+                #   generation's native envelopes; the host rebuild fills it;
+                # - a generation that was already superseded never returns by
+                #   "last ready wins" (an older engine's render after a bump).
+                # Otherwise "last ready wins" stands: a laptop re-ship from a
+                # new source replaces what a legacy import served.
+                held = False
+                if render_state == "ready" and current_key not in (None, generation_key):
+                    current_revision = str(
+                        connection.execute(
+                            select(render_generation.c.parser_revision).where(render_generation.c.generation_id == current_key)
+                        ).scalar()
+                        or ""
+                    )
+                    engine_normalized = current_revision.startswith(("engine-parser-", "cursor-store-"))
+                    held = bool(
+                        (render_manifest.get("host_generation") is True and engine_normalized)
+                        or (existing_generation is not None and existing_generation["state"] == "superseded")
+                    )
+                publish_render = render_state == "ready" and not held
                 if existing_generation is None:
                     connection.execute(
                         insert(render_generation).values(

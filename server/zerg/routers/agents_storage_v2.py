@@ -1152,16 +1152,22 @@ async def _commit_admitted_envelope(
         owner_value = getattr(auth_token, "owner_id", None)
         # Host authority (host-normalized-transcripts Phase 4): the host names
         # the generation and, for a witnessed envelope, builds the render.
+        from zerg.services.host_render import HostRenderUnavailable
         from zerg.services.host_render import render_at_ingest
 
-        host_render = await render_at_ingest(
-            catalog=catalogd,
-            raw_workers=raw_workers,
-            raw_spec=spec,
-            parsed=parsed,
-            owner_id=str(owner_value) if owner_value is not None else None,
-            lane=lane,
-        )
+        try:
+            host_render = await render_at_ingest(
+                catalog=catalogd,
+                raw_workers=raw_workers,
+                raw_spec=spec,
+                parsed=parsed,
+                owner_id=str(owner_value) if owner_value is not None else None,
+                lane=lane,
+            )
+        except HostRenderUnavailable as exc:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "storage_lane_busy", "The host normalizer is busy; retry this envelope."
+            ) from exc
         if host_render is not None:
             parsed["render_spec"] = host_render["spec"]
         timer.mark("host_render")

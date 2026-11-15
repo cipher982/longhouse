@@ -45,10 +45,13 @@ for line in sys.stdin:
     for envelope in request["envelopes"]:
         data = b"".join(base64.b64decode(record["data_b64"]) for record in envelope["records"])
         witnessed = [fact for fact in envelope["facts"] if fact["kind"] == "capture.witness"]
-        if data != b"hello\n" or len(witnessed) != 1 or witnessed[0]["payload"] != {"format": "codex"}:
+        if data != b"hello\n" or len(witnessed) != 1 or witnessed[0]["payload"].get("format") not in ("codex", "claude"):
             answers.append({"range_start": envelope["range_start"], "range_end": envelope["range_end"], "error": f"bad input {data!r} {witnessed!r}"})
             continue
         if mode == "short":
+            continue
+        if mode == "withheld":
+            answers.append({"range_start": envelope["range_start"], "range_end": envelope["range_end"], "render": {"records": [], "session": {}, "media": [], "facts": [], "withheld": True}})
             continue
         records = [dict(record) for record in render]
         if mode == "drift":
@@ -78,15 +81,15 @@ def _fake_normalizer(tmp_path: Path, monkeypatch, *, mode: str, render: list[dic
     return str(script)
 
 
-async def _commit(stack, *, witnessed: bool, laptop_render: bool = True) -> tuple[str, dict]:
-    payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+async def _commit(stack, *, witnessed: bool, laptop_render: bool = True, provider: str = "codex") -> tuple[str, dict]:
+    payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4(), provider=provider)
     session_id = str(uuid4())
     payload["session_id"] = session_id
     if not laptop_render:
         payload["render"] = None
     if witnessed:
         payload["facts"] = [
-            {"kind": "capture.witness", "at": "2026-07-12T12:00:00+00:00", "source_position": 0, "payload": {"format": "codex"}}
+            {"kind": "capture.witness", "at": "2026-07-12T12:00:00+00:00", "source_position": 0, "payload": {"format": provider}}
         ]
     response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
     assert response.status_code == 200, response.text
@@ -450,6 +453,53 @@ async def test_ingest_seals_the_host_render_of_a_witnessed_envelope(monkeypatch,
 
     monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
     async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-ingest-") as stack:
+        from zerg.services import render_shadow as shadow_module
+
+        monkeypatch.setattr(
+            shadow_module,
+            "_context",
+            {"catalog": stack.catalog, "raw_workers": stack.raw_workers, "render_workers": stack.render_workers},
+        )
+        laptop_records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"][
+            "records"
+        ]
+        monkeypatch.setenv("LONGHOUSE_NORMALIZER_BIN", _fake_normalizer(tmp_path, monkeypatch, mode="drift", render=laptop_records))
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps(
+                {
+                    "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+                    "parser_revision": "engine-parser-v2",
+                    "ordering_revision": "semantic-order-v2",
+                }
+            ),
+        )
+        try:
+            session_id, _payload_sent = await _commit(stack, witnessed=True, provider="claude")
+        finally:
+            await close_ingest_normalizer()
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert page.status_code == 200, page.text
+        # The laptop shipped "world"; the host rendered "WORLD" from raw and that is served.
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
+        inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
+        assert inputs["current_render_generation"] == "018f0c3a-7b2d-7f10-8a11-423456789abc"
+
+
+@pytest.mark.asyncio
+async def test_ingest_keeps_the_laptop_render_of_a_provider_that_needs_its_epoch_header(monkeypatch, tmp_path):
+    """Codex reads its session header from earlier in the epoch, so one envelope alone renders wrong."""
+    from zerg.services.host_render import close_ingest_normalizer
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-codex-") as stack:
+        from zerg.services import render_shadow as shadow_module
+
+        monkeypatch.setattr(
+            shadow_module,
+            "_context",
+            {"catalog": stack.catalog, "raw_workers": stack.raw_workers, "render_workers": stack.render_workers},
+        )
         laptop_records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"][
             "records"
         ]
@@ -470,10 +520,7 @@ async def test_ingest_seals_the_host_render_of_a_witnessed_envelope(monkeypatch,
             await close_ingest_normalizer()
         page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
         assert page.status_code == 200, page.text
-        # The laptop shipped "world"; the host rendered "WORLD" from raw and that is served.
-        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
-        inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
-        assert inputs["current_render_generation"] == "018f0c3a-7b2d-7f10-8a11-423456789abc"
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "world"]
 
 
 @pytest.mark.asyncio
@@ -482,6 +529,13 @@ async def test_a_witnessed_envelope_without_a_laptop_render_is_served_from_the_h
 
     monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
     async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-norender-") as stack:
+        from zerg.services import render_shadow as shadow_module
+
+        monkeypatch.setattr(
+            shadow_module,
+            "_context",
+            {"catalog": stack.catalog, "raw_workers": stack.raw_workers, "render_workers": stack.render_workers},
+        )
         records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"]["records"]
         monkeypatch.setenv("LONGHOUSE_NORMALIZER_BIN", _fake_normalizer(tmp_path, monkeypatch, mode="match", render=records))
         monkeypatch.setenv(
@@ -492,7 +546,7 @@ async def test_a_witnessed_envelope_without_a_laptop_render_is_served_from_the_h
         assert capabilities.status_code == 200, capabilities.text
         assert capabilities.json()["host_render"] is True
         try:
-            session_id, _sent = await _commit(stack, witnessed=True, laptop_render=False)
+            session_id, _sent = await _commit(stack, witnessed=True, laptop_render=False, provider="claude")
         finally:
             await close_ingest_normalizer()
         page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
@@ -526,3 +580,127 @@ async def test_a_dry_rebuild_compares_host_event_counts_with_the_served_render(m
         # Nothing was committed: the laptop generation still serves.
         session = (await stack.catalog.call("storage.session.read.v2", {"session_id": session_id}))["session"]
         assert session["current_render_generation"] == payload["render"]["generation_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_host_render_replaces_a_differing_laptop_object_in_the_same_generation(monkeypatch, tmp_path):
+    """Review F1: one object per (generation, envelope); the host's takes the laptop's row."""
+    from zerg.services.render_shadow import _take_over
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-replace-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps(
+                {
+                    "generation_id": payload["render"]["generation_id"],
+                    "parser_revision": "engine-parser-v2",
+                    "ordering_revision": "semantic-order-v2",
+                }
+            ),
+        )
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="drift", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+            assert [row["outcome"] for row in results] == ["mismatch"]
+            results = await _take_over(
+                catalog=stack.catalog,
+                raw_workers=stack.raw_workers,
+                render_workers=stack.render_workers,
+                worker=worker,
+                session_id=session_id,
+                results=results,
+            )
+        finally:
+            await worker.close()
+        assert [row["outcome"] for row in results] == ["host_rendered"]
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
+        inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
+        assert [(row["render_source"], row["generation_id"]) for row in inputs["render_objects"]] == [
+            ("host", payload["render"]["generation_id"])
+        ]
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_range_becomes_an_empty_host_object(monkeypatch, tmp_path):
+    """Review F5: the host's "nothing here" replaces the laptop's render instead of leaving it served."""
+    from zerg.services.host_render import host_rebuild_session
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-withheld-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps(
+                {
+                    "generation_id": payload["render"]["generation_id"],
+                    "parser_revision": "engine-parser-v2",
+                    "ordering_revision": "semantic-order-v2",
+                }
+            ),
+        )
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="withheld", render=payload["render"]["records"]))
+        try:
+            await host_rebuild_session(
+                catalog=stack.catalog,
+                raw_workers=stack.raw_workers,
+                render_workers=stack.render_workers,
+                worker=worker,
+                session_id=session_id,
+            )
+        finally:
+            await worker.close()
+        inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
+        assert [(row["render_source"], row["event_count"]) for row in inputs["render_objects"]] == [("host", 0)]
+
+
+@pytest.mark.asyncio
+async def test_a_render_filled_in_by_a_rebuild_is_ready_indexed_and_announced(monkeypatch, tmp_path):
+    """Review F4: a host render that arrives after its raw does what ingest would have done."""
+    import sqlite3
+
+    from zerg.services import host_render as host_render_module
+    from zerg.services.host_render import host_rebuild_session
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "0")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-late-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True, laptop_render=False)
+        database = stack.object_root.parent / "catalog.db"
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("select render_state from raw_objects where session_id = ?", (session_id,)).fetchone()[0] != "ready"
+            before = dict(
+                connection.execute("select projector, desired_revision from projector_state where session_id = ?", (session_id,)).fetchall()
+            )
+        woken = []
+        monkeypatch.setattr(host_render_module, "_wake_clients", lambda sid, *, provider: woken.append(sid))
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps({"generation_id": str(uuid4()), "parser_revision": "engine-parser-v2", "ordering_revision": "semantic-order-v2"}),
+        )
+        laptop_records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"][
+            "records"
+        ]
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="match", render=laptop_records))
+        try:
+            result = await host_rebuild_session(
+                catalog=stack.catalog,
+                raw_workers=stack.raw_workers,
+                render_workers=stack.render_workers,
+                worker=worker,
+                session_id=session_id,
+            )
+        finally:
+            await worker.close()
+        assert result["written"] == 1 and result["current"]
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("select render_state from raw_objects where session_id = ?", (session_id,)).fetchone()[0] == "ready"
+            after = dict(
+                connection.execute("select projector, desired_revision from projector_state where session_id = ?", (session_id,)).fetchall()
+            )
+        from zerg.catalogd.store import storage_projectors_for_provider
+
+        assert all(after.get(name, 0) > before.get(name, 0) for name in storage_projectors_for_provider("codex")), (before, after)
+        assert woken == [session_id]
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "world"]

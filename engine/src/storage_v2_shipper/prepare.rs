@@ -866,12 +866,7 @@ fn prepare_file_envelope(
             // Suppressed outright when store.db owns this conversation's render;
             // otherwise the original rule stands, because a Cursor snapshot
             // without a clock cannot certify an empty transcript.
-            // A host that renders from raw needs only the bytes and the
-            // witness. Cursor keeps shipping its render: the host leaves
-            // Cursor's store.db versus agent-transcripts authority to it.
-            render: (render_shipped
-                && !(capabilities.host_render && !provider.eq_ignore_ascii_case("cursor")))
-            .then(|| StorageV2Render {
+            render: render_shipped.then(|| StorageV2Render {
                 generation_id: render_generation.to_string(),
                 parser_revision: PARSER_REVISION.to_string(),
                 ordering_revision: ORDERING_REVISION.to_string(),

@@ -142,11 +142,11 @@ def test_storage_v2_writer_queue_full_sends_retry_after_header():
     assert raised.value.headers["Retry-After"] == "3"
 
 
-def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
+def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n", provider: str = "codex") -> dict:
     identity = EnvelopeIdentity(
         tenant_id=tenant_id,
         machine_id=machine_id,
-        provider="codex",
+        provider=provider,
         opaque_source_id="history.jsonl",
         source_epoch=epoch,
         range_kind="byte_offset",
@@ -159,7 +159,7 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
         "tenant_id": tenant_id,
         "machine_id": machine_id,
         "session_id": "018f0c3a-7b2d-7f10-8a11-123456789abc",
-        "provider": "codex",
+        "provider": provider,
         "opaque_source_id": "history.jsonl",
         "source_epoch": str(epoch),
         "predecessor_source_epoch": None,

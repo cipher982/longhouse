@@ -18,6 +18,7 @@ import asyncio
 import base64
 import logging
 from collections import defaultdict
+from dataclasses import asdict
 from dataclasses import replace
 from typing import Any
 from uuid import UUID
@@ -36,11 +37,20 @@ from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 logger = logging.getLogger(__name__)
 
 COMMIT_CHUNK = 500
+# Providers whose render the host builds from one envelope and its witness
+# alone; the engine's HOST_RENDERS_ALONE stops shipping their render. Codex,
+# Pi and OMP read their file header from earlier in the epoch, so ingest seals
+# their laptop render and the sweep rebuilds them from the whole epoch.
+HOST_RENDERS_ALONE = frozenset({"claude", "antigravity"})
 INGEST_TIMEOUT_SECONDS = 10.0
 
 
 class HostRenderSkipped(Exception):
     """The session cannot be rebuilt into a complete host generation now."""
+
+
+class HostRenderUnavailable(Exception):
+    """Host authority is on but the normalizer did not answer: the envelope is retried."""
 
 
 def render_manifest(spec: Any, sealed: Any) -> dict[str, Any]:
@@ -83,19 +93,24 @@ async def host_rebuild_session(
 ) -> dict[str, Any]:
     """Rebuild one session into its host generation and commit it.
 
+    Witnessed envelopes are rendered by the host; an envelope the parser holds
+    back becomes an empty host object. When the host generation is not the
+    current one, every other native envelope the current generation serves is
+    carried forward, and so is any epoch the host could not rebuild (too large,
+    media deleted, a normalizer error), so the generation always covers what
+    is served and nothing new waits on a rebuild that cannot finish.
+
     With `only_missing`, an epoch whose witnessed envelopes all have a render
-    in the current generation is not rebuilt: ingest committed raw it could
-    not render on its own (an OpenCode or Cursor store envelope needs the
-    epoch's earlier records), and only that needs filling.
+    in the current generation is skipped: ingest committed raw it could not
+    render alone (an OpenCode envelope needs the epoch's earlier records).
 
-    With `commit=False` nothing is sealed or committed: each host-rendered
-    envelope's event count is compared with the render served for it.
-
-    Returns the host-rendered envelope ids and whether the host generation is
-    now current. Raises `HostRenderSkipped` when a complete generation cannot
-    be built (an epoch too large, deleted media, a normalizer error), leaving
-    what is served untouched.
+    With `commit=False` nothing is sealed or committed: each host render is
+    compared row by row with the render served for that envelope.
     """
+    from zerg.services.render_shadow import _first_difference
+    from zerg.services.render_shadow import _render_row
+    from zerg.services.render_shadow import _sort_key
+
     inputs = await catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
     if inputs.get("found") is not True:
         raise HostRenderSkipped("session not found")
@@ -106,15 +121,29 @@ async def host_rebuild_session(
     media_by_envelope: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in inputs["media"]:
         media_by_envelope[row["envelope_id"]].append(row)
-    laptop_objects = {row["source_envelope_id"]: row for row in inputs["render_objects"]}
+    served_objects = {row["source_envelope_id"]: row for row in inputs["render_objects"]}
     epochs: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in inputs["raw_objects"]:
         epochs[(row["machine_id"], row["provider"], row["opaque_source_id"], row["source_epoch"])].append(row)
+    owner_id = str(inputs["owner_id"]) if inputs.get("owner_id") is not None else None
     manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
+
+    async def served_rows(envelope_id: str) -> list[dict[str, Any]]:
+        served = served_objects.get(envelope_id)
+        if served is None:
+            return []
+        decoded = await render_workers.read(
+            served["object_path"],
+            served["object_hash"],
+            lane="background",
+            queue_timeout_seconds=READ_QUEUE_SECONDS,
+            operation_timeout_seconds=30.0,
+        )
+        return sorted((_render_row(asdict(record)) for record in decoded.spec.records), key=_sort_key)
 
     generation: dict[str, Any] | None = None
     objects: list[dict[str, Any]] = []
-    compared = {"compared": 0, "equal": 0, "differences": []}
+    compared: dict[str, Any] = {"compared": 0, "equal": 0, "differences": [], "unrebuilt_epochs": 0}
     host_envelopes: list[str] = []
     for (_machine, provider, _source, epoch), rows in epochs.items():
         rows.sort(key=lambda row: row["range_start"])
@@ -124,7 +153,7 @@ async def host_rebuild_session(
         if (
             only_missing
             and current is not None
-            and all(str((laptop_objects.get(row["envelope_id"]) or {}).get("generation_id")) == str(current) for row in witnessed)
+            and all(str((served_objects.get(row["envelope_id"]) or {}).get("generation_id")) == str(current) for row in witnessed)
         ):
             continue
         try:
@@ -138,54 +167,51 @@ async def host_rebuild_session(
                 capture=capture,
                 media_by_envelope=media_by_envelope,
             )
+            response = await worker.rebuild(request)
         except NormalizerUnavailable:
             raise
-        except Exception as exc:  # noqa: BLE001 - nothing partial is committed
-            raise HostRenderSkipped(f"reading epoch {epoch}: {type(exc).__name__}: {exc}") from exc
-        response = await worker.rebuild(request)
-        if "error" in response or not isinstance(response.get("generation"), dict):
-            raise HostRenderSkipped(f"normalizer: {response.get('error') or 'no generation named'}")
-        epoch_generation = response["generation"]
+        except Exception as exc:  # noqa: BLE001 - this epoch keeps its served render
+            logger.info("host render session=%s epoch=%s not rebuilt: %s: %s", session_id, epoch, type(exc).__name__, exc)
+            compared["unrebuilt_epochs"] += 1
+            continue
+        epoch_generation = response.get("generation")
+        if not isinstance(epoch_generation, dict) or "error" in response:
+            logger.info("host render session=%s epoch=%s not rebuilt: %s", session_id, epoch, response.get("error"))
+            compared["unrebuilt_epochs"] += 1
+            continue
         if generation is None:
             generation = epoch_generation
         elif generation["generation_id"] != epoch_generation["generation_id"]:
             raise HostRenderSkipped("session spans two host generations")
         answers = {int(answer.get("range_start", -1)): answer for answer in response.get("envelopes") or []}
-        for row in rows:
-            if (epoch, row["range_start"]) not in capture:
-                continue
-            answer = answers.get(row["range_start"])
-            if answer is None or answer.get("error"):
-                raise HostRenderSkipped(f"normalizer: {answer.get('error') if answer else 'no answer'} for {row['envelope_id']}")
-            rebuilt = answer["render"]
-            if rebuilt.get("withheld"):
-                # The parser holds this range back (an unfinished turn): no object.
-                if not commit:
-                    served = laptop_objects.get(row["envelope_id"])
-                    compared["compared"] += 1
-                    compared["equal"] += int(served is None or int(served["event_count"]) == 0)
-                host_envelopes.append(row["envelope_id"])
-                continue
+        if any((answers.get(row["range_start"]) or {"error": "no answer"}).get("error") for row in witnessed):
+            compared["unrebuilt_epochs"] += 1
+            continue
+        for row in witnessed:
+            rebuilt = answers[row["range_start"]]["render"]
+            # A range the parser holds back (an unfinished turn) is an empty
+            # host object, so coverage holds and the laptop's is replaced.
+            records = [] if rebuilt.get("withheld") else rebuilt["records"]
             spec = await host_render_spec(
                 catalog=catalog,
                 raw_workers=raw_workers,
                 session_id=session_id,
-                owner_id=str(inputs["owner_id"]) if inputs.get("owner_id") is not None else None,
+                owner_id=owner_id,
                 raw_spec=raw_specs[row["envelope_id"]],
                 envelope_id=row["envelope_id"],
-                records=rebuilt["records"],
+                records=records,
                 generation=epoch_generation,
                 manifest_cache=manifest_cache,
             )
+            host_envelopes.append(row["envelope_id"])
             if not commit:
-                served = laptop_objects.get(row["envelope_id"])
-                served_events = int(served["event_count"]) if served is not None else 0
+                host = sorted((_render_row(asdict(record)) for record in spec.records), key=_sort_key)
+                difference = _first_difference(await served_rows(row["envelope_id"]), host)
                 compared["compared"] += 1
-                if served_events == len(spec.records):
+                if difference is None:
                     compared["equal"] += 1
                 elif len(compared["differences"]) < 5:
-                    compared["differences"].append({"envelope_id": row["envelope_id"], "served": served_events, "host": len(spec.records)})
-                host_envelopes.append(row["envelope_id"])
+                    compared["differences"].append({"envelope_id": row["envelope_id"], "difference": difference})
                 continue
             sealed = await render_workers.seal(spec, lane="repair")
             objects.append(
@@ -196,9 +222,10 @@ async def host_rebuild_session(
                     "object_parser_revision": epoch_generation["parser_revision"],
                 }
             )
-            host_envelopes.append(row["envelope_id"])
     if generation is None:
-        raise HostRenderSkipped("nothing to rebuild" if only_missing else "no witnessed envelope")
+        generation = await _name_generation(worker, inputs, session_id)
+    if generation is None:
+        raise HostRenderSkipped("nothing to rebuild" if only_missing else "no generation to rebuild into")
 
     if not commit:
         return {**compared, "generation_id": generation["generation_id"], "current": str(current) == generation["generation_id"]}
@@ -207,17 +234,17 @@ async def host_rebuild_session(
         # Carry every other native envelope the current generation serves.
         rendered = set(host_envelopes)
         for row in inputs["raw_objects"]:
-            laptop = laptop_objects.get(row["envelope_id"])
+            served = served_objects.get(row["envelope_id"])
             if (
                 row["envelope_id"] in rendered
                 or row.get("provenance_kind") != "native"
-                or laptop is None
-                or str(laptop.get("generation_id")) != str(current)
+                or served is None
+                or str(served.get("generation_id")) != str(current)
             ):
                 continue
             decoded = await render_workers.read(
-                laptop["object_path"],
-                laptop["object_hash"],
+                served["object_path"],
+                served["object_hash"],
                 lane="background",
                 queue_timeout_seconds=READ_QUEUE_SECONDS,
                 operation_timeout_seconds=30.0,
@@ -233,8 +260,10 @@ async def host_rebuild_session(
                 {
                     **render_manifest(spec, sealed),
                     "source_envelope_id": row["envelope_id"],
-                    "render_source": "laptop",
-                    "object_parser_revision": laptop.get("parser_revision"),
+                    # Keep who made it and with which parser: a carried object
+                    # is not a host render.
+                    "render_source": served.get("render_source") or "laptop",
+                    "object_parser_revision": served.get("parser_revision"),
                 }
             )
 
@@ -256,15 +285,67 @@ async def host_rebuild_session(
             },
         )
         result = {"current": answer.get("current"), "written": result["written"] + int(answer.get("written") or 0)}
+    if result["written"] and result["current"]:
+        _wake_clients(session_id, provider=str(inputs.get("provider") or ""))
     logger.info(
-        "host render session=%s generation=%s objects=%d written=%d current=%s",
+        "host render session=%s generation=%s objects=%d written=%d current=%s unrebuilt_epochs=%d",
         session_id,
         generation["generation_id"],
         len(objects),
         result["written"],
         result["current"],
+        compared["unrebuilt_epochs"],
     )
-    return {**result, "generation_id": generation["generation_id"], "host_envelopes": host_envelopes}
+    return {
+        **result,
+        "generation_id": generation["generation_id"],
+        "host_envelopes": host_envelopes,
+        "unrebuilt_epochs": compared["unrebuilt_epochs"],
+    }
+
+
+def _wake_clients(session_id: str, *, provider: str) -> None:
+    """Tell open timelines and detail pages that what this session serves changed."""
+    from datetime import UTC
+    from datetime import datetime
+
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
+    payload = {
+        "session_id": session_id,
+        "kind": "ingest",
+        "events_inserted": 0,
+        "provider": provider,
+        "source": "host_render",
+        "server_fanout_at_ms": int(datetime.now(UTC).timestamp() * 1000),
+    }
+    bus = get_pubsub()
+    bus.publish(topic_session(session_id), payload)
+    bus.publish(TOPIC_TIMELINE, payload)
+
+
+async def _name_generation(worker: NormalizerWorker, inputs: dict[str, Any], session_id: str) -> dict[str, Any] | None:
+    """The host generation of a session with nothing witnessed to rebuild, named by the normalizer."""
+    for row in inputs["raw_objects"]:
+        if row["provider"] == "cursor":
+            continue
+        answer = await worker.rebuild(
+            {
+                "id": "name",
+                "provider": row["provider"],
+                "session_id": session_id,
+                "source_epoch": row["source_epoch"],
+                "epoch_opened_at": inputs["epoch_opened_at"].get(row["source_epoch"], ""),
+                "range_kind": row["range_kind"],
+                "envelopes": [],
+                "media": {},
+            }
+        )
+        generation = answer.get("generation")
+        return generation if isinstance(generation, dict) else None
+    return None
 
 
 _ingest_worker: NormalizerWorker | None = None
@@ -315,8 +396,12 @@ async def render_at_ingest(
     rebuilds it from raw when it differs). `spec` is None when there is no
     render to seal.
     """
+    from zerg.services.render_shadow import rebuild_context
+
     worker = _ingest_normalizer()
-    if worker is None or raw_spec.provider == "cursor":
+    # Host authority needs the rebuild sweep running: a host generation that
+    # waits for coverage is filled by it.
+    if worker is None or rebuild_context() is None or raw_spec.provider == "cursor":
         # Cursor keeps the laptop's render authority for now: its store.db
         # render must replace a lossy agent-transcripts render whenever it
         # arrives, which a host generation's coverage rule would block.
@@ -326,7 +411,7 @@ async def render_at_ingest(
         for fact in parsed.get("provider_facts") or []
         if fact.get("kind") == CAPTURE_WITNESS and fact.get("source_position") == raw_spec.range_start
     ]
-    host_renders = bool(witness) and raw_spec.range_kind == "byte_offset"
+    host_renders = bool(witness) and raw_spec.range_kind == "byte_offset" and raw_spec.provider in HOST_RENDERS_ALONE
     refs: list[dict[str, Any]] = []
     media: dict[str, str] = {}
     if host_renders:
@@ -357,13 +442,15 @@ async def render_at_ingest(
         "media": media,
     }
     try:
-        answer = await worker.rebuild(request)
-    except Exception:  # noqa: BLE001 - the laptop render is sealed as before
+        # The whole call, lock wait included, so one slow render cannot hold
+        # every queued live envelope.
+        answer = await asyncio.wait_for(worker.rebuild(request), INGEST_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - the Machine Agent retries the envelope
         logger.warning("host render at ingest unavailable for session %s", raw_spec.session_id, exc_info=True)
-        return None
+        raise HostRenderUnavailable(str(exc)) from exc
     generation = answer.get("generation")
     if not isinstance(generation, dict):
-        return None
+        raise HostRenderUnavailable(f"normalizer named no generation: {answer.get('error')}")
     rendered = (answer.get("envelopes") or [None])[0] if host_renders and "error" not in answer else None
     if rendered is not None and rendered.get("render") is not None and not rendered.get("error"):
         if rendered["render"].get("withheld"):
