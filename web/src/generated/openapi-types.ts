@@ -2139,7 +2139,7 @@ export interface paths {
         };
         /**
          * Get Timeline Session Turn Index
-         * @description Every user turn of the session, oldest first, from the catalog's turn index.
+         * @description The newest `limit` user turns of the session, oldest first, from the catalog's turn index.
          */
         get: operations["get_timeline_session_turn_index_timeline_sessions__session_id__turn_index_get"];
         put?: never;
@@ -2945,7 +2945,7 @@ export interface paths {
         };
         /**
          * Get Agents Session Turn Index
-         * @description Every user turn of the session, oldest first, from the catalog's turn index.
+         * @description The newest `limit` user turns of the session, oldest first, from the catalog's turn index.
          */
         get: operations["get_agents_session_turn_index_agents_sessions__session_id__turn_index_get"];
         put?: never;
@@ -9470,6 +9470,11 @@ export interface components {
             generation_id?: string | null;
             /** Branch Mode */
             branch_mode: string;
+            /**
+             * Total Turns
+             * @description Turns in the session; `turns` holds the newest `limit` of them
+             */
+            total_turns: number;
             /** Turns */
             turns?: components["schemas"]["SessionTurn"][];
             /**
@@ -14214,6 +14219,8 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Newest turns to return */
+                limit?: number;
             };
             header?: never;
             path: {
@@ -15699,6 +15706,8 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Newest turns to return */
+                limit?: number;
             };
             header?: never;
             path: {

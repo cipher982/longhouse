@@ -1174,10 +1174,11 @@ export async function fetchSessionEventBodies(
 /** Every user turn of a session, oldest first, without loading its transcript. */
 export async function fetchSessionTurnIndex(
   sessionId: string,
-  options: { branch_mode?: "head" | "all" } = {},
+  options: { branch_mode?: "head" | "all"; limit?: number } = {},
 ): Promise<SessionTurnIndexResponse> {
   const params = new URLSearchParams();
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+  if (options.limit) params.set("limit", String(options.limit));
   const queryString = params.toString();
   return request<SessionTurnIndexResponse>(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/turn-index${queryString ? `?${queryString}` : ""}`,

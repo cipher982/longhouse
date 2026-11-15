@@ -1060,10 +1060,11 @@ async def get_timeline_session_workspace(
 async def get_timeline_session_turn_index(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(500, ge=1, le=5000, description="Newest turns to return"),
     current_user=Depends(get_current_browser_caller),
 ):
-    """Every user turn of the session, oldest first, from the catalog's turn index."""
-    return await read_session_turn_index(session_id=session_id, owner_id=int(current_user.owner_id), branch_mode=branch_mode)
+    """The newest `limit` user turns of the session, oldest first, from the catalog's turn index."""
+    return await read_session_turn_index(session_id=session_id, owner_id=int(current_user.owner_id), branch_mode=branch_mode, limit=limit)
 
 
 @router.get("/sessions/{session_id}/event-bodies", response_model=SessionEventBodiesResponse)

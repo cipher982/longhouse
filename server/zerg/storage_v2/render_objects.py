@@ -381,8 +381,8 @@ def _user_turn(spec: RenderObjectSpec, record: RenderRecord, *, turn: bool) -> d
     return {
         "event_id": record.event_id,
         "order_key": list(_order_key_tuple(spec, record)),
-        "parent_uuid": record.parent_uuid,
-        "branch_kind": record.branch_kind,
+        "parent_uuid": record.parent_uuid or None,
+        "branch_kind": record.branch_kind or None,
         "turn": turn,
         "preview": _turn_preview(record.content_text) if turn else None,
     }
@@ -397,13 +397,13 @@ _WRAPPED_BODY_CHARS = 120
 
 
 def _turn_preview(value: str | None) -> str | None:
-    if value is None:
+    if not value:
         return None
     shortened = _WRAPPED_BLOCK.sub(
         lambda match: match.group(1) + match.group(3)[:_WRAPPED_BODY_CHARS] + match.group(4),
         value,
     )
-    return _preview(shortened)
+    return _preview(shortened) or None
 
 
 def aggregate_render_object(spec: RenderObjectSpec) -> dict[str, object]:

@@ -22,19 +22,27 @@ from fastapi import status
 
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.routers.agents_storage_v2 import _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS as SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import resolve_session_alias
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerBusy
+from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
+from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import recover_render_spec
 from zerg.storage_v2.branching import infers_branches_from_parent_links
 from zerg.storage_v2.branching import superseded_user_event_ids
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import aggregate_render_object
 
 _CATALOG_TIMEOUT_SECONDS = 5.0
+_PREVIEW_CHARS = 500
+# The newest turns are what the rail shows; older ones stay a count.
+DEFAULT_TURN_LIMIT = 500
+MAX_TURN_LIMIT = 5_000
 _DECODE_BATCH = 16
 # The engine splits one prompt's content blocks into `<id>-image-<n>` and
 # `<id>-text-<n>` events; the transcript shows them as one row (timelineModel's
@@ -76,8 +84,10 @@ def build_turns(
             continue
         preview = entry.get("preview")
         if turns and _is_fragment_of(str(turns[-1]["event_id"]), event_id):
-            if not turns[-1]["preview"] and preview:
-                turns[-1]["preview"] = preview
+            # The timeline joins a prompt's blocks with a blank line
+            # (timelineModel's joinMessageParts); the preview does the same.
+            parts = [part.strip() for part in (turns[-1]["preview"], preview) if isinstance(part, str) and part.strip()]
+            turns[-1]["preview"] = "\n\n".join(parts)[:_PREVIEW_CHARS] or None
             continue
         order_key = entry["order_key"]
         turns.append(
@@ -101,7 +111,15 @@ async def _read_index(catalogd, session_id: UUID, owner_id: int) -> dict:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
 
 
-async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mode: str = "head") -> dict[str, object]:
+async def read_session_turn_index(
+    *,
+    session_id: UUID,
+    owner_id: int,
+    branch_mode: str = "head",
+    limit: int = DEFAULT_TURN_LIMIT,
+) -> dict[str, object]:
+    if not 1 <= limit <= MAX_TURN_LIMIT:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"limit must be from 1 through {MAX_TURN_LIMIT}")
     if branch_mode not in {"head", "all"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="branch_mode must be one of: head, all")
     catalogd = get_catalogd_client()
@@ -109,7 +127,7 @@ async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mod
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.")
     requested_id = session_id
     index = await _read_index(catalogd, session_id, owner_id)
-    if index.get("found") is not True:
+    if index.get("found") is not True or index.get("retired") is True:
         # Same alias rule as the workspace: a provider alias or retired shadow
         # id opens the session it now belongs to.
         try:
@@ -123,7 +141,7 @@ async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mod
         if resolved is not None and resolved != session_id:
             session_id = resolved
             index = await _read_index(catalogd, session_id, owner_id)
-    if index.get("found") is not True:
+    if index.get("found") is not True or index.get("retired") is True:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {requested_id} not found")
     generation_id = index.get("generation_id")
     objects = [item for item in index.get("objects") or [] if isinstance(item, dict)]
@@ -143,7 +161,17 @@ async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mod
             for start in range(0, len(pending), _DECODE_BATCH):
                 batch = pending[start : start + _DECODE_BATCH]
                 decoded_batch = await asyncio.gather(
-                    *(workers.read(str(item["object_path"]), str(item["object_hash"]), lane="user") for item in batch)
+                    *(
+                        workers.read(
+                            str(item["object_path"]),
+                            str(item["object_hash"]),
+                            lane="user",
+                            # The transcript reader's timeout, so concurrent
+                            # reads of the same object share one decode.
+                            queue_timeout_seconds=SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
+                        )
+                        for item in batch
+                    )
                 )
                 for item, decoded in zip(batch, decoded_batch, strict=True):
                     spec = decoded.spec
@@ -174,11 +202,21 @@ async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mod
                 detail="Session history is temporarily busy; retry shortly.",
                 headers={"Retry-After": "1"},
             ) from exc
+        except StorageV2SemanticRecoveryPermanentError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
+            ) from exc
         except StorageV2SemanticRecoveryError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Provider interaction semantics are pending immutable raw history; retry shortly.",
                 headers={"Retry-After": "60"},
+            ) from exc
+        except (RenderObjectCorruptError, RenderObjectWorkerError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The immutable render generation could not be verified.",
             ) from exc
 
     providers = {str(item.get("provider") or "") for item in objects}
@@ -191,7 +229,8 @@ async def read_session_turn_index(*, session_id: UUID, owner_id: int, branch_mod
         "session_id": str(session_id),
         "generation_id": str(generation_id) if generation_id is not None else None,
         "branch_mode": branch_mode,
-        "turns": turns,
+        "total_turns": len(turns),
+        "turns": turns[-limit:],
         "objects_indexed": len(objects) - len(pending),
         "objects_decoded": decoded_objects,
     }

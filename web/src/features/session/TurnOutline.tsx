@@ -69,6 +69,14 @@ export function deriveTurnOutline(items: TimelineItem[]): TurnOutlineTurn[] {
   return turns;
 }
 
+const PROMPT_FRAGMENT = /^(?:image|text)-\d+$/;
+
+/** Whether `eventId` is one content block of the prompt `baseId` (timelineModel merges these). */
+function isPromptFragmentOf(baseId: string, eventId: string): boolean {
+  const prefix = `${baseId}-`;
+  return eventId.startsWith(prefix) && PROMPT_FRAGMENT.test(eventId.slice(prefix.length));
+}
+
 /** An outline row for a turn the server's turn index returned. */
 export function turnFromIndex(turn: SessionTurn): TurnOutlineTurn {
   return {
@@ -97,9 +105,16 @@ export function mergeTurnOutline(
   if (!indexed || indexed.length === 0) return loaded;
   const loadedIds = new Set(loaded.map((turn) => String(turn.eventId)));
   const older = indexed
-    .filter((turn) => !loadedIds.has(turn.event_id) && parseUTC(turn.timestamp).getTime() < loadedFromMs)
+    .filter((turn) => !loadedIds.has(turn.event_id) && parseUTC(turn.timestamp).getTime() <= loadedFromMs)
     .map(turnFromIndex);
-  return older.length > 0 ? [...older, ...loaded] : loaded;
+  if (older.length === 0) return loaded;
+  // A page can start on the image or text block of a prompt whose first block
+  // is just outside it; that block is part of the indexed turn, not a new one.
+  const olderIds = older.map((turn) => String(turn.eventId));
+  const inWindow = loaded.filter(
+    (turn) => !olderIds.some((base) => isPromptFragmentOf(base, String(turn.eventId))),
+  );
+  return [...older, ...inWindow];
 }
 
 export interface TurnOutlineProps {

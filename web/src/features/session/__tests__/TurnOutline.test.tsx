@@ -109,6 +109,12 @@ describe("mergeTurnOutline", () => {
     expect(turns[1]).toBe(window[0]);
   });
 
+  it("does not repeat a prompt whose image block opens the loaded window", () => {
+    const window = [loaded("u2-image-1", "2026-11-14T11:00:00Z"), loaded("u4", "2026-11-14T13:00:00Z")];
+    const turns = mergeTurnOutline(indexed, window, Date.parse("2026-11-14T11:00:00Z"));
+    expect(turns.map((turn) => turn.eventId)).toEqual(["u1", "u2", "u4"]);
+  });
+
   it("falls back to the loaded thread without an index", () => {
     const only = [loaded("u9", "2026-11-14T13:00:00Z")];
     expect(mergeTurnOutline(null, only, 0)).toBe(only);

@@ -1556,6 +1556,7 @@ class SessionTurnIndexResponse(BaseModel):
     session_id: str
     generation_id: Optional[str] = None
     branch_mode: str
+    total_turns: int = Field(..., description="Turns in the session; `turns` holds the newest `limit` of them")
     turns: list[SessionTurn] = Field(default_factory=list)
     objects_indexed: int = Field(..., description="Render objects whose turns came from the catalog")
     objects_decoded: int = Field(..., description="Render objects decoded because they are pending repair or predate the index")

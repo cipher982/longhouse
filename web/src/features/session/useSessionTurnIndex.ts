@@ -4,6 +4,8 @@ import { fetchSessionTurnIndex, type SessionTurn } from "@/shared/api/agents";
 import type { TurnOutlineTurn } from "./TurnOutline";
 
 export const SESSION_TURN_INDEX_QUERY_KEY = "agent-session-turn-index";
+/** How many of the newest turns the outline lists. */
+export const SESSION_TURN_OUTLINE_LIMIT = 200;
 
 /**
  * Every user turn of the session from the server's turn index, so the outline
@@ -20,7 +22,8 @@ export function useSessionTurnIndex(
 ): readonly SessionTurn[] | null {
   const query = useQuery({
     queryKey: [SESSION_TURN_INDEX_QUERY_KEY, sessionId, branchMode] as const,
-    queryFn: () => fetchSessionTurnIndex(sessionId!, { branch_mode: branchMode }),
+    queryFn: () =>
+      fetchSessionTurnIndex(sessionId!, { branch_mode: branchMode, limit: SESSION_TURN_OUTLINE_LIMIT }),
     enabled: Boolean(sessionId),
     staleTime: 60_000,
     refetchOnWindowFocus: false,

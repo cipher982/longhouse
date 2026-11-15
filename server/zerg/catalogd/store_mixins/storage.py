@@ -1974,7 +1974,11 @@ class StorageMixin:
             ).scalar_one_or_none()
             session_row = (
                 connection.execute(
-                    select(session_table.c.current_render_generation).where(
+                    select(
+                        session_table.c.current_render_generation,
+                        session_table.c.raw_state,
+                        session_table.c.render_state,
+                    ).where(
                         session_table.c.session_id == session_key,
                         session_table.c.owner_id == owner_id,
                     )
@@ -2036,6 +2040,8 @@ class StorageMixin:
             return {
                 "found": session_row is not None and deleted is None,
                 "deleted": deleted is not None,
+                # A retired shadow keeps its row; the caller resolves its alias.
+                "retired": session_row is not None and "retired" in {session_row["raw_state"], session_row["render_state"]},
                 "generation_id": generation_id,
                 "objects": [
                     {
@@ -2770,13 +2776,6 @@ def _retire_session_render(connection, session_key: str, observed_at: datetime) 
     return commit_seq, int(retired_render or 0), int(retired_generations or 0)
 
 
-# Raw replay of one object reads its companions within this many objects on
-# each side of it in the same source stream (storage_v2_semantics'
-# _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS), so a pending object can still change
-# the semantic kinds of settled neighbors inside that window.
-_TURN_INDEX_PENDING_NEIGHBORS = 2
-
-
 def _turn_index_selection(outline) -> tuple[list[str], set[str]]:
     """Objects the turn index needs, in order, and the subset that must be decoded.
 
@@ -2785,6 +2784,11 @@ def _turn_index_selection(outline) -> tuple[list[str], set[str]]:
     objects sealed before turn lists existed that count a user message.
     """
 
+    # Raw replay of one object reads its companions within this many objects
+    # on each side in the same source stream, so a pending object can still
+    # change the semantic kinds of settled neighbors inside that window.
+    from zerg.services.storage_v2_semantics import _SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS as neighbors
+
     streams: dict[tuple[object, ...], list[Any]] = {}
     for row in outline:
         streams.setdefault((row.first_machine_id, row.first_provider, row.first_opaque_source_id, row.first_source_epoch), []).append(row)
@@ -2792,7 +2796,7 @@ def _turn_index_selection(outline) -> tuple[list[str], set[str]]:
     for stream in streams.values():
         for index, row in enumerate(stream):
             if int(row.semantic_projection_version or 0) < 1:
-                window = stream[max(0, index - _TURN_INDEX_PENDING_NEIGHBORS) : index + _TURN_INDEX_PENDING_NEIGHBORS + 1]
+                window = stream[max(0, index - neighbors) : index + neighbors + 1]
                 decode.update(str(item.object_id) for item in window if int(item.event_count or 0) > 0)
     wanted: list[str] = []
     for row in outline:

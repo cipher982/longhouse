@@ -5328,12 +5328,15 @@ async def test_turn_index_reads_settled_turn_lists_and_marks_what_needs_decoding
         assert returned[pending] == [_turn("u5", 5)] and returned[near] == [_turn("u4", 4)]
         assert returned[legacy] is None
 
-        with pytest.raises(CatalogRemoteError, match="user_turns"):
-            bad = _raw_params(epoch=epoch, session_id=session_id, start=36, end=42, records=(b"line6\n",), sealed_at=now, provider="claude")
-            manifest = _render_manifest(generation_id, seed=b"bad", position=10, source_epoch=epoch, provider="claude")
-            manifest["user_turns"] = []  # disagrees with user_messages=1
-            bad.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
-            await client.call("storage.raw_object.commit.v2", bad)
+        # A turn list the catalog cannot accept never fails the commit: it is
+        # stored as missing, and the turn index decodes that object instead.
+        bad = _raw_params(epoch=epoch, session_id=session_id, start=36, end=42, records=(b"line6\n",), sealed_at=now, provider="claude")
+        manifest = _render_manifest(generation_id, seed=b"bad", position=6, source_epoch=epoch, provider="claude")
+        manifest["user_turns"] = []  # disagrees with user_messages=1
+        bad.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+        await client.call("storage.raw_object.commit.v2", bad)
+        after_bad = await client.call("storage.session.turn_index.v2", {"session_id": str(session_id), "owner_id": "42"})
+        assert {item["object_id"]: item["user_turns"] for item in after_bad["objects"]}[manifest["object_id"]] is None
 
         missing = await client.call("storage.session.turn_index.v2", {"session_id": str(uuid4()), "owner_id": "42"})
         assert missing["found"] is False and missing["objects"] == []

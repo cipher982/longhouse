@@ -37,6 +37,7 @@ import {
 import { BranchSessionCard, branchUnavailableNote } from "./BranchSessionCard";
 import { deriveTurnOutline, mergeTurnOutline, TurnOutline, turnRowId, type TurnOutlineTurn } from "./TurnOutline";
 import { useSessionTurnIndex } from "./useSessionTurnIndex";
+import { useTurnSeek } from "./useTurnSeek";
 import { useActiveTurn } from "./useActiveTurn";
 import { SessionStateBadge } from "./SessionStateBadge";
 import { SessionOpening } from "./SessionOpening";
@@ -203,27 +204,25 @@ function SessionDetailWorkspaceRoute({
     [registerTimelineList],
   );
   const { activeKey: activeTurnKey, pin: pinTurn } = useActiveTurn(timelineList);
-  const [, setSearchParams] = useSearchParams();
-  const routeLocation = useLocation();
-  const handleSelectTurn = useCallback((turn: TurnOutlineTurn) => {
-    selectKey(`message:${turn.eventId}`);
-    pinTurn(turn.eventId);
-    const row = document.getElementById(turnRowId(turn.eventId));
-    if (!row) {
-      // Not loaded yet: the event_id deep link pages back until the row is
-      // loaded, then scrolls to it.
-      setSearchParams(
-        (current) => {
-          const next = new URLSearchParams(current);
-          next.set("event_id", String(turn.eventId));
-          return next;
-        },
-        { replace: true, state: routeLocation.state },
-      );
-      return;
-    }
-    row.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [selectKey, pinTurn, setSearchParams, routeLocation.state]);
+  const scrollToTurn = useCallback(
+    (eventId: AgentEventId): boolean => {
+      const row = document.getElementById(turnRowId(eventId));
+      if (!row) return false;
+      selectKey(`message:${eventId}`);
+      pinTurn(eventId);
+      row.scrollIntoView({ behavior: "smooth", block: "start" });
+      return true;
+    },
+    [selectKey, pinTurn],
+  );
+  const { seek: seekTurn } = useTurnSeek({
+    events,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
+    scrollToTurn,
+  });
+  const handleSelectTurn = useCallback((turn: TurnOutlineTurn) => seekTurn(turn.eventId), [seekTurn]);
 
   // Read-on-open acknowledgement for Console results
   // (console-unread-acknowledgement spec).

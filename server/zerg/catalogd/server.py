@@ -5032,45 +5032,39 @@ _USER_TURN_FIELDS = frozenset({"event_id", "order_key", "parent_uuid", "branch_k
 
 
 def _user_turns_json(value: object, user_messages: int, label: str) -> str | None:
-    """Validate a render object's turn list and return it as canonical JSON text.
+    """A render object's turn list as canonical JSON text, or None to fall back to decoding.
 
-    One entry per user-role record; exactly ``user_messages`` of them are
-    marked ``turn``, so the turn index cannot disagree with the counts.
+    The turn list is derived from the immutable object, so a list this check
+    does not accept is dropped (the turn index then decodes the object) and
+    never fails the commit or repair that carries it. Exactly ``user_messages``
+    entries must be marked ``turn`` so the index cannot disagree with the counts.
     """
 
-    if value is None:
-        return None
     if not isinstance(value, list) or len(value) > 10_000:
-        raise ValueError(f"{label}.user_turns must be a bounded list")
+        return None
     if sum(1 for turn in value if isinstance(turn, dict) and turn.get("turn") is True) != user_messages:
-        raise ValueError(f"{label}.user_turns must mark exactly user_messages turns")
+        return None
     turns: list[dict[str, object]] = []
     for turn in value:
-        if not isinstance(turn, dict) or set(turn) != _USER_TURN_FIELDS:
-            raise ValueError(f"{label}.user_turns entry has invalid fields")
-        if type(turn["turn"]) is not bool:
-            raise ValueError(f"{label}.user_turns.turn must be a boolean")
-        if not isinstance(turn["order_key"], list):
-            raise ValueError(f"{label}.user_turns.order_key must be a list")
-        _validate_render_order_key(json.dumps(turn["order_key"]), f"{label}.user_turns.order_key")
-        turns.append(
-            {
-                "event_id": canonical_text(turn["event_id"], field=f"{label}.user_turns.event_id", maximum_bytes=512),
-                "order_key": turn["order_key"],
-                "parent_uuid": (
-                    canonical_text(turn["parent_uuid"], field=f"{label}.user_turns.parent_uuid", maximum_bytes=512)
-                    if turn["parent_uuid"] is not None
-                    else None
-                ),
-                "branch_kind": (
-                    canonical_text(turn["branch_kind"], field=f"{label}.user_turns.branch_kind", maximum_bytes=64)
-                    if turn["branch_kind"] is not None
-                    else None
-                ),
-                "turn": turn["turn"],
-                "preview": bounded_text(turn["preview"], f"{label}.user_turns.preview", 2_000) if turn["preview"] is not None else None,
-            }
-        )
+        if not isinstance(turn, dict) or set(turn) != _USER_TURN_FIELDS or type(turn["turn"]) is not bool:
+            return None
+        order_key = turn["order_key"]
+        if not isinstance(order_key, list):
+            return None
+        try:
+            _validate_render_order_key(json.dumps(order_key), f"{label}.user_turns.order_key")
+        except (TypeError, ValueError):
+            return None
+        event_id = turn["event_id"]
+        if not isinstance(event_id, str) or not event_id or len(event_id.encode("utf-8")) > 1_024:
+            return None
+        optional: dict[str, str | None] = {}
+        for field, maximum in (("parent_uuid", 1_024), ("branch_kind", 64), ("preview", 2_000)):
+            raw = turn[field]
+            if raw is not None and (not isinstance(raw, str) or len(raw.encode("utf-8")) > maximum * 4):
+                return None
+            optional[field] = raw or None
+        turns.append({"event_id": event_id, "order_key": order_key, "turn": turn["turn"], **optional})
     return json.dumps(turns, ensure_ascii=False, separators=(",", ":"))
 
 

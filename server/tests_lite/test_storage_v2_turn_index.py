@@ -260,7 +260,7 @@ async def test_turn_index_rows_carry_time_and_preview(monkeypatch):
     assert result["objects_decoded"] == 0
 
 
-def test_catalog_rejects_a_turn_list_that_disagrees_with_the_count():
+def test_catalog_drops_a_turn_list_it_cannot_accept_instead_of_failing():
     spec_turn = {
         "event_id": "e0",
         "order_key": [1, "m", "p", "s", "e", 0, 0],
@@ -270,11 +270,52 @@ def test_catalog_rejects_a_turn_list_that_disagrees_with_the_count():
         "preview": "x",
     }
     assert json.loads(_user_turns_json([spec_turn], 1, "t"))[0]["event_id"] == "e0"
-    with pytest.raises(ValueError):
-        _user_turns_json([spec_turn], 2, "t")
-    with pytest.raises(ValueError):
-        _user_turns_json([{**spec_turn, "extra": 1}], 1, "t")
+    assert _user_turns_json([spec_turn], 2, "t") is None
+    assert _user_turns_json([{**spec_turn, "extra": 1}], 1, "t") is None
     assert _user_turns_json(None, 3, "t") is None
+    # Empty strings that a sealed record may carry are normalized, not rejected.
+    loose = json.loads(_user_turns_json([{**spec_turn, "preview": "", "parent_uuid": "", "branch_kind": ""}], 1, "t"))[0]
+    assert loose["preview"] is None and loose["parent_uuid"] is None and loose["branch_kind"] is None
+
+
+def test_an_image_only_prompt_seals_a_turn_the_catalog_accepts():
+    session = _Session("claude", [[_record(0, "user", "", parent_uuid="", branch_kind="")]])
+    stored = json.loads(session.rows[0]["user_turns"])
+    assert [(turn["event_id"], turn["turn"], turn["parent_uuid"], turn["branch_kind"], turn["preview"]) for turn in stored] == [
+        ("e0", True, None, None, None)
+    ]
+
+
+def test_fragment_previews_join_like_the_timeline():
+    from zerg.services.storage_v2_turn_index import build_turns
+
+    key = [1, "m", "pi", "s", "e", 0, 0]
+    entries = [
+        {"event_id": "u", "order_key": key, "parent_uuid": None, "branch_kind": None, "turn": True, "preview": "[image]"},
+        {
+            "event_id": "u-text-1",
+            "order_key": [*key[:5], 0, 1],
+            "parent_uuid": None,
+            "branch_kind": None,
+            "turn": True,
+            "preview": "why did this fail?",
+        },
+    ]
+    assert [turn["preview"] for turn in build_turns(entries, infer_parent_branches=False)] == ["[image]\n\nwhy did this fail?"]
+
+
+@pytest.mark.asyncio
+async def test_limit_keeps_the_newest_turns_and_reports_the_total(monkeypatch):
+    session = _cases()["claude rewind and local command"]
+    for module in (storage_router, turn_index_module):
+        monkeypatch.setattr(module, "get_catalogd_client", session.catalog)
+        monkeypatch.setattr(module, "get_render_object_worker_pool", session.render_pool)
+        monkeypatch.setattr(module, "get_raw_object_worker_pool", lambda: None)
+
+    result = await turn_index_module.read_session_turn_index(session_id=session.session_id, owner_id=42, limit=2)
+
+    assert [turn["event_id"] for turn in result["turns"]] == ["e5", "e7"]
+    assert result["total_turns"] == 3
 
 
 def test_owner_is_forwarded_as_text(monkeypatch):
@@ -306,7 +347,8 @@ def test_turn_preview_keeps_the_ask_typed_after_a_long_paste():
     assert preview.startswith('<pasted_content id="a1">log line')
 
 
-def test_alias_id_reads_the_session_it_belongs_to(monkeypatch):
+@pytest.mark.parametrize("alias_row", [{"found": False}, {"found": True, "retired": True, "objects": []}])
+def test_alias_id_reads_the_session_it_belongs_to(monkeypatch, alias_row):
     import asyncio
 
     alias, canonical = UUID(int=2), UUID(int=3)
@@ -316,7 +358,7 @@ def test_alias_id_reads_the_session_it_belongs_to(monkeypatch):
         async def call(self, method, params, **_kwargs):
             asked.append(params["session_id"])
             if params["session_id"] != str(canonical):
-                return {"found": False}
+                return alias_row
             return {"found": True, "deleted": False, "generation_id": str(UUID(int=4)), "objects": []}
 
     monkeypatch.setattr(turn_index_module, "get_catalogd_client", lambda: Catalog())

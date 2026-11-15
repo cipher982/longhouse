@@ -84,6 +84,7 @@ vi.mock("@/shared/api/agents", async (importOriginal) => {
       session_id: sessionId,
       generation_id: null,
       branch_mode: "head",
+      total_turns: 0,
       turns: [],
       objects_indexed: 0,
       objects_decoded: 0,
