@@ -1209,14 +1209,10 @@ summary::-webkit-details-marker {
 			title: "Context compacted",
 			detail: null
 		};
-		if (trimmed === "Context microcompacted") return {
-			title: "Context microcompacted",
-			detail: null
-		};
-		const microMatch = trimmed.match(/^Context microcompacted\s+\[(.+)\]$/i);
+		const microMatch = trimmed.match(/^(?:Context microcompacted|Microcompacted(?:\s+[^[]+?)?)\s*(?:\[(.+)\])?$/i);
 		if (microMatch) {
 			const tokens = [];
-			for (const part of microMatch[1].split(/\s+/)) {
+			for (const part of (microMatch[1] ?? "").split(/\s+/)) {
 				const [key, rawValue] = part.split("=", 2);
 				if (!rawValue) continue;
 				if (key === "trigger") tokens.push(rawValue.charAt(0).toUpperCase() + rawValue.slice(1));

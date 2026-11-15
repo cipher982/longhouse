@@ -76,14 +76,10 @@ export function summarizeCompactionNotice(text: string | null | undefined): Comp
   if (!trimmed || trimmed === "Conversation compacted") {
     return { title: "Context compacted", detail: null };
   }
-  if (trimmed === "Context microcompacted") {
-    return { title: "Context microcompacted", detail: null };
-  }
-
-  const microMatch = trimmed.match(/^Context microcompacted\s+\[(.+)\]$/i);
+  const microMatch = trimmed.match(/^(?:Context microcompacted|Microcompacted(?:\s+[^[]+?)?)\s*(?:\[(.+)\])?$/i);
   if (microMatch) {
     const tokens: string[] = [];
-    for (const part of microMatch[1].split(/\s+/)) {
+    for (const part of (microMatch[1] ?? "").split(/\s+/)) {
       const [key, rawValue] = part.split("=", 2);
       if (!rawValue) continue;
       if (key === "trigger") {

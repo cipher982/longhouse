@@ -549,12 +549,20 @@ describe("compaction boundaries", () => {
           kind: "compaction",
           body: "Context microcompacted [trigger=auto tokens_saved=14200]",
         },
+        {
+          id: "compaction-boundary:3",
+          kind: "compaction",
+          body: "Microcompacted tool outputs [trigger=auto pre_tokens=180000 tokens_saved=42000]",
+        },
       ],
     });
 
-    const row = root().querySelector('[data-testid="session-compaction-boundary"]');
-    expect(row?.textContent).toContain("Context microcompacted");
-    expect(row?.textContent).toContain("Auto · 14.2k saved");
+    const rows = root().querySelectorAll('[data-testid="session-compaction-boundary"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Context microcompacted");
+    expect(rows[0]?.textContent).toContain("Auto · 14.2k saved");
+    expect(rows[1]?.textContent).toContain("Context microcompacted");
+    expect(rows[1]?.textContent).toContain("Auto · 180k tokens · 42k saved");
   });
 });
 
