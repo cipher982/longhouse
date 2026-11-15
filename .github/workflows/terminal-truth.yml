@@ -23,6 +23,10 @@ name: Terminal Truth
 #     engine (the same build with the qa-fault-injection feature); every engine mutation is a runtime switch in that one
 #     binary. Until 2026-11-15 each was a binary of its own: 33 builds, 1300 s of compiling a run, 6 GiB of cache.
 #   - A row that came out wrong beside the others is run once more alone; the first result stays in the record.
+#   - Four shards at a time, not eight (2026-11-15). Without the mutant builds in front of them the cells start together,
+#     and at eight the omp/helm reply cell missed its delay budget on its first try every time (median 2.37 s against 1.0 s;
+#     0 of 6 to 2 of 6 markers before the last token). At four, with reruns off, all 58 cells and 43 mutation checks
+#     passed first try (omp/helm 0.02 s) in 668 s.
 #
 # Triggers
 #   push to main, paths below    the whole gate. The verdict is the commit status `longhouse/terminal-truth` and a CI
@@ -121,7 +125,7 @@ on:
       jobs:
         description: "Shards running at once"
         required: false
-        default: "8"
+        default: "4"
         type: string
       publish_status:
         description: "Publish the commit status for this SHA (only honoured on main for the whole gate: every provider, both modes, the short stream, one pass, every mutation check, reruns on)"
@@ -163,7 +167,7 @@ jobs:
       TT_TOKENS: ${{ inputs.tokens || '100' }}
       TT_RATE: ${{ inputs.rate || '20' }}
       TT_REPEATS: ${{ inputs.repeats || '1' }}
-      TT_JOBS: ${{ inputs.jobs || '8' }}
+      TT_JOBS: ${{ inputs.jobs || '4' }}
       # The nightly measures the raw rate: nothing is run a second time.
       TT_RERUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rerun)) && '0' || '1' }}
       TT_MUTATIONS: ${{ (github.event_name == 'workflow_dispatch' && !inputs.mutations) && '0' || '1' }}
