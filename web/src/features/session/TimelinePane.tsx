@@ -1361,6 +1361,8 @@ function ToolRow(props: {
 }
 
 const EMPTY_OUTBOX: OutboxEntry[] = [];
+/** Sends whose first sight of the loaded rows is remembered. */
+const FIRST_SIGHT_LIMIT = 100;
 
 export const TimelinePane = memo(function TimelinePane({
   items,
@@ -1785,17 +1787,20 @@ export const TimelinePane = memo(function TimelinePane({
           ]
         : [],
     );
+    // First sight is kept after a send leaves the outbox: if it comes back
+    // (its echo briefly unloaded), it must not take the rows loaded now,
+    // its own echo among them, as already there. Oldest entries go first.
     const firstSight = loadedAtFirstSightRef.current;
-    const current = new Set(sends.map((send) => send.sendKey));
-    for (const key of [...firstSight.keys()]) {
-      if (!current.has(key)) firstSight.delete(key);
-    }
+    while (firstSight.size > FIRST_SIGHT_LIMIT) firstSight.delete(firstSight.keys().next().value!);
     if (sends.length === 0) return new Set<string>();
+    // Taken from every loaded row, not the filtered ones, and not before
+    // the transcript has loaded: an empty snapshot would give an older row
+    // with the same words the full allowance once it shows.
     let loadedUserRows: Set<string> | null = null;
     for (const send of sends) {
-      if (firstSight.has(send.sendKey)) continue;
+      if (firstSight.has(send.sendKey) || items.length === 0) continue;
       loadedUserRows ??= new Set(
-        filteredItems.flatMap((item) =>
+        items.flatMap((item) =>
           item.kind === "message" && item.event.role === "user" ? [String(item.event.id)] : [],
         ),
       );
@@ -1809,7 +1814,7 @@ export const TimelinePane = memo(function TimelinePane({
       sendKeyByEventRef.current.set(String(eventId), key);
     }
     return new Set(matches.keys());
-  }, [filteredItems, outbox]);
+  }, [filteredItems, items, outbox]);
   // Send keys that a row stamped with its request id already holds: a row
   // bound by text never takes one of those, so no two rows share a key.
   const stampedSendKeys = useMemo(

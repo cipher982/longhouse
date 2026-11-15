@@ -622,6 +622,8 @@ const LINKED_RECEIPT_BRIDGE_MS = 60_000;
 // Only a recent send is bridged: an old linked receipt loaded with the page
 // is history the transcript already shows. Loose on purpose, since it
 // compares the server's clock with this browser's.
+/** A connected page's one read after a send, in case the stream dropped its wake. */
+const SEND_SAFETY_READ_MS = 5_000;
 const LINKED_RECEIPT_RECENT_MS = 10 * 60_000;
 
 function bridgeReceiptKey(row: QueuedInputSummary): string | null {
@@ -899,11 +901,29 @@ export function SessionChat({
   // After a send the server wakes the live stream (its runtime state, then the
   // ingested rows), so a connected page needs no read of its own; the POST
   // answer already put the receipt in the cache. Without a live stream, read.
+  // The fanout drops a wake when a subscriber's queue is full, so a connected
+  // page still reads the transcript's newest rows once, a few seconds on
+  // (a delta read: usually one small request, off the path that paints).
   const streamConnectedRef = useRef(streamConnected);
   streamConnectedRef.current = streamConnected;
+  const safetyReadRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (safetyReadRef.current !== null) window.clearTimeout(safetyReadRef.current);
+    },
+    [],
+  );
   const refreshAfterSend = useCallback(() => {
-    if (!streamConnectedRef.current) void refreshCurrentSessionWorkspace();
-  }, [refreshCurrentSessionWorkspace]);
+    if (!streamConnectedRef.current) {
+      void refreshCurrentSessionWorkspace();
+      return;
+    }
+    if (safetyReadRef.current !== null) window.clearTimeout(safetyReadRef.current);
+    safetyReadRef.current = window.setTimeout(() => {
+      safetyReadRef.current = null;
+      void refreshAgentSessionProjectionTail(queryClient, session.id);
+    }, SEND_SAFETY_READ_MS);
+  }, [queryClient, refreshCurrentSessionWorkspace, session.id]);
   // A send whose POST is still out: its own answer will say what happened,
   // so its receipt is not polled meanwhile.
   const postsInFlightRef = useRef(new Set<string>());
@@ -917,10 +937,11 @@ export function SessionChat({
       const shown = new Set<QueuedInputSummary>();
       const keyed = rows.filter((row) => row.client_request_id);
       const firstSight = receiptFirstSightRef.current;
+      // Not before the transcript has loaded (see TimelinePane).
       let loadedUserRows: Set<string> | null = null;
       for (const row of keyed) {
         const key = row.client_request_id!;
-        if (firstSight.has(key)) continue;
+        if (firstSight.has(key) || !timelineItems?.length) continue;
         loadedUserRows ??= new Set(
           (timelineItems ?? []).flatMap((item) =>
             item.kind === "message" && item.event.role === "user" ? [String(item.event.id)] : [],
@@ -1115,15 +1136,31 @@ export function SessionChat({
       ];
     }),
   );
+  // A send's own receipt (polled by request id), kept only where it is the
+  // freshest copy: when the list was read more recently and holds the
+  // receipt, the listed copy wins everywhere it is read.
+  const listedReadAt = queuedInputsQuery.dataUpdatedAt;
+  const exactReadAt = new Map<string, number>();
+  exactInputQueries.forEach((query, index) => {
+    const clientRequestId = pendingManagedLocalInputs[index]?.clientRequestId;
+    if (clientRequestId && query.data) exactReadAt.set(clientRequestId, query.dataUpdatedAt);
+  });
+  const exactReadAtKey = JSON.stringify([...exactReadAt]);
   const exactInputRows = useMemo(() => {
     const rows = new Map<string, QueuedInputSummary>();
+    const readAt = new Map<string, number>(JSON.parse(exactReadAtKey) as [string, number][]);
+    const listedIds = new Set((queuedInputsQuery.data ?? []).map((row) => row.client_request_id));
     exactInputQueries.forEach((query, index) => {
       const row = query.data;
       const clientRequestId = pendingManagedLocalInputs[index]?.clientRequestId;
-      if (row && clientRequestId) rows.set(clientRequestId, row);
+      if (!row || !clientRequestId) return;
+      if (listedIds.has(clientRequestId) && (readAt.get(clientRequestId) ?? 0) < listedReadAt) return;
+      rows.set(clientRequestId, row);
     });
     return rows;
-  }, [exactInputRowsKey, pendingManagedLocalInputs]);
+    // exactInputRowsKey stands for the exact queries' rows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exactInputRowsKey, exactReadAtKey, listedReadAt, pendingManagedLocalInputs, queuedInputsQuery.data]);
 
   useEffect(() => {
     const listed = queuedInputsQuery.data ?? [];
@@ -2339,29 +2376,19 @@ export function SessionChat({
       hostResumeRetryWaitersRef.current.set(pending.clientRequestId, cancel);
     }
   }, [pendingManagedLocalInputs]);
-  // The listed receipts, with a send's own receipt (polled by request id) in
-  // place of its listed copy when it was read more recently.
-  const exactReadAt = new Map<string, number>();
-  exactInputQueries.forEach((query, index) => {
-    const clientRequestId = pendingManagedLocalInputs[index]?.clientRequestId;
-    if (clientRequestId && query.data) exactReadAt.set(clientRequestId, query.dataUpdatedAt);
-  });
-  const exactReadAtKey = JSON.stringify([...exactReadAt]);
-  const listedReadAt = queuedInputsQuery.dataUpdatedAt;
+  // The listed receipts, with a send's own receipt in place of its listed
+  // copy where that is fresher (exactInputRows holds only those).
   const receiptRows = useMemo<QueuedInputSummary[]>(() => {
     const listed = queuedInputsQuery.data ?? [];
-    const readAt = new Map<string, number>(JSON.parse(exactReadAtKey) as [string, number][]);
-    const merged = listed.map((row) => {
-      const exact = row.client_request_id ? exactInputRows.get(row.client_request_id) : undefined;
-      if (!exact || !row.client_request_id) return row;
-      return (readAt.get(row.client_request_id) ?? 0) >= listedReadAt ? exact : row;
-    });
+    const merged = listed.map((row) =>
+      (row.client_request_id ? exactInputRows.get(row.client_request_id) : undefined) ?? row,
+    );
     const listedIds = new Set(listed.map((row) => row.client_request_id));
     for (const [clientRequestId, row] of exactInputRows) {
       if (!listedIds.has(clientRequestId)) merged.push(row);
     }
     return merged;
-  }, [exactInputRows, exactReadAtKey, listedReadAt, queuedInputsQuery.data]);
+  }, [exactInputRows, queuedInputsQuery.data]);
   // Re-render when a linked receipt's bridge window closes.
   const [bridgeClock, setBridgeClock] = useState(0);
   const firstSeenLinkedAtRef = useRef(new Map<string, number>());

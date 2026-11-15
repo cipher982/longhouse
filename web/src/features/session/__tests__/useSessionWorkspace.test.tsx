@@ -9,6 +9,7 @@ const agentSessionMocks = vi.hoisted(() => ({
   holdsOlderPages: vi.fn(() => false),
   refreshAgentSessionProjectionTail: vi.fn(() => Promise.resolve()),
   applyPushedProjectionDelta: vi.fn(() => true),
+  pushedProjectionDeltaMayApply: vi.fn(() => true),
   sessionHoldsOlderProjectionPages: vi.fn(() => false),
 }));
 const visibilityMocks = vi.hoisted(() => ({
@@ -21,6 +22,10 @@ const queryClientMocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
   setQueriesData: vi.fn(),
   getQueryData: vi.fn(() => undefined),
+  isFetching: vi.fn((): number => 0),
+  getQueryCache: vi.fn(
+    (): { subscribe: (listener: () => void) => () => void } => ({ subscribe: () => () => {} }),
+  ),
 }));
 const renderBeaconMocks = vi.hoisted(() => ({
   emitRenderBeacon: vi.fn(),
@@ -639,6 +644,32 @@ describe("useSessionWorkspace", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 2_100));
       });
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads once more after a projection refetch that was already running", () => {
+      const handlers = capture();
+      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
+      let notify: (() => void) | undefined;
+      queryClientMocks.getQueryCache.mockReturnValueOnce({
+        subscribe: (listener: () => void) => {
+          notify = listener;
+          return () => {};
+        },
+      });
+      queryClientMocks.isFetching.mockReturnValue(1);
+      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      act(() => handlers()?.onProjectionDelta?.(delta));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
+      queryClientMocks.isFetching.mockReturnValue(0);
+      act(() => notify?.());
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads over HTTP at once when the pushed rows could not apply anyway", () => {
+      const handlers = capture();
+      agentSessionMocks.pushedProjectionDeltaMayApply.mockReturnValueOnce(false);
+      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
     });
 

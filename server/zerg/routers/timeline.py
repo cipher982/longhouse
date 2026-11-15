@@ -1590,7 +1590,11 @@ PROJECTION_DELTA_MAX_BYTES = 256_000
 
 
 async def _workspace_projection_delta(session_id: UUID, owner_id: int) -> dict | None:
-    """The newest head rows as a delta after the window's first row, or None."""
+    """The newest head rows as a delta after the window's first row, or None.
+
+    Never raises: a delta is an optimization, and without one the client
+    reads the rows over HTTP.
+    """
     started = monotonic()
     try:
         workspace = await asyncio.wait_for(
@@ -1604,7 +1608,8 @@ async def _workspace_projection_delta(session_id: UUID, owner_id: int) -> dict |
             ),
             timeout=PROJECTION_DELTA_TIMEOUT_SECONDS,
         )
-    except Exception:  # noqa: BLE001 - a delta is an optimization; the client reads over HTTP instead
+        return _projection_delta_from_workspace(workspace)
+    except Exception:  # noqa: BLE001 - see docstring
         logger.info(
             "workspace stream projection delta unavailable session=%s took_ms=%.0f",
             session_id,
@@ -1612,6 +1617,9 @@ async def _workspace_projection_delta(session_id: UUID, owner_id: int) -> dict |
             exc_info=True,
         )
         return None
+
+
+def _projection_delta_from_workspace(workspace: object) -> dict | None:
     projection = workspace.get("projection") if isinstance(workspace, dict) else None
     if not isinstance(projection, dict) or not projection.get("generation_id"):
         return None

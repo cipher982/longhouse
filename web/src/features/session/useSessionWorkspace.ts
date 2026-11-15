@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   holdsOlderPages,
   applyPushedProjectionDelta,
+  pushedProjectionDeltaMayApply,
   refreshAgentSessionProjectionTail,
   sessionHoldsOlderProjectionPages,
   useAgentSessionProjectionInfinite,
@@ -364,7 +365,8 @@ export function useSessionWorkspace(
         if (lane.queued) {
           lane.queued = false;
           runLane(lane);
-        } else if (lane.retirePreview) {
+        } else if (lane.retirePreview && !(lane === lanes.transcript && deltaWait !== null)) {
+          // (While pushed rows are awaited, their arrival retires it.)
           lane.retirePreview = false;
           // Retiring the reply preview after an ingest must not take a live
           // thinking row with it: the prompt's own ingest lands while thinking.
@@ -389,6 +391,19 @@ export function useSessionWorkspace(
       window.clearTimeout(deltaWait);
       deltaWait = null;
       return true;
+    };
+    // A projection refetch React Query runs by itself (focus, mount,
+    // reconnect) can also land after pushed rows with an older tail.
+    let projectionFetchWatch: (() => void) | null = null;
+    const projectionKey = ["agent-session-projection-infinite", sessionId];
+    const rereadAfterProjectionFetch = () => {
+      if (projectionFetchWatch || queryClient.isFetching({ queryKey: projectionKey }) === 0) return;
+      projectionFetchWatch = queryClient.getQueryCache().subscribe(() => {
+        if (queryClient.isFetching({ queryKey: projectionKey }) > 0) return;
+        projectionFetchWatch?.();
+        projectionFetchWatch = null;
+        if (!disposed) runLane(lanes.transcript);
+      });
     };
     const waitForPushedDelta = (pubsubSeq: number | null | undefined) => {
       runLane(lanes.base);
@@ -508,7 +523,16 @@ export function useSessionWorkspace(
             // transcript queries; runtime wakes must not evict it.
             return;
           }
-          if (isTranscriptMutation && data.projection_delta === "follows") {
+          // Wait for the pushed rows only when they can be applied and no
+          // transcript read is under way: a read in flight may have started
+          // before this ingest and would replace the pushed rows with older
+          // ones, so it gets the usual follow-up round instead.
+          if (
+            isTranscriptMutation &&
+            data.projection_delta === "follows" &&
+            !lanes.transcript.inFlight &&
+            pushedProjectionDeltaMayApply(queryClient, sessionId)
+          ) {
             waitForPushedDelta(data.pubsub_seq);
             return;
           }
@@ -522,13 +546,19 @@ export function useSessionWorkspace(
             return;
           }
           // Read before a later wake: keep waiting for the push that covers it.
-          if ((data.pubsub_seq ?? Number.POSITIVE_INFINITY) >= awaitedDeltaSeq) stopWaitingForDelta();
+          const coversLatest = (data.pubsub_seq ?? Number.POSITIVE_INFINITY) >= awaitedDeltaSeq;
+          if (coversLatest) stopWaitingForDelta();
+          // A transcript read already under way may have begun before these
+          // rows existed and would put the older tail back: read once more
+          // after it (a delta read on top of whatever it wrote).
+          if (lanes.transcript.inFlight) lanes.transcript.queued = true;
+          else rereadAfterProjectionFetch();
           // The rows are on the page. The other transcript queries refresh as
           // on any ingest, and a reply preview the rows replace retires now.
           for (const queryKey of transcriptRefreshQueryKeys) {
             void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
           }
-          if (lanes.transcript.retirePreview && !lanes.transcript.inFlight) {
+          if (coversLatest && lanes.transcript.retirePreview && !lanes.transcript.inFlight) {
             lanes.transcript.retirePreview = false;
             applyStreamTranscriptPreview(null, { keepThinking: true });
           }
@@ -556,6 +586,7 @@ export function useSessionWorkspace(
       disposed = true;
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
       stopWaitingForDelta();
+      projectionFetchWatch?.();
       cleanup();
     };
   }, [

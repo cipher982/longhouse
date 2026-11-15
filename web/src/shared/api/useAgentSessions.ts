@@ -413,7 +413,26 @@ export async function refreshAgentSessionProjectionTail(
  * anchor the held tail does not reach, a running tool call at or before that
  * anchor (its state may still change, and the push would not carry it), or
  * the once-a-minute full read that corrects drift.
+ * `pushedProjectionDeltaMayApply` asks the questions that need no delta, so
+ * a caller that already knows the answer is no reads over HTTP at once.
  */
+export function pushedProjectionDeltaMayApply(queryClient: QueryClient, sessionId: string): boolean {
+  const queries = projectionInfiniteQueries(queryClient, sessionId);
+  return (
+    queries.length > 0 &&
+    queries.every((query) => {
+      const queryKey = query.queryKey as ProjectionInfiniteKey;
+      const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
+      const tail = data?.pages[data.pages.length - 1];
+      return (
+        Boolean(tail?.items.some((item) => item.event?.cursor)) &&
+        queryKey[2]?.branch_mode === "head" &&
+        !fullTailReadDue(sessionId, tail)
+      );
+    })
+  );
+}
+
 export function applyPushedProjectionDelta(
   queryClient: QueryClient,
   sessionId: string,

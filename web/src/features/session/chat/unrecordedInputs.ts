@@ -52,6 +52,12 @@ export function normalizeInputText(value: string | null | undefined): string {
 
 // The server links an event that starts up to 5 s before the receipt's clock.
 const LINK_SKEW_MS = 5_000;
+/**
+ * Clock allowance for a row already loaded when its send first appeared:
+ * enough for skew between the provider's clock and the send's, far less than
+ * the seconds between a "yes" typed in the terminal and the same words sent.
+ */
+const FIRST_SIGHT_SKEW_MS = 1_000;
 /** Sends of the same words this close to their row pair in send order. */
 const RECENT_SEND_MS = 60_000;
 
@@ -78,8 +84,8 @@ export interface SendForMatch {
  * Longhouse ids may echo a send by the same text when it is not bound to a
  * different send (`boundTo`) and is not older than the send by more than the
  * clock allowance. A row already loaded when the send first appeared
- * (`loadedAtFirstSight`) gets no allowance: it must be stamped at or after
- * the send, as after a reload. Each row echoes at most one send (the rule
+ * (`loadedAtFirstSight`) gets only a second's allowance: it must be stamped
+ * about when the send was, as after a reload. Each row echoes at most one send (the rule
  * for picking which is below). Without the first-sight rule a "yes" sent
  * seconds after a "yes" typed in the terminal was taken for the older row
  * and vanished on send.
@@ -147,7 +153,7 @@ export function matchSendsToTranscript(
       if (normalizeInputText(send.text) !== text) return false;
       const sentAt = timeMs(send.at);
       if (!Number.isFinite(sentAt)) return true;
-      const allowance = loadedAtFirstSight.get(send.sendKey)?.has(id) ? 0 : LINK_SKEW_MS;
+      const allowance = loadedAtFirstSight.get(send.sendKey)?.has(id) ? FIRST_SIGHT_SKEW_MS : LINK_SKEW_MS;
       return eventAt >= sentAt - allowance;
     });
     if (eligible.length === 0) continue;
