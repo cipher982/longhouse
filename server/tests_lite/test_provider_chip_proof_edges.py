@@ -33,7 +33,7 @@ UNPROVEN_RUNTIME_CLAIMS = frozenset(
         # (antigravity-parity.md step 2), not by a factory assertion (step 6).
         ("antigravity", "interrupt"),
         # Helm steer and terminate are proven on the bench against the scripted
-        # model (steps 3 and 4, scripts/qa/agy-helm-live-receipt.sh), not yet by
+        # model (steps 3 and 4, the Helm live receipt), not yet by
         # a factory assertion (step 6).
         ("antigravity", "steer_active_turn"),
         ("antigravity", "terminate"),
