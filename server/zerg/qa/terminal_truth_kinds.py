@@ -264,9 +264,15 @@ def plan_kind_cell(spec: CellSpec, mutation: str | None = None, *, text_before_t
                 for t in turns
             ]
             if spec.mode == "console":
-                # Codex interrupts a Console child when the parent's turn ends (its rollout ends `turn_aborted`, reason `interrupted`,
-                # before any model request), so the child writes nothing: only the spawn is measurable.
-                turns = [t for t in turns if t["id"] != f"{spec.key}:sub"]
+                # Codex interrupts a Console child when the parent's turn ends (its rollout ends `turn_aborted`, reason `interrupted`),
+                # so the child writes nothing: only the spawn is measurable. The child must still outlive the parent's answer: a
+                # child served at once completes in milliseconds and Codex then aborts the parent's turn before its answer streams
+                # (2026-11-14: the parent's turn b was served and cut off, and the cell failed every_scripted_turn_served). A 6 s
+                # websocket retry on the child's first request used to hide that; with the retry gone the child needs a slow turn.
+                turns = [
+                    {**t, "pace": _pace(dataclasses.replace(sub_pace, initial_delay=6.0))} if t["id"] == f"{spec.key}:sub" else t
+                    for t in turns
+                ]
                 signals = [s for s in signals if s.group != "subagent_text"]
                 ids, groups = [f"{spec.key}:a", f"{spec.key}:b"], ("reply",)
         return KindPlan(spec, nonce, turns, signals, prompt, ids, groups, SUB_TOKENS / SUB_RATE + 60)

@@ -258,8 +258,18 @@ def configure_scripted_model_profile(
         environment["CODEX_HOME"] = str(codex_home)
         environment["CODEX_MODEL"] = SCRIPTED_MODEL_NAME
         config = codex_home / "config.toml"
+        # The built-in "openai" provider pins supports_websockets = true and a config entry cannot override it, so Codex tries
+        # a websocket the scripted server does not serve and retries about 6 s per cell before falling back to HTTP. A custom
+        # provider can turn it off; requires_openai_auth keeps using the API-key login the harness already did.
         config.write_text(
-            f'model_provider = "openai"\nmodel = {json.dumps(SCRIPTED_MODEL_NAME)}\nopenai_base_url = {json.dumps(openai_base_url)}\n',
+            f"model_provider = {json.dumps(SCRIPTED_MODEL_PROVIDER)}\n"
+            f"model = {json.dumps(SCRIPTED_MODEL_NAME)}\n"
+            f"\n[model_providers.{SCRIPTED_MODEL_PROVIDER}]\n"
+            'name = "Longhouse mock"\n'
+            f"base_url = {json.dumps(openai_base_url)}\n"
+            'wire_api = "responses"\n'
+            "requires_openai_auth = true\n"
+            "supports_websockets = false\n",
             encoding="utf-8",
         )
         config.chmod(0o600)

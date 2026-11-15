@@ -516,10 +516,11 @@ def test_scripted_profiles_route_fake_provider_binaries_to_loopback_endpoint(mon
             assert Path(os.environ["HOME"]) != Path(os.environ["FAKE_INHERITED_HOME"])
             if provider == "codex":
                 config = tomllib.loads((Path(os.environ["CODEX_HOME"]) / "config.toml").read_text())
-                assert config["model_provider"] == "openai"
+                assert config["model_provider"] == "longhouse-mock"
                 assert config["model"] == "mock-model"
                 assert Path(os.environ["CODEX_HOME"]) == Path(os.environ["HOME"]) / ".codex"
-                base_url = config["openai_base_url"]
+                assert config["model_providers"]["longhouse-mock"]["supports_websockets"] is False
+                base_url = config["model_providers"]["longhouse-mock"]["base_url"]
                 assert os.environ["CODEX_API_KEY"] == "longhouse-mock-key"
             elif provider == "claude":
                 assert Path(os.environ["CLAUDE_CONFIG_DIR"]).is_dir()
