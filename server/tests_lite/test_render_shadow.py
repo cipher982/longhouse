@@ -704,3 +704,33 @@ async def test_a_render_filled_in_by_a_rebuild_is_ready_indexed_and_announced(mo
         assert woken == [session_id]
         page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
         assert [event["content_text"] for event in page.json()["events"]] == ["hello", "world"]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_only_rebuild_replaces_laptop_renders_in_the_host_generation_once(monkeypatch, tmp_path):
+    """Review Gemini F5: only a host render in the host's generation counts as done."""
+    from zerg.services.host_render import host_rebuild_session
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-missing-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        # The host names the generation the laptop render already sits in.
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps(
+                {
+                    "generation_id": payload["render"]["generation_id"],
+                    "parser_revision": "engine-parser-v2",
+                    "ordering_revision": "semantic-order-v2",
+                }
+            ),
+        )
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="drift", render=payload["render"]["records"]))
+        context = {"catalog": stack.catalog, "raw_workers": stack.raw_workers, "render_workers": stack.render_workers}
+        try:
+            first = await host_rebuild_session(worker=worker, session_id=session_id, only_missing=True, **context)
+            second = await host_rebuild_session(worker=worker, session_id=session_id, only_missing=True, **context)
+        finally:
+            await worker.close()
+        assert (first["written"], second["written"]) == (1, 0)
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]

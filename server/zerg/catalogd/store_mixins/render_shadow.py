@@ -151,6 +151,7 @@ class RenderShadowMixin:
             # from the newest generation holding one: a generation started by a
             # laptop parser bump need not re-render every older envelope.
             render_rows: dict[str, dict[str, Any]] = {}
+            host_rendered: list[list[str]] = []
             for row in connection.execute(
                 select(
                     render.c.source_envelope_id,
@@ -166,6 +167,8 @@ class RenderShadowMixin:
                 .where(render.c.session_id == session_id, render.c.retired_at.is_(None))
             ).mappings():
                 key = str(row["source_envelope_id"])
+                if row["render_source"] == "host":
+                    host_rendered.append([key, str(row["generation_id"])])
                 rank = (row["generation_id"] == generation_id, int(row["commit_seq"]))
                 held = render_rows.get(key)
                 if held is None or rank > held["_rank"]:
@@ -181,6 +184,7 @@ class RenderShadowMixin:
             )
         return {
             "found": True,
+            "host_rendered": host_rendered,
             "provider": session["provider"],
             "owner_id": session["owner_id"],
             "current_render_generation": generation_id,

@@ -100,9 +100,9 @@ async def host_rebuild_session(
     media deleted, a normalizer error), so the generation always covers what
     is served and nothing new waits on a rebuild that cannot finish.
 
-    With `only_missing`, an epoch whose witnessed envelopes all have a render
-    in the current generation is skipped: ingest committed raw it could not
-    render alone (an OpenCode envelope needs the epoch's earlier records).
+    With `only_missing`, an epoch whose witnessed envelopes are all already
+    host-rendered into the host's generation is skipped; the rest are rebuilt
+    (raw ingest could not render alone, a laptop render, an older generation).
 
     With `commit=False` nothing is sealed or committed: each host render is
     compared row by row with the render served for that envelope.
@@ -142,6 +142,11 @@ async def host_rebuild_session(
         return sorted((_render_row(asdict(record)) for record in decoded.spec.records), key=_sort_key)
 
     generation: dict[str, Any] | None = None
+    # The generation this rebuild fills. An epoch already host-rendered into
+    # it is skipped under `only_missing`; one served from an older generation
+    # or by a laptop render sealed into this one is rebuilt.
+    target = (await _name_generation(worker, inputs, session_id) or {}).get("generation_id") if only_missing else None
+    host_rendered = {(envelope_id, generation_id) for envelope_id, generation_id in inputs.get("host_rendered") or []}
     objects: list[dict[str, Any]] = []
     compared: dict[str, Any] = {"compared": 0, "equal": 0, "differences": [], "unrebuilt_epochs": 0}
     host_envelopes: list[str] = []
@@ -150,11 +155,7 @@ async def host_rebuild_session(
         witnessed = [row for row in rows if (epoch, row["range_start"]) in capture]
         if not witnessed or provider == "cursor":
             continue
-        if (
-            only_missing
-            and current is not None
-            and all(str((served_objects.get(row["envelope_id"]) or {}).get("generation_id")) == str(current) for row in witnessed)
-        ):
+        if only_missing and target is not None and all((row["envelope_id"], target) in host_rendered for row in witnessed):
             continue
         try:
             request, raw_specs = await _epoch_request(
@@ -544,6 +545,9 @@ def schedule_host_rebuild(session_id: str) -> None:
 
     context = rebuild_context()
     if context is None or sweep_worker is None:
+        # Ingest renders at the host only while the sweep runs, so this is a
+        # worker that just died; the restarted sweep finds the session.
+        logger.warning("host render session=%s not scheduled: normalizer sweep is not running", session_id)
         return
 
     async def run() -> None:
