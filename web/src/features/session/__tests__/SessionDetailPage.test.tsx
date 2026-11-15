@@ -15,6 +15,8 @@ import type {
 } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 import { TestRouter } from "@/shared/test/test-utils";
+import type { SessionStateFacts } from "@/shared/api/agents";
+import { BackgroundTaskRoster } from "../BackgroundTaskRoster";
 import SessionDetailPage from "../SessionDetailPage";
 
 const workspaceMocks = vi.hoisted(() => ({
@@ -94,11 +96,16 @@ vi.mock("@/shared/api/agents", async (importOriginal) => {
 
 vi.mock("../chat/SessionChat", () => ({
   SessionChat: ({
+    session,
     composerDisabledReason,
     composerDisabledAction,
     managedLaunchSuggestion,
     composerHeaderAccessory,
   }: {
+    session?: {
+      session_state?: SessionStateFacts | null;
+      pending_background_agent_count?: number | null;
+    };
     composerDisabledReason?: string | null;
     composerDisabledAction?: React.ReactNode;
     managedLaunchSuggestion?: { command: string } | null;
@@ -110,6 +117,11 @@ vi.mock("../chat/SessionChat", () => ({
       data-launch-command={managedLaunchSuggestion?.command ?? ""}
     >
       session-chat
+      <BackgroundTaskRoster
+        delegation={session?.session_state?.delegation}
+        pendingBackgroundAgentCount={session?.pending_background_agent_count}
+        nowMs={Date.parse("2026-03-22T22:04:20Z")}
+      />
       {composerHeaderAccessory}
       {composerDisabledAction}
     </div>
@@ -828,7 +840,7 @@ describe("SessionDetailPage", () => {
       fireEvent.click(within(row).getByRole("button", { expanded: false }));
 
       expect(row).not.toHaveTextContent("Result not recorded yet.");
-      expect(row).toHaveTextContent(/No output|Activity uncertain/);
+      expect(row).toHaveTextContent(/Waiting for return|Unconfirmed|No output recorded/);
       expect(row).not.toHaveTextContent(
         "Tool call dropped \u2014 no result was ever recorded.",
       );
@@ -1856,5 +1868,73 @@ describe("SessionDetailPage — header affordances", () => {
       session: makeSession({ session_state: liveFacts }),
     });
     expect(screen.getByTestId("session-header-state")).toBeInTheDocument();
+  });
+
+  it("renders Claude HUD readouts, permission mode, away recap banner, live background roster during active work, and session crons", async () => {
+    const user = userEvent.setup();
+    const liveFacts = makeSessionStateFacts({
+      access: "live_control",
+      activity: "executing",
+      tool: "Bash",
+      observedAt: "2026-03-22T22:04:20Z",
+      activityValidUntil: "2026-03-22T22:20:00Z",
+    });
+    liveFacts.delegation = {
+      state: "active",
+      count: 2,
+      kinds: { agent: 1, monitor: 1 },
+      items: [
+        {
+          id: "agent-a1",
+          kind: "agent",
+          status: "waiting",
+          agent_type: "general-purpose",
+          description: "Waiting on terminal-truth",
+          started_at: "2026-03-22T22:00:00Z",
+          session_id: "sess-sub-1",
+          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench" },
+        },
+        {
+          id: "mon-1",
+          kind: "monitor",
+          status: "running",
+          description: "Watch canary ring",
+        },
+      ],
+    };
+
+    const session = makeSession({
+      provider: "claude",
+      cwd: "/Users/example/git/zerg/control-plane",
+      git_branch: "main",
+      permission_mode: "bypassPermissions",
+      worktree: { name: "claude-fidelity", branch: "claude-fidelity" },
+      recap: { text: "Landed Step 2 projections.", at: "2026-03-22T22:04:00Z" },
+      session_crons: [{ id: "cron-1", schedule: "*/15 * * * *", prompt: "Check ring health" }],
+      pending_background_agent_count: 1,
+      usage_latest: {
+        model: "claude-opus-4-7",
+        effort: "high",
+        context_tokens: 130_000,
+        context_window: 1_000_000,
+        used_percent: 13,
+        cost_usd: 53.89,
+        cumulative_duration_ms: 28_860_000,
+        label: "opus 4.7 · 126k in · 27 out",
+      },
+      session_state: liveFacts,
+    });
+
+    renderSessionDetailPageAt("/timeline/session-codex", { session });
+
+    expect(screen.getByTestId("session-usage")).toHaveTextContent("13% of 1.0M");
+    expect(screen.getByTestId("session-cost")).toHaveTextContent("$53.89");
+    expect(screen.getByTestId("session-cumulative-duration")).toHaveTextContent("8h 1m");
+    expect(screen.getByTestId("session-git-context")).toHaveTextContent("control-plane git:(claude-fidelity) wt:claude-fidelity");
+    expect(screen.getByTestId("session-permission-mode")).toHaveTextContent("bypass permissions");
+    expect(screen.getByTestId("session-away-recap")).toHaveTextContent("Landed Step 2 projections.");
+    expect(screen.getByTestId("session-background-roster-toggle")).toHaveTextContent("1 agent (waiting) · 1 monitor");
+    await openInfoDrawer(user);
+    expect(screen.getByTestId("session-crons")).toHaveTextContent("*/15 * * * *");
   });
 });

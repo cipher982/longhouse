@@ -77,10 +77,19 @@ export interface AgentSession {
     context_window_source?: "native" | "derived" | null;
     output_tokens: number;
     thinking_tokens?: number | null;
+    used_percent?: number | null;
+    cost_usd?: number | null;
+    cumulative_duration_ms?: number | null;
+    rate_limits?: SessionRateLimit[] | null;
     at: string;
     /** The model/context line every client renders verbatim: "opus 5 · high · 501k ctx". */
     label: string;
   } | null;
+  permission_mode?: string | null;
+  provider_title?: string | null;
+  worktree?: SessionWorktree | null;
+  session_crons?: SessionCron[];
+  pending_background_agent_count?: number;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;
   /** Where the headline came from: ai | provider | prompt | project. */
@@ -430,19 +439,57 @@ export type AgentSessionStatus =
 export type PresenceState = components["schemas"]["PresenceState"];
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
+export type SessionRateLimit = components["schemas"]["SessionRateLimitResponse"];
+export type SessionWorktree = components["schemas"]["SessionWorktreeResponse"];
+export type SessionCron = components["schemas"]["SessionCronResponse"];
+
+export interface TaskNotificationPayload {
+  task_id?: string | null;
+  tool_use_id?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  description?: string | null;
+  agent_type?: string | null;
+  duration_ms?: number | null;
+  subagent_tokens?: number | null;
+  total_tokens?: number | null;
+  tool_uses?: number | null;
+  result?: string | null;
+  note?: string | null;
+  source?: string | null;
+  additional_items?: TaskNotificationPayload[] | null;
+  [key: string]: unknown;
+}
+
+export interface ApiErrorPayload {
+  error?: string | null;
+  details?: string | null;
+  message?: string | null;
+  status_code?: number | null;
+  attempt?: number | null;
+  retry_attempt?: number | null;
+  max_retries?: number | null;
+  retry_in_ms?: number | null;
+  will_retry?: boolean | null;
+  provider?: string | null;
+  [key: string]: unknown;
+}
+
 export interface AgentEventTurnEnd {
   duration_ms: number;
   ended_at: string;
   message_count?: number | null;
-  /** Codex reports a stopped turn's duration too; Claude only writes finished ones. */
-  outcome?: "completed" | "aborted";
+  /** Codex and Claude report how the turn ended. */
+  outcome?: "completed" | "aborted" | "interrupted" | "error" | (string & {});
+  stop_hook_summary?: string | null;
 }
 
 export interface AgentSessionLastTurn {
   duration_ms: number;
   ended_at: string;
   event_id?: string | null;
-  outcome?: "completed" | "aborted";
+  outcome?: "completed" | "aborted" | "interrupted" | "error" | (string & {});
+  stop_hook_summary?: string | null;
 }
 
 export interface AgentEventInputOrigin {
@@ -539,6 +586,12 @@ export interface AgentEvent {
   tool_call_id: string | null;
   tool_presentation?: AgentToolPresentation | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
+  tool_intent?: string | null;
+  message_phase?: "commentary" | "final_answer" | null;
+  reasoning_withheld?: boolean;
+  task_notification?: TaskNotificationPayload | null;
+  waiting_background_agents?: number | null;
+  api_error?: ApiErrorPayload | null;
   timestamp: string;
   in_active_context?: boolean;
   branch_id?: number | null;
@@ -1070,8 +1123,24 @@ export async function createSessionResumeIntent(
 export interface SessionSubagent {
   session_id: string;
   provider: string;
+  provider_session_id?: string | null;
+  parent_session_id?: string | null;
   parent_tool_call_id: string | null;
+  parent_agent_id?: string | null;
   run_id: string | null;
+  agent_type?: string | null;
+  description?: string | null;
+  model?: string | null;
+  is_fork?: boolean | null;
+  spawn_depth?: number | null;
+  finished?: boolean | null;
+  live_status?: string | null;
+  duration_ms?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  context_tokens?: number | null;
+  context_window?: number | null;
   started_at: string | null;
   last_activity_at: string | null;
   ended_at: string | null;

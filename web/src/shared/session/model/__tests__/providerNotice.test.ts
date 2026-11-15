@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { summarizeCompactionNotice, summarizeProviderNotice } from "../providerNotice";
+import {
+  summarizeApiError,
+  summarizeCompactionNotice,
+  summarizeProviderNotice,
+  summarizeTaskNotification,
+} from "../providerNotice";
 
 // Served text: what `provider_display_message_text` and Claude's task
 // notification summary put in `content_text` of a provider_notification row.
@@ -100,5 +105,63 @@ describe("summarizeCompactionNotice", () => {
       title: "Context compacted",
       detail: "Earlier work focused on parser migration.",
     });
+  });
+
+  it("formats Claude microcompact boundaries", () => {
+    expect(summarizeCompactionNotice("Context microcompacted [trigger=auto tokens_saved=14200]")).toEqual({
+      title: "Context microcompacted",
+      detail: "Auto · 14.2k saved",
+    });
+    expect(summarizeCompactionNotice("Context microcompacted")).toEqual({
+      title: "Context microcompacted",
+      detail: null,
+    });
+  });
+});
+
+describe("summarizeTaskNotification", () => {
+  it("formats duration, tokens, tool uses, note, and result", () => {
+    const summary = summarizeTaskNotification({
+      task_id: "a123",
+      status: "completed",
+      summary: "Agent \"Inspect hooks\" completed",
+      duration_ms: 45_000,
+      subagent_tokens: 12_400,
+      tool_uses: 7,
+      note: "Merged into working tree",
+      result: "All hook paths verified.",
+    });
+    expect(summary.title).toBe('Agent "Inspect hooks" completed');
+    expect(summary.meta).toBe("45s · 12.4k tokens · 7 tool uses");
+    expect(summary.note).toBe("Merged into working tree");
+    expect(summary.result).toBe("All hook paths verified.");
+  });
+
+  it("handles absorbed additional_items in one user notification record", () => {
+    const summary = summarizeTaskNotification({
+      task_id: "t1",
+      status: "completed",
+      summary: "First done",
+      additional_items: [{ task_id: "t2", status: "failed", summary: "Second failed", duration_ms: 5_000 }],
+    });
+    expect(summary.title).toBe("2 background tasks updated");
+    expect(summary.entries).toHaveLength(2);
+    expect(summary.entries[1]?.summary).toBe("Second failed");
+  });
+});
+
+describe("summarizeApiError", () => {
+  it("extracts retry badge and details", () => {
+    const summary = summarizeApiError({
+      retry_attempt: 2,
+      max_retries: 4,
+      status_code: 529,
+      retry_in_ms: 4000,
+      error: "Overloaded",
+      details: "upstream saturated",
+    });
+    expect(summary.badge).toBe("retry 2/4 · HTTP 529 · in 4s");
+    expect(summary.title).toBe("Overloaded");
+    expect(summary.detail).toBe("upstream saturated");
   });
 });

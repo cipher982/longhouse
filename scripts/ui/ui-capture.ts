@@ -71,6 +71,7 @@ import { sweepPopovers, type PopoverFailure } from "./popover-sweep";
 import { ensureFrontend, REPO_ROOT } from "./frontend";
 import {
   buildSessionBackgroundNoticesFixture,
+  buildSessionClaudeFidelityFixture,
   buildSessionDetailStressFixture,
   buildSessionParkedCloseFixture,
   buildSessionProseIdleFixture,
@@ -170,6 +171,7 @@ const SCENES = [
   "session-stale-observation",
   "session-tones",
   "session-background-notices",
+  "session-claude-fidelity",
   "session-parked-close",
   "session-demo-shell",
   "landing",
@@ -244,6 +246,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "session-tones",
   "session-parked-close",
   "session-background-notices",
+  "session-claude-fidelity",
   "session-demo-shell",
 ];
 
@@ -429,6 +432,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "session-tones" ||
     scene === "session-parked-close" ||
     scene === "session-background-notices" ||
+    scene === "session-claude-fidelity" ||
     scene === DEMO_SHELL_SCENE ||
     scene === FIRST_RUN_SCENE ||
     scene === FIRST_RUN_MACHINE_SCENE ||
@@ -608,6 +612,8 @@ export async function installSceneMocks(
             ? buildSessionToneFixture(tone)
             : scene === "session-background-notices"
               ? buildSessionBackgroundNoticesFixture()
+              : scene === "session-claude-fidelity"
+                ? buildSessionClaudeFidelityFixture()
               : scene === "session-parked-close"
                 ? buildSessionParkedCloseFixture()
               : buildSessionDetailStressFixture();
@@ -638,7 +644,7 @@ export async function installSceneMocks(
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ subagents: [] }),
+          body: JSON.stringify({ subagents: fixture.subagents ?? [] }),
         });
         return;
       }
@@ -665,6 +671,15 @@ export async function installSceneMocks(
           status: 200,
           contentType: "application/json",
           body: JSON.stringify(fixture.turns),
+        });
+        return;
+      }
+
+      if (pathname === `${sessionBasePath}/turn-index`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ items: [] }),
         });
         return;
       }
@@ -1678,6 +1693,22 @@ async function captureBundle(
     await page.waitForSelector("[data-testid='session-provider-notification-body']", { timeout: 5000 });
   }
 
+  if (scene === "session-claude-fidelity" && frameName.endsWith("-expanded")) {
+    const rosterToggle = page.locator("[data-testid='session-background-roster-toggle']");
+    if ((await rosterToggle.count()) > 0) {
+      await rosterToggle.first().click();
+      await page.waitForSelector("[data-testid='session-background-roster-list']", { timeout: 5000 });
+    }
+    const subagentSummary = page.locator("[data-testid='tool-subagents'] summary");
+    if ((await subagentSummary.count()) > 0) {
+      await subagentSummary.first().click();
+    }
+    const taskToggle = page.locator("[data-testid='session-task-notification'] button");
+    if ((await taskToggle.count()) > 0) {
+      await taskToggle.first().click();
+    }
+  }
+
   if (scene === "session-resume" && pageName === "session-detail") {
     await page.getByRole("button", { name: /Show resume command/ }).click();
     await page.getByRole("dialog").waitFor();
@@ -1904,7 +1935,7 @@ async function main() {
     const frames: Array<{ pageName: PageName; frameName: string; tone: SessionTone }> =
       opts.scene === "session-tones"
         ? SESSION_TONES.map((tone) => ({ pageName: "session-detail" as const, frameName: `session-detail-${tone}`, tone }))
-        : opts.scene === "session-background-notices"
+        : opts.scene === "session-background-notices" || opts.scene === "session-claude-fidelity"
           ? ["collapsed", "expanded"].map((state) => ({
               pageName: "session-detail" as const,
               frameName: `session-detail-${state}`,

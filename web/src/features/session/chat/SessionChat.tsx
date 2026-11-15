@@ -54,6 +54,7 @@ import {
   getSessionHeaderState,
 } from "../sessionHeaderState";
 import type { SessionActivityFeed } from "../sessionActivityFeed";
+import { BackgroundTaskRoster } from "../BackgroundTaskRoster";
 import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useWallClock } from "@/shared/hooks/useWallClock";
@@ -221,6 +222,7 @@ export type SessionChatTarget = Pick<
   | "capabilities"
   | "session_state"
   | "origin_kind"
+  | "pending_background_agent_count"
 >;
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -2532,8 +2534,11 @@ export function SessionChat({
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
   const composerWorkingLabel = workingStatusLabel(session.session_state);
+  const hasBackgroundRoster =
+    (session.session_state?.delegation?.items?.length ?? 0) > 0 ||
+    (session.pending_background_agent_count ?? 0) > 0;
   const composerDelegatedDetail =
-    composerState.tone === "live"
+    composerState.tone === "live" && !hasBackgroundRoster
       ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
       : null;
   const leafRef = useRef<HTMLSpanElement | null>(null);
@@ -2977,13 +2982,18 @@ export function SessionChat({
                 ) : null}
               </>
             ) : null}
-            {showComposerUnavailableState && composerHeaderAccessory ? (
+            {composerHeaderAccessory ? (
               <span className="session-chat-composer__head-accessory">
                 {composerHeaderAccessory}
               </span>
             ) : null}
           </div>
         ) : null}
+        <BackgroundTaskRoster
+          delegation={session.session_state?.delegation}
+          pendingBackgroundAgentCount={session.pending_background_agent_count}
+          nowMs={activityNowMs}
+        />
         {queuedBanner}
         {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
@@ -3141,13 +3151,6 @@ export function SessionChat({
                       disabled={isSubmitting}
                       rows={1}
                     />
-                    {/* The info button rides the input's own line; a second
-                        row appears only for a control the user can change. */}
-                    {composerHeaderAccessory ? (
-                      <span className="session-chat-composer__head-accessory">
-                        {composerHeaderAccessory}
-                      </span>
-                    ) : null}
                   </div>
                 </div>
                 {hasComposerToolbar ? (
@@ -3165,10 +3168,22 @@ export function SessionChat({
                       testId="session-model-select"
                     />
                     <span className="session-chat-composer-toolbar__spacer" />
+                    {!composerHeadVisible && composerHeaderAccessory ? (
+                      <span className="session-chat-composer-row__accessory">
+                        {composerHeaderAccessory}
+                      </span>
+                    ) : null}
                     {composerActions}
                   </div>
                 ) : (
-                  composerActions
+                  <>
+                    {!composerHeadVisible && composerHeaderAccessory ? (
+                      <span className="session-chat-composer-row__accessory">
+                        {composerHeaderAccessory}
+                      </span>
+                    ) : null}
+                    {composerActions}
+                  </>
                 )}
               </div>
           </>

@@ -74,6 +74,22 @@ export function ReasoningRow({
   /** Clock label, only when the minute changed since the last thought. */
   time?: string | null;
 }) {
+  const cleaned = reasoningText(event).trim();
+  if (event.reasoning_withheld && (!cleaned || cleaned === "[Reasoning withheld]")) {
+    return (
+      <div
+        id={`event-${event.id}`}
+        className={`tl-thought tl-thought--withheld${isSelected ? " is-selected" : ""}`}
+        data-testid="session-reasoning-withheld"
+        data-row-kind="reasoning"
+      >
+        {time ? <span className="tl-thought__time">{time}</span> : null}
+        <div className="tl-thought__head">
+          <span className="tl-thought__prose tl-thought__prose--withheld">Reasoning withheld</span>
+        </div>
+      </div>
+    );
+  }
   if (isLivePreviewReasoning(event)) return <LiveThinkingRow event={event} isSelected={isSelected} />;
   return <StoredReasoningRow event={event} isSelected={isSelected} time={time} />;
 }

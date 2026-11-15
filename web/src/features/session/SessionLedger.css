@@ -347,13 +347,20 @@
   right: 0;
   z-index: 30;
   width: min(440px, 80vw);
-  max-height: min(50dvh, 340px);
+  max-height: min(38dvh, 280px);
   border-radius: 2px;
   background: var(--color-surface-elevated);
   box-shadow:
     inset 0 0 0 1px var(--color-border-primary),
     0 14px 36px rgba(0, 0, 0, 0.45);
   padding: 10px 12px 12px;
+}
+
+@media (max-width: 720px) {
+  .session-ledger[data-surface="composer"] .session-ledger__evidence {
+    width: min(320px, calc(100vw - 56px));
+    max-height: min(28dvh, 220px);
+  }
 }
 
 /* Arrivals are a texture in the field, not another dashboard column. */

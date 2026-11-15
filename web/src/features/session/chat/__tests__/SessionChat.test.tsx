@@ -4406,9 +4406,11 @@ describe("SessionChat composer status", () => {
     expect(screen.queryByTestId("session-chat-composer-head")).not.toBeInTheDocument();
     const input = screen.getByLabelText("Next instruction");
     expect(input).toHaveAttribute("placeholder", expect.stringMatching(/^Idle since .+ — message to continue$/));
-    // The evidence chip rides on the input's own line, so an idle Helm
-    // composer is one line tall; the toolbar row is only for a model picker.
-    expect(input.parentElement).toContainElement(screen.getByTestId("evidence-accessory"));
+    // Idle composers stay one line tall while keeping the accessory outside the textarea line.
+    expect(input.closest(".session-chat-composer-row")).toContainElement(
+      screen.getByTestId("evidence-accessory"),
+    );
+    expect(input.parentElement).not.toContainElement(screen.getByTestId("evidence-accessory"));
     expect(screen.queryByTestId("session-chat-composer-toolbar")).not.toBeInTheDocument();
   });
 
@@ -4594,5 +4596,61 @@ describe("SessionChat composer status", () => {
     expect(cancelMock).toHaveBeenCalledTimes(1);
 
     unmount();
+  });
+
+  it("renders interactive background roster in real SessionChat even while executing", () => {
+    const now = Date.now();
+    const activeFacts = makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+      activity: "executing",
+      tool: "Bash",
+      observedAt: new Date(now - 5_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    activeFacts.delegation = {
+      state: "active",
+      count: 2,
+      kinds: { agent: 1, monitor: 1 },
+      items: [
+        {
+          id: "agent-a1",
+          kind: "agent",
+          status: "waiting",
+          agent_type: "general-purpose",
+          description: "Waiting on terminal-truth",
+          started_at: new Date(now - 60_000).toISOString(),
+          session_id: "sess-sub-1",
+          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench" },
+        },
+        {
+          id: "mon-1",
+          kind: "monitor",
+          status: "running",
+          description: "Watch canary ring",
+        },
+      ],
+      recent_items: [],
+      observed_at: new Date(now - 5_000).toISOString(),
+      valid_until: new Date(now + 60_000).toISOString(),
+      source: "native",
+    };
+
+    renderSessionChat(
+      {
+        session: makeSession({
+          session_state: activeFacts,
+          pending_background_agent_count: 1,
+        }),
+      },
+      { queryClient: lockedClient() },
+    );
+
+    const toggle = screen.getByTestId("session-background-roster-toggle");
+    expect(toggle).toHaveTextContent("1 agent (waiting) · 1 monitor");
+    expect(screen.queryByTestId("session-chat-composer-delegated-detail")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("session-background-roster-list")).toHaveTextContent("194.2k tok");
   });
 });

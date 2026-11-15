@@ -645,8 +645,9 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  height: 44px;
-  padding: 0 14px;
+  min-height: 44px;
+  height: auto;
+  padding: 4px 14px;
   /* A grid item defaults to its min-content width; the slot's title must be
      able to shrink, or a long title widens the whole page. */
   min-width: 0;

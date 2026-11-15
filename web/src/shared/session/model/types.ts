@@ -9,9 +9,25 @@ export type EventFilter = "all" | "messages" | "tools";
  */
 export type SubagentChild = {
   session_id: string;
+  provider_session_id?: string | null;
+  parent_session_id?: string | null;
+  parent_agent_id?: string | null;
   provider: string;
   parent_tool_call_id: string | null;
   run_id: string | null;
+  agent_type?: string | null;
+  description?: string | null;
+  model?: string | null;
+  is_fork?: boolean | null;
+  spawn_depth?: number | null;
+  finished?: boolean | null;
+  live_status?: string | null;
+  duration_ms?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  context_tokens?: number | null;
+  context_window?: number | null;
   started_at: string | null;
   ended_at: string | null;
   user_messages: number;

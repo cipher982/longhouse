@@ -80,7 +80,11 @@ function buildBackgroundInspector(
       }
     }
   }
-  const subagentCount = delegation.kinds?.subagent;
+  const hasSubagent = delegation.kinds?.subagent !== undefined;
+  const hasAgent = delegation.kinds?.agent !== undefined;
+  const subagentCount = hasSubagent || hasAgent
+    ? (delegation.kinds?.subagent ?? 0) + (delegation.kinds?.agent ?? 0)
+    : undefined;
   let typedCount = 0;
   for (const kind in delegation.kinds) typedCount += delegation.kinds[kind];
   return {

@@ -260,6 +260,8 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
  * read there).
  */
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
+  const callIntent = interaction.callEvent?.tool_intent;
+  if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();
   const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
   const shell = isShellTool(interaction.presentation?.tool_name ?? interaction.toolName);
   const fields = shell ? (["i", "intent", "description"] as const) : (["i", "intent"] as const);
@@ -275,6 +277,7 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
 export function isActivityEligible(interaction: ToolInteraction): boolean {
+  if ((interaction.children?.length ?? 0) > 0) return false;
   if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
   if (!interaction.resultEvent) return false;
   // A live preview row stays standalone until its durable event replaces it,

@@ -9,6 +9,7 @@ import {
   formatDuration,
   formatProviderLabel,
   formatFullDate,
+  formatTurnDuration,
   getSessionInteractionCapabilities,
   getSessionOriginLabel,
   truncatePath,
@@ -244,9 +245,63 @@ export function SessionContextPane({
             {session.project ? (
               <MetaRow label="Project" value={session.project} />
             ) : null}
+            {session.permission_mode ? (
+              <MetaRow label="Permission mode" value={session.permission_mode} />
+            ) : null}
+            {session.worktree?.name || session.worktree?.path ? (
+              <MetaRow
+                label="Worktree"
+                value={session.worktree.name || truncatePath(session.worktree.path || "", 60)}
+              />
+            ) : null}
+            {session.usage_latest?.cost_usd != null ? (
+              <MetaRow label="Session cost" value={`$${session.usage_latest.cost_usd.toFixed(2)}`} />
+            ) : null}
+            {session.usage_latest?.cumulative_duration_ms != null &&
+            session.usage_latest.cumulative_duration_ms > 0 ? (
+              <MetaRow
+                label="Session time"
+                value={formatTurnDuration(session.usage_latest.cumulative_duration_ms)}
+              />
+            ) : null}
+            {session.usage_latest?.rate_limits && session.usage_latest.rate_limits.length > 0 ? (
+              <MetaRow
+                label="Rate limits"
+                value={session.usage_latest.rate_limits
+                  .map((limit) =>
+                    [
+                      limit.kind,
+                      limit.percent_used != null ? `${Math.round(limit.percent_used)}%` : null,
+                      limit.resets_at ? `resets ${limit.resets_at}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" "),
+                  )
+                  .join(" · ")}
+              />
+            ) : null}
           </div>
         </div>
       </details>
+
+      {session.session_crons && session.session_crons.length > 0 ? (
+        <details className="session-pane-disclosure session-pane-disclosure--tertiary" data-testid="session-crons">
+          <summary className="session-pane-disclosure__summary">
+            <span className="session-pane-disclosure__title">Scheduled crons</span>
+            <span className="session-pane-disclosure__meta">{session.session_crons.length}</span>
+          </summary>
+          <div className="session-pane-disclosure__body">
+            <div className="session-crons-list">
+              {session.session_crons.map((cron, idx) => (
+                <div key={cron.id ?? `cron-${idx}`} className="session-crons-item">
+                  {cron.schedule ? <span className="session-crons-item__schedule">{cron.schedule}</span> : null}
+                  <span>{cron.prompt || cron.id || "Recurring task"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      ) : null}
 
       <ContinuationsList
         sessions={threadSessions}
