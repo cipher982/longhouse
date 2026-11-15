@@ -1906,7 +1906,9 @@ fn record_antigravity_provider_process(session_id: &str) {
         state.insert("provider_process_start_time".into(), json!(started.lstart));
     }
     if let Err(error) = write_private_json(&path, &serde_json::Value::Object(state)) {
-        eprintln!("Longhouse warning: could not record the Antigravity process for terminate: {error:#}");
+        eprintln!(
+            "Longhouse warning: could not record the Antigravity process for terminate: {error:#}"
+        );
     }
 }
 

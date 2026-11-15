@@ -757,13 +757,16 @@ mod tests {
                 prompt,
             ])
             .current_dir(cwd)
-            .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
-            .env("LONGHOUSE_MANAGED_PROVIDER", "antigravity")
             .env("LONGHOUSE_HOOK_PYTHON", "python3")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .process_group(0);
+        crate::managed_identity::ManagedIdentity::new(
+            crate::managed_identity_contract::ManagedProvider::Antigravity,
+            session_id,
+        )
+        .apply(&mut command, &[]);
         command.spawn().expect("spawn agy")
     }
 
