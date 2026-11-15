@@ -851,6 +851,11 @@ class CatalogDaemon:
         ),
         "render.shadow.record.v2": _Route("_record_render_shadow", frozenset({"results"}), "render.shadow.record.v2 requires results"),
         "render.shadow.summary.v2": _Route("_render_shadow_summary", frozenset(), "render.shadow.summary.v2 accepts no parameters"),
+        "storage.render.host_commit.v2": _Route(
+            "_commit_host_render_objects",
+            frozenset({"session_id", "generation_id", "parser_revision", "ordering_revision", "objects", "promote"}),
+            "storage.render.host_commit.v2 has invalid parameters",
+        ),
         "session.input.link_events.v2": _Route("_link_input_receipts_to_events"),
         "session.input.cancel.v2": _Route(
             "_cancel_input_receipt", frozenset({"receipt_id", "session_id"}), "session.input.cancel.v2 has invalid parameters"
@@ -2582,6 +2587,51 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "render.shadow.record.v2 results are invalid")
         assert self._store is not None
         result = await self._run_store(self._store.record_render_shadow, results=tuple(results))
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _commit_host_render_objects(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        """Render objects the Runtime Host built from raw, into a host generation."""
+        params = request.params
+        try:
+            session_id = str(_canonical_uuid(params["session_id"], "session_id"))
+            generation_id = str(_canonical_uuid(params["generation_id"], "generation_id"))
+            parser_revision = canonical_text(params["parser_revision"], field="parser_revision", maximum_bytes=128)
+            ordering_revision = canonical_text(params["ordering_revision"], field="ordering_revision", maximum_bytes=128)
+            if type(params["promote"]) is not bool:
+                raise ValueError("promote must be a boolean")
+            items = params["objects"]
+            if not isinstance(items, list) or len(items) > 1_000:
+                raise ValueError("objects must hold at most 1000 render manifests")
+            objects = []
+            for item in items:
+                if not isinstance(item, dict) or not _is_hash(item.get("source_envelope_id")):
+                    raise ValueError("each object needs a source_envelope_id")
+                manifest = {key: value for key, value in item.items() if key != "source_envelope_id"}
+                manifest.update(generation_id=generation_id, parser_revision=parser_revision, ordering_revision=ordering_revision)
+                validated = _validate_render_manifest(manifest, render_state="ready")
+                assert validated is not None
+                if validated.get("render_source") is None:
+                    raise ValueError("a host commit object names its render_source")
+                validated["source_envelope_id"] = item["source_envelope_id"]
+                objects.append(validated)
+        except (KeyError, ValueError) as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.commit_host_render_objects,
+            session_id=session_id,
+            generation_id=generation_id,
+            parser_revision=parser_revision,
+            ordering_revision=ordering_revision,
+            objects=tuple(objects),
+            promote=params["promote"],
+        )
+        if result.get("session_deleted"):
+            return self._error(request, "session_deleted", "session has a durable deletion fence")
+        if result.get("not_found"):
+            return self._error(request, "not_found", "session was not found")
+        if result.get("conflict"):
+            return self._error(request, "conflict", str(result.get("reason") or "host render commit conflicts with the catalog"))
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _render_shadow_summary(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -4988,10 +5038,26 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         "user_turns",
         "semantic_projection_version",
     }
-    optional = {"semantic_projection_version", "abandoned_events", "user_turns"}
+    optional = {
+        "semantic_projection_version",
+        "abandoned_events",
+        "user_turns",
+        "render_source",
+        "object_parser_revision",
+        "host_generation",
+    }
+    expected |= optional
     if not expected - optional <= set(value) <= expected:
         raise ValueError("render_manifest has invalid fields")
     result = dict(value)
+    if result.get("render_source") not in (None, "host", "laptop"):
+        raise ValueError("render_manifest.render_source must be host or laptop")
+    if result.get("object_parser_revision") is not None:
+        result["object_parser_revision"] = canonical_text(
+            result["object_parser_revision"], field="object_parser_revision", maximum_bytes=128
+        )
+    if result.get("host_generation") not in (None, True, False):
+        raise ValueError("render_manifest.host_generation must be a boolean")
     result.setdefault("semantic_projection_version", 0)
     result.setdefault("abandoned_events", None)
     result["generation_id"] = _canonical_uuid(result["generation_id"], "generation_id")

@@ -58,13 +58,14 @@ for line in sys.stdin:
             "range_end": envelope["range_end"],
             "render": {"records": records, "session": {}, "media": [], "facts": []},
         })
-    print(json.dumps({"id": request["id"], "envelopes": answers, "elapsed_us": 1, "revision": os.environ.get("FAKE_NORMALIZER_REVISION", "engine-parser-v2+cursor-fake")}), flush=True)
+    generation = json.loads(os.environ.get("FAKE_NORMALIZER_GENERATION", "null"))
+    print(json.dumps({"id": request["id"], "envelopes": answers, "generation": generation, "elapsed_us": 1, "revision": os.environ.get("FAKE_NORMALIZER_REVISION", "engine-parser-v2+cursor-fake")}), flush=True)
 """
 
 
 class _ShadowRenderPool(_InlineRenderPool):
     async def read(self, object_path, expected_object_hash, *, lane, queue_timeout_seconds=None, operation_timeout_seconds=None):
-        assert lane == "background"
+        assert lane in {"background", "user"}
         return read_render_object(self.root, object_path, expected_object_hash=expected_object_hash)
 
 
@@ -377,3 +378,97 @@ def test_a_laptop_render_is_comparable_when_its_revision_is_either_host_parser()
 
     assert comparable_revisions("engine-parser-v2+cursor-store-render-v8") == {"engine-parser-v2", "cursor-store-render-v8"}
     assert comparable_revisions(None) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_a_host_revision_bump_serves_the_host_render_from_a_host_generation(monkeypatch, tmp_path):
+    """Phase 4 check: with an older engine's render stored, a host revision
+    bump moves the session to a host generation built from raw, with no
+    laptop release."""
+    from zerg.services.render_shadow import _take_over
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-bump-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        host_generation = str(uuid4())
+        monkeypatch.setenv("FAKE_NORMALIZER_REVISION", "engine-parser-v3+cursor-fake")
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps({"generation_id": host_generation, "parser_revision": "engine-parser-v3", "ordering_revision": "semantic-order-v2"}),
+        )
+        worker = NormalizerWorker(_fake_normalizer(tmp_path, monkeypatch, mode="drift", render=payload["render"]["records"]))
+        try:
+            results = await _shadow(stack, worker, session_id)
+            assert [row["outcome"] for row in results] == ["revision_skew"]
+            results = await _take_over(
+                catalog=stack.catalog,
+                raw_workers=stack.raw_workers,
+                render_workers=stack.render_workers,
+                worker=worker,
+                session_id=session_id,
+                results=results,
+            )
+        finally:
+            await worker.close()
+        assert [row["outcome"] for row in results] == ["host_rendered"]
+        session = (await stack.catalog.call("storage.session.read.v2", {"session_id": session_id}))["session"]
+        assert session["current_render_generation"] == host_generation
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert page.status_code == 200, page.text
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
+
+
+@pytest.mark.asyncio
+async def test_a_host_generation_is_not_served_until_it_covers_the_current_one(monkeypatch, tmp_path):
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-cover-") as stack:
+        session_id, payload = await _commit(stack, witnessed=True)
+        envelope_id = payload["expected_envelope_id"]
+        current = (await stack.catalog.call("storage.session.read.v2", {"session_id": session_id}))["session"]["current_render_generation"]
+        answer = await stack.catalog.call(
+            "storage.render.host_commit.v2",
+            {
+                "session_id": session_id,
+                "generation_id": str(uuid4()),
+                "parser_revision": "engine-parser-v9",
+                "ordering_revision": "semantic-order-v2",
+                "objects": [],
+                "promote": True,
+            },
+        )
+        assert answer["current"] is False
+        assert (await stack.catalog.call("storage.session.read.v2", {"session_id": session_id}))["session"][
+            "current_render_generation"
+        ] == current
+        assert envelope_id
+
+
+@pytest.mark.asyncio
+async def test_ingest_seals_the_host_render_of_a_witnessed_envelope(monkeypatch, tmp_path):
+    from zerg.services.host_render import close_ingest_normalizer
+
+    monkeypatch.setenv("LONGHOUSE_HOST_RENDER", "1")
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_ShadowRenderPool, prefix="lh2-host-ingest-") as stack:
+        laptop_records = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())["render"][
+            "records"
+        ]
+        monkeypatch.setenv("LONGHOUSE_NORMALIZER_BIN", _fake_normalizer(tmp_path, monkeypatch, mode="drift", render=laptop_records))
+        monkeypatch.setenv(
+            "FAKE_NORMALIZER_GENERATION",
+            json.dumps(
+                {
+                    "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+                    "parser_revision": "engine-parser-v2",
+                    "ordering_revision": "semantic-order-v2",
+                }
+            ),
+        )
+        try:
+            session_id, _payload_sent = await _commit(stack, witnessed=True)
+        finally:
+            await close_ingest_normalizer()
+        page = await stack.client.get(f"/agents/storage/v2/sessions/{session_id}/events")
+        assert page.status_code == 200, page.text
+        # The laptop shipped "world"; the host rendered "WORLD" from raw and that is served.
+        assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
+        inputs = await stack.catalog.call("storage.session.rebuild_inputs.v2", {"session_id": session_id})
+        assert inputs["current_render_generation"] == "018f0c3a-7b2d-7f10-8a11-423456789abc"

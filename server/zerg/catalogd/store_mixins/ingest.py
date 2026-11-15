@@ -46,6 +46,7 @@ from zerg.catalogd.store import _media_object_dto
 from zerg.catalogd.store import _media_ref_dto
 from zerg.catalogd.store import _minimum_order_key
 from zerg.catalogd.store import _normalized_parent_source_id
+from zerg.catalogd.store import _promote_generation_if_covering
 from zerg.catalogd.store import _raw_object_manifest_dto
 from zerg.catalogd.store import _raw_object_matches
 from zerg.catalogd.store import _raw_object_receipt
@@ -1448,9 +1449,22 @@ class IngestMixin:
                                 existing.thread_id,
                                 primary_thread_id,
                             )
+            promoted = False
+            publish_render = False
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
-                publish_render = render_state == "ready"
+                current_key = (
+                    str(existing_session["current_render_generation"])
+                    if existing_session is not None and existing_session.get("current_render_generation") is not None
+                    else None
+                )
+                # A host generation (minted by the Runtime Host from raw) joins
+                # what is served only once it covers the current generation's
+                # native envelopes; see _promote_generation_if_covering. A
+                # laptop generation keeps "last ready wins": a laptop re-ship
+                # from a new source replaces what an older source served.
+                host_generation = render_manifest.get("host_generation") is True
+                publish_render = render_state == "ready" and (not host_generation or current_key in (None, generation_key))
                 if existing_generation is None:
                     connection.execute(
                         insert(render_generation).values(
@@ -1474,7 +1488,7 @@ class IngestMixin:
                         update(render_generation)
                         .where(render_generation.c.generation_id == generation_key)
                         .values(
-                            state="current" if publish_render else "pending",
+                            state="current" if publish_render else existing_generation["state"],
                             source_chain_hash=hashlib.sha256(
                                 bytes.fromhex(str(existing_generation["source_chain_hash"])) + bytes.fromhex(envelope_id)
                             ).hexdigest(),
@@ -1516,6 +1530,8 @@ class IngestMixin:
                         last_visible_text_preview=render_manifest["last_visible_text_preview"],
                         user_turns=render_manifest.get("user_turns"),
                         semantic_projection_version=render_manifest.get("semantic_projection_version", 0),
+                        render_source=render_manifest.get("render_source"),
+                        object_parser_revision=render_manifest.get("object_parser_revision"),
                         first_order_key=render_manifest["first_order_key"],
                         last_order_key=render_manifest["last_order_key"],
                         **_render_order_columns(
@@ -1572,16 +1588,24 @@ class IngestMixin:
                 commit_time=commit_time,
             )
             timer.mark("project_render")
+            if render_manifest is not None and render_state == "ready" and not publish_render:
+                promoted = _promote_generation_if_covering(
+                    connection,
+                    session_id=session_key,
+                    candidate=str(render_manifest["generation_id"]),
+                    commit_seq=commit_seq,
+                    commit_time=commit_time,
+                )
             generation_replaced = bool(
-                render_manifest is not None
+                publish_render
                 and existing_session is not None
                 and existing_session.get("current_render_generation") is not None
                 and str(existing_session["current_render_generation"]) != str(render_manifest["generation_id"])
             )
-            if (predecessor_row is not None or generation_replaced) and render_state == "ready":
+            if (predecessor_row is not None or generation_replaced) and render_state == "ready" and not promoted:
                 generation_to_recompute = (
                     str(render_manifest["generation_id"])
-                    if render_manifest is not None
+                    if render_manifest is not None and publish_render
                     else str((existing_session or {}).get("current_render_generation") or "")
                 )
                 if generation_to_recompute:
@@ -1644,6 +1668,9 @@ class IngestMixin:
                 "receipt": _raw_object_receipt(row),
                 "title_generation_required": title_generation_required,
                 "delegation_parent_session_id": (str(delegation_parent_session_id) if delegation_parent_session_id is not None else None),
+                # Whether this envelope's render is now served (False while a
+                # host generation waits to cover the current one).
+                "render_served": bool(publish_render or promoted),
             }
 
     def read_source_epoch_manifest(

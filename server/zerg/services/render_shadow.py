@@ -223,16 +223,50 @@ async def _ingested_rows(
     only whether the engines agree. Both steps go away when the host render
     becomes authoritative.
     """
+    spec = await host_render_spec(
+        catalog=catalog,
+        raw_workers=raw_workers,
+        session_id=session_id,
+        owner_id=owner_id,
+        raw_spec=raw_spec,
+        envelope_id=envelope_id,
+        records=records,
+        generation={"generation_id": str(uuid4()), "parser_revision": revision or "unknown", "ordering_revision": "host-shadow"},
+        manifest_cache=manifest_cache,
+    )
+    return sorted((_render_row(asdict(record)) for record in spec.records), key=_sort_key)
+
+
+async def host_render_spec(
+    *,
+    catalog: CatalogClient,
+    raw_workers: RawObjectWorkerPool,
+    session_id: str,
+    owner_id: object,
+    raw_spec: Any,
+    envelope_id: str,
+    records: list[dict[str, Any]],
+    generation: dict[str, Any],
+    manifest_cache: dict[str, dict[str, dict[str, object]]],
+    lane: str = "repair",
+    projector_read: bool = True,
+) -> Any:
+    """A host-built render as ingest would seal it: the wire parser, then the ingest classifier."""
     from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
     from zerg.storage_v2.envelope_wire import parse_render_spec
 
     spec = parse_render_spec(
-        {"generation_id": str(uuid4()), "parser_revision": revision or "unknown", "ordering_revision": "host-shadow", "records": records},
+        {
+            "generation_id": str(generation["generation_id"]),
+            "parser_revision": str(generation["parser_revision"]),
+            "ordering_revision": str(generation["ordering_revision"]),
+            "records": records,
+        },
         raw_spec=raw_spec,
         source_envelope_id=envelope_id,
     )
     assert spec is not None
-    spec = await enrich_render_interaction_kinds(
+    return await enrich_render_interaction_kinds(
         catalog=catalog,
         raw_workers=raw_workers,
         session_id=session_id,
@@ -240,10 +274,9 @@ async def _ingested_rows(
         raw_spec=raw_spec,
         render_spec=spec,
         manifest_cache=manifest_cache,
-        lane="repair",
-        projector_read=True,
+        lane=lane,
+        projector_read=projector_read,
     )
-    return sorted((_render_row(asdict(record)) for record in spec.records), key=_sort_key)
 
 
 async def shadow_session(
@@ -569,6 +602,12 @@ async def _compare(
 
 _task: asyncio.Task[None] | None = None
 _worker: NormalizerWorker | None = None
+_context: dict[str, Any] | None = None
+
+
+def rebuild_context() -> dict[str, Any] | None:
+    """The catalog and worker pools the running sweep uses, for an out-of-band host rebuild."""
+    return _context
 
 
 def render_shadow_enabled() -> bool:
@@ -608,6 +647,14 @@ async def _sweep(
                         worker=worker,
                         session_id=session_id,
                     )
+                    results = await _take_over(
+                        catalog=catalog,
+                        raw_workers=raw_workers,
+                        render_workers=render_workers,
+                        worker=worker,
+                        session_id=session_id,
+                        results=results,
+                    )
                     for chunk in range(0, len(results), RECORD_CHUNK):
                         await catalog.call("render.shadow.record.v2", {"results": results[chunk : chunk + RECORD_CHUNK]})
                 except (asyncio.CancelledError, NormalizerUnavailable):
@@ -635,9 +682,60 @@ async def _sweep(
             await asyncio.sleep(SWEEP_IDLE_SECONDS)
 
 
+# Outcomes after which the host's render, not the laptop's, must be served.
+TAKEOVER_OUTCOMES = frozenset({"revision_skew", "mismatch"})
+
+
+async def _take_over(
+    *,
+    catalog: CatalogClient,
+    raw_workers: RawObjectWorkerPool,
+    render_workers: RenderObjectWorkerPool,
+    worker: NormalizerWorker,
+    session_id: str,
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Phase 4: when the laptop render is not what the host would serve, serve the host's.
+
+    A mismatch, a laptop render from another revision, or a witnessed envelope
+    the laptop never rendered rebuilds the session into its host generation.
+    The envelopes the host rendered are recorded as `host_rendered`.
+    """
+    if not host_authority_enabled() or not any(row["outcome"] in TAKEOVER_OUTCOMES for row in results):
+        return results
+    from zerg.services.host_render import HostRenderSkipped
+    from zerg.services.host_render import host_rebuild_session
+
+    try:
+        rebuilt = await host_rebuild_session(
+            catalog=catalog,
+            raw_workers=raw_workers,
+            render_workers=render_workers,
+            worker=worker,
+            session_id=session_id,
+        )
+    except HostRenderSkipped as exc:
+        logger.info("host render session=%s skipped: %s", session_id, exc)
+        return results
+    hosted = set(rebuilt["host_envelopes"])
+    return [
+        {**row, "outcome": "host_rendered", "detail": f"generation {rebuilt['generation_id']} current={rebuilt['current']}"}
+        if row["envelope_id"] in hosted and row["outcome"] in TAKEOVER_OUTCOMES
+        else row
+        for row in results
+    ]
+
+
+def host_authority_enabled() -> bool:
+    from zerg.config import get_settings
+
+    default = "0" if get_settings().testing else "1"
+    return os.getenv("LONGHOUSE_HOST_RENDER", default).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def start_render_shadow() -> bool:
     """Start the paced shadow sweep when enabled and the engine is installed."""
-    global _task, _worker
+    global _task, _worker, _context
     if _task is not None and not _task.done():
         return True
     if not render_shadow_enabled():
@@ -654,14 +752,23 @@ def start_render_shadow() -> bool:
     if catalog is None:
         return False
     _worker = NormalizerWorker()
+    _context = {
+        "catalog": catalog,
+        "raw_workers": get_raw_object_worker_pool(),
+        "render_workers": get_render_object_worker_pool(),
+    }
     _task = asyncio.create_task(
-        _sweep(catalog, get_raw_object_worker_pool(), get_render_object_worker_pool(), _worker), name="render-shadow"
+        _sweep(_context["catalog"], _context["raw_workers"], _context["render_workers"], _worker), name="render-shadow"
     )
     return True
 
 
 async def stop_render_shadow() -> None:
-    global _task, _worker
+    global _task, _worker, _context
+    from zerg.services.host_render import close_ingest_normalizer
+
+    await close_ingest_normalizer()
+    _context = None
     if _task is not None:
         _task.cancel()
         await asyncio.gather(_task, return_exceptions=True)

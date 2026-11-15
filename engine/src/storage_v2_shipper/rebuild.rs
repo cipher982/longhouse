@@ -7,7 +7,10 @@
 //! check of `host-normalized-transcripts.md` holds this equal to the render
 //! the laptop shipped.
 
-use super::render::{render_records_for_batch, session_facts, storage_v2_media_refs};
+use super::render::{
+    cursor_render_generation_id, render_generation_id, render_records_for_batch, session_facts,
+    storage_v2_media_refs,
+};
 use super::*;
 use crate::pipeline::source::{CapturedWitness, MemorySource, CAPTURE_WITNESS_FACT_KIND};
 use crate::raw_records::RawRecord;
@@ -522,6 +525,26 @@ pub(crate) fn rebuild_epoch(request: &EpochRequest) -> Result<Vec<EpochRender>> 
     Ok(out)
 }
 
+/// The render generation a host rebuild of this epoch belongs to: the same
+/// identity the Machine Agent's shipper mints for this kind of source, so a
+/// host render and a laptop render at one revision land in one generation.
+fn epoch_generation(request: &EpochRequest) -> Option<Value> {
+    let provider = request.provider.to_ascii_lowercase();
+    if request.range_kind != "byte_offset" && provider == "cursor" {
+        return Some(serde_json::json!({
+            "generation_id": cursor_render_generation_id(&request.session_id).to_string(),
+            "parser_revision": CURSOR_PARSER_REVISION,
+            "ordering_revision": "cursor-root-order-v1",
+        }));
+    }
+    let session = Uuid::parse_str(&request.session_id).ok()?;
+    Some(serde_json::json!({
+        "generation_id": render_generation_id(session).to_string(),
+        "parser_revision": PARSER_REVISION,
+        "ordering_revision": ORDERING_REVISION,
+    }))
+}
+
 /// The Runtime Host's normalizer process: one JSON request per line on
 /// stdin, one JSON response per line on stdout, until stdin closes. A request
 /// that fails or panics answers with an error and the worker keeps serving.
@@ -534,11 +557,13 @@ pub(crate) fn serve_normalize_worker(
         if line.trim().is_empty() {
             continue;
         }
+        let mut generation = Value::Null;
         let mut response = match serde_json::from_str::<EpochRequest>(&line) {
             Err(error) => {
                 serde_json::json!({ "id": Value::Null, "error": format!("bad request: {error}") })
             }
             Ok(request) => {
+                generation = epoch_generation(&request).unwrap_or(Value::Null);
                 let started = std::time::Instant::now();
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     rebuild_epoch(&request)
@@ -560,6 +585,11 @@ pub(crate) fn serve_normalize_worker(
         // Every answer names the revision, so a caller learns it from a probe
         // before it has anything to rebuild.
         response["revision"] = Value::from(normalizer_revision());
+        // And, for any request it could read, the generation a host render of
+        // that source belongs to, even when there was nothing to rebuild.
+        if !generation.is_null() {
+            response["generation"] = generation;
+        }
         serde_json::to_writer(&mut output, &response)?;
         output.write_all(b"\n")?;
         output.flush()?;
@@ -1258,6 +1288,34 @@ mod tests {
     }
 
     #[test]
+    fn a_host_rebuild_names_the_generation_the_shipper_mints() {
+        let session = Uuid::new_v4();
+        let request = |provider: &str, range_kind: &str| EpochRequest {
+            id: Value::Null,
+            provider: provider.to_string(),
+            session_id: session.to_string(),
+            source_epoch: Uuid::new_v4().to_string(),
+            epoch_opened_at: "2026-11-15T00:00:00Z".to_string(),
+            range_kind: range_kind.to_string(),
+            envelopes: Vec::new(),
+            media: HashMap::new(),
+        };
+        let file = epoch_generation(&request("claude", "byte_offset")).unwrap();
+        assert_eq!(file["generation_id"], Value::from(render_generation_id(session).to_string()));
+        assert_eq!(file["parser_revision"], Value::from(PARSER_REVISION));
+        assert_eq!(file["ordering_revision"], Value::from(ORDERING_REVISION));
+        let cursor = epoch_generation(&request("cursor", "record_ordinal")).unwrap();
+        assert_eq!(
+            cursor["generation_id"],
+            Value::from(cursor_render_generation_id(&session.to_string()).to_string())
+        );
+        assert_eq!(cursor["parser_revision"], Value::from(CURSOR_PARSER_REVISION));
+        // A Cursor JSONL transcript goes through the file parser.
+        let cursor_file = epoch_generation(&request("cursor", "byte_offset")).unwrap();
+        assert_eq!(cursor_file["parser_revision"], Value::from(PARSER_REVISION));
+    }
+
+    #[test]
     fn normalize_worker_answers_errors_and_keeps_serving() {
         let input = "not json\n{\"provider\":\"claude\",\"session_id\":\"s\",\"source_epoch\":\"e\",\"epoch_opened_at\":\"2026-11-14T00:00:00Z\",\"range_kind\":\"byte_offset\",\"envelopes\":[]}\n";
         let mut output = Vec::new();
@@ -1277,6 +1335,8 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("no stored envelopes"));
+        // Session "s" is not a UUID, so no file-parser generation is named.
+        assert!(lines[1].get("generation").is_none());
     }
 
     #[test]

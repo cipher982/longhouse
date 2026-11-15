@@ -82,7 +82,6 @@ from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectValidationError
-from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
@@ -1141,8 +1140,23 @@ async def _commit_admitted_envelope(
             return replay_receipt
 
         owner_value = getattr(auth_token, "owner_id", None)
+        # Host authority (host-normalized-transcripts Phase 4): the host names
+        # the generation and, for a witnessed envelope, builds the render.
+        from zerg.services.host_render import render_at_ingest
+
+        host_render = await render_at_ingest(
+            catalog=catalogd,
+            raw_workers=raw_workers,
+            raw_spec=spec,
+            parsed=parsed,
+            owner_id=str(owner_value) if owner_value is not None else None,
+            lane=lane,
+        )
+        if host_render is not None:
+            parsed["render_spec"] = host_render["spec"]
+        timer.mark("host_render")
         render_spec = parsed["render_spec"]
-        if render_spec is not None:
+        if render_spec is not None and (host_render is None or host_render["render_source"] == "laptop"):
             parsed["render_spec"] = await enrich_render_interaction_kinds(
                 catalog=catalogd,
                 raw_workers=raw_workers,
@@ -1190,32 +1204,15 @@ async def _commit_admitted_envelope(
         timer.mark("seal")
         render_manifest = None
         if sealed_render is not None and render_spec is not None:
-            render_manifest = {
-                "generation_id": str(render_spec.render_generation),
-                "parser_revision": render_spec.parser_revision,
-                "ordering_revision": render_spec.ordering_revision,
-                "object_id": sealed_render.object_id,
-                "object_hash": sealed_render.object_hash,
-                "payload_hash": sealed_render.payload_hash,
-                "object_path": sealed_render.object_path,
-                "uncompressed_size": sealed_render.uncompressed_size,
-                "compressed_size": sealed_render.compressed_size,
-                "event_count": sealed_render.event_count,
-                "first_order_key": sealed_render.first_order_key,
-                "last_order_key": sealed_render.last_order_key,
-                "user_messages": sealed_render.user_messages,
-                "assistant_messages": sealed_render.assistant_messages,
-                "tool_calls": sealed_render.tool_calls,
-                "abandoned_events": sealed_render.abandoned_events,
-                "first_user_message_preview": sealed_render.first_user_message_preview,
-                "last_visible_text_preview": sealed_render.last_visible_text_preview,
-                "user_turns": list(sealed_render.user_turns),
-                # Claude local-command evidence can arrive in a later raw
-                # envelope. Keep its catalog projection explicitly pending so
-                # timeline/search/embedding projectors replay the complete raw
-                # stream before treating the first user row as durable.
-                "semantic_projection_version": (0 if render_spec.provider.strip().lower() == "claude" else SEMANTIC_PROJECTION_VERSION),
-            }
+            from zerg.services.host_render import render_manifest as _render_manifest
+
+            render_manifest = _render_manifest(render_spec, sealed_render)
+            if host_render is not None:
+                render_manifest.update(
+                    render_source=host_render["render_source"],
+                    object_parser_revision=host_render["object_parser_revision"],
+                    host_generation=True,
+                )
         committed = await catalogd.call(
             "storage.raw_object.commit.v2",
             {
@@ -1259,6 +1256,11 @@ async def _commit_admitted_envelope(
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
         timer.mark("catalog_commit")
+        if host_render is not None and render_manifest is not None and committed.get("render_served") is False:
+            # A host generation that does not cover what is served yet: fill it now.
+            from zerg.services.host_render import schedule_host_rebuild
+
+            schedule_host_rebuild(str(spec.session_id))
         committed_receipt = _validated_receipt(
             committed.get("receipt"),
             expected_envelope_id=sealed.envelope_id,

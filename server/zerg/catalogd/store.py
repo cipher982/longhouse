@@ -3679,6 +3679,69 @@ def _session_keeps_published_render(connection, session: Mapping[str, Any] | Non
     )
 
 
+def _generation_covers(connection, *, session_id: str, candidate: str, current: str) -> bool:
+    """Whether `candidate` holds an object for every live native envelope `current` serves.
+
+    A host generation becomes current only when it covers what is served now,
+    so a generation that a revision bump started serves nothing partial.
+    Legacy-imported envelopes do not count: a session that has native raw
+    serves the native re-ship, which replaces the legacy import.
+    """
+    objects = RenderObject.__table__
+    raw = LiveRawObject.__table__
+    held = objects.alias("held")
+    missing = connection.execute(
+        select(objects.c.source_envelope_id)
+        .where(
+            objects.c.session_id == session_id,
+            objects.c.generation_id == current,
+            objects.c.retired_at.is_(None),
+            objects.c.source_envelope_id.in_(
+                select(raw.c.envelope_id).where(
+                    raw.c.session_id == session_id, raw.c.retired_at.is_(None), raw.c.provenance_kind == "native"
+                )
+            ),
+            ~select(held.c.object_id)
+            .where(
+                held.c.generation_id == candidate,
+                held.c.source_envelope_id == objects.c.source_envelope_id,
+                held.c.retired_at.is_(None),
+            )
+            .exists(),
+        )
+        .limit(1)
+    ).first()
+    return missing is None
+
+
+def _promote_generation_if_covering(
+    connection,
+    *,
+    session_id: str,
+    candidate: str,
+    commit_seq: int,
+    commit_time: datetime,
+) -> bool:
+    """Make `candidate` the session's current generation if it covers the current one."""
+    generation = RenderGeneration.__table__
+    sessions = StorageSession.__table__
+    current = connection.execute(select(sessions.c.current_render_generation).where(sessions.c.session_id == session_id)).scalar()
+    if current is not None and str(current) == candidate:
+        return True
+    if current is not None and not _generation_covers(connection, session_id=session_id, candidate=candidate, current=str(current)):
+        return False
+    connection.execute(
+        update(generation)
+        .where(generation.c.session_id == session_id, generation.c.generation_id != candidate, generation.c.state == "current")
+        .values(state="superseded", superseded_at=commit_time, commit_seq=commit_seq, updated_at=commit_time)
+    )
+    _recompute_render_generation_projection(
+        connection, session_id=session_id, generation_id=candidate, commit_seq=commit_seq, commit_time=commit_time
+    )
+    connection.execute(update(sessions).where(sessions.c.session_id == session_id).values(render_state="ready"))
+    return True
+
+
 def _recompute_render_generation_projection(
     connection,
     *,

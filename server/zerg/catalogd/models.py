@@ -397,6 +397,13 @@ class RenderObject(CatalogBase):
     assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
     tool_calls = Column(Integer, nullable=False, server_default=text("0"))
     # Unknown for historical objects until verified semantic repair/replay.
+    # Who made this object: "host" (the Runtime Host's normalizer rebuilt it
+    # from raw) or "laptop" (the render a laptop shipped). NULL on objects from
+    # before host authority, all laptop-made.
+    render_source = Column(String(16), nullable=True)
+    # The parser revision that made this object's records. A generation can
+    # hold laptop objects from an older revision until the host rebuilds them.
+    object_parser_revision = Column(String(128), nullable=True)
     abandoned_events = Column(Integer, nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)

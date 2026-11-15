@@ -16,9 +16,12 @@ from sqlalchemy import func
 from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from zerg.catalogd.fact_reducer import _advance_commit_seq
 from zerg.catalogd.models import MediaObject
+from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import RawObject
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
@@ -28,7 +31,10 @@ from zerg.catalogd.models import SessionProviderFact
 from zerg.catalogd.models import SessionTombstone
 from zerg.catalogd.models import SourceEpoch
 from zerg.catalogd.models import StorageSession
+from zerg.catalogd.store import _promote_generation_if_covering
 from zerg.catalogd.store import _read_snapshot
+from zerg.catalogd.store import _recompute_render_generation_projection
+from zerg.catalogd.store import _render_order_columns
 from zerg.catalogd.store import _write_transaction
 
 # A session this large is rebuilt by Phase 4's incremental path, not sampled.
@@ -46,12 +52,23 @@ def _rfc3339(value: object) -> str:
     return (moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)).isoformat()
 
 
-SHADOW_OUTCOMES = ("match", "mismatch", "revision_skew", "no_witness", "raw_only", "too_large", "media_missing", "error")
+SHADOW_OUTCOMES = (
+    "match",
+    "mismatch",
+    "revision_skew",
+    "host_rendered",
+    "no_witness",
+    "raw_only",
+    "too_large",
+    "media_missing",
+    "error",
+)
 # Outcomes a newer normalizer revision must answer again. An error is retried
 # after the cooldown whatever the revision. `revision_skew` means the laptop
 # render was made by another parser revision than the host's, so the two are
 # not comparable until one of them moves.
-REVISION_BOUND_OUTCOMES = ("match", "mismatch", "revision_skew")
+# `host_rendered`: the host replaced the laptop render with its own (Phase 4).
+REVISION_BOUND_OUTCOMES = ("match", "mismatch", "revision_skew", "host_rendered")
 
 
 class RenderShadowMixin:
@@ -101,6 +118,7 @@ class RenderShadowMixin:
                         raw.c.opaque_source_id,
                         raw.c.source_epoch,
                         raw.c.range_kind,
+                        raw.c.provenance_kind,
                         raw.c.range_start,
                         raw.c.range_end,
                         raw.c.object_path,
@@ -185,6 +203,155 @@ class RenderShadowMixin:
             "media": [dict(row) for row in media_rows],
             "checked": checked,
         }
+
+    def commit_host_render_objects(
+        self,
+        *,
+        session_id: str,
+        generation_id: str,
+        parser_revision: str,
+        ordering_revision: str,
+        objects: tuple[dict[str, Any], ...],
+        promote: bool,
+    ) -> dict[str, Any]:
+        """Seal host-built render objects into a host generation, one per envelope.
+
+        An envelope that already has an object in the generation keeps it when
+        it is the same object and has it replaced (the old one retired) when the
+        host rebuilt it differently. With `promote`, the generation becomes
+        current once it covers the current one's native envelopes. Rebuilding a
+        generation that is already current recomputes the session's heads and
+        reopens its projectors.
+        """
+        sessions = StorageSession.__table__
+        generations = RenderGeneration.__table__
+        render = RenderObject.__table__
+        raw = RawObject.__table__
+        tombstones = SessionTombstone.__table__
+        projectors = ProjectorState.__table__
+        with _write_transaction(self.engine) as connection:
+            if connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id == session_id)).first() is not None:
+                return {"session_deleted": True}
+            session = connection.execute(select(sessions).where(sessions.c.session_id == session_id)).mappings().first()
+            if session is None:
+                return {"not_found": True}
+            generation = connection.execute(select(generations).where(generations.c.generation_id == generation_id)).mappings().first()
+            if generation is not None and (
+                generation["session_id"] != session_id
+                or generation["parser_revision"] != parser_revision
+                or generation["ordering_revision"] != ordering_revision
+                or generation["state"] == "failed"
+            ):
+                return {"conflict": True, "reason": "generation belongs to another session or revision"}
+            if generation is None:
+                other = connection.execute(
+                    select(generations.c.generation_id).where(
+                        generations.c.session_id == session_id,
+                        generations.c.parser_revision == parser_revision,
+                        generations.c.ordering_revision == ordering_revision,
+                    )
+                ).first()
+                if other is not None:
+                    return {"conflict": True, "reason": "another generation holds this session and revision"}
+            envelope_ids = {str(item["source_envelope_id"]) for item in objects}
+            live = {
+                str(value)
+                for value in connection.execute(
+                    select(raw.c.envelope_id).where(
+                        raw.c.session_id == session_id, raw.c.retired_at.is_(None), raw.c.envelope_id.in_(envelope_ids)
+                    )
+                ).scalars()
+            }
+            held = {
+                str(row["source_envelope_id"]): row
+                for row in connection.execute(
+                    select(render.c.object_id, render.c.source_envelope_id).where(
+                        render.c.generation_id == generation_id,
+                        render.c.retired_at.is_(None),
+                        render.c.source_envelope_id.in_(envelope_ids),
+                    )
+                ).mappings()
+            }
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            if generation is None:
+                connection.execute(
+                    generations.insert().values(
+                        generation_id=generation_id,
+                        session_id=session_id,
+                        parser_revision=parser_revision,
+                        ordering_revision=ordering_revision,
+                        state="pending",
+                        source_chain_hash="0" * 64,
+                        object_count=0,
+                        event_count=0,
+                        commit_seq=commit_seq,
+                        created_at=commit_time,
+                        updated_at=commit_time,
+                    )
+                )
+            written = 0
+            for item in objects:
+                envelope_id = str(item["source_envelope_id"])
+                if envelope_id not in live:
+                    continue
+                previous = held.get(envelope_id)
+                if previous is not None and str(previous["object_id"]) == item["object_id"]:
+                    continue
+                if previous is not None:
+                    connection.execute(update(render).where(render.c.object_id == previous["object_id"]).values(retired_at=commit_time))
+                if connection.execute(select(render.c.object_id).where(render.c.object_id == item["object_id"])).first() is not None:
+                    # The same content already sealed for another generation:
+                    # objects are content-addressed and carry their generation,
+                    # so this cannot be the same object.
+                    return {"conflict": True, "reason": "render object already belongs to another generation"}
+                connection.execute(
+                    render.insert().values(
+                        object_id=item["object_id"],
+                        generation_id=generation_id,
+                        session_id=session_id,
+                        source_envelope_id=envelope_id,
+                        object_hash=item["object_hash"],
+                        payload_hash=item["payload_hash"],
+                        object_path=item["object_path"],
+                        uncompressed_size=item["uncompressed_size"],
+                        compressed_size=item["compressed_size"],
+                        event_count=item["event_count"],
+                        user_messages=item["user_messages"],
+                        assistant_messages=item["assistant_messages"],
+                        tool_calls=item["tool_calls"],
+                        abandoned_events=item.get("abandoned_events"),
+                        first_user_message_preview=item["first_user_message_preview"],
+                        last_visible_text_preview=item["last_visible_text_preview"],
+                        user_turns=item.get("user_turns"),
+                        semantic_projection_version=item.get("semantic_projection_version", 0),
+                        render_source=item["render_source"],
+                        object_parser_revision=item.get("object_parser_revision") or parser_revision,
+                        first_order_key=item["first_order_key"],
+                        last_order_key=item["last_order_key"],
+                        **_render_order_columns(item["first_order_key"], item["last_order_key"]),
+                        commit_seq=commit_seq,
+                        created_at=commit_time,
+                    )
+                )
+                written += 1
+            was_current = session["current_render_generation"] is not None and str(session["current_render_generation"]) == generation_id
+            current = was_current
+            if was_current and written:
+                _recompute_render_generation_projection(
+                    connection, session_id=session_id, generation_id=generation_id, commit_seq=commit_seq, commit_time=commit_time
+                )
+            elif promote and not was_current:
+                current = _promote_generation_if_covering(
+                    connection, session_id=session_id, candidate=generation_id, commit_seq=commit_seq, commit_time=commit_time
+                )
+            if current and (written or not was_current):
+                connection.execute(
+                    update(projectors)
+                    .where(projectors.c.session_id == session_id)
+                    .values(desired_revision=func.max(projectors.c.desired_revision, commit_seq), desired_at=commit_time)
+                )
+        return {"written": written, "current": current, "promoted": current and not was_current, "commit_seq": str(commit_seq)}
 
     def list_render_shadow_candidates(self, *, limit: int, revision: str | None = None) -> dict[str, Any]:
         """Sessions with envelopes the shadow has not answered yet, newest first.
