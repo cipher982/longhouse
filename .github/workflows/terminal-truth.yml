@@ -242,6 +242,8 @@ jobs:
           if [[ "$GITHUB_REF" != refs/heads/main ]]; then cache=/ci-cache/terminal-truth-branch; fi
           if ! { mkdir -p "$cache" 2>/dev/null && [[ -w "$cache" ]]; }; then cache="$RUNNER_TEMP/terminal-truth-cache"; fi
           mkdir -p artifacts/terminal-truth "$cache"
+          # The mutated-engine cache (33 binaries, 1.4 GiB) was retired 2026-11-15; nothing prunes it any more.
+          rm -rf -- "${cache:?}/mutants"
           {
             echo "TT_PROVIDERS=${providers}"
             echo "TT_PUBLISH=${publish}"
