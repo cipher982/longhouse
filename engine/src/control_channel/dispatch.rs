@@ -534,9 +534,10 @@ pub(super) async fn execute_command(
             if provider == "antigravity" {
                 // Images arrive as staged file paths inside the injected
                 // message (the model opens them with read_file).
-                let outcome = crate::antigravity_channel_control::send_text(&session_id, &path_text)
-                    .await
-                    .map_err(CommandError::command_failed)?;
+                let outcome =
+                    crate::antigravity_channel_control::send_text(&session_id, &path_text)
+                        .await
+                        .map_err(CommandError::command_failed)?;
                 return Ok(json!({
                     "exit_code": 0,
                     "stdout": "",

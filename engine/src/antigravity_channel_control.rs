@@ -339,7 +339,8 @@ mod tests {
         let rt = runtime();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
             rt.block_on(async {
-                let result = send_text_with_timeout("session-timeout", "never claimed", "send", 0.05).await;
+                let result =
+                    send_text_with_timeout("session-timeout", "never claimed", "send", 0.05).await;
                 assert!(result.is_err(), "{result:?}");
 
                 let inbox_dir = temp
