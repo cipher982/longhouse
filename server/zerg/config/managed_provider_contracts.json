@@ -2869,7 +2869,7 @@
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
       "auth_probe": {
         "disposition": "upstream_absent",
-        "reason": "the agy CLI has no auth/login/status subcommand"
+        "reason": "the agy CLI has no auth/login/status subcommand (checked on 1.5.9)"
       },
       "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
@@ -2966,7 +2966,7 @@
       "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": true,
       "launch_local": true,
-      "run_once": true,
+      "run_once": false,
       "reattach": false,
       "send_input": true,
       "interrupt": false,
@@ -3119,58 +3119,59 @@
           "source": "factory assertions: hook_inbox_contract_preserved"
         },
         "run_once": {
-          "level": "live_token",
-          "source": "real agy --print returned a structured single-turn result carrying the requested marker",
-          "disposition": "implemented",
-          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once. This is upstream provider-release evidence for the bounded `agy --print` surface; it does not advertise or qualify a Longhouse Console adapter.",
-          "observed_provider_version": "1.1.17"
+          "level": "none",
+          "source": "Console routes through session.turn.start, not the legacy run_once command",
+          "disposition": "policy_disabled",
+          "reason": "The engine's session.run_once command accepts Codex only. Antigravity Console has one turn-scoped path through session.turn.start. The bounded `agy -p` invocation is still proven upstream behaviour (scripts/qa/provider-control-e2e-canary.py --antigravity-real-run-once), but it is reached only through that path.",
+          "routed_to": "turn_start",
+          "observed_provider_version": "1.5.9"
         },
         "reattach": {
           "level": "none",
           "source": "not implemented; provider reattach surface verified present",
           "disposition": "not_implemented",
-          "reason": "Corrected 2026-08-20. This cell previously read upstream_absent on the grounds that Antigravity exposed no stable reattach surface. That was true of the 1.1.5 observation it was written against and is false now: `agy --conversation <id>` resumes an existing conversation with intact history, including after the previous process was killed with SIGINT. Verified against 1.1.16. Longhouse has not built the reattach path.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity --conversation reattach path and canary"
+          "reason": "Upstream supports it: `agy --conversation <full id>`, `-c` and ACP `session/resume` resume an existing conversation with intact history, including after the previous process was killed. Verified on 1.5.9. A short id prefix silently starts a new conversation, so the engine must pass the full id. Longhouse has not built the reattach path (antigravity-parity.md steps 2 and 4).",
+          "observed_provider_version": "1.5.9",
+          "owner_action": "antigravity reattach through --conversation / ACP session/resume with the full id, plus a canary"
         },
         "send_input": {
           "level": "live_token",
           "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
           "disposition": "implemented",
-          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release: the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing. Hooks fire under GEMINI_API_KEY auth (observed on agy 1.5.6 through Longhouse's own hook install).",
-          "observed_provider_version": "1.1.17"
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release: the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing. Hooks fire under GEMINI_API_KEY auth (observed on agy 1.5.6 and again on 1.5.9, including the Stop hook's terminationReason).",
+          "observed_provider_version": "1.5.9"
         },
         "interrupt": {
           "level": "none",
-          "source": "no native cancel; reconstructable as kill plus resume",
+          "source": "not implemented; ACP session/cancel exists upstream, process interrupt proven",
           "disposition": "not_implemented",
-          "reason": "Antigravity exposes no native turn cancel. `user` is the only accepted stream-json input event -- interrupt, cancel, stop and abort are all rejected as unsupported -- and SIGINT ends the process rather than the turn. The conversation survives and resumes intact by id, so interrupt is reconstructable as kill-then-resume rather than natively supported. Typing it as a native interrupt would be a lie to the caller.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity kill-and-resume interrupt path with process-group reap",
+          "reason": "Upstream offers three routes, none built in Longhouse yet. Console (ACP): `session/cancel` is part of the protocol but was not proven on 1.5.9 (the probe never cancelled a running prompt). Print mode: SIGINT ends the process with finished_reason `interrupted` and exit code 1; stream-json stdin accepts only `user` events, so there is no cancel or image frame there. Helm: kill-and-resume, or a PreInvocation hook that returns `terminationBehavior: terminate`. The conversation survives and resumes by full id. Nothing upstream blocks shipping it.",
+          "observed_provider_version": "1.5.9",
+          "owner_action": "Console: ACP session/cancel (step 2). Helm: kill-and-resume or PreInvocation terminate, with process-group reap (step 4)",
           "blocker": "none"
         },
         "steer_active_turn": {
           "level": "none",
-          "source": "not implemented; bounded injection verified against 1.1.16",
+          "source": "not implemented; two upstream mechanisms proven live on 1.5.9",
           "disposition": "not_implemented",
-          "reason": "Corrected 2026-08-20. Bounded active-turn injection is proven, not unproven: a message queued in the hook inbox is claimed at the next PreInvocation inside the running turn and changes the model's course before that turn ends. Steering lands at an invocation boundary, so a single long tool call delays it -- it is bounded, not immediate, and product copy must say so. Longhouse does not route to it.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity bounded active-turn injection canary"
+          "reason": "Proven upstream, not yet routed by Longhouse. (1) ACP: a second `session/prompt` sent during a running turn lands between tool steps (quirk: the first prompt's RPC returns `end_turn` immediately while the turn continues). (2) Hooks: a PreInvocation hook returns `injectSteps` with a `userMessage`, claimed after the running tool call. Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate, and product copy must say so.",
+          "observed_provider_version": "1.5.9",
+          "owner_action": "Console: second ACP session/prompt (step 2). Helm: route steer to the PreInvocation hook inbox (step 3)"
         },
         "answer_pause": {
           "level": "none",
           "source": "no headless pause exists upstream",
           "disposition": "upstream_absent",
-          "reason": "Headless Antigravity never pauses for a permission or a question. It reports permission_mode always-proceed and settles the choice itself, which upstream made deliberate in 1.1.12. There is no pause to answer. The Helm TUI does prompt but exposes no structured surface for it, so answering would mean scraping and driving a PTY.",
-          "observed_provider_version": "1.1.16"
+          "reason": "With `--dangerously-skip-permissions` agy reports permission_mode always-proceed in print mode and sends zero permission requests in ACP. Without it, headless mode auto-denies tools rather than pausing. Longhouse runs Console in bypass, so there is no pause to answer. The Helm TUI does prompt but exposes no structured surface, so answering would mean scraping and driving a PTY. Answering `ask_question` and permission prompts is a non-goal of antigravity-parity.md.",
+          "observed_provider_version": "1.5.9"
         },
         "terminate": {
           "level": "none",
-          "source": "unsupported until process termination policy is designed",
+          "source": "not implemented; process-group reaping confirmed necessary on 1.5.9",
           "disposition": "not_implemented",
-          "reason": "SIGINT ends the process cleanly and emits a typed error result, but leaves run_command children orphaned. Longhouse has not designed the process-group termination policy that requires, and shipping terminate without it would strand child processes on every kill.",
-          "observed_provider_version": "1.1.16",
-          "owner_action": "antigravity process termination policy and canary"
+          "reason": "A tool's child (`sleep`) outlived its killed process group on 1.5.9, so terminate must reap the whole process group, not the agy pid. Upstream does not block this. Longhouse has not built it.",
+          "observed_provider_version": "1.5.9",
+          "owner_action": "antigravity terminate with process-group reaping and a canary (step 4)"
         },
         "tail_output": {
           "level": "hermetic",
@@ -3196,7 +3197,7 @@
           "disposition": "implemented",
           "reason": "One bounded `agy --print` invocation per Console turn. This path does not use hooks, which is why it matters: hook delivery is unavailable under GEMINI_API_KEY auth, so the Console turn is the control surface that works under either credential authority. The canary now reads the argv from `longhouse-engine antigravity-console-argv` instead of rebuilding it, so the adapter's command line, the result shape it parses, and the transcript path it binds are all proven against the installed release. It refuses to run rather than falling back to a copy when the engine is unavailable.",
           "observed_provider_version": "1.1.18",
-          "owner_action": "extend the canary to drive start_antigravity_print_turn so process supervision, turn-claim settlement, and engine-side transcript binding are covered too"
+          "owner_action": "superseded by the ACP Console adapter (antigravity-parity.md step 2); extend the canary to drive start_antigravity_print_turn so process supervision, turn-claim settlement, and engine-side transcript binding are covered too"
         }
       },
       "machine_control_supports": [

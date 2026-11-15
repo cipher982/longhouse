@@ -764,7 +764,7 @@ def test_opencode_full_column_gate_accepts_measured_contract_limits(tmp_path: Pa
     }
 
 
-def test_antigravity_full_column_gate_accepts_maintenance_tier_limits(tmp_path: Path) -> None:
+def test_antigravity_full_column_gate_accepts_hook_inbox_limits(tmp_path: Path) -> None:
     gate = bridge._full_column_gate(  # noqa: SLF001
         _passing_antigravity_full_column_payload(tmp_path),
         provider="antigravity",

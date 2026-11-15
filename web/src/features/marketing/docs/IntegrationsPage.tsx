@@ -182,9 +182,10 @@ longhouse opencode --model <provider/model>`}
 longhouse omp`}
       </CodeBlock>
       <p>
-        <strong>Antigravity CLI</strong> is the narrowest of the seven. It launches
-        under Longhouse&apos;s hook-inbox control path and accepts send;
-        interrupt, terminate, and reattach are not supported. It refuses to
+        <strong>Antigravity CLI</strong> launches under Longhouse&apos;s hook-inbox
+        control path and accepts send. Upstream agy supports mid-turn steering,
+        interrupt and resume by conversation id; Longhouse has not wired those
+        up yet, and the chips above show what is proven today. It refuses to
         start if its Longhouse hook is not installed rather than opening an
         unmanaged session wearing a managed session id, and send stays gated per
         session on observed hook readiness.

@@ -1078,7 +1078,7 @@ def _antigravity_full_column_executor(
     canaries = _antigravity_hook_canaries(launch_result, evidence_root=evidence_root)
     assertions = antigravity_hook_qualification.antigravity_hook_inbox_oracle(canaries)
 
-    # Antigravity's maintenance-tier profile is the hook/inbox oracle.  The
+    # Antigravity's profile is the hook/inbox oracle.  The
     # universal column is retained for coverage reporting and cannot rewrite
     # the profile result.
     if AssertionOutcome.INFRASTRUCTURE_ERROR in {assertion.outcome for assertion in assertions}:

@@ -154,16 +154,18 @@ longhouse cursor       # Cursor Agent
 longhouse opencode     # OpenCode
 longhouse pi           # Pi Agent
 longhouse omp          # Oh My Pi
-longhouse antigravity  # Antigravity CLI, send only`}
+longhouse antigravity  # Antigravity CLI`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
         local observation path. All seven providers ship today; what they can do
-        after launch differs. Every provider but Antigravity can be steered
-        mid-turn. OpenCode Helm supports managed send, interrupt, terminate,
-        pause-answer, and active-turn steer that lands at the next step
-        boundary. Antigravity takes send alone, and refuses to start if its
-        Longhouse hook is not installed. The{" "}
+        after launch differs. Which control actions each provider offers
+        is generated from the managed-provider declarations. OpenCode Helm
+        supports managed send, interrupt, terminate, pause-answer, and
+        active-turn steer that lands at the next step boundary. Antigravity
+        Helm offers send today and refuses to start if its Longhouse hook is
+        not installed; its upstream CLI supports steering, interrupt and resume,
+        which Longhouse is wiring up. The{" "}
         <Link to="/docs/integrations">Integrations</Link> page carries the full
         provider detail, generated from the managed-provider declarations.
       </p>

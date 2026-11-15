@@ -426,7 +426,7 @@ def test_codex_contract_keeps_helm_and_console_controls():
     )
     # Antigravity joined on 2026-08-20 with a live-token canary that drives the
     # Console adapter's own argv, so this set is derived, not curated.
-    assert run_once_supported_providers() == frozenset({"codex", "antigravity"})
+    assert run_once_supported_providers() == frozenset({"codex"})
 
 
 def test_launch_tier_providers_advertise_remote_pause_answering():
@@ -613,8 +613,8 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("pi", "session.turn.interrupt", "pi.turn_interrupt"),
         ("omp", "session.turn.start", "omp.turn_start"),
         ("omp", "session.turn.interrupt", "omp.turn_interrupt"),
-        # Maintenance-tier Antigravity remains hook-driven and has no Console
-        # turn admission, regardless of the dormant print adapter.
+        # Antigravity Helm is hook-driven and grants send only until the
+        # parity steps in antigravity-parity.md land.
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
