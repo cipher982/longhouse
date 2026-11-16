@@ -279,6 +279,18 @@ jobs:
         # catch a provider gate -- the exact hole the cursor outage fell through.
         run: make test-managed-launch-lifecycle
 
+      - name: Upload failure diagnostics
+        # The isolated container is gone when the job ends; its collected
+        # receipts (full server, catalogd and engine logs, tenant data dir
+        # summary) are the only record of why a flaky run failed.
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lifecycle-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-isolation/
+          if-no-files-found: warn
+          retention-days: 7
+
   backend-shards:
     timeout-minutes: 30
     needs: [changes, test-image]
@@ -383,6 +395,18 @@ jobs:
       - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
         if: ${{ needs.changes.outputs.engine != 'true' && github.event_name != 'workflow_dispatch' }}
         run: make test-shipper-e2e
+
+      - name: Upload failure diagnostics
+        # The isolated container is gone when the job ends; its collected
+        # receipts (full server, catalogd and engine logs, tenant data dir
+        # summary) are the only record of why a flaky run failed.
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shipper-e2e-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-isolation/
+          if-no-files-found: warn
+          retention-days: 7
 
   frontend-tests:
     timeout-minutes: 20
@@ -511,6 +535,18 @@ jobs:
 
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
+
+      - name: Upload failure diagnostics
+        # The isolated container is gone when the job ends; its collected
+        # receipts (full server, catalogd and engine logs, tenant data dir
+        # summary) are the only record of why a flaky run failed.
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-core-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-isolation/
+          if-no-files-found: warn
+          retention-days: 7
 
   model-smoke:
     timeout-minutes: 20

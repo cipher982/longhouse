@@ -69,11 +69,28 @@ retain_failure_diagnostics() {
   [[ -n "$FAILURE_ARTIFACT_DIR" ]] || return 0
   printf '%s\n' "$reason" >"$FAILURE_ARTIFACT_DIR/reason.txt"
   printf 'scratch_root=%s\n' "$TEST_ROOT" >"$FAILURE_ARTIFACT_DIR/ownership.txt"
+  # Whole logs, not tails: the runner (and this scratch root) is gone once the
+  # job ends, and a 503 from catalogd is explained by what catalogd logged
+  # seconds earlier. Capped per file so one runaway log cannot fill the upload.
   for file in "$SERVER_LOG" "$ENGINE_LOG" "$TEST_ROOT"/*.out "$TEST_ROOT"/*.log; do
     [[ -f "$file" ]] || continue
     name="$(basename "$file")"
-    tail -100 "$file" >"$FAILURE_ARTIFACT_DIR/$name.tail" 2>/dev/null || true
+    tail -c 20000000 "$file" >"$FAILURE_ARTIFACT_DIR/$name" 2>/dev/null || true
   done
+  for file in "$HOME_DIR/.longhouse/logs"/* "$HOME_DIR/.longhouse"/*.log; do
+    [[ -f "$file" ]] || continue
+    tail -c 5000000 "$file" >"$FAILURE_ARTIFACT_DIR/engine-home-$(basename "$file")" 2>/dev/null || true
+  done
+  # Tenant data dir summary: file sizes and mtimes (database, WAL, catalogd
+  # socket dir), plus the guest's disk state at the moment of failure.
+  {
+    echo "# tenant data dir: $TEST_ROOT"
+    find "$TEST_ROOT" -maxdepth 3 -not -path "$TEST_ROOT/bin/*" -not -path "$HOME_DIR/.cache/*" \
+      -exec ls -ld {} + 2>/dev/null || true
+    echo; echo "# df"; df -h "$TEST_ROOT" 2>/dev/null || true
+    echo; echo "# loadavg"; cat /proc/loadavg 2>/dev/null || uptime 2>/dev/null || true
+    echo; echo "# pressure"; cat /proc/pressure/io /proc/pressure/cpu 2>/dev/null || true
+  } >"$FAILURE_ARTIFACT_DIR/tenant-data-summary.txt" 2>&1
   ps -axo pid=,ppid=,command= >"$FAILURE_ARTIFACT_DIR/processes.txt" 2>/dev/null || true
   echo "retained failure diagnostics: $FAILURE_ARTIFACT_DIR" >&2
 }
