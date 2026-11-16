@@ -30,12 +30,15 @@ from zerg.qa.live_kit import poll
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import wait_process_group_dead
 from zerg.qa.pty_reader import OwnedPtyReader
+from zerg.qa.tenant_evidence import capture_tenant_evidence
+from zerg.qa.tenant_evidence import should_capture
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
+from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 
@@ -683,6 +686,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
     terminal_path = artifact_root / "terminal.raw"
     session: _PtyProcess | None = None
     session_id: str | None = None
+    failure: BaseException | None = None
     report: dict[str, Any] = {"started_at": _now(), "status": "running", "artifact_root": str(artifact_root)}
     try:
         session = _PtyProcess.start(
@@ -1279,9 +1283,24 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         return report
     except Exception as exc:
+        failure = exc
         report.update({**failed_report(exc), "finished_at": _now()})
         raise
     finally:
+        try:
+            if session_id and failure is not None and should_capture(failure) and args.api_url and args.agents_token:
+                # The hosted QA tenant is deleted after the run: read what it holds
+                # while it still exists, before our own teardown changes it.
+                path = capture_tenant_evidence(
+                    url=str(args.api_url),
+                    token=str(args.agents_token),
+                    session_id=session_id,
+                    artifact_root=artifact_root,
+                    engine_log_dir=get_agent_log_dir(),
+                )
+                report["tenant_evidence"] = path.name if path else None
+        except Exception:  # noqa: BLE001 - never replace the run's own failure
+            pass
         try:
             if session_id:
                 hook_log = root / "hook-events" / f"{session_id}.ndjson"
