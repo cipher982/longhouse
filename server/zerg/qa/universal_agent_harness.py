@@ -3405,108 +3405,65 @@ class UniversalProviderAdapter:
         payload["scenario"] = scenario
         return payload
 
-    @_with_co_located_store_settings
     def _run_runtime_phase_service_projection(self, package: EvidencePackage) -> dict[str, Any]:
-        os.environ.setdefault("TESTING", "1")
-
-        from zerg.database import initialize_database
-        from zerg.database import initialize_live_database
-        from zerg.database import make_engine
-        from zerg.database import make_sessionmaker
-        from zerg.models.agents import AgentSession
-        from zerg.models.live_store import LiveRuntimeState
-        from zerg.services.session_runtime import RuntimeEventIngest
-        from zerg.services.session_runtime import ingest_runtime_events
+        from zerg.provider_contract.catalogd_process import run_catalogd
 
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
-        db_path = package.path("longhouse", "runtime-phase-service.sqlite")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = make_engine(f"sqlite:///{db_path}")
-        initialize_database(engine)
-        initialize_live_database(engine)
-        session_factory = make_sessionmaker(engine)
-
-        with session_factory() as db:
-            session = AgentSession(
-                provider=self.config.provider,
-                environment="test",
-                project="universal-agent-harness",
-                device_id="universal-harness",
-                cwd=str(package.path("workspace")),
-                started_at=now - timedelta(minutes=5),
-                last_activity_at=now,
-                user_messages=1,
-                assistant_messages=1,
-            )
-            db.add(session)
-            db.flush()
-            db.refresh(session)
-            runtime_key = f"{self.config.provider}:{session.id}:runtime-phase"
-            events = [
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=session.id,
-                    provider=self.config.provider,
-                    device_id="universal-harness",
-                    source="universal_harness",
-                    kind="phase_signal",
-                    phase="running",
-                    tool_name="Shell",
-                    occurred_at=now,
-                    freshness_ms=10 * 60 * 1000,
-                    dedupe_key="runtime-phase:running",
-                    payload={},
-                ),
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=session.id,
-                    provider=self.config.provider,
-                    device_id="universal-harness",
-                    source="universal_harness",
-                    kind="progress_signal",
-                    phase="running",
-                    tool_name="Shell",
-                    occurred_at=now + timedelta(seconds=1),
-                    freshness_ms=10 * 60 * 1000,
-                    dedupe_key="runtime-phase:progress",
-                    payload={"message": "runtime phase progress marker"},
-                ),
-                RuntimeEventIngest(
-                    runtime_key=runtime_key,
-                    session_id=session.id,
-                    provider=self.config.provider,
-                    device_id="universal-harness",
-                    source="universal_harness",
-                    kind="phase_signal",
-                    phase="idle",
-                    occurred_at=now + timedelta(seconds=2),
-                    freshness_ms=10 * 60 * 1000,
-                    dedupe_key="runtime-phase:idle",
-                    payload={},
-                ),
-            ]
-            result = ingest_runtime_events(db, events)
-            db.commit()
-            state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one_or_none()
-            state_projection = None
-            if state is not None:
-                state_projection = {
-                    "runtime_key": state.runtime_key,
-                    "session_id": str(state.session_id) if state.session_id else None,
-                    "provider": state.provider,
-                    "phase": state.phase,
-                    "phase_source": state.phase_source,
-                    "active_tool": state.active_tool,
-                    "phase_started_at": state.phase_started_at,
-                    "last_runtime_signal_at": state.last_runtime_signal_at,
-                    "last_progress_at": state.last_progress_at,
-                    "runtime_version": state.runtime_version,
-                }
-            db_summary = {
-                "session_id": str(session.id),
+        session_id = str(uuid4())
+        stamp = _catalog_timestamp(now - timedelta(minutes=5))
+        runtime_key = f"{self.config.provider}:{session_id}:runtime-phase"
+        events = [
+            {
                 "runtime_key": runtime_key,
-                "db_path": str(db_path),
-                "ingest_result": result.model_dump(mode="json"),
+                "session_id": session_id,
+                "provider": self.config.provider,
+                "device_id": "universal-harness",
+                "source": "universal_harness",
+                "kind": kind,
+                "phase": phase,
+                "tool_name": tool_name,
+                "occurred_at": (now + timedelta(seconds=offset)).isoformat(),
+                "freshness_ms": 10 * 60 * 1000,
+                "dedupe_key": dedupe_key,
+                "payload": event_payload,
+            }
+            for kind, phase, tool_name, offset, dedupe_key, event_payload in (
+                ("phase_signal", "running", "Shell", 0, "runtime-phase:running", {}),
+                ("progress_signal", "running", "Shell", 1, "runtime-phase:progress", {"message": "runtime phase progress marker"}),
+                ("phase_signal", "idle", None, 2, "runtime-phase:idle", {}),
+            )
+        ]
+        with run_catalogd(server_root=default_repo_root() / "server") as catalog:
+            catalog.execute(
+                "INSERT INTO live_session_catalog (session_id, provider, environment, started_at, user_state) VALUES (?, ?, ?, ?, ?)",
+                (session_id, self.config.provider, "test", stamp, "active"),
+            )
+            result = catalog.rpc("session.runtime.apply.v2", {"events": events})
+            rows = catalog.query(
+                "SELECT runtime_key, session_id, provider, phase, phase_source, active_tool, phase_started_at, "
+                "last_runtime_signal_at, last_progress_at, runtime_version FROM live_runtime_state WHERE runtime_key = ?",
+                (runtime_key,),
+            )
+            state_projection = None
+            if rows:
+                columns = (
+                    "runtime_key",
+                    "session_id",
+                    "provider",
+                    "phase",
+                    "phase_source",
+                    "active_tool",
+                    "phase_started_at",
+                    "last_runtime_signal_at",
+                    "last_progress_at",
+                    "runtime_version",
+                )
+                state_projection = dict(zip(columns, rows[0], strict=True))
+            db_summary = {
+                "session_id": session_id,
+                "runtime_key": runtime_key,
+                "db_path": str(catalog.database_path),
+                "ingest_result": result,
                 "state": _json_safe(state_projection),
             }
 
@@ -3559,7 +3516,7 @@ class UniversalProviderAdapter:
             **projection,
             "status": status,
             "scenario": "runtime_phase",
-            "db_path": str(db_path),
+            "db_path": db_summary["db_path"],
             "db_summary_path": str(db_summary_path),
             "runtime_key": runtime_key,
             "runtime_state_path": str(package.path("longhouse", "runtime-state.json")),
