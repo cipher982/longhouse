@@ -47,6 +47,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import getpass
 import hashlib
 import json
 import os
@@ -189,6 +190,9 @@ def orchestrate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.fault and (len(cells) != 1 or classify(cells[0])[0] != "producer"):
+        print("prove: FAULT=<name> runs one producer cell (CELLS=\"pi_helm_send_idle\") as a negative control", file=sys.stderr)
+        return 2
     bad = {c: classify(c)[1]["reason"] for c in cells if classify(c)[0] == "bad"}
     if bad:
         for cell, reason in bad.items():
@@ -225,6 +229,7 @@ def orchestrate(args: argparse.Namespace) -> int:
             f"timeout -k 30 {int(args.deadline)} python3 $HOME/{tools} --on-bench --run-id {run_id} --sha {sha} "
             f"--cells {shlex.quote(' '.join(cells))} --deadline {int(args.deadline)}"
             + (" --keep" if args.keep else "")
+            + (f" --fault {shlex.quote(args.fault)}" if args.fault else "")
             + (f" --cell-timeout {int(args.cell_timeout)}" if args.cell_timeout else "")
         )
         child = subprocess.Popen(
@@ -269,9 +274,61 @@ def orchestrate(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------------------------------------------------
 
 
+def fault_wrapper(argv: list[str], env: dict[str, str], fault: str, receipts: Path, timeout: float) -> list[str]:
+    """`argv` run as this user inside a private mount namespace where /run/longhouse-qa holds the fault selection.
+
+    This is the factory's engine-only channel (provider_factory/sandbox.py binds the same path): the QA engine reads
+    /run/longhouse-qa/fault.json, the producer's argv and environment are exactly an honest run's, and the namespace
+    keeps another agent's QA engine on this bench from reading the selection. Receipts are copied out before exit.
+    The inner `timeout` is the cap: the sudo parent is root's and a plain group kill cannot reach it.
+    """
+
+    config = json.dumps({"fault": fault, "receipt": "/run/longhouse-qa/receipts.jsonl"})
+    script = (
+        "set -e; mkdir -p /run/longhouse-qa; mount -t tmpfs -o mode=0755 tmpfs /run/longhouse-qa; "
+        "printf '%s' \"$1\" > /run/longhouse-qa/fault.json; touch /run/longhouse-qa/receipts.jsonl; chown \"$2\" /run/longhouse-qa/receipts.jsonl; "
+        "shift 2; set +e; runuser -u \"$USER_NAME\" -- \"$@\"; rc=$?; "
+        "cp /run/longhouse-qa/receipts.jsonl \"$RECEIPTS\" 2>/dev/null; chown \"$USER_NAME\" \"$RECEIPTS\" 2>/dev/null; exit $rc"
+    )
+    user = getpass.getuser()
+    inner = ["timeout", "-k", "20", str(int(timeout)), "env", "-i", *[f"{k}={v}" for k, v in env.items()], *argv]
+    return [
+        "sudo", "-n", "env", f"USER_NAME={user}", f"RECEIPTS={receipts}", "unshare", "-m", "--propagation", "private", "--",
+        "bash", "-c", script, "_", config, user, *inner,
+    ]  # fmt: skip
+
+
+def control_verdict(result: dict, receipts: Path, target: str, fault: str, seconds: float, evidence: str) -> dict:
+    """One negative control read off an ordinary producer result and the engine's receipts, by the factory's rule
+    (provider_factory.negative_controls.blind_verdict, control-plane repo): the fault fired, no assertion but the
+    target is false, and the target is false and not excused as the model's. PASS means the oracle caught the fault."""
+
+    assertions = result.get("assertions") if isinstance(result.get("assertions"), dict) else {}
+    fired = 0
+    with contextlib.suppress(OSError):
+        fired = sum(1 for line in receipts.read_text().splitlines() if line.strip().startswith("{"))
+    others = sorted(name for name, value in assertions.items() if name != target and value is False)
+    observation = result.get("observation") if isinstance(result.get("observation"), dict) else {}
+    excused = isinstance(observation.get("model_noncompliance"), dict) and target in observation["model_noncompliance"]
+    value = assertions.get(target)
+    facts = f"fault {fault}: receipts={fired} target={value} other_false={others}"
+    if not fired:
+        verdict, reason = "FAIL", f"inconclusive, the fault did not fire ({facts})"
+    elif type(value) is not bool:
+        verdict, reason = "FAIL", f"inconclusive, target not reported ({facts}; {result.get('failure_code') or result.get('status')})"
+    elif others:
+        verdict, reason = "FAIL", f"inconclusive, preconditions failed ({facts})"
+    elif value is True or excused:
+        verdict, reason = "FAIL", f"ORACLE BLIND: the producer {'put it down to the model' if excused else 'passed the target under a fired fault'} ({facts})"
+    else:
+        verdict, reason = "PASS", f"control caught the fault ({facts})"
+    return {"verdict": verdict, "reason": reason, "seconds": seconds, "evidence": evidence}
+
+
 class Bench:
-    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0) -> None:
+    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0, fault: str = "") -> None:
         self.run_id, self.sha, self.keep = run_id, sha, keep
+        self.fault = fault
         self.base = Path.home() / BENCH_BASE
         self.repo = self.base / "repo.git"
         self.run_dir = self.base / "runs" / run_id
@@ -414,7 +471,7 @@ class Bench:
 
         rustc = subprocess.run(["rustc", "--version"], capture_output=True, text=True, check=False).stdout.strip()
         tree_listing = sh("git", "-C", str(self.tree), "ls-tree", "-r", self.sha, "--", "engine", "config", "schemas", "scripts/build", "server/pyproject.toml")
-        digest = hashlib.sha256(f"{tree_listing}\n{rustc}\nci\n".encode()).hexdigest()[:24]
+        digest = hashlib.sha256(f"{tree_listing}\n{rustc}\nci\n{'qa-fault-injection' if self.fault else ''}".encode()).hexdigest()[:24]
         cache = self.base / "bin-cache" / digest
         (self.base / "by-sha").mkdir(parents=True, exist_ok=True)
         (self.base / "by-sha" / self.sha).write_text(digest + "\n")
@@ -438,13 +495,13 @@ class Bench:
                 "PATH": os.environ.get("PATH", ""),
                 "HOME": str(Path.home()),
                 "LANG": "C.UTF-8",
-                "LONGHOUSE_CARGO_TARGET_DIR": str(self.base / "cargo-target"),
+                "LONGHOUSE_CARGO_TARGET_DIR": str(self.base / ("cargo-target-qa" if self.fault else "cargo-target")),
             }
             log_path = self.out / "engine-build.log"
             steps = [
                 [sys.executable, "scripts/build/generate_build_identity.py", "--output", ".build/build-identity.json"],
                 [sys.executable, "scripts/build/cargo.py", "exec", "--", "build", "--manifest-path", "engine/Cargo.toml", "--profile", "ci",
-                 "--bin", "longhouse-engine", "--bin", "longhouse"],
+                 "--bin", "longhouse-engine", "--bin", "longhouse", *(["--features", "qa-fault-injection"] if self.fault else [])],
             ]  # fmt: skip
             for step in steps:
                 if self.run(step, cwd=build_tree, env=env, log_path=log_path, timeout=900, label="engine build") != 0:
@@ -531,8 +588,13 @@ class Bench:
             "--provider-bin", shutil.which(provider, path=self.env_base["PATH"]) or provider,
             "--provider-version", pins[provider]["version"], "--model", model,
         ]  # fmt: skip
+        timeout = self.cell_timeout or PRODUCER_TIMEOUT_S
+        env = self.py_env()
+        receipts = evidence.parent / "fault-receipts.jsonl"
+        if self.fault:
+            argv = fault_wrapper(argv, env, self.fault, receipts, timeout)
         t0 = time.monotonic()
-        code = self.run(argv, cwd=self.tree, env=self.py_env(), log_path=driver_log, timeout=self.cell_timeout or PRODUCER_TIMEOUT_S, label=producer_id)
+        code = self.run(argv, cwd=self.tree, env=env if not self.fault else {"PATH": env["PATH"]}, log_path=driver_log, timeout=timeout + (60 if self.fault else 0), label=producer_id)
         seconds = time.monotonic() - t0
         result_path = evidence / "result.json"
         result = None
@@ -541,6 +603,13 @@ class Bench:
                 result = json.loads(result_path.read_text())
         rel = f"producers/{producer_id}/ev/result.json" if result else f"producers/{producer_id}/run.log"
         any_fail = False
+        if self.fault and result is not None:
+            for cell in cells:
+                verdicts[cell["name"]] = control_verdict(result, receipts, cell["assertion"], self.fault, seconds, rel)
+                any_fail |= verdicts[cell["name"]]["verdict"] != "PASS"
+            if any_fail:
+                self.keep_scratch_evidence(producer_id)
+            return
         for cell in cells:
             if result is None:
                 reason = "timed out" if code == 124 else f"producer wrote no result (exit {code}); last log: {tail_text(driver_log)}"
@@ -737,7 +806,7 @@ def sweep_old_runs(base: Path, keep_id: str) -> None:
 
 
 def on_bench(args: argparse.Namespace) -> int:
-    bench = Bench(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout)
+    bench = Bench(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout, args.fault)
     bench.run_dir.mkdir(parents=True, exist_ok=True)
     sweep_old_runs(bench.base, args.run_id)
 
@@ -858,6 +927,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", default=os.environ.get("TARGET") or "bench", help="bench (default); factory and wisp are not built")
     parser.add_argument("--deadline", type=int, default=DEFAULT_DEADLINE_S, help="seconds the whole run may take, teardown included")
     parser.add_argument("--cell-timeout", type=int, default=0, help="seconds one cell (or producer run) may take; default %d for a Terminal Truth cell, %d for a producer" % (CELL_TIMEOUT_S, PRODUCER_TIMEOUT_S))
+    parser.add_argument("--fault", default=os.environ.get("FAULT") or "", help="run ONE producer cell as a negative control: the QA engine is told this fault through the engine-only channel (the producer is not), and PASS means the oracle caught it")
     parser.add_argument("--keep", action="store_true", help="leave the bench's scratch, venv and worktree for debugging (swept after 6 h)")
     parser.add_argument("--on-bench", action="store_true", help="internal: the bench half")
     parser.add_argument("--run-id")
