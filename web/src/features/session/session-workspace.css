@@ -3587,7 +3587,9 @@
     position: sticky;
     bottom: 0;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
-    z-index: 3;
+    /* Above the Jump to live pill (z-index 4) so the composer's popovers
+       (model chip, ledger evidence) open over it, not under it. */
+    z-index: 5;
   }
 }
 
