@@ -9,10 +9,14 @@ from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from uuid import UUID
 from uuid import uuid4
 
+from zerg.provider_contract.catalogd_process import CatalogdHandle
+from zerg.provider_contract.catalogd_process import run_catalogd
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
+from zerg.qa.repo_root import default_repo_root
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "product_console_lifecycle"
@@ -62,6 +66,46 @@ class _ConsoleRegistry:
         return owner_id == 1 and device_id == "factory-machine" and capability == "codex.turn_start"
 
 
+def _wire(value: object) -> object:
+    """JSON form of an RPC parameter: ISO timestamps and string ids."""
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _wire(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_wire(item) for item in value]
+    return value
+
+
+class _CatalogRpcStore:
+    """The catalog operations this oracle drives, each one a request to a real catalogd process."""
+
+    def __init__(self, catalog: CatalogdHandle) -> None:
+        self._catalog = catalog
+
+    def create_console_session(self, *, data: dict) -> dict:
+        return self._catalog.rpc("session.console.create.v2", {"session": _wire(data)})
+
+    def enqueue_console_turn(self, *, data: dict) -> dict:
+        return self._catalog.rpc("session.console.turn.enqueue.v2", {"turn": _wire(data)})
+
+    def update_console_turn(self, *, data: dict) -> dict:
+        return self._catalog.rpc("session.console.turn.update.v2", {"turn": _wire(data)})
+
+    def apply_session_runtime(self, *, events: list[dict]) -> dict:
+        return self._catalog.rpc("session.runtime.apply.v2", {"events": _wire(events)})
+
+    def read_shadow_session_state(self, *, session_id: str, owner_id: int) -> dict:
+        return self._catalog.rpc("session.shadow_state.read.v2", {"session_id": session_id, "owner_id": owner_id})
+
+
+def _runtime_event(**fields: object) -> dict[str, object]:
+    return dict(fields)
+
+
 def _project(store: object, session_id: str):
     from zerg.services.live_catalog_timeline import project_catalog_session_facts
 
@@ -104,25 +148,16 @@ def _reach(run: Run) -> None:
 def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
     """Run after establishing explicit test-safe process configuration."""
 
-    from sqlalchemy.orm import Session
+    with run_catalogd(server_root=default_repo_root() / "server") as catalog:
+        _exercise_console_lifecycle(run, catalog)
 
-    from zerg.catalogd.schema import create_catalog_engine
-    from zerg.catalogd.schema import initialize_catalog_schema
-    from zerg.catalogd.store import CatalogStore
-    from zerg.models.live_store import LiveConsoleTurn
-    from zerg.models.live_store import LiveSessionInputReceipt
-    from zerg.models.live_store import LiveUser
-    from zerg.services.session_runtime import RuntimeEventIngest
 
-    engine = create_catalog_engine(runtime_root / "catalog.db")
-    store = CatalogStore(engine)
+def _exercise_console_lifecycle(run: Run, catalog: CatalogdHandle) -> None:
+    store = _CatalogRpcStore(catalog)
     session_id = uuid4()
     thread_id = uuid4()
     try:
-        initialize_catalog_schema(engine)
-        with Session(engine) as db:
-            db.add(LiveUser(id=1, email="factory@example.invalid", is_active=True))
-            db.commit()
+        catalog.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (1, "factory@example.invalid"))
         store.create_console_session(
             data={
                 "session_id": str(session_id),
@@ -198,7 +233,7 @@ def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
             )
             store.apply_session_runtime(
                 events=[
-                    RuntimeEventIngest(
+                    _runtime_event(
                         runtime_key=f"codex:{session_id}",
                         session_id=session_id,
                         thread_id=thread_id,
@@ -257,7 +292,7 @@ def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
             )
             store.apply_session_runtime(
                 events=[
-                    RuntimeEventIngest(
+                    _runtime_event(
                         runtime_key=f"codex:{session_id}",
                         session_id=session_id,
                         thread_id=thread_id,
@@ -283,9 +318,10 @@ def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
                 and terminal.control.actions.start_turn.state == "available"
             )
 
-        with Session(engine) as db:
-            exact_receipts = db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.session_id == str(session_id)).count() == 2
-            exact_turns = db.query(LiveConsoleTurn).filter(LiveConsoleTurn.session_id == str(session_id)).count() == 2
+        exact_receipts = (
+            catalog.query("SELECT COUNT(*) FROM live_session_input_receipts WHERE session_id = ?", (str(session_id),))[0][0] == 2
+        )
+        exact_turns = catalog.query("SELECT COUNT(*) FROM live_console_turns WHERE session_id = ?", (str(session_id),))[0][0] == 2
         idempotent_receipt = replay["turn"]["turn_id"] == first_turn["turn_id"] and exact_receipts and exact_turns
         ordered_fifo = next_turn["turn_id"] == second_turn["turn_id"]
         observed = {
@@ -308,7 +344,6 @@ def _run_product_console_lifecycle(run: Run, *, runtime_root: Path) -> None:
         run.observation = observed
         run.assertions = {ASSERTION_ID: all(observed[name] is True for name in REGISTRATION.observed_activity)}
     finally:
-        engine.dispose()
         run.write("cleanup-receipt.json", {**_CLEANUP, "status": "pass", "catalog_disposed": True})
 
 
