@@ -1,8 +1,8 @@
 /**
  * Shell salience classifier — shared conformance corpus + grouping wiring.
  *
- * The fixture file is the parity contract with iOS (ShellSalienceTests.swift
- * runs the same corpus). A false demotion here is a safety failure of the
+ * The fixture file is the conformance corpus; iOS runs this same code in its
+ * transcript document. A false demotion here is a safety failure of the
  * whole Change B design, not a cosmetic bug.
  */
 import { readFileSync } from "node:fs";

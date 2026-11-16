@@ -961,7 +961,8 @@ def projected_user_texts(projection: dict) -> list[str]:
 
 
 def projected_latest(projection: dict) -> str | None:
-    # WebTranscriptPayload uses TimelineItem.id, not SessionProjectionItem.id.
+    # The transcript document reports row ids from the shared presentTranscript,
+    # not SessionProjectionItem.id.
     # These scenarios finish with prose, whose rendered key is prose:<event.id>.
     items = projection.get("items", [])
     if not items or items[-1].get("kind") != "event":

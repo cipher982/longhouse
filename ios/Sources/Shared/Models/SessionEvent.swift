@@ -61,6 +61,9 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let taskNotification: [String: JSONValue]?
     let waitingBackgroundAgents: Int?
     let apiError: [String: JSONValue]?
+    /// Canonical item facts (phase, reasoning visibility, intent, turn end) the
+    /// host asserted; the shared presentation model reads them.
+    let item: APIItemFactsResponse?
 
     init(
         id: String,
@@ -94,9 +97,11 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         reasoningWithheld: Bool = false,
         taskNotification: [String: JSONValue]? = nil,
         waitingBackgroundAgents: Int? = nil,
-        apiError: [String: JSONValue]? = nil
+        apiError: [String: JSONValue]? = nil,
+        item: APIItemFactsResponse? = nil
     ) {
         self.id = id
+        self.item = item
         self.cursor = cursor
         self.toolInputTruncated = toolInputTruncated
         self.toolOutputTruncated = toolOutputTruncated
@@ -160,7 +165,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         reasoningWithheld: Bool = false,
         taskNotification: [String: JSONValue]? = nil,
         waitingBackgroundAgents: Int? = nil,
-        apiError: [String: JSONValue]? = nil
+        apiError: [String: JSONValue]? = nil,
+        item: APIItemFactsResponse? = nil
     ) {
         self.init(
             id: String(id),
@@ -190,7 +196,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             reasoningWithheld: reasoningWithheld,
             taskNotification: taskNotification,
             waitingBackgroundAgents: waitingBackgroundAgents,
-            apiError: apiError
+            apiError: apiError,
+            item: item
         )
     }
 
@@ -241,6 +248,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         taskNotification = try container.decodeIfPresent([String: JSONValue].self, forKey: .taskNotification)
         waitingBackgroundAgents = try container.decodeIfPresent(Int.self, forKey: .waitingBackgroundAgents)
         apiError = try container.decodeIfPresent([String: JSONValue].self, forKey: .apiError)
+        item = try container.decodeIfPresent(APIItemFactsResponse.self, forKey: .item)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -276,6 +284,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(taskNotification, forKey: .taskNotification)
         try container.encodeIfPresent(waitingBackgroundAgents, forKey: .waitingBackgroundAgents)
         try container.encodeIfPresent(apiError, forKey: .apiError)
+        try container.encodeIfPresent(item, forKey: .item)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -311,6 +320,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case taskNotification
         case waitingBackgroundAgents
         case apiError
+        case item
     }
 
     var legacyNumericId: Int? { Int(id) }
@@ -319,42 +329,6 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     var liteBodyCursor: String? {
         guard toolInputTruncated || toolOutputTruncated, let cursor, !cursor.isEmpty else { return nil }
         return cursor
-    }
-
-    /// The same event with its full tool body from `/event-bodies`.
-    func withFullBody(_ body: SessionEventBody) -> SessionEvent {
-        let input = body.toolInputJson ?? toolInputValue
-        return SessionEvent(
-            id: id,
-            role: role,
-            contentText: contentText,
-            interactionKind: interactionKind,
-            toolName: toolName,
-            toolInputJSON: input?.objectValue,
-            toolInputValue: input,
-            toolOutputText: body.toolOutputText ?? toolOutputText,
-            toolCallId: toolCallId,
-            toolCallState: toolCallState,
-            toolPresentation: body.toolPresentation ?? toolPresentation,
-            timestamp: timestamp,
-            inActiveContext: inActiveContext,
-            isHeadBranch: isHeadBranch,
-            inputOrigin: inputOrigin,
-            eventOrigin: eventOrigin,
-            mediaRefs: mediaRefs,
-            turnEnd: turnEnd,
-            cursor: cursor,
-            orderTimeUs: orderTimeUs,
-            threadId: threadId,
-            branchKind: branchKind,
-            toolOutputFailed: toolOutputFailed,
-            toolIntent: toolIntent,
-            messagePhase: messagePhase,
-            reasoningWithheld: reasoningWithheld,
-            taskNotification: taskNotification,
-            waitingBackgroundAgents: waitingBackgroundAgents,
-            apiError: apiError
-        )
     }
 
     var isSynthetic: Bool {

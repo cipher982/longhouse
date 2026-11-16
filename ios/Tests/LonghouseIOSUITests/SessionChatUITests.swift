@@ -1015,6 +1015,21 @@ final class SessionChatUITests: XCTestCase {
         add(shot)
     }
 
+    func testCaptureNarrationTrailScreenshot() {
+        let app = launchChatFixture(name: "narration", eventCount: 0)
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
+        )
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "narration-trail"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     func testCaptureClaudeFidelitySheetScreenshot() {
         let app = launchChatFixture(name: "claude-fidelity-sheet", eventCount: 0)
         let parentAgent = app.buttons["session-runtime-background-task-sub-1"]

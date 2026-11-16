@@ -303,14 +303,14 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        await waitForItemIds(model, ["user:10"])
-        #expect(model.items.map(\.id) == ["user:10"])
+        await waitForItemIds(model, ["event:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
         await api.failNextTailRequests(1)
 
         recorder.emitChanged(latestEventId: 11, pubsubSeq: 778)
-        await waitForItemIds(model, ["user:11"])
+        await waitForItemIds(model, ["event:11"])
 
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         #expect(await api.tailRequestCount() >= 3)
         #expect(model.refreshErrorMessage == nil)
 
@@ -337,7 +337,7 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        await waitForItemIds(model, ["user:10"])
+        await waitForItemIds(model, ["event:10"])
         let requestCountBeforeWake = await api.tailRequestCount()
         recorder.emitChanged(latestEventId: 11, pubsubSeq: 778)
         await waitForTailRequests(api, atLeast: requestCountBeforeWake + 1)
@@ -373,13 +373,13 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        await waitForItemIds(model, ["user:10"])
+        await waitForItemIds(model, ["event:10"])
         recorder.emitConnected()
 
         recorder.emitDecodeFailed()
-        await waitForItemIds(model, ["user:11"])
+        await waitForItemIds(model, ["event:11"])
 
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         model.stop()
     }
 
@@ -400,7 +400,7 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        await waitForItemIds(model, ["user:10"])
+        await waitForItemIds(model, ["event:10"])
         recorder.emitConnected()
         await api.delayTailResponses(nanoseconds: 150_000_000)
         let baseline = await api.tailRequestCount()
@@ -461,7 +461,7 @@ struct SessionStreamResumeTests {
         recorder.emitConnected()
         recorder.emitChanged(latestEventId: 10, pubsubSeq: nil)
         await opening.value
-        await waitForItemIds(model, ["user:10"])
+        await waitForItemIds(model, ["event:10"])
         await waitForTailHandleRelease(model)
         try? await Task.sleep(nanoseconds: 600_000_000)
 
@@ -485,9 +485,9 @@ struct SessionStreamResumeTests {
         recorder.emitConnected()
         recorder.emitChanged(latestEventId: 11, pubsubSeq: nil)
         await opening.value
-        await waitForItemIds(model, ["user:11"])
+        await waitForItemIds(model, ["event:11"])
 
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         #expect(await api.tailRequestCount() == 2)
         model.stop()
     }
@@ -544,10 +544,10 @@ struct SessionStreamResumeTests {
         // Wait for the burst to drain instead of assuming a drain rate. A fixed
         // sleep made this assert wall-clock throughput on a loaded machine, and
         // it failed with whatever preview happened to be last (51, 81, ...).
-        await waitForLastItemId(model, "prose:synthetic:preview:100")
+        await waitForLastItemId(model, "event:synthetic:preview:100")
 
         #expect(await api.tailRequestCount() == baseline)
-        #expect(model.items.last?.id == "prose:synthetic:preview:100")
+        #expect(model.items.last?.id == "event:synthetic:preview:100")
         model.stop()
     }
 

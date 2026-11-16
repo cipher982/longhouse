@@ -882,8 +882,8 @@ extension WebTranscriptView {
             let diagnostics = RenderBeaconReporter.WebKitDiagnostics(
                 stage: stage,
                 payload_byte_size: payload.payloadByteSize,
-                row_count: payload.rowCount,
-                latest_item_id: payload.latestItemId,
+                row_count: javaScriptMetrics?.rowCount ?? payload.rowCount,
+                latest_item_id: javaScriptMetrics?.latestItemId ?? payload.latestItemId,
                 payload_fingerprint: payload.payloadFingerprint,
                 render_sequence: sequence,
                 js_failure_count: jsFailureCount,
@@ -931,6 +931,9 @@ private struct WebTranscriptJavaScriptMetrics {
     let domDurationMs: Int?
     let rafDurationMs: Int?
     let totalDurationMs: Int?
+    /// Rows the document built and the last one's id; native no longer builds rows.
+    let rowCount: Int?
+    let latestItemId: String?
 
     init?(_ value: Any) {
         guard let dictionary = value as? [String: Any] else { return nil }
@@ -943,6 +946,8 @@ private struct WebTranscriptJavaScriptMetrics {
         domDurationMs = milliseconds("dom_ms")
         rafDurationMs = milliseconds("raf_ms")
         totalDurationMs = milliseconds("total_ms")
+        rowCount = milliseconds("row_count")
+        latestItemId = dictionary["latest_item_id"] as? String
     }
 
     private init(
@@ -950,13 +955,17 @@ private struct WebTranscriptJavaScriptMetrics {
         htmlDurationMs: Int?,
         domDurationMs: Int?,
         rafDurationMs: Int?,
-        totalDurationMs: Int?
+        totalDurationMs: Int?,
+        rowCount: Int?,
+        latestItemId: String?
     ) {
         self.decodeDurationMs = decodeDurationMs
         self.htmlDurationMs = htmlDurationMs
         self.domDurationMs = domDurationMs
         self.rafDurationMs = rafDurationMs
         self.totalDurationMs = totalDurationMs
+        self.rowCount = rowCount
+        self.latestItemId = latestItemId
     }
 
     func merging(_ other: WebTranscriptJavaScriptMetrics?) -> WebTranscriptJavaScriptMetrics {
@@ -965,7 +974,9 @@ private struct WebTranscriptJavaScriptMetrics {
             htmlDurationMs: htmlDurationMs ?? other?.htmlDurationMs,
             domDurationMs: domDurationMs ?? other?.domDurationMs,
             rafDurationMs: rafDurationMs ?? other?.rafDurationMs,
-            totalDurationMs: totalDurationMs ?? other?.totalDurationMs
+            totalDurationMs: totalDurationMs ?? other?.totalDurationMs,
+            rowCount: rowCount ?? other?.rowCount,
+            latestItemId: latestItemId ?? other?.latestItemId
         )
     }
 }

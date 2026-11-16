@@ -2642,12 +2642,5 @@ struct SessionDelegationFactsTests {
         #expect(withheldEvent.reasoningWithheld)
         #expect(toolEvent.toolIntent == "Run unit tests")
         #expect(commentaryEvent.messagePhase == "commentary")
-
-        let timeline = TimelineBuilder.build(events: [withheldEvent])
-        #expect(timeline.count == 1)
-        if case .reasoning = timeline[0] {
-        } else {
-            Issue.record("Expected withheld reasoning item from ItemFacts to build a .reasoning timeline item")
-        }
     }
 }

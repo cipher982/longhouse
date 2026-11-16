@@ -796,8 +796,12 @@ function replyProjectionItems(
 /** A row built from the live transcript preview rather than a durable event.
  *  Durable ids are catalog strings or positive integers; the preview's
  *  synthetic events above carry a non-positive number. */
-function isLivePreviewEvent(event: AgentEvent | null | undefined): boolean {
-  return typeof event?.id === "number" && event.id <= 0;
+export function isLivePreviewEvent(event: AgentEvent | null | undefined): boolean {
+  if (!event) return false;
+  // Native clients build preview rows with `synthetic:` ids and mark their origin.
+  if (event.event_origin === "live_provisional") return true;
+  if (typeof event.id === "string" && event.id.startsWith("synthetic:")) return true;
+  return typeof event.id === "number" && event.id <= 0;
 }
 
 export function isLivePreviewTimelineItem(item: TimelineItem): boolean {

@@ -8,7 +8,7 @@ import OSLog
 /// runtime controls, and composer native.
 struct WebTranscriptView: UIViewRepresentable {
     let serverURL: String
-    let items: [TimelineItem]
+    let items: [SessionProjectionItem]
     /// Workers this session spawned, attached to the tool rows that spawned them.
     let subagents: [SessionSubagent]
     let submittedInputs: [SubmittedInput]
@@ -53,7 +53,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
     init(
         serverURL: String,
-        items: [TimelineItem],
+        items: [SessionProjectionItem],
         subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
@@ -200,7 +200,7 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         let preparationInput = WebTranscriptPayloadInput(
             serverURL: serverURL,
-            timelineItems: items,
+            projectionItems: items,
             subagents: subagents,
             submittedInputs: submittedInputs,
             errorMessage: errorMessage,
@@ -273,21 +273,6 @@ struct WebTranscriptView: UIViewRepresentable {
         // representable transition starts a second WebContent process and loses
         // the prewarm precisely on the cold-open path.
         WebTranscriptWebViewPool.recycle(webView, documentIsLoaded: documentIsLoaded)
-    }
-
-    private func preparedPayload() -> WebTranscriptPreparedPayload {
-        Self.preparedPayload(
-            serverURL: serverURL,
-            timelineItems: items,
-            subagents: subagents,
-            submittedInputs: submittedInputs,
-            errorMessage: errorMessage,
-            contentRevision: contentRevision,
-            transcriptReadThrough: transcriptReadThrough,
-            retryRevision: retryRevision,
-            sourceRevision: sourceRevision,
-            sourceOperation: sourceOperation
-        )
     }
 }
 

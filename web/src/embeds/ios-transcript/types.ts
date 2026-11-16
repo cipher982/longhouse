@@ -1,6 +1,10 @@
-// The payload Swift encodes (`WebTranscriptPayload` in
-// ios/Sources/LonghouseApp/Session/Transcript). Every field is optional here
-// because the renderer treats a missing one exactly like an empty one.
+// The row contract: what `presentTranscript` (shared/session/model) produces
+// and the renderer draws. Every field is optional here because the renderer
+// treats a missing one exactly like an empty one. Native sends served events
+// plus an overlay (`TranscriptProjection`), not rows.
+
+import type { AgentSessionProjectionItem, SessionEventBody } from "@/shared/api/agents";
+import type { SubagentChild } from "@/shared/session/model/types";
 
 export interface MediaRef {
   sha256?: string;
@@ -98,18 +102,52 @@ export interface TranscriptItem {
   toolIntent?: string | null;
   /** Epoch milliseconds when a running tool started (for live timers). */
   startedAtMs?: number | null;
+  /** A tool or activity row that trails under a commentary or reasoning leader. */
+  narrationTrail?: boolean;
+}
+
+/** A row native owns (an optimistic submitted input or a Longhouse notice) and where it stands. */
+export interface OverlayRow {
+  row: TranscriptItem;
+  /** True: stands at its send time. False: after the transcript, in send order. */
+  placedAtSendTime: boolean;
+  createdAtMs: number;
+  /** `submitting`, `working`, `sent`, `queued`, `couldNotConfirm`, `failed` or `needsUserDecision`. */
+  phase: string;
+}
+
+export interface LiteBodiesPayload {
+  bodies?: SessionEventBody[];
+  loading?: string[];
+  failed?: string[];
+  unavailable?: string[];
+}
+
+/** Served events and native state: the renderer builds the rows. */
+export interface TranscriptProjection {
+  items: AgentSessionProjectionItem[];
+  subagents?: SubagentChild[];
+  serverUrl?: string | null;
+  liteBodies?: LiteBodiesPayload;
+  overlay?: OverlayRow[];
 }
 
 export interface TranscriptPayload {
   errorMessage?: string | null;
+  /** Ready rows (tests and the stability harness). */
   items?: TranscriptItem[];
+  /** What native sends. Wins over `items` when both are present. */
+  projection?: TranscriptProjection;
 }
 
 /** Stage timings `renderTranscript` returns synchronously. */
 export interface RenderMetrics {
   decode_ms: number;
+  present_ms: number;
   html_ms: number;
   dom_ms: number;
+  row_count: number;
+  latest_item_id: string | null;
 }
 
 /** Timings `waitForTranscriptFrame` resolves once the frame painted. */

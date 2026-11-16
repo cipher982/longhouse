@@ -58,12 +58,12 @@ struct SessionResumeHydrationTests {
         // disk snapshot rendered before any server response could replace it.
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
-        #expect(model.items.map(\.id) == ["user:30"])
+        #expect(model.items.map(\.id) == ["event:30"])
         #expect(model.errorMessage == nil)
 
         await api.waitUntilTailRequested()
         await api.releaseTail()
-        #expect(await waitForItems(model, ["user:31"]))
+        #expect(await waitForItems(model, ["event:31"]))
     }
 
     @Test
@@ -89,7 +89,7 @@ struct SessionResumeHydrationTests {
         await waitForRefreshError(model)
 
         // The transcript must survive the failed refresh.
-        #expect(model.items.map(\.id) == ["user:30"])
+        #expect(model.items.map(\.id) == ["event:30"])
         // Full-screen blocking error must NOT be set (that's the lone triangle).
         #expect(model.errorMessage == nil)
         // The failure degrades to the non-destructive banner.
@@ -109,11 +109,11 @@ struct SessionResumeHydrationTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        #expect(model.items.map(\.id) == ["user:40"])
+        #expect(model.items.map(\.id) == ["event:40"])
 
         // Simulate scene background.
         model.pauseRealtime()
-        #expect(model.items.map(\.id) == ["user:40"], "pause must not erase the transcript")
+        #expect(model.items.map(\.id) == ["event:40"], "pause must not erase the transcript")
 
         // Now the network goes bad and we resume to foreground.
         await api.failFutureTails()
@@ -121,7 +121,7 @@ struct SessionResumeHydrationTests {
         await waitForRefreshError(model)
 
         // Same session resumed: content preserved, no blocking error.
-        #expect(model.items.map(\.id) == ["user:40"])
+        #expect(model.items.map(\.id) == ["event:40"])
         #expect(model.errorMessage == nil)
     }
 

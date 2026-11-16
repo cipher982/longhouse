@@ -50,9 +50,6 @@ struct LiteTranscriptTests {
         #expect(!edit.toolInputTruncated)
         let answer = try #require(lite.events.first { $0.toolName == "StructuredOutput" })
         #expect(!answer.toolInputTruncated)
-        #expect(TimelineBuilder.finalAnswerText(for: answer) == TimelineBuilder.finalAnswerText(
-            for: try #require(fullById[answer.id])
-        ))
     }
 
     @Test
@@ -69,7 +66,7 @@ struct LiteTranscriptTests {
         #expect(output.toolOutputOriginalChars == fullById["evt-4"]?.toolOutputText?.count)
         #expect((output.toolOutputText?.count ?? 0) < (fullById["evt-4"]?.toolOutputText?.count ?? 0))
         // The wrapper header survives the cut, so the exit code still parses.
-        #expect(ShellSalienceClassifier.parseExitCode(output.toolOutputText) == 0)
+        #expect(output.toolOutputText?.contains("Process exited with code 0") == true)
 
         let failure = try #require(lite.events.first { $0.id == "evt-8" })
         #expect(failure.toolOutputFailed)
@@ -116,115 +113,59 @@ struct LiteTranscriptTests {
         #expect(response.events.first?.toolOutputText == "the whole output")
         #expect(response.missing == ["cursor-gone"])
     }
-
-    // MARK: - Cut rows never mislead
-
-    @Test
-    func aCutCommandNeverDemotesToNoise() throws {
-        let lite = try LonghouseAPI.decodeSessionMobileTail(fixture("lite-mobile-tail.json"))
-        let call = try #require(lite.events.first { $0.id == "evt-3" })
-        let result = try #require(lite.events.first { $0.id == "evt-4" })
-        #expect(TimelineBuilder.shellSalience(call: call, result: result) == nil)
-    }
-
-    @Test
-    func aStructuredFailureJudgedOnTheWholeOutputStillFails() throws {
-        let lite = try LonghouseAPI.decodeSessionMobileTail(fixture("lite-mobile-tail.json"))
-        let call = try #require(lite.events.first { $0.id == "evt-7" })
-        let result = try #require(lite.events.first { $0.id == "evt-8" })
-        #expect(TimelineBuilder.isFailed(call: call, result: result))
-    }
-
-    @Test
-    func aCutEditNamesItsFileWithoutACount() {
-        let edit = SessionEvent(
-            id: "e",
-            role: "assistant",
-            contentText: nil,
-            toolName: "Edit",
-            toolInputJSON: ["file_path": .string("/repo/a.swift"), "old_string": .string("a"), "new_string": .string("b\nc")],
-            toolOutputText: nil,
-            toolCallId: "c",
-            toolCallState: .completed,
-            timestamp: "2026-10-06T12:00:00Z",
-            inActiveContext: true,
-            isHeadBranch: true,
-            inputOrigin: nil,
-            cursor: "cursor-e",
-            toolInputTruncated: true
-        )
-        let stat = EditSummary.stat(for: edit)
-        #expect(stat.fileName == "a.swift")
-        #expect(!stat.hasStat)
-        #expect(EditSummary.format(stat) == "a.swift")
-    }
 }
 
-/// What WebKit receives for cut rows, before and after their full bodies load.
+/// What WebKit receives for cut rows: the served events with their cursors,
+/// and the bodies loaded so far. The document (shared TypeScript model) decides
+/// each row's body state; web/.../presentTranscript.test.ts pins that.
 struct LiteTranscriptPayloadTests {
     private func liteTail() throws -> SessionMobileTailResponse {
         try LonghouseAPI.decodeSessionMobileTail(Data(contentsOf: RepoRoot.url()
             .appendingPathComponent("tests/fixtures/session-detail/lite-mobile-tail.json")))
     }
 
-    private func fullOutput() throws -> String? {
-        try LonghouseAPI.decodeSessionMobileTail(Data(contentsOf: RepoRoot.url()
-            .appendingPathComponent("tests/fixtures/session-detail/lite-mobile-tail.full.json")))
-            .events.first { $0.id == "evt-4" }?.toolOutputText
+    private func payload(_ liteBodies: LiteBodyState) throws -> [String: Any] {
+        let data = WebTranscriptView.payloadData(
+            serverURL: "https://example.test",
+            projectionItems: try liteTail().projection.items,
+            subagents: [],
+            submittedInputs: [],
+            errorMessage: nil,
+            liteBodies: liteBodies
+        )
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try #require(root["projection"] as? [String: Any])
     }
 
     @Test
-    func aCutRowCarriesItsBodyCursorsUntilTheBodiesLoad() throws {
-        let items = TimelineBuilder.build(items: try liteTail().projection.items)
-        let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
-        // The command may render on its own or inside an activity group; find
-        // the row by the cut it carries rather than by its id shape.
-        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
-        #expect(row.bodyCursors?.starts(with: ["cursor-3", "cursor-4"]) == true)
-        #expect(row.bodyState == "preview")
-
+    func cutRowsKeepTheirCursorsAndLoadedBodiesTravelBesideThem() throws {
         var bodies = LiteBodyState()
-        bodies.loading = ["cursor-3", "cursor-4"]
-        let loading = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(loading.first { $0.id == row.id }?.bodyState == "loading")
-
-        let whole = try #require(try fullOutput())
-        bodies.loading = []
-        bodies.bodies = [
-            "cursor-3": SessionEventBody(id: "evt-3", cursor: "cursor-3", toolInputJson: .object(["command": .string("rg -n")]), toolOutputText: nil, toolPresentation: nil),
-            "cursor-4": SessionEventBody(id: "evt-4", cursor: "cursor-4", toolInputJson: nil, toolOutputText: whole, toolPresentation: nil),
-        ]
-        let loaded = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        let full = try #require(loaded.first { $0.id == row.id })
-        #expect(full.bodyCursors?.contains("cursor-3") != true)
-        #expect(full.bodyCursors?.contains("cursor-4") != true)
-        let outputs = [full.output] + full.calls.map(\.output)
-        #expect(outputs.contains(whole))
-    }
-
-    @Test
-    func aBodyTheServerNoLongerHasSaysSo() throws {
-        let items = TimelineBuilder.build(items: try liteTail().projection.items)
-        let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
-        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
-        var bodies = LiteBodyState()
-        bodies.unavailable = Set(row.bodyCursors ?? [])
-        let payload = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(payload.first { $0.id == row.id }?.bodyState == "unavailable")
-    }
-
-    @Test
-    func aFailedBodyReadSaysSoInsteadOfLoadingForever() throws {
-        let items = TimelineBuilder.build(items: try liteTail().projection.items)
-        let preview = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
-        let row = try #require(preview.first { $0.bodyCursors?.contains("cursor-3") == true })
-        var bodies = LiteBodyState()
-        bodies.failed = ["cursor-3"]
-        let payload = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(payload.first { $0.id == row.id }?.bodyState == "failed")
         bodies.loading = ["cursor-3"]
-        let retrying = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [], liteBodies: bodies)
-        #expect(retrying.first { $0.id == row.id }?.bodyState == "loading")
+        bodies.failed = ["cursor-9"]
+        bodies.bodies = [
+            "cursor-4": SessionEventBody(id: "evt-4", cursor: "cursor-4", toolInputJson: nil, toolOutputText: "whole", toolPresentation: nil)
+        ]
+        let projection = try payload(bodies)
+        let items = try #require(projection["items"] as? [[String: Any]])
+        let events = items.compactMap { $0["event"] as? [String: Any] }
+        // Wire keys are snake_case, the shape the shared model reads.
+        #expect(events.contains { $0["cursor"] as? String == "cursor-3" && ($0["tool_input_truncated"] != nil || $0["tool_output_truncated"] != nil) })
+        #expect(events.allSatisfy { $0["contentText"] == nil && $0["toolName"] == nil })
+        let lite = try #require(projection["liteBodies"] as? [String: Any])
+        #expect(lite["loading"] as? [String] == ["cursor-3"])
+        #expect(lite["failed"] as? [String] == ["cursor-9"])
+        let loaded = try #require(lite["bodies"] as? [[String: Any]])
+        #expect(loaded.first?["tool_output_text"] as? String == "whole")
+        #expect(projection["serverUrl"] as? String == "https://example.test")
+    }
+
+    @Test
+    func toolInputKeysAreProviderOwnedAndNeverRewritten() throws {
+        let projection = try payload(LiteBodyState())
+        let items = try #require(projection["items"] as? [[String: Any]])
+        let edit = try #require(items.compactMap { $0["event"] as? [String: Any] }.first { $0["tool_name"] as? String == "Edit" })
+        let input = try #require(edit["tool_input_json"] as? [String: Any])
+        #expect(input.keys.contains("file_path"))
     }
 
     @Test

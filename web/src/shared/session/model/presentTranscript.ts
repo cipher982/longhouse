@@ -25,6 +25,7 @@ import type {
 import type {
   DiffLine as EmbedDiffLine,
   MediaRef,
+  OverlayRow,
   Subagent as EmbedSubagent,
   ToolCall,
   TranscriptItem,
@@ -38,10 +39,13 @@ import { flattenSubagentTree, subagentLabel, summarizeSubagents } from "./subage
 import {
   buildTimelineModel,
   formatActivitySummary,
+  formatToolInput,
   getFailurePreview,
   getToolExitCode,
   getToolIntentLabel,
+  getToolSummary,
   isEditInteraction,
+  isLivePreviewEvent,
   isToolInteractionFailed,
   messagePhase,
   narrationTrail,
@@ -71,6 +75,8 @@ export interface PresentTranscriptInput {
   /** Resolves relative media URLs. */
   serverUrl?: string | null;
   liteBodies?: LiteBodyState;
+  /** Rows native owns (optimistic inputs), merged in before wake notices collapse. */
+  overlay?: OverlayRow[];
   /** Clock for turn-end copy ("Turn finished 9:15 AM"). */
   now?: Date;
   /** Locale and zone for turn-end copy; the device's own when omitted. */
@@ -87,46 +93,15 @@ const MESSAGE_PREVIEW_TAIL_LINES = 80;
 const PREVIEW_MAX_CHARACTERS = 4_096;
 const FULL_OUTPUT_MAX_CHARACTERS = 12_000;
 
-// -- Swift-compatible JSON text -----------------------------------------------
-//
-// `input` is shown to people, and the embed has always received Foundation's
-// pretty form (sorted keys, `" : "`, `\/` for slashes). Kept byte-for-byte so
-// the Swift golden stays the oracle; change here if the form should change.
-
-function jsonString(value: string): string {
-  return JSON.stringify(value).replace(/\//g, "\\/");
-}
-
-function prettyJsonText(value: unknown, indent: string): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "string") return jsonString(value);
-  if (typeof value === "number" || typeof value === "boolean") return JSON.stringify(value);
-  const inner = `${indent}  `;
-  if (Array.isArray(value)) {
-    if (value.length === 0) return `[\n\n${indent}]`;
-    return `[\n${value.map((entry) => `${inner}${prettyJsonText(entry, inner)}`).join(",\n")}\n${indent}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  if (keys.length === 0) return `{\n\n${indent}}`;
-  const lines = keys.map((key) => `${inner}${jsonString(key)} : ${prettyJsonText(record[key], inner)}`);
-  return `{\n${lines.join(",\n")}\n${indent}}`;
-}
-
-function compactJsonText(value: unknown): string {
-  return JSON.stringify(value).replace(/\//g, "\\/");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** An object pretty, a string as is, anything else compact; nothing for empty or absent. */
+/** A tool input as the web timeline shows it; nothing for an empty or absent one. */
 function prettyJsonValue(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
-  if (isRecord(value)) return Object.keys(value).length === 0 ? undefined : prettyJsonText(value, "");
-  if (typeof value === "string") return value;
-  return compactJsonText(value);
+  if (isRecord(value) && Object.keys(value).length === 0) return undefined;
+  return formatToolInput(value) ?? undefined;
 }
 
 // -- Small helpers ------------------------------------------------------------
@@ -147,29 +122,6 @@ function scalarText(value: unknown): string | undefined {
   return undefined;
 }
 
-function presentedInputString(event: AgentEvent, key: string): string | undefined {
-  const presented = event.tool_presentation?.tool_input_json;
-  if (isRecord(presented)) {
-    const text = scalarText(presented[key]);
-    if (text !== undefined) return text;
-  }
-  return isRecord(event.tool_input_json) ? scalarText(event.tool_input_json[key]) : undefined;
-}
-
-// Swift's `Character.isNewline` set.
-// eslint-disable-next-line no-control-regex
-const NEWLINES = /[\n\r\u000B\u000C\u0085\u2028\u2029]+/;
-
-function firstLine(text: string): string {
-  return text.split(NEWLINES).find((line) => line.length > 0) ?? text;
-}
-
-function lastPathComponent(path: string): string {
-  const stripped = path.replace(/\/+$/, "");
-  if (!stripped) return path ? "/" : "";
-  return stripped.slice(stripped.lastIndexOf("/") + 1);
-}
-
 function parseMs(timestamp: string | undefined): number | undefined {
   if (!timestamp) return undefined;
   const ms = Date.parse(timestamp);
@@ -178,74 +130,6 @@ function parseMs(timestamp: string | undefined): number | undefined {
 
 function setIf<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | null | undefined): void {
   if (value !== null && value !== undefined) target[key] = value;
-}
-
-// -- Tool summary line (Swift `TimelineBuilder.inputSummary`) -----------------
-
-const SHELL_TOOLS = new Set(["Bash", "shell", "shell_command", "exec_command", "run_shell_command"]);
-
-function inputSummary(event: AgentEvent): string {
-  const tool = presentedToolName(event);
-  const presentation = event.tool_presentation;
-  const children = presentation?.children ?? [];
-  if (children.length > 0 && !presentation?.wrapper_recedes) {
-    return `contains ${children.map((child) => child.label).join(" · ")}`;
-  }
-  const input = (key: string) => presentedInputString(event, key);
-  if (SHELL_TOOLS.has(tool)) {
-    const command = input("command") ?? input("cmd");
-    return command === undefined ? "" : firstLine(command);
-  }
-  switch (tool) {
-    case "Grep":
-    case "Glob":
-      return input("pattern") ?? "";
-    case "Read":
-    case "Edit":
-    case "Write":
-    case "NotebookEdit": {
-      const path = input("file_path") ?? input("path");
-      return path === undefined ? "" : lastPathComponent(path);
-    }
-    case "apply_patch": {
-      const patch = input("patch");
-      if (patch === undefined) return "Applied patch";
-      const paths = patch
-        .split("\n")
-        .flatMap((line) => {
-          for (const prefix of ["*** Update File: ", "*** Add File: ", "*** Delete File: "]) {
-            if (line.startsWith(prefix)) return [line.slice(prefix.length).trim()];
-          }
-          return [];
-        });
-      if (paths.length === 0) return "Applied patch";
-      const extra = paths.length - 1;
-      return lastPathComponent(paths[0]) + (extra > 0 ? ` + ${extra} ${extra === 1 ? "file" : "files"}` : "");
-    }
-    case "Task":
-    case "Agent":
-    case "dispatch_agent": {
-      const agentType = input("subagent_type");
-      const description = input("description");
-      if (description) {
-        if (agentType && !description.toLowerCase().startsWith(`${agentType.toLowerCase()}:`)) {
-          return `${agentType}: ${description}`;
-        }
-        return description;
-      }
-      const prompt = input("prompt");
-      if (prompt !== undefined) {
-        const line = firstLine(prompt);
-        return agentType ? `${agentType}: ${line}` : line;
-      }
-      return agentType ?? "";
-    }
-    case "WebFetch":
-    case "WebSearch":
-      return input("url") ?? input("query") ?? "";
-    default:
-      return "";
-  }
 }
 
 // -- Durations and output -----------------------------------------------------
@@ -642,7 +526,8 @@ function toolRow(
   const editLabel = editStat ? formatEditStat(editStat) : null;
   const spawned = interaction.children ?? [];
   const intent = getToolIntentLabel(interaction);
-  const summary = inputSummary(call);
+  // An orphan result has no call to summarize; its output is the whole row.
+  const summary = orphan ? "" : getToolSummary(interaction);
 
   const row = baseRow(id, "tool");
   row.title = presentation?.label ?? resolved.label;
@@ -650,7 +535,7 @@ function toolRow(
   if (status !== undefined) row.status = status;
   setIf(row, "duration", result ? toolDuration(call, result) : undefined);
   row.input =
-    prettyJsonValue(presentation?.wrapper_recedes ? presentation.tool_input_json : call.tool_input_json) ?? summary;
+    prettyJsonValue(presentation?.wrapper_recedes ? presentation.tool_input_json : call.tool_input_json) ?? "";
   setIf(row, "output", truncatedOutput(result ?? (state === "running" ? call : null)));
   row.calls = presentationCalls(presentation, call, result, toolName);
   if (presentation?.disposition === "parsed") {
@@ -686,7 +571,7 @@ function activityRow(
     const result = interaction.resultEvent;
     const presentation = call.tool_presentation;
     const state = call.tool_call_state;
-    const summaryLine = inputSummary(call);
+    const summaryLine = getToolSummary(interaction);
     const entry: ToolCall = {
       title: presentation?.label ?? resolveToolInfo(presentedToolName(call)).label,
       subtitle: summaryLine,
@@ -694,12 +579,13 @@ function activityRow(
     };
     entry.input =
       prettyJsonValue(presentation?.wrapper_recedes ? presentation.tool_input_json : call.tool_input_json) ??
-      summaryLine;
+      "";
     if (presentation?.wrapper_recedes) setIf(entry, "rawInput", prettyJsonValue(call.tool_input_json));
     setIf(entry, "output", truncatedOutput(result ?? (state === "running" ? call : null)));
     setIf(entry, "media", mediaRefs([...(call.media_refs ?? []), ...(result?.media_refs ?? [])], serverUrl));
     if (state === "running") setIf(entry, "startedAtMs", parseMs(call.timestamp));
-    setIf(entry, "toolIntent", trimmed(call.tool_intent));
+    const intent = trimmed(call.tool_intent);
+    if (intent !== summaryLine) setIf(entry, "toolIntent", intent);
     return entry;
   });
 
@@ -786,7 +672,7 @@ function mapItem(
     case "tool": {
       const interaction = mergedInteraction(item.interaction, liteBodies);
       row = toolRow(id, interaction, serverUrl);
-      attachCursors(row, [item.interaction], liteBodies);
+      attachCursors(row, [interaction], liteBodies);
       break;
     }
     case "activity_group": {
@@ -795,7 +681,7 @@ function mapItem(
         interactions: item.group.interactions.map((interaction) => mergedInteraction(interaction, liteBodies)),
       };
       row = activityRow(id, merged, serverUrl);
-      attachCursors(row, item.group.interactions, liteBodies);
+      attachCursors(row, merged.interactions, liteBodies);
       break;
     }
   }
@@ -850,19 +736,81 @@ export function collapsingProviderNotifications(rows: PresentedTranscriptItem[])
   return out;
 }
 
-/** Served projection items to the embed's rows. */
+function sortMs(item: TimelineItem): number | null {
+  let timestamp: string | undefined;
+  switch (item.kind) {
+    case "seam":
+      return null;
+    case "action":
+      timestamp = item.action.timestamp;
+      break;
+    case "tool":
+      timestamp = (item.interaction.callEvent ?? item.interaction.resultEvent)?.timestamp;
+      break;
+    case "activity_group":
+      timestamp = (item.group.interactions[0]?.callEvent ?? item.group.interactions[0]?.resultEvent)?.timestamp;
+      break;
+    default:
+      timestamp = item.event.timestamp;
+  }
+  return parseMs(timestamp) ?? null;
+}
+
+/** Rows native owns, merged in: send-time receipts stand at their time, the rest follow. */
+function placeOverlay(
+  rows: { row: PresentedTranscriptItem; sort: number | null; live: boolean; liveMs: number }[],
+  overlay: OverlayRow[],
+): PresentedTranscriptItem[] {
+  const placed = overlay.filter((entry) => entry.placedAtSendTime).sort((a, b) => a.createdAtMs - b.createdAtMs);
+  let remaining = overlay.filter((entry) => !entry.placedAtSendTime);
+  const out: PresentedTranscriptItem[] = [];
+  for (const { row, sort, live, liveMs } of rows) {
+    while (placed.length > 0 && (live || (sort !== null && placed[0].createdAtMs < sort))) {
+      out.push(placed.shift()!.row);
+    }
+    if (live) {
+      const insertion = remaining.filter((entry) => {
+        switch (entry.phase) {
+          case "submitting":
+          case "working":
+          case "sent":
+            return true;
+          case "queued":
+            return entry.createdAtMs <= liveMs;
+          default:
+            return false;
+        }
+      });
+      if (insertion.length > 0) {
+        out.push(...insertion.map((entry) => entry.row));
+        remaining = remaining.filter((entry) => !insertion.includes(entry));
+      }
+    }
+    out.push(row);
+  }
+  out.push(...placed.map((entry) => entry.row), ...remaining.map((entry) => entry.row));
+  return out;
+}
+
+function isLiveAssistantRow(item: TimelineItem): boolean {
+  return item.kind === "message" && item.event.role !== "user" && isLivePreviewEvent(item.event);
+}
+
+/** Served projection items and native overlay rows to the embed's rows. */
 export function presentTranscript(input: PresentTranscriptInput): PresentedTranscriptItem[] {
   const model = buildTimelineModel(input.items, input.subagents ?? []);
   const trail = narrationTrail(model.items);
   const clock: ClockOptions = { now: input.now ?? new Date(), locale: input.locale, timeZone: input.timeZone };
-  const rows: PresentedTranscriptItem[] = [];
+  const rows: { row: PresentedTranscriptItem; sort: number | null; live: boolean; liveMs: number }[] = [];
   for (const item of model.items) {
     const id = rowId(item);
     if (id === null) continue;
     const row = mapItem(item, id, input, clock);
     if (!row) continue;
     if (trail.has(timelineItemIdentity(item))) row.narrationTrail = true;
-    rows.push(row);
+    const sort = sortMs(item);
+    rows.push({ row, sort, live: isLiveAssistantRow(item), liveMs: sort ?? Number.NEGATIVE_INFINITY });
   }
-  return collapsingProviderNotifications(rows);
+  const placed = input.overlay?.length ? placeOverlay(rows, input.overlay) : rows.map((entry) => entry.row);
+  return collapsingProviderNotifications(placed);
 }

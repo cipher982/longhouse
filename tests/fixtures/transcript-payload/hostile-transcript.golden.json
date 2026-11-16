@@ -1,73 +1,67 @@
 [
   {
-    "body" : "Investigate the failing job and report what Alex changed.",
-    "calls" : [
-
-    ],
-    "collapsed" : false,
-    "id" : "user:1",
-    "kind" : "message",
-    "role" : "user"
+    "id": "user:1",
+    "kind": "message",
+    "calls": [],
+    "collapsed": false,
+    "role": "user",
+    "body": "Investigate the failing job and report what Alex changed."
   },
   {
-    "body" : "Now I can see what Alex did. Two blockers appeared: **PROJ-101** and **PROJ-102**. Here is a `code` span and a [link](https:\/\/example.com).",
-    "calls" : [
-
-    ],
-    "collapsed" : false,
-    "id" : "prose:2",
-    "kind" : "message",
-    "role" : "assistant"
+    "id": "prose:2",
+    "kind": "message",
+    "calls": [],
+    "collapsed": false,
+    "role": "assistant",
+    "body": "Now I can see what Alex did. Two blockers appeared: **PROJ-101** and **PROJ-102**. Here is a `code` span and a [link](https://example.com)."
   },
   {
-    "calls" : [
+    "id": "activity:3",
+    "kind": "activityGroup",
+    "calls": [
       {
-        "input" : "{\n  \"issueKey\" : \"PROJ-101\"\n}",
-        "output" : "PROJ-101: blocked on MR rename by Alex at 18:42.",
-        "status" : "done",
-        "subtitle" : "",
-        "title" : "getJiraIssue"
+        "title": "getJiraIssue",
+        "subtitle": "PROJ-101: blocked on MR rename by Alex at 18:42.",
+        "status": "done",
+        "input": "{\n  \"issueKey\": \"PROJ-101\"\n}",
+        "output": "PROJ-101: blocked on MR rename by Alex at 18:42."
       },
       {
-        "input" : "{\n  \"command\" : \"git log --oneline\"\n}",
-        "output" : "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
-        "status" : "done",
-        "subtitle" : "git log --oneline",
-        "title" : "Bash"
+        "title": "Bash",
+        "subtitle": "git log --oneline",
+        "status": "done",
+        "input": "{\n  \"command\": \"git log --oneline\"\n}",
+        "output": "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output"
       },
       {
-        "input" : "{\n  \"pattern\" : \"\\\/repo\\\/a.txt\"\n}",
-        "output" : "contents of a.txt",
-        "status" : "done",
-        "subtitle" : "\/repo\/a.txt",
-        "title" : "Grep"
+        "title": "Grep",
+        "subtitle": "/repo/a.txt",
+        "status": "done",
+        "input": "{\n  \"pattern\": \"/repo/a.txt\"\n}",
+        "output": "contents of a.txt"
       },
       {
-        "input" : "{\n  \"pattern\" : \"\\\/repo\\\/b.txt\"\n}",
-        "output" : "contents of b.txt",
-        "status" : "done",
-        "subtitle" : "\/repo\/b.txt",
-        "title" : "Grep"
+        "title": "Grep",
+        "subtitle": "/repo/b.txt",
+        "status": "done",
+        "input": "{\n  \"pattern\": \"/repo/b.txt\"\n}",
+        "output": "contents of b.txt"
       }
     ],
-    "collapsed" : false,
-    "id" : "activity:3",
-    "kind" : "activityGroup",
-    "subtitle" : "4",
-    "title" : "Searched 2 searches, read 1 file, ran 1 command"
+    "collapsed": false,
+    "title": "Searched 2 searches, read 1 file, ran 1 command",
+    "subtitle": "4"
   },
   {
-    "calls" : [
-
-    ],
-    "collapsed" : false,
-    "duration" : "0ms",
-    "id" : "orphan:11",
-    "input" : "",
-    "kind" : "tool",
-    "output" : "orphan result with no matching call",
-    "status" : "orphan",
-    "subtitle" : "",
-    "title" : "getJiraIssue"
+    "id": "orphan:11",
+    "kind": "tool",
+    "calls": [],
+    "collapsed": false,
+    "title": "getJiraIssue",
+    "subtitle": "",
+    "status": "orphan",
+    "duration": "0ms",
+    "input": "",
+    "output": "orphan result with no matching call"
   }
 ]

@@ -760,6 +760,43 @@ summary::-webkit-details-marker {
 }
 
 /* --- Claude Code fidelity signals & subagent tree --- */
+/* Narration: the steps under a commentary line or a thought read as one dim line
+   each, the way the web timeline shows them. The leader keeps its prose; the
+   final answer, with no phase mark, stays at full weight. */
+details.trail, .row.trail {
+  margin-bottom: 2px;
+}
+
+details.trail summary {
+  min-height: 24px;
+  padding: 2px 10px;
+  gap: 8px;
+}
+
+details.trail .tool-title {
+  font: 500 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--tertiary);
+}
+
+details.trail .tool-subtitle {
+  font-size: 12px;
+  color: var(--secondary);
+}
+
+details.trail .tool-intent {
+  display: none;
+}
+
+details.trail .tool-meta {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* A step ends where the next row that is not part of it starts: give it air. */
+.trail + :not(.trail):not(.failure-preview):not(.subagents) {
+  margin-top: 10px;
+}
+
 .message.assistant.commentary .message-content {
   color: var(--secondary);
   font-size: 13.5px;

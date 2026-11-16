@@ -2,10 +2,11 @@ import { reconcile, resetReconciler } from "./reconcile";
 import { markdownToHtml } from "./markdown";
 import { attachSubmittedInputHandlers } from "./rows";
 import { captureAnchor, isStickingToBottom, resetScrollForTesting, retargetAnchor, setStickToBottom, settle } from "./scroll";
+import { presentTranscript } from "../../shared/session/model/presentTranscript";
 import { attachSubagentHandlers } from "./subagents";
 import { attachToolBodyHandlers } from "./liteBodies";
 import { updateRunningTimers } from "./toolCards";
-import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload } from "./types";
+import type { FrameMetrics, RenderMetrics, TranscriptItem, TranscriptPayload, TranscriptProjection } from "./types";
 
 let currentItems: TranscriptItem[] = [];
 const transcriptFrames = new Map<number, Promise<FrameMetrics>>();
@@ -57,6 +58,26 @@ export function decodePayload(base64: string): TranscriptPayload {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
+/// Native sends served events and its own state; the shared model builds the
+/// rows, so this document and the web timeline cannot disagree.
+function presentProjection(projection: TranscriptProjection): TranscriptItem[] {
+  const lite = projection.liteBodies;
+  return presentTranscript({
+    items: projection.items,
+    subagents: projection.subagents,
+    serverUrl: projection.serverUrl,
+    overlay: projection.overlay,
+    liteBodies: lite
+      ? {
+          bodies: new Map((lite.bodies ?? []).map((body) => [body.cursor, body])),
+          loading: new Set(lite.loading ?? []),
+          failed: new Set(lite.failed ?? []),
+          unavailable: new Set(lite.unavailable ?? []),
+        }
+      : undefined,
+  });
+}
+
 function attachExpandHandlers(scope: ParentNode = document): void {
   attachSubagentHandlers(scope);
   attachSubmittedInputHandlers(scope);
@@ -95,7 +116,9 @@ export function renderTranscript(
   const decodeStartedAt = performance.now();
   const payload = decodePayload(base64);
   const decodeMs = performance.now() - decodeStartedAt;
-  currentItems = payload.items || [];
+  const presentStartedAt = performance.now();
+  currentItems = payload.projection ? presentProjection(payload.projection) : payload.items || [];
+  const presentMs = payload.projection ? performance.now() - presentStartedAt : 0;
   const root = document.getElementById("root")!;
   // The reader's place, taken before anything changes.
   if (!isStickingToBottom()) captureAnchor();
@@ -115,6 +138,9 @@ export function renderTranscript(
   transcriptFrames.set(sequence, frame);
   return {
     decode_ms: decodeMs,
+    present_ms: presentMs,
+    row_count: currentItems.length,
+    latest_item_id: currentItems.length > 0 ? currentItems[currentItems.length - 1].id : null,
     html_ms: result.html_ms,
     dom_ms: result.dom_ms,
   };

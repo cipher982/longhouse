@@ -41,469 +41,131 @@ final class WebTranscriptViewTests: XCTestCase {
 
     func testPreparedPayloadReportsDiagnosticsFacts() {
         let payload = WebTranscriptView.preparedPayload(
-            timelineItems: [
-                .user(makeUserEvent(
-                    id: 11,
-                    content: "server projected text",
-                    inputOrigin: nil
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "queued text",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: nil
-                ),
-            ],
+            projectionItems: [projectionItem(makeUserEvent(id: 11, content: "server projected text", inputOrigin: nil))],
+            submittedInputs: [makeSubmittedInput(text: "queued text", clientRequestId: "ios-request-1", serverInputId: nil)],
             errorMessage: nil
         )
 
         XCTAssertGreaterThan(payload.payloadByteSize, 0)
         XCTAssertFalse(payload.base64.isEmpty)
         XCTAssertFalse(payload.payloadFingerprint.isEmpty)
-        XCTAssertEqual(payload.rowCount, 2)
-        XCTAssertEqual(payload.latestItemId, "ios-request-1")
+        // The document builds rows; native only knows how many events it sent.
+        XCTAssertEqual(payload.rowCount, 1)
     }
 
-    func testPreparedPayloadForwardsSubagentsToToolRows() throws {
-        let call = SessionEvent(
-            id: 12,
-            role: "assistant",
-            contentText: nil,
-            interactionKind: nil,
-            toolName: "Task",
-            toolInputJSON: nil,
-            toolOutputText: nil,
-            toolCallId: "call-1",
-            toolCallState: nil,
-            timestamp: "2026-05-02T20:00:00Z",
-            inActiveContext: true,
-            isHeadBranch: true,
-            inputOrigin: nil
+    func testPayloadEnvelopeCarriesProjectionOverlayAndServerURL() throws {
+        let data = WebTranscriptView.payloadData(
+            serverURL: "https://example.longhouse.ai",
+            projectionItems: [projectionItem(makeUserEvent(id: 11, content: "hello", inputOrigin: nil))],
+            subagents: [],
+            submittedInputs: [makeSubmittedInput(text: "queued text", clientRequestId: "ios-request-1", serverInputId: nil, phase: .queued)],
+            errorMessage: nil,
+            liteBodies: LiteBodyState()
         )
-        let child = SessionSubagent(
-            sessionId: "child-1",
-            provider: "claude",
-            parentToolCallId: "call-1",
-            runId: nil,
-            startedAt: "2026-05-02T20:00:01Z",
-            lastActivityAt: "2026-05-02T20:00:02Z",
-            endedAt: "2026-05-02T20:00:03Z",
-            userMessages: 1,
-            assistantMessages: 1,
-            toolCalls: 2,
-            title: "Worker",
-            firstUserMessagePreview: nil,
-            lastVisibleTextPreview: nil
-        )
-        let payload = WebTranscriptView.preparedPayload(
-            timelineItems: [
-                .tool(call: call, result: nil, pairing: .pending),
-                .activityGroup(calls: [
-                    ActivityCall(call: call, result: nil, pairing: .pending)
-                ]),
-            ],
-            subagents: [child],
-            submittedInputs: [],
-            errorMessage: nil
-        )
-
-        let json = try JSONSerialization.jsonObject(
-            with: Data(base64Encoded: payload.base64)!
-        ) as? [String: Any]
-        let rows = json?["items"] as? [[String: Any]]
-        let workers = rows?.first?["subagents"] as? [[String: Any]]
-        let groupedWorkers = rows?.dropFirst().first?["subagents"] as? [[String: Any]]
-        XCTAssertEqual(workers?.first?["sessionId"] as? String, "child-1")
-        XCTAssertEqual(workers?.first?["toolCalls"] as? Int, 2)
-        XCTAssertEqual(groupedWorkers?.first?["sessionId"] as? String, "child-1")
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let projection = try XCTUnwrap(root["projection"] as? [String: Any])
+        XCTAssertEqual(projection["serverUrl"] as? String, "https://example.longhouse.ai")
+        let items = try XCTUnwrap(projection["items"] as? [[String: Any]])
+        let event = try XCTUnwrap(items.first?["event"] as? [String: Any])
+        XCTAssertEqual(event["content_text"] as? String, "hello")
+        XCTAssertEqual(event["is_head_branch"] as? Bool, true)
+        let overlay = try XCTUnwrap(projection["overlay"] as? [[String: Any]])
+        let row = try XCTUnwrap(overlay.first?["row"] as? [String: Any])
+        XCTAssertEqual(row["kind"] as? String, "submitted")
+        XCTAssertEqual(row["body"] as? String, "queued text")
+        XCTAssertEqual(row["status"] as? String, "queued")
+        XCTAssertEqual(row["subtitle"] as? String, "Queued \u{00B7} sends after this turn")
+        XCTAssertEqual(overlay.first?["placedAtSendTime"] as? Bool, false)
+        XCTAssertEqual(overlay.first?["phase"] as? String, "queued")
     }
 
-    func testPayloadRendersProviderNotificationAsCompactStatusItem() {
-        let event = SessionEvent(
-            id: 42,
-            role: "system",
-            contentText: "Background command \"Run the checks\" completed (exit code 0)",
-            interactionKind: "provider_notification",
-            toolName: nil,
-            toolInputJSON: nil,
-            toolOutputText: nil,
-            toolCallId: nil,
-            toolCallState: nil,
-            timestamp: "2026-05-02T20:00:42Z",
-            inActiveContext: true,
-            isHeadBranch: true,
-            inputOrigin: nil
+    func testOverlayDropsSubmittedInputWhenDurableEventHasSameSessionInputId() {
+        let rows = WebTranscriptView.overlayRows(
+            projectionItems: [projectionItem(makeUserEvent(
+                id: 11, content: "server projected text",
+                inputOrigin: SessionInputOrigin(authoredVia: .longhouse, sessionInputId: 7, clientRequestId: nil)
+            ))],
+            submittedInputs: [makeSubmittedInput(text: "optimistic local text", clientRequestId: "ios-local", serverInputId: 7)]
         )
-        let items = TimelineBuilder.build(events: [event])
-        let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
-
-        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
-        XCTAssertEqual(rows.first?.body, event.contentText)
-        XCTAssertNil(rows.first?.role)
+        XCTAssertTrue(rows.isEmpty)
     }
 
-    func testConsecutiveBackgroundCompletionsCollapseToOneCountedRowAtTheLatest() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(text: "Background task finished: lint", clientRequestId: "wake:1:1", serverInputId: nil, origin: "wake"),
-                makeSubmittedInput(text: "Background task finished: tests", clientRequestId: "wake:2:1", serverInputId: nil, origin: "wake"),
-                makeSubmittedInput(text: "Background task finished: build", clientRequestId: "wake:3:1", serverInputId: nil, origin: "wake"),
-            ]
+    func testOverlayDropsSubmittedInputWhenDurableEventHasSameClientRequestId() {
+        let rows = WebTranscriptView.overlayRows(
+            projectionItems: [projectionItem(makeUserEvent(
+                id: 11, content: "server projected text",
+                inputOrigin: SessionInputOrigin(authoredVia: .longhouse, sessionInputId: nil, clientRequestId: "ios-local")
+            ))],
+            submittedInputs: [makeSubmittedInput(text: "optimistic local text", clientRequestId: "ios-local", serverInputId: nil)]
         )
-        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
-        XCTAssertEqual(rows.first?.id, "wake:3:1", "the collapsed row stands at the latest completion")
-        XCTAssertEqual(rows.first?.body, "Background task finished: build (3 updates)")
-        XCTAssertEqual(rows.first?.wake, true, "the collapsed row keeps the wake marker")
+        XCTAssertTrue(rows.isEmpty)
     }
 
-    func testWakeAndLonghouseCloseReceiptsRenderAsProviderNotifications() {
-        let wakeText = "Background task finished: the branch is ready"
-        let receiptRows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: wakeText,
-                    clientRequestId: "wake:invocation-1:1",
-                    serverInputId: nil,
-                    origin: "wake"
-                ),
-            ]
+    func testOverlayKeepsSubmittedInputWhenDurableEventHasNoMatchingIdentity() {
+        let rows = WebTranscriptView.overlayRows(
+            projectionItems: [projectionItem(makeUserEvent(
+                id: 11, content: "someone else",
+                inputOrigin: SessionInputOrigin(authoredVia: .longhouse, sessionInputId: 9, clientRequestId: "other")
+            ))],
+            submittedInputs: [makeSubmittedInput(text: "mine", clientRequestId: "ios-local", serverInputId: 7)]
         )
-        XCTAssertEqual(receiptRows.map(\.kind), ["providerNotification"])
-        XCTAssertNil(receiptRows.first?.role)
-        XCTAssertEqual(receiptRows.first?.wake, true)
-        XCTAssertEqual(receiptRows.first?.body, wakeText)
-
-        // A close that could not confirm its processes are gone carries the
-        // server's cleanup line in the same one-line notice.
-        let closeText = "Stopped 2 background tasks: watch the branch; run the tests. "
-            + "Some processes didn't exit and may still be running."
-        let closeRows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: closeText,
-                    clientRequestId: "close:invocation-1",
-                    serverInputId: nil,
-                    origin: "longhouse"
-                ),
-            ]
-        )
-        XCTAssertEqual(closeRows.map(\.kind), ["providerNotification"])
-        XCTAssertNil(closeRows.first?.role)
-        XCTAssertEqual(closeRows.first?.body, closeText)
-        XCTAssertNil(closeRows.first?.wake)
-        XCTAssertEqual(closeRows.first?.origin, "longhouse", "the document shows Longhouse's notice whole")
-        let wakeEvent = makeUserEvent(
-            id: 44,
-            content: "provider's wake input",
-            inputOrigin: SessionInputOrigin(
-                authoredVia: .longhouse,
-                origin: "wake",
-                sessionInputId: nil,
-                clientRequestId: "wake:invocation-1:1"
-            )
-        )
-        let durableRows = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: [wakeEvent]),
-            submittedInputs: []
-        )
-        XCTAssertEqual(durableRows.map(\.kind), ["providerNotification"])
-        XCTAssertEqual(durableRows.first?.wake, true)
-        XCTAssertNil(durableRows.first?.role)
+        XCTAssertEqual(rows.map(\.row.body), ["mine"])
     }
 
-    /// The transcript document collapses a notice from its text alone, so the
-    /// payload must carry a long multi-line job result whole, not preview it.
-    func testPayloadCarriesLongProviderNotificationInFull() {
-        let text = "Background job bg_96 has completed.\n…\nered job: zerg-tenant-data-reserve\n"
-            + String(repeating: "2026-09-30 15:24:21,974 [INFO] sauron.jobs.registry: Registered job\n", count: 25)
-            + "[Output truncated. Showing first 4,000 characters.]\nFull output: artifact://335"
-        let event = SessionEvent(
-            id: 43,
-            role: "system",
-            contentText: text,
-            interactionKind: "provider_notification",
-            toolName: nil,
-            toolInputJSON: nil,
-            toolOutputText: nil,
-            toolCallId: nil,
-            toolCallState: nil,
-            timestamp: "2026-09-30T15:24:22Z",
-            inActiveContext: true,
-            isHeadBranch: true,
-            inputOrigin: nil
-        )
-        let rows = WebTranscriptView.payloadItems(timelineItems: TimelineBuilder.build(events: [event]), submittedInputs: [])
-
-        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
-        XCTAssertEqual(rows.first?.body, text)
-        XCTAssertFalse(rows.first?.collapsed ?? true)
+    func testOverlayLabelsEachSubmittedPhase() {
+        func subtitle(_ phase: SubmittedInputPhase, _ error: String? = nil) -> String? {
+            WebTranscriptView.overlayRows(
+                projectionItems: [],
+                submittedInputs: [makeSubmittedInput(text: "t", clientRequestId: "r", serverInputId: nil, phase: phase, lastError: error)]
+            ).first?.row.subtitle
+        }
+        XCTAssertEqual(subtitle(.couldNotConfirm), "Not confirmed")
+        XCTAssertEqual(subtitle(.sent), "Sent")
+        XCTAssertEqual(subtitle(.working), "Sent")
+        XCTAssertEqual(subtitle(.needsUserDecision, "The active turn already ended."), "Needs choice \u{2014} The active turn already ended.")
+        XCTAssertEqual(subtitle(.failed, "provider_auth_missing: run login"), "Not delivered \u{2014} provider_auth_missing: run login")
     }
 
-    func testPayloadSuppressesSubmittedInputWhenDurableLonghouseEventHasSameSessionInputId() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [
-                .user(makeUserEvent(
-                    id: 11,
-                    content: "server projected text",
-                    inputOrigin: SessionInputOrigin(
-                        authoredVia: .longhouse,
-                        sessionInputId: 7,
-                        clientRequestId: nil
-                    )
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "optimistic local text",
-                    clientRequestId: "ios-local",
-                    serverInputId: 7
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first?.kind, "message")
-        XCTAssertEqual(rows.first?.body, "server projected text")
-        XCTAssertEqual(rows.first?.origin, "longhouse")
-    }
-
-    func testPayloadSuppressesSubmittedInputWhenDurableLonghouseEventHasSameClientRequestId() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [
-                .user(makeUserEvent(
-                    id: 11,
-                    content: "server projected text",
-                    inputOrigin: SessionInputOrigin(
-                        authoredVia: .longhouse,
-                        sessionInputId: nil,
-                        clientRequestId: "ios-request-1"
-                    )
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "optimistic local text",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: nil
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.map(\.kind), ["message"])
-        XCTAssertEqual(rows.first?.body, "server projected text")
-    }
-
-    func testPayloadKeepsSubmittedInputWhenDurableEventHasNoMatchingIdentity() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [
-                .user(makeUserEvent(
-                    id: 11,
-                    content: "same visible text",
-                    inputOrigin: nil
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "same visible text",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: nil
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.map(\.kind), ["message", "submitted"])
-        XCTAssertEqual(rows.map(\.body), ["same visible text", "same visible text"])
-    }
-
-    func testPayloadPlacesSentInputBeforeLiveProvisionalAssistantPreview() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [
-                .user(makeUserEvent(
-                    id: 11,
-                    content: "prior durable text",
-                    inputOrigin: nil
-                )),
-                .assistant(makeAssistantEvent(
-                    id: -99,
-                    content: "streaming answer",
-                    timestamp: "2026-05-02T20:00:05Z",
-                    eventOrigin: "live_provisional"
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "new local prompt",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: 7
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.map(\.kind), ["message", "submitted", "message"])
-        XCTAssertEqual(rows.map(\.body), ["prior durable text", "new local prompt", "streaming answer"])
-    }
-
-    func testPayloadKeepsNewQueuedInputAfterExistingLivePreview() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [
-                .assistant(makeAssistantEvent(
-                    id: -99,
-                    content: "already streaming",
-                    timestamp: "2026-05-02T20:00:05Z",
-                    eventOrigin: "live_provisional"
-                )),
-            ],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "queue after this turn",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: 7,
-                    phase: .queued,
-                    createdAt: date("2026-05-02T20:00:06Z")
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.map(\.kind), ["message", "submitted"])
-        XCTAssertEqual(rows.map(\.body), ["already streaming", "queue after this turn"])
-    }
-
-    func testPayloadLabelsUnconfirmedSubmittedInput() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "maybe landed",
-                    clientRequestId: "ios-request-1",
-                    serverInputId: nil,
-                    phase: .couldNotConfirm
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.first?.kind, "submitted")
-        XCTAssertEqual(rows.first?.status, "couldNotConfirm")
-        XCTAssertEqual(rows.first?.subtitle, "Not confirmed")
-    }
-
-    func testPayloadLabelsSentSubmittedInput() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "sent prompt",
-                    clientRequestId: "ios-request-sent",
-                    serverInputId: nil,
-                    phase: .sent
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.first?.status, "sent")
-        XCTAssertEqual(rows.first?.subtitle, "Sent")
-    }
-
-    func testPayloadLabelsTurnEndedDecisionWithItsReason() {
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "keep going",
-                    clientRequestId: "ios-turn-ended",
-                    serverInputId: 7,
-                    phase: .needsUserDecision,
-                    lastError: "The active turn already ended."
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.first?.status, "needsUserDecision")
-        XCTAssertEqual(rows.first?.subtitle, "Needs choice — The active turn already ended.")
-    }
-
-    func testPayloadShowsTypedProviderAuthFailureInNotDeliveredText() {
-        let reason = "provider_auth_missing: OMP has no OpenAI credential; run `omp /login` on the selected machine."
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: [],
-            submittedInputs: [
-                makeSubmittedInput(
-                    text: "continue",
-                    clientRequestId: "ios-auth-failed",
-                    serverInputId: 7,
-                    phase: .failed,
-                    lastError: reason
-                ),
-            ]
-        )
-
-        XCTAssertEqual(rows.first?.subtitle, "Not delivered — \(reason)")
-    }
-
-    func testPayloadCarriesBoundedAttachmentSummaryOnOneSubmittedRow() {
-        let input = SubmittedInput(
+    func testOverlayCarriesBoundedAttachmentSummaryAndPlacementFacts() {
+        var input = SubmittedInput(
             id: "ios-request-attachments",
             clientRequestId: "ios-request-attachments",
             text: "describe this",
             intent: "auto",
-            attachmentSummaries: [
-                SubmittedInputAttachmentSummary(filename: "shot.jpg", mimeType: "image/jpeg", byteSize: 4)
-            ],
+            attachmentSummaries: [SubmittedInputAttachmentSummary(filename: "shot.jpg", mimeType: "image/jpeg", byteSize: 4)],
             phase: .failed,
             serverInputId: nil,
             lastError: "unsupported attachment",
-            createdAt: Date(timeIntervalSince1970: 0)
+            createdAt: Date(timeIntervalSince1970: 5)
         )
-        let rows = WebTranscriptView.payloadItems(timelineItems: [], submittedInputs: [input])
+        input.placedAtSendTime = true
+        let rows = WebTranscriptView.overlayRows(projectionItems: [], submittedInputs: [input])
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first?.attachments?.count, 1)
-        XCTAssertEqual(rows.first?.attachments?.first?.filename, "shot.jpg")
-        XCTAssertEqual(rows.first?.attachments?.first?.byteSize, 4)
+        XCTAssertEqual(rows.first?.row.attachments?.first?.filename, "shot.jpg")
+        XCTAssertEqual(rows.first?.row.status, "failed placed")
+        XCTAssertEqual(rows.first?.createdAtMs, 5000)
+        XCTAssertEqual(rows.first?.placedAtSendTime, true)
     }
 
-
-    func testPayloadCarriesPresentMediaRefsWithAbsoluteThumbnailURL() {
-        let mediaRef = SessionEventMediaRef(
-            sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
-            mediaState: "present",
-            mimeType: "image/png",
-            byteSize: 1024,
-            blobUrl: "/api/media/abc123/blob",
-            thumbUrl: "/api/media/abc123/thumb",
-            width: 2880,
-            height: 1800,
-            sourcePath: nil,
-            sourceOffset: nil,
-            jsonPointer: nil,
-            originalKind: "data_url_backfill"
+    func testOverlayTurnsWakeAndCloseReceiptsIntoProviderNotifications() {
+        let rows = WebTranscriptView.overlayRows(
+            projectionItems: [],
+            submittedInputs: [
+                makeSubmittedInput(text: "Task done", clientRequestId: "wake:1", serverInputId: nil, origin: "wake"),
+                makeSubmittedInput(text: "Session closed", clientRequestId: "close:1", serverInputId: nil, origin: "longhouse"),
+            ]
         )
-        let rows = WebTranscriptView.payloadItems(
-            serverURL: "https://david010.longhouse.ai",
-            timelineItems: [
-                .assistant(makeAssistantEvent(
-                    id: 21,
-                    content: "screenshot",
-                    timestamp: "2026-05-02T20:00:05Z",
-                    eventOrigin: nil,
-                    mediaRefs: [
-                        mediaRef,
-                        mediaRef,
-                    ]
-                )),
-            ],
-            submittedInputs: []
-        )
+        XCTAssertEqual(rows.map(\.row.kind), ["providerNotification", "providerNotification"])
+        XCTAssertEqual(rows.map(\.row.origin), [nil, "longhouse"])
+        XCTAssertEqual(rows.map(\.row.wake), [true, nil])
+    }
 
-        XCTAssertEqual(rows.first?.media?.count, 1)
-        XCTAssertEqual(rows.first?.media?.first?.sha256, "abc123def456abc123def456abc123def456abc123def456abc123def456abcd")
-        XCTAssertEqual(rows.first?.media?.first?.url, "https://david010.longhouse.ai/api/media/abc123/thumb")
-        XCTAssertEqual(rows.first?.media?.first?.blobUrl, "https://david010.longhouse.ai/api/media/abc123/blob")
-        // The intrinsic size reaches the transcript so the row reserves layout.
-        XCTAssertEqual(rows.first?.media?.first?.width, 2880)
-        XCTAssertEqual(rows.first?.media?.first?.height, 1800)
+    private func projectionItem(_ event: SessionEvent) -> SessionProjectionItem {
+        SessionProjectionItem(
+            kind: "event", sessionId: "session-1", timestamp: event.timestamp, event: event,
+            continuedFromSessionId: nil, continuationKind: nil, originLabel: nil,
+            parentOriginLabel: nil, parentContinuationKind: nil, branchedFromEventId: nil
+        )
     }
 
     private func makeSubmittedInput(
@@ -548,34 +210,5 @@ final class WebTranscriptViewTests: XCTestCase {
             isHeadBranch: isHeadBranch,
             inputOrigin: inputOrigin
         )
-    }
-
-    private func makeAssistantEvent(
-        id: Int,
-        content: String,
-        timestamp: String,
-        eventOrigin: String?,
-        mediaRefs: [SessionEventMediaRef] = []
-    ) -> SessionEvent {
-        SessionEvent(
-            id: id,
-            role: "assistant",
-            contentText: content,
-            toolName: nil,
-            toolInputJSON: nil,
-            toolOutputText: nil,
-            toolCallId: nil,
-            toolCallState: nil,
-            timestamp: timestamp,
-            inActiveContext: true,
-            isHeadBranch: true,
-            inputOrigin: nil,
-            eventOrigin: eventOrigin,
-            mediaRefs: mediaRefs
-        )
-    }
-
-    private func date(_ value: String) -> Date {
-        LonghouseDateParser.parse(value) ?? Date(timeIntervalSince1970: 0)
     }
 }

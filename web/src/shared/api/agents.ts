@@ -617,6 +617,8 @@ export interface AgentEvent {
   branch_id?: number | null;
   is_head_branch?: boolean;
   media_refs?: AgentEventMediaRef[];
+  /** `live_provisional` on a row built from the live preview, not a durable event. */
+  event_origin?: string | null;
   /** Lite pages: the tool input was cut to what its collapsed row needs. */
   tool_input_truncated?: boolean;
   /** Lite pages: the output is the collapsed row's preview of a longer body. */

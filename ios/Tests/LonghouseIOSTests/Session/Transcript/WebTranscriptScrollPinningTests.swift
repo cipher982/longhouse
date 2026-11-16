@@ -295,15 +295,20 @@ final class WebTranscriptScrollPinningTests: XCTestCase, WKNavigationDelegate {
         mode: String = "snapshot",
         sequence: Int = 1
     ) async throws -> [String: Any] {
-        let items: [TimelineItem] = (0..<rowCount).map { index in
-            .assistant(makeAssistantEvent(
+        let items: [SessionProjectionItem] = (0..<rowCount).map { index in
+            let event = makeAssistantEvent(
                 id: index + 1,
                 // Long enough that the document overflows any test viewport.
                 content: "Assistant row \(index + 1) with enough body text to wrap across several lines and give the transcript real height to scroll through."
-            ))
+            )
+            return SessionProjectionItem(
+                kind: "event", sessionId: "session-1", timestamp: event.timestamp, event: event,
+                continuedFromSessionId: nil, continuationKind: nil, originLabel: nil,
+                parentOriginLabel: nil, parentContinuationKind: nil, branchedFromEventId: nil
+            )
         }
         let payload = WebTranscriptView.preparedPayload(
-            timelineItems: items,
+            projectionItems: items,
             submittedInputs: [],
             errorMessage: nil
         )

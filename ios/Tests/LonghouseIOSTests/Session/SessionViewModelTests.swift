@@ -66,7 +66,7 @@ struct SessionViewModelTests {
         #expect(model.errorMessage == nil)
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
         let firstRequest = await api.workspaceRequest(at: 0)
         #expect(firstRequest?.id == "session-1")
         #expect(firstRequest?.limit == 50)
@@ -186,8 +186,8 @@ struct SessionViewModelTests {
         #expect(await api.deltaCursors() == ["cursor-10"])
         #expect(await api.tailRequestCount() == fullReadsBefore)
         #expect(model.items.count == 31)
-        #expect(model.items.first?.id == "prose:evt-1")
-        #expect(model.items.last?.id == "prose:evt-31")
+        #expect(model.items.first?.id == "event:evt-1")
+        #expect(model.items.last?.id == "event:evt-31")
     }
 
     @Test
@@ -317,7 +317,7 @@ struct SessionViewModelTests {
         await api.resumePausedTailResponses()
         await startTask.value
 
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
         #expect(model.isInitialLoading == false)
     }
     @Test
@@ -391,7 +391,7 @@ struct SessionViewModelTests {
         await startTask.value
 
         #expect(model.detail?.displayTitle == tailWorkspace.session.displayTitle)
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
     }
 
     @Test
@@ -430,7 +430,7 @@ struct SessionViewModelTests {
 
         #expect(model.detail?.displayTitle == "Tail title")
         #expect(model.detail?.recap?.text == "Tail recap")
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
     }
 
     @Test
@@ -541,7 +541,7 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
 
-        #expect(model.items.map(\.id) == ["user:10", "prose:synthetic:preview:99"])
+        #expect(model.items.map(\.id) == ["event:10", "event:synthetic:preview:99"])
     }
 
     @Test
@@ -561,9 +561,9 @@ struct SessionViewModelTests {
         // The refresh still happens; it just isn't awaited by start().
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("tail refresh applies the transcript") {
-            model.items.map(\.id) == ["user:11"]
+            model.items.map(\.id) == ["event:11"]
         }
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         #expect(await api.workspaceRequestCount() == 2)
     }
 
@@ -593,7 +593,7 @@ struct SessionViewModelTests {
         await model.loadOlder(sessionId: "session-1", appState: appState)
         await model.reload(sessionId: "session-1", appState: appState)
 
-        let freshTailItemIds = TimelineBuilder.build(items: freshTailItems).map(\.id)
+        let freshTailItemIds = freshTailItems.map(\.id)
         await waitForCondition("full tail replaces non-overlapping held history") {
             model.items.map(\.id) == freshTailItemIds
         }
@@ -605,7 +605,7 @@ struct SessionViewModelTests {
         #expect(refreshedOlderRequest?.cursor == "fresh-cursor")
         #expect(
             model.items.map(\.id)
-                == TimelineBuilder.build(items: nextOlderItems + freshTailItems).map(\.id)
+                == (nextOlderItems + freshTailItems).map(\.id)
         )
     }
 
@@ -621,7 +621,7 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         await model.loadOlder(sessionId: "session-1", appState: appState)
 
-        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+        #expect(model.items.map(\.id) == ["event:1", "event:51"])
         let olderRequest = await api.tailRequest(at: 1)
         #expect(olderRequest?.offset == 50)
         #expect(olderRequest?.snapshotEventId == "51")
@@ -704,7 +704,7 @@ struct SessionViewModelTests {
         #expect(offsets.filter { $0 == 50 }.count == 2)
         #expect(await api.tailRequest(at: 2)?.offset == 50)
         #expect(await api.tailRequest(at: 2)?.snapshotEventId == "51")
-        #expect(model.items.map { $0.id } == ["user:2", "user:51"])
+        #expect(model.items.map { $0.id } == ["event:2", "event:51"])
         model.stop()
     }
 
@@ -727,7 +727,7 @@ struct SessionViewModelTests {
         await model.loadOlder(sessionId: "session-1", appState: appState)
         await model.reload(sessionId: "session-1", appState: appState)
 
-        let expectedIds = TimelineBuilder.build(items: conversationItems(1...101)).map(\.id)
+        let expectedIds = conversationItems(1...101).map(\.id)
         #expect(model.items.map(\.id) == expectedIds)
         let refreshRequest = await api.tailRequest(at: 2)
         #expect(refreshRequest?.offset == 0)
@@ -758,7 +758,7 @@ struct SessionViewModelTests {
         await model.reload(sessionId: "session-1", appState: appState)
         await model.loadOlder(sessionId: "session-1", appState: appState)
 
-        let expectedIds = TimelineBuilder.build(items: conversationItems(1...151)).map(\.id)
+        let expectedIds = conversationItems(1...151).map(\.id)
         #expect(model.items.map(\.id) == expectedIds)
     }
 
@@ -790,7 +790,7 @@ struct SessionViewModelTests {
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
         await waitForCondition("fresh cached-tail reconcile", sourceLocation: #_sourceLocation) {
-            model.items.map(\.id) == ["user:21"]
+            model.items.map(\.id) == ["event:21"]
         }
         #expect(await api.workspaceRequestCount() == 1)
     }
@@ -824,7 +824,7 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
 
-        #expect(model.items.map(\.id) == ["action:interrupt-1", "user:20"])
+        #expect(model.items.map(\.id) == ["action:interrupt-1", "event:20"])
 
         await api.resumePausedTailResponses()
         await waitForTailResponseCount(api, atLeast: 1)
@@ -933,7 +933,7 @@ struct SessionViewModelTests {
 
         await api.resumePausedTailResponses()
         await waitForCondition("tail transcript", sourceLocation: #_sourceLocation) {
-            model.items.map(\.id) == ["user:21"]
+            model.items.map(\.id) == ["event:21"]
         }
         let request = try #require(model.detail?.activePauseRequest)
         #expect(request.id == "pause-scope")
@@ -971,13 +971,13 @@ struct SessionViewModelTests {
         await secondAPI.pauseNextTailResponse(offset: 0)
         let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
         await secondModel.start(sessionId: "session-1", appState: appState)
-        let cachedItemIds = TimelineBuilder.build(items: conversationItems(1...100)).map(\.id)
+        let cachedItemIds = conversationItems(1...100).map(\.id)
         await waitForCondition("cached history frame", sourceLocation: #_sourceLocation) {
             secondModel.items.map(\.id) == cachedItemIds
         }
         recordCurrentTranscriptFrame(secondModel)
         await secondAPI.resumePausedTailResponses()
-        let refreshedItemIds = TimelineBuilder.build(items: conversationItems(1...101)).map(\.id)
+        let refreshedItemIds = conversationItems(1...101).map(\.id)
         await waitForCondition("preserved cached history reconcile", sourceLocation: #_sourceLocation) {
             secondModel.items.map(\.id) == refreshedItemIds
         }
@@ -1020,7 +1020,7 @@ struct SessionViewModelTests {
         #expect(!model.isInitialLoading)
         #expect(model.hasLoadedTranscript)
         #expect(model.errorMessage == nil)
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
     }
 
     @Test
@@ -1038,7 +1038,7 @@ struct SessionViewModelTests {
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.lastSendOutcome == .sent)
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .sent)
         #expect(await api.sendRequests() == ["continue:auto"])
@@ -1087,7 +1087,7 @@ struct SessionViewModelTests {
         #expect(sent.isSuccessfulHandoff)
         #expect(model.errorMessage == nil)
         #expect(model.refreshErrorMessage == nil)
-        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.items.map(\.id) == ["event:10"])
         #expect(model.submittedInputs.first?.phase == .sent)
         #expect(await api.workspaceRequestCount() >= 1)
     }
@@ -1910,7 +1910,7 @@ struct SessionViewModelTests {
         #expect(answered)
         #expect(model.isRespondingToPauseRequest == false)
         #expect(model.pauseResponseErrorMessage == nil)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         let responses = await api.pauseResponses()
         #expect(responses.count == 1)
         #expect(responses.first?.sessionId == "session-1")
@@ -1982,7 +1982,7 @@ struct SessionViewModelTests {
         #expect(!answered)
         #expect(model.pauseResponseErrorMessage == "This provider question has already resolved.")
         #expect(model.detail?.activePauseRequest == nil)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         #expect(await api.workspaceRequestCount() == 2)
     }
 
@@ -2051,7 +2051,7 @@ struct SessionViewModelTests {
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2085,7 +2085,7 @@ struct SessionViewModelTests {
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2127,12 +2127,12 @@ struct SessionViewModelTests {
         let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
-            model.items.map(\.id) == ["user:11"]
+            model.items.map(\.id) == ["event:11"]
         }
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2247,12 +2247,12 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         #expect(model.isTranscriptFrameReady == false)
         await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
-        #expect(model.items.map(\.id) == ["user:51"])
+        #expect(model.items.map(\.id) == ["event:51"])
 
         recordCurrentTranscriptFrame(model)
         #expect(model.isTranscriptFrameReady == true)
         await waitForTailRequestCount(api, atLeast: 2)
-        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+        #expect(model.items.map(\.id) == ["event:1", "event:51"])
         let afterFirstFill = await api.tailRequestCount()
 
         // The next page is a duplicate: nothing added, so the fill stalls.
@@ -2260,7 +2260,7 @@ struct SessionViewModelTests {
         #expect(await api.tailRequestCount() == afterFirstFill + 1)
         await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
         #expect(await api.tailRequestCount() == afterFirstFill + 1)
-        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+        #expect(model.items.map(\.id) == ["event:1", "event:51"])
     }
 
     @Test
@@ -2289,7 +2289,7 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let staleRevision = model.transcriptRevision
         let staleWatermark = model.transcriptReadThrough
-        model.items.append(.user(makeEvent(id: 2, role: "user", content: "Newer row")))
+        model.items.append(projectionItem(makeEvent(id: 2, role: "user", content: "Newer row")))
 
         model.recordTranscriptFrameRendered(
             WebTranscriptRenderReceipt(
@@ -2297,7 +2297,7 @@ struct SessionViewModelTests {
                 transcriptReadThrough: staleWatermark,
                 retryRevision: model.transcriptRenderRetryRevision,
                 payloadFingerprint: "stale-frame",
-                latestItemId: "user:1"
+                latestItemId: "event:1"
             )
         )
 
@@ -2540,7 +2540,7 @@ struct SessionViewModelTests {
 
         await model.reload(sessionId: "session-1", appState: appState)
         #expect(model.submittedInputs.count == 1)
-        #expect(model.items.map(\.id).contains("user:11"))
+        #expect(model.items.map(\.id).contains("event:11"))
     }
 
     @Test
@@ -2574,7 +2574,7 @@ struct SessionViewModelTests {
 
         #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.isEmpty)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
         #expect(model.errorMessage == nil)
     }
 
@@ -2595,12 +2595,12 @@ struct SessionViewModelTests {
         let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
-            model.items.map(\.id) == ["user:11"]
+            model.items.map(\.id) == ["event:11"]
         }
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2632,13 +2632,13 @@ struct SessionViewModelTests {
         let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies transcript") {
-            model.items.map(\.id) == ["user:11"]
+            model.items.map(\.id) == ["event:11"]
         }
 
         #expect(!sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2669,12 +2669,12 @@ struct SessionViewModelTests {
         let sent = await model.sendResult(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
         await waitForCondition("post-send tail refresh applies the transcript") {
-            model.items.map(\.id) == ["user:11"]
+            model.items.map(\.id) == ["event:11"]
         }
 
         #expect(sent.isSuccessfulHandoff)
         #expect(model.submittedInputs.count == 1)
-        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.items.map(\.id) == ["event:11"])
     }
 
     @Test
@@ -2712,7 +2712,7 @@ struct SessionViewModelTests {
             stage: "rendered",
             payload_byte_size: 2048,
             row_count: 1,
-            latest_item_id: "user:10",
+            latest_item_id: "event:10",
             render_sequence: 1,
             js_failure_count: 0,
             should_stick_to_bottom: true,
@@ -2768,7 +2768,7 @@ struct SessionViewModelTests {
                 stage: "queued",
                 payload_byte_size: 2048,
                 row_count: 1,
-                latest_item_id: "user:10",
+                latest_item_id: "event:10",
                 render_sequence: 1,
                 js_failure_count: 0,
                 should_stick_to_bottom: true,
@@ -2783,7 +2783,7 @@ struct SessionViewModelTests {
                 stage: "duplicate",
                 payload_byte_size: 2048,
                 row_count: 1,
-                latest_item_id: "user:10",
+                latest_item_id: "event:10",
                 render_sequence: 1,
                 js_failure_count: 0,
                 should_stick_to_bottom: true,
@@ -3039,7 +3039,7 @@ struct SessionViewModelTests {
         }
 
         expectAdvance("assigning items") {
-            model.items = [.user(makeEvent(id: 1, role: "user", content: "hello"))]
+            model.items = [projectionItem(makeEvent(id: 1, role: "user", content: "hello"))]
         }
         expectAdvance("appending a submitted input") {
             model.submittedInputs.append(
@@ -3067,6 +3067,21 @@ struct SessionViewModelTests {
         expectAdvance("assigning subagents") {
             model.subagents = []
         }
+    }
+
+    private func projectionItem(_ event: SessionEvent) -> SessionProjectionItem {
+        SessionProjectionItem(
+            kind: "event",
+            sessionId: "session-1",
+            timestamp: event.timestamp,
+            event: event,
+            continuedFromSessionId: nil,
+            continuationKind: nil,
+            originLabel: nil,
+            parentOriginLabel: nil,
+            parentContinuationKind: nil,
+            branchedFromEventId: nil
+        )
     }
 
     private func makeEvent(id: Int, role: String, content: String) -> SessionEvent {

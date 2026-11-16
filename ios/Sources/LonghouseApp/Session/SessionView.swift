@@ -534,23 +534,30 @@ struct SessionView: View {
         // All served receipts, including completion notices, stand at their
         // recorded time instead of collecting beneath newer messages.
         let userEvents = viewModel.items.compactMap { item -> SessionEvent? in
-            if case .user(let event) = item { return event }
-            return nil
+            guard let event = item.event, event.role == "user",
+                  !["compaction_boundary", "provider_notification", "provider_reasoning"].contains(event.interactionKind)
+            else { return nil }
+            return event
         }
         // One older than the loaded rows waits for that page, while one exists.
         let firstLoadedDate = viewModel.hasOlderHistory
-            ? viewModel.items.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
+            ? viewModel.items.first.flatMap { LonghouseDateParser.parse($0.timestamp) }
             : nil
         let placedReceiptInputs = UnrecordedInputs.placedInputs(
             receipts: viewModel.detail?.inputReceipts ?? [],
             userEvents: userEvents,
             notificationEvents: viewModel.items.compactMap { item in
-                if case .providerNotification(let event) = item { return event }
+                guard let event = item.event else { return nil }
+                if event.interactionKind == "provider_notification" { return event }
+                if event.role == "system",
+                   event.taskNotification != nil || event.waitingBackgroundAgents != nil || event.apiError != nil {
+                    return event
+                }
                 return nil
             },
             excluding: Set(localInputs.map(\.clientRequestId)),
             loadedFrom: firstLoadedDate,
-            windowStart: viewModel.items.first.flatMap { LonghouseDateParser.parse($0.sortTimestamp) }
+            windowStart: viewModel.items.first.flatMap { LonghouseDateParser.parse($0.timestamp) }
         )
         return localInputs + placedReceiptInputs
     }

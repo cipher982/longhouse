@@ -25,13 +25,13 @@ function ev(partial: Partial<AgentEvent> & { id: number; role: string }): AgentS
 const asJson = (value: unknown) => JSON.parse(JSON.stringify(value));
 
 describe("presentTranscript hostile transcript", () => {
-  it("equals the Swift golden exactly", () => {
+  it("equals the checked-in golden rows", () => {
     const rows = presentTranscript({ items: fixture("hostile-transcript.json").projection.items });
     const golden = JSON.parse(readFileSync(resolve(process.cwd(), "../tests/fixtures/transcript-payload/hostile-transcript.golden.json"), "utf8"));
     expect(asJson(rows)).toEqual(golden);
   });
 
-  it("keeps the Swift key semantics", () => {
+  it("keeps the key semantics", () => {
     const rows = presentTranscript({ items: fixture("hostile-transcript.json").projection.items });
     expect(rows[0].kind).toBe("message");
     const activity = rows.find((row) => row.kind === "activityGroup");
@@ -131,5 +131,49 @@ describe("presentTranscript policies", () => {
     expect(end("error")?.label).toBe("Failed after 1m 5s");
     expect(end("interrupted")?.label).toBe("Interrupted after 1m 5s");
     expect(end("interrupted")?.doneAt).toMatch(/^stopped 10:02/);
+  });
+});
+
+describe("presentTranscript lite pages", () => {
+  const lite = JSON.parse(
+    readFileSync(resolve(process.cwd(), "../tests/fixtures/session-detail/lite-mobile-tail.json"), "utf8"),
+  ) as { projection: { items: AgentSessionProjectionItem[] } };
+  const rowFor = (rows: ReturnType<typeof presentTranscript>, cursor: string) =>
+    rows.find((row) => row.bodyCursors?.includes(cursor));
+
+  it("a cut row carries its body cursors until the bodies load", () => {
+    const rows = presentTranscript({ items: lite.projection.items });
+    const row = rowFor(rows, "cursor-3");
+    expect(row?.bodyCursors?.slice(0, 2)).toEqual(["cursor-3", "cursor-4"]);
+    expect(row?.bodyState).toBe("preview");
+
+    const loading = presentTranscript({ items: lite.projection.items, liteBodies: { loading: new Set(["cursor-3"]) } });
+    expect(rowFor(loading, "cursor-3")?.bodyState).toBe("loading");
+
+    const failed = presentTranscript({ items: lite.projection.items, liteBodies: { failed: new Set(["cursor-3"]) } });
+    expect(rowFor(failed, "cursor-3")?.bodyState).toBe("failed");
+
+    const gone = presentTranscript({
+      items: lite.projection.items,
+      liteBodies: { unavailable: new Set(row?.bodyCursors ?? []) },
+    });
+    expect(rowFor(gone, "cursor-3")?.bodyState).toBe("unavailable");
+  });
+
+  it("a loaded body replaces the preview and drops the cursor", () => {
+    const whole = "the whole output";
+    const rows = presentTranscript({
+      items: lite.projection.items,
+      liteBodies: {
+        bodies: new Map([
+          ["cursor-3", { id: "evt-3", cursor: "cursor-3", tool_input_json: { command: "rg -n" } } as never],
+          ["cursor-4", { id: "evt-4", cursor: "cursor-4", tool_output_text: whole } as never],
+        ]),
+      },
+    });
+    expect(rowFor(rows, "cursor-3")).toBeUndefined();
+    expect(rowFor(rows, "cursor-4")).toBeUndefined();
+    const outputs = rows.flatMap((row) => [row.output, ...row.calls.map((call) => call.output)]);
+    expect(outputs).toContain(whole);
   });
 });

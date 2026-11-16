@@ -5,9 +5,9 @@ import { renderTranscript, resetTranscriptStateForTesting, waitForTranscriptFram
 import { setStickToBottom } from "../scroll";
 import type { TranscriptItem, TranscriptPayload } from "../types";
 
-// The golden payload Swift's TranscriptPayloadGoldenTests pins: what
-// TimelineBuilder + WebTranscriptView.payloadItems produce for the hostile
-// transcript fixture. Rendering it here closes the loop from projection to DOM.
+// The golden rows `presentTranscript` produces for the hostile transcript
+// fixture (see presentTranscript.test.ts). Rendering them here closes the loop
+// from projection to DOM.
 const goldenItems: TranscriptItem[] = JSON.parse(
   readFileSync(
     path.resolve(import.meta.dirname, "../../../../../tests/fixtures/transcript-payload/hostile-transcript.golden.json"),
@@ -47,7 +47,7 @@ afterEach(() => {
 describe("renderTranscript against the golden payload", () => {
   it("renders every golden item with its semantics", async () => {
     const metrics = render({ errorMessage: null, items: goldenItems });
-    expect(Object.keys(metrics).sort()).toEqual(["decode_ms", "dom_ms", "html_ms"]);
+    expect(Object.keys(metrics).sort()).toEqual(["decode_ms", "dom_ms", "html_ms", "latest_item_id", "present_ms", "row_count"]);
 
     const user = root().querySelector(".row.message.user .bubble");
     expect(user?.textContent).toBe("Investigate the failing job and report what Alex changed.");
@@ -622,6 +622,7 @@ describe("Claude fidelity signals", () => {
     expect(root().querySelector('[data-testid="session-reasoning-withheld"]')?.textContent?.trim()).toBe(
       "Reasoning withheld",
     );
+    expect(root().querySelector(".message.assistant.commentary")).not.toBeNull();
     expect(root().querySelector(".message.assistant.commentary .phase-badge")).toBeNull();
     expect(root().querySelector(".message.assistant.commentary .message-content")?.textContent).toContain(
       "Launching audit workers.",

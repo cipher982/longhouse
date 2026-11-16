@@ -62,6 +62,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             seedEvents = Self.marketingFixtureEvents()
         } else if fixture.name == "lite-bodies" {
             seedEvents = Self.liteBodiesFixtureEvents()
+        } else if fixture.name == "narration" {
+            seedEvents = Self.narrationFixtureEvents()
         } else if fixture.name == "background-completion-receipts" {
             seedEvents = Self.backgroundCompletionReceiptFixtureEvents()
         } else if fixture.name == "claude-fidelity" || fixture.name == "claude-fidelity-sheet" {
@@ -559,6 +561,8 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         switch fixtureName {
         case "background-completion-receipts":
             return "Background Completion Receipts"
+        case "narration":
+            return "Flaky OAuth refresh test"
         case "marketing":
             return "Wire up OAuth refresh flow"
         case "ended-codex-helm":
@@ -627,7 +631,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         var detail = SessionDetail(
             id: sessionID,
             title: title,
-            provider: isWorkingSession ? "claude" : "codex",
+            provider: (isWorkingSession || title == titleForFixture("narration")) ? "claude" : "codex",
             project: isClaudeFidelity ? "control-plane" : "longhouse",
             cwd: isClaudeFidelity ? "/Users/davidrose/git/zerg/control-plane" : "/Users/example/git/zerg/longhouse",
             gitBranch: "main",
@@ -1199,7 +1203,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     /// A realistic mixed transcript that exercises the redesign's demoted
-    /// tool-row CSS + TimelineBuilder pairing: assistant prose, a paired
+    /// tool-row CSS and shared-model pairing: assistant prose, a paired
     /// tool call+result, a passive group, and a dropped (orphaned) tool call.
     private static func toolFixtureEvents() -> [SessionEvent] {
         var events: [SessionEvent] = []
@@ -1394,6 +1398,52 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             ),
             makeEvent(id: 4, role: "assistant", content: "All 40 tests pass.", timestamp: fixedTimestamp(offset: 3)),
         ]
+    }
+
+    /// A Claude turn that narrates: each commentary message is followed by the
+    /// tool steps it announced, which render as dim one-line steps under it.
+    private static func narrationFixtureEvents() -> [SessionEvent] {
+        func tool(
+            _ id: Int, _ name: String, input: [String: JSONValue], output: String,
+            callId: String, intent: String? = nil, at offset: Int
+        ) -> [SessionEvent] {
+            [
+                SessionEvent(
+                    id: id, role: "assistant", contentText: nil,
+                    toolName: name, toolInputJSON: input, toolOutputText: nil,
+                    toolCallId: callId, toolCallState: .completed,
+                    timestamp: fixedTimestamp(offset: offset), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                    toolIntent: intent
+                ),
+                SessionEvent(
+                    id: id + 1, role: "tool", contentText: nil,
+                    toolName: name, toolInputJSON: nil, toolOutputText: output,
+                    toolCallId: callId, toolCallState: .completed,
+                    timestamp: fixedTimestamp(offset: offset + 1), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+                ),
+            ]
+        }
+        func say(_ id: Int, _ text: String, phase: String, at offset: Int) -> SessionEvent {
+            SessionEvent(
+                id: id, role: "assistant", contentText: text,
+                toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil, toolCallState: nil,
+                timestamp: fixedTimestamp(offset: offset), inActiveContext: true, isHeadBranch: true, inputOrigin: nil,
+                messagePhase: phase
+            )
+        }
+        var events: [SessionEvent] = [makeEvent(id: 1, role: "user", content: "The OAuth refresh test is flaky. Find out why and fix it.", timestamp: fixedTimestamp(offset: 0))]
+        events += [say(2, "I'll start by reading the refresh test and the token store it uses.", phase: "commentary", at: 3)]
+        events += tool(3, "Read", input: ["file_path": .string("/repo/tests/test_oauth_refresh.py")], output: "def test_refresh_rotates_token(): ...", callId: "n-read-1", at: 5)
+        events += tool(5, "Bash", input: ["command": .string("rg -n 'expires_at' src/auth"), "description": .string("Find where the token expiry is set")], output: "src/auth/store.py:41: expires_at = now() + ttl", callId: "n-bash-1", intent: "Find where the token expiry is set", at: 8)
+        events += [say(7, "The expiry is computed from the wall clock, so the test races it. I'll inject a clock.", phase: "commentary", at: 12)]
+        events += tool(8, "Edit", input: [
+                "file_path": .string("/repo/src/auth/store.py"),
+                "old_string": .string("expires_at = now() + ttl"),
+                "new_string": .string("expires_at = self.clock() + ttl\nself.last_refresh = self.clock()"),
+            ], output: "ok", callId: "n-edit-1", at: 14)
+        events += tool(10, "Bash", input: ["command": .string("uv run pytest tests/test_oauth_refresh.py -q"), "description": .string("Run the refresh test")], output: "1 passed in 0.12s", callId: "n-bash-2", intent: "Run the refresh test", at: 18)
+        events += [say(12, "Fixed. The token store takes a clock now, and the refresh test passes without sleeping.", phase: "final_answer", at: 22)]
+        return events
     }
 
     func sessionEventBodies(id: String, cursors: [String]) async throws -> SessionEventBodiesResponse {

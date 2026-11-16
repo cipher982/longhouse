@@ -134,9 +134,9 @@ export function toolDetails(item: TranscriptItem): string {
     ? '<div class="running-output-tail"><pre><code>' + escapeHtml(liveTail) + "</code></pre></div>"
     : "";
   return `
-        <details class="tool row"${bodyAttributes(item)}>
+        <details class="tool row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
-            <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
+            ${item.narrationTrail && item.toolIntent ? "" : `<span class="tool-title">${escapeHtml(item.title || "Tool")}</span>`}
             <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
             ${intentNote}
             <span class="tool-meta ${meta}"${metaAttr}>${escapeHtml(status)}</span>
@@ -178,7 +178,7 @@ export function activityGroup(item: TranscriptItem): string {
       ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>`
       : "";
   return `
-        <details class="passive row"${bodyAttributes(item)}>
+        <details class="passive row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Activity")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>

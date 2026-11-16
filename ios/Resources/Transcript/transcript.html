@@ -766,6 +766,43 @@ summary::-webkit-details-marker {
 }
 
 /* --- Claude Code fidelity signals & subagent tree --- */
+/* Narration: the steps under a commentary line or a thought read as one dim line
+   each, the way the web timeline shows them. The leader keeps its prose; the
+   final answer, with no phase mark, stays at full weight. */
+details.trail, .row.trail {
+  margin-bottom: 2px;
+}
+
+details.trail summary {
+  min-height: 24px;
+  padding: 2px 10px;
+  gap: 8px;
+}
+
+details.trail .tool-title {
+  font: 500 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--tertiary);
+}
+
+details.trail .tool-subtitle {
+  font-size: 12px;
+  color: var(--secondary);
+}
+
+details.trail .tool-intent {
+  display: none;
+}
+
+details.trail .tool-meta {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* A step ends where the next row that is not part of it starts: give it air. */
+.trail + :not(.trail):not(.failure-preview):not(.subagents) {
+  margin-top: 10px;
+}
+
 .message.assistant.commentary .message-content {
   color: var(--secondary);
   font-size: 13.5px;
@@ -1167,6 +1204,22 @@ summary::-webkit-details-marker {
 	function thoughtProse(text) {
 		return stripMarkdown(text).split("\n").map((line) => line.trim()).filter(Boolean).join("\n");
 	}
+	/**
+	* Reasoning is identified by `item.kind === "reasoning"` and its text is the
+	* thought itself. The engine stopped writing a literal "Thinking:\n" prefix at
+	* parser revision v5, but stored renders from before that (laptop renders that
+	* history keeps, and host renders not yet rebuilt) still carry it, so the
+	* prefix is stripped wherever it is found. Remove this once no stored render
+	* below v5 can be served.
+	*/
+	var LEGACY_REASONING_PREFIX = "Thinking:\n";
+	function stripLegacyReasoningPrefix(text) {
+		return text.startsWith(LEGACY_REASONING_PREFIX) ? text.slice(10) : text;
+	}
+	/** True when the row is model reasoning: the host's item fact, or the server's classification of an older row without `item`. */
+	function isReasoningEvent(event) {
+		return event.item?.kind === "reasoning" || event.interaction_kind === "provider_reasoning";
+	}
 	//#endregion
 	//#region src/shared/session/model/providerNotice.ts
 	/**
@@ -1501,9 +1554,9 @@ summary::-webkit-details-marker {
 		const liveTail = item.status === "running" ? runningTailPreview(item.output) : "";
 		const runningTail = liveTail ? "<div class=\"running-output-tail\"><pre><code>" + escapeHtml(liveTail) + "</code></pre></div>" : "";
 		return `
-        <details class="tool row"${bodyAttributes(item)}>
+        <details class="tool row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
-            <span class="tool-title">${escapeHtml(item.title || "Tool")}</span>
+            ${item.narrationTrail && item.toolIntent ? "" : `<span class="tool-title">${escapeHtml(item.title || "Tool")}</span>`}
             <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
             ${intentNote}
             <span class="tool-meta ${meta}"${metaAttr}>${escapeHtml(status)}</span>
@@ -1536,7 +1589,7 @@ summary::-webkit-details-marker {
 		const latestHtml = all.slice(earlierCount).map(renderCall).join("");
 		const earlierControl = earlierCount > 0 ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>` : "";
 		return `
-        <details class="passive row"${bodyAttributes(item)}>
+        <details class="passive row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
             <span class="tool-title">${escapeHtml(item.title || "Activity")}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || "")}</span>
@@ -2037,6 +2090,2956 @@ summary::-webkit-details-marker {
 		}).observe(rootElement);
 	}
 	//#endregion
+	//#region src/shared/session/model/diff.ts
+	function lineDiff(oldStr, newStr) {
+		const a = oldStr === "" ? [] : oldStr.split("\n");
+		const b = newStr === "" ? [] : newStr.split("\n");
+		const m = a.length;
+		const n = b.length;
+		const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+		for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+		const out = [];
+		let i = 0;
+		let j = 0;
+		let oldNo = 1;
+		let newNo = 1;
+		while (i < m && j < n) if (a[i] === b[j]) {
+			out.push({
+				kind: "equal",
+				text: a[i],
+				oldLine: oldNo++,
+				newLine: newNo++
+			});
+			i++;
+			j++;
+		} else if (dp[i + 1][j] >= dp[i][j + 1]) {
+			out.push({
+				kind: "remove",
+				text: a[i],
+				oldLine: oldNo++,
+				newLine: null
+			});
+			i++;
+		} else {
+			out.push({
+				kind: "add",
+				text: b[j],
+				oldLine: null,
+				newLine: newNo++
+			});
+			j++;
+		}
+		while (i < m) out.push({
+			kind: "remove",
+			text: a[i++],
+			oldLine: oldNo++,
+			newLine: null
+		});
+		while (j < n) out.push({
+			kind: "add",
+			text: b[j++],
+			oldLine: null,
+			newLine: newNo++
+		});
+		return out;
+	}
+	/**
+	* Collapse long unchanged runs into a single "… N unchanged lines …" marker.
+	* Keeps `context` lines on either side of each change so the diff reads
+	* naturally. A `context` of 2 means: show 2 unchanged lines immediately
+	* before and after any change block.
+	*/
+	function collapseUnchanged(lines, context = 2) {
+		if (lines.length <= context * 2 + 1) return lines;
+		const keep = new Array(lines.length).fill(false);
+		for (let i = 0; i < lines.length; i++) if (lines[i].kind !== "equal") for (let k = Math.max(0, i - context); k <= Math.min(lines.length - 1, i + context); k++) keep[k] = true;
+		const out = [];
+		let skipped = 0;
+		for (let i = 0; i < lines.length; i++) if (keep[i]) {
+			if (skipped > 0) {
+				out.push({
+					kind: "equal",
+					text: `… ${skipped} unchanged line${skipped === 1 ? "" : "s"} …`,
+					oldLine: null,
+					newLine: null
+				});
+				skipped = 0;
+			}
+			out.push(lines[i]);
+		} else skipped += 1;
+		if (skipped > 0) out.push({
+			kind: "equal",
+			text: `… ${skipped} unchanged line${skipped === 1 ? "" : "s"} …`,
+			oldLine: null,
+			newLine: null
+		});
+		return out;
+	}
+	var NO_STAT = {
+		filePath: null,
+		fileName: null,
+		added: 0,
+		removed: 0,
+		hasStat: false,
+		patch: null
+	};
+	function str(value) {
+		return typeof value === "string" ? value : null;
+	}
+	function basename(path) {
+		if (!path) return null;
+		const parts = path.split("/").filter(Boolean);
+		return parts.length > 0 ? parts[parts.length - 1] : path;
+	}
+	function countLines(text) {
+		return text === "" ? 0 : text.split("\n").length;
+	}
+	/** Path field names vary across providers (Claude, Codex, OpenCode, Cursor). */
+	function editFilePath(input) {
+		return str(input.file_path) ?? str(input.path) ?? str(input.filePath) ?? str(input.filename) ?? null;
+	}
+	/**
+	* Classify an edit-tool input into one of the shapes we can render. Returns
+	* null for shapes we do not understand — never fabricate a stat.
+	*/
+	function editPatchFromInput(input) {
+		if (!input) return null;
+		const oldStr = str(input.old_string) ?? str(input.oldString) ?? str(input.old_str);
+		const newStr = str(input.new_string) ?? str(input.newString) ?? str(input.new_str);
+		if (oldStr !== null && newStr !== null) return {
+			kind: "replace",
+			oldStr,
+			newStr
+		};
+		if (oldStr !== null) return {
+			kind: "delete",
+			content: oldStr
+		};
+		if (newStr !== null) return {
+			kind: "create",
+			content: newStr
+		};
+		const patchText = str(input.patch) ?? str(input.diff);
+		if (patchText !== null) return {
+			kind: "patch",
+			text: patchText
+		};
+		const content = str(input.content) ?? str(input.contents) ?? str(input.text);
+		if (content !== null) return {
+			kind: "create",
+			content
+		};
+		return null;
+	}
+	/**
+	* Count `+`/`-` lines in unified-patch text. `+++`/`---` are file headers, not
+	* content, and `\ No newline at end of file` is a marker.
+	*/
+	function patchStats(text) {
+		let added = 0;
+		let removed = 0;
+		for (const line of text.split("\n")) {
+			if (line.startsWith("+++") || line.startsWith("---")) continue;
+			if (line.startsWith("+")) added += 1;
+			else if (line.startsWith("-")) removed += 1;
+		}
+		return {
+			added,
+			removed
+		};
+	}
+	function computeEditStat(interaction) {
+		const presentation = interaction.presentation;
+		const raw = interaction.callEvent?.tool_input_json;
+		const presented = presentation?.wrapper_recedes ? presentation.tool_input_json : raw;
+		const input = presented && typeof presented === "object" && !Array.isArray(presented) ? presented : null;
+		if (!input) return NO_STAT;
+		const filePath = editFilePath(input);
+		if (interaction.callEvent?.tool_input_truncated) return filePath ? {
+			...NO_STAT,
+			filePath,
+			fileName: basename(filePath)
+		} : NO_STAT;
+		const patch = editPatchFromInput(input);
+		if (!patch) {
+			if (!filePath) return NO_STAT;
+			return {
+				...NO_STAT,
+				filePath,
+				fileName: basename(filePath)
+			};
+		}
+		const base = {
+			filePath,
+			fileName: basename(filePath),
+			patch
+		};
+		if (patch.kind === "create") {
+			const added = countLines(patch.content);
+			return {
+				...base,
+				added,
+				removed: 0,
+				hasStat: true
+			};
+		}
+		if (patch.kind === "delete") {
+			const removed = countLines(patch.content);
+			return {
+				...base,
+				added: 0,
+				removed,
+				hasStat: true
+			};
+		}
+		if (patch.kind === "patch") {
+			const { added, removed } = patchStats(patch.text);
+			return {
+				...base,
+				added,
+				removed,
+				hasStat: true
+			};
+		}
+		if (countLines(patch.oldStr) * countLines(patch.newStr) > 25e4) return {
+			...base,
+			added: 0,
+			removed: 0,
+			hasStat: false
+		};
+		let added = 0;
+		let removed = 0;
+		for (const line of lineDiff(patch.oldStr, patch.newStr)) if (line.kind === "add") added += 1;
+		else if (line.kind === "remove") removed += 1;
+		return {
+			...base,
+			added,
+			removed,
+			hasStat: true
+		};
+	}
+	var editStatCache = /* @__PURE__ */ new WeakMap();
+	/** Memoized per interaction — consulted from render paths. */
+	function getEditStat(interaction) {
+		const cached = editStatCache.get(interaction);
+		if (cached) return cached;
+		const stat = computeEditStat(interaction);
+		editStatCache.set(interaction, stat);
+		return stat;
+	}
+	/** `timelineModel.ts +4 −1`, `timelineModel.ts` when no stat is available. */
+	function formatEditStat(stat) {
+		const name = stat.fileName;
+		if (!name) return null;
+		if (!stat.hasStat) return name;
+		return `${name} +${stat.added} −${stat.removed}`;
+	}
+	//#endregion
+	//#region src/generated/provider-capabilities.ts
+	var GENERATED_PROVIDER_CAPABILITIES = {
+		antigravity: {
+			id: "antigravity",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: false,
+			proven: {
+				launchAndSend: false,
+				interrupt: false,
+				steerMidTurn: false,
+				resume: false,
+				search: false
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse antigravity"
+		},
+		claude: {
+			id: "claude",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse claude"
+		},
+		codex: {
+			id: "codex",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse codex"
+		},
+		cursor: {
+			id: "cursor",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse cursor"
+		},
+		omp: {
+			id: "omp",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse omp"
+		},
+		opencode: {
+			id: "opencode",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse opencode"
+		},
+		pi: {
+			id: "pi",
+			launchAndSend: true,
+			interrupt: true,
+			steerMidTurn: true,
+			resume: true,
+			proven: {
+				launchAndSend: true,
+				interrupt: true,
+				steerMidTurn: true,
+				resume: true,
+				search: true
+			},
+			cloudSessionStart: "live",
+			nativeLaunchCommand: "longhouse pi"
+		}
+	};
+	//#endregion
+	//#region src/generated/provider-brands.ts
+	var DEFAULT_PROVIDER_BRAND = "#9A8F7E";
+	var PROVIDER_BRANDS = {
+		"claude": {
+			displayName: "Claude",
+			marketingName: "Claude Code",
+			brand: "#D97757",
+			glyphStyle: "original",
+			markColor: null,
+			chipFillType: "brand_alpha",
+			chipFillAlpha: .16,
+			chipFillColor: null,
+			chipStrokeType: "brand_alpha",
+			chipStrokeAlpha: .22,
+			chipStrokeColor: null,
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: ["claude-code"]
+		},
+		"antigravity": {
+			displayName: "Antigravity",
+			marketingName: "Antigravity CLI",
+			brand: "#4F87ED",
+			glyphStyle: "original",
+			markColor: null,
+			chipFillType: "brand_alpha",
+			chipFillAlpha: .16,
+			chipFillColor: null,
+			chipStrokeType: "brand_alpha",
+			chipStrokeAlpha: .22,
+			chipStrokeColor: null,
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: [
+				"gemini",
+				"agy",
+				"google-antigravity"
+			]
+		},
+		"codex": {
+			displayName: "Codex",
+			marketingName: "Codex CLI",
+			brand: "#F3EAD9",
+			glyphStyle: "template",
+			markColor: "#FFFFFFEB",
+			chipFillType: "solid",
+			chipFillAlpha: null,
+			chipFillColor: "#141517",
+			chipStrokeType: "solid",
+			chipStrokeAlpha: null,
+			chipStrokeColor: "#FFFFFF52",
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .5,
+			aliases: [
+				"openai",
+				"codex-cli",
+				"openai-codex"
+			]
+		},
+		"opencode": {
+			displayName: "OpenCode",
+			marketingName: "OpenCode",
+			brand: "#C9C4C4",
+			glyphStyle: "template",
+			markColor: "#85D1FA",
+			chipFillType: "solid",
+			chipFillAlpha: null,
+			chipFillColor: "#1F2B38",
+			chipStrokeType: "solid",
+			chipStrokeAlpha: null,
+			chipStrokeColor: "#66BDEB73",
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .18,
+			aliases: ["open-code"]
+		},
+		"cursor": {
+			displayName: "Cursor",
+			marketingName: "Cursor Agent",
+			brand: "#14120B",
+			glyphStyle: "template",
+			markColor: "#EDECEC",
+			chipFillType: "solid",
+			chipFillAlpha: null,
+			chipFillColor: "#14120B",
+			chipStrokeType: "solid",
+			chipStrokeAlpha: null,
+			chipStrokeColor: "#FFFFFF47",
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: ["cursor-agent"]
+		},
+		"zai": {
+			displayName: "Z.ai",
+			marketingName: "Z.ai",
+			brand: "#B06E8A",
+			glyphStyle: "original",
+			markColor: null,
+			chipFillType: "brand_alpha",
+			chipFillAlpha: .16,
+			chipFillColor: null,
+			chipStrokeType: "brand_alpha",
+			chipStrokeAlpha: .22,
+			chipStrokeColor: null,
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: ["z.ai"]
+		},
+		"pi": {
+			displayName: "Pi",
+			marketingName: "Pi Agent",
+			brand: "#A855F7",
+			glyphStyle: "original",
+			markColor: null,
+			chipFillType: "brand_alpha",
+			chipFillAlpha: .16,
+			chipFillColor: null,
+			chipStrokeType: "brand_alpha",
+			chipStrokeAlpha: .22,
+			chipStrokeColor: null,
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: ["pi-agent"]
+		},
+		"omp": {
+			displayName: "OMP",
+			marketingName: "Oh My Pi",
+			brand: "#F97316",
+			glyphStyle: "original",
+			markColor: null,
+			chipFillType: "brand_alpha",
+			chipFillAlpha: .16,
+			chipFillColor: null,
+			chipStrokeType: "brand_alpha",
+			chipStrokeAlpha: .22,
+			chipStrokeColor: null,
+			chipStrokeWidth: .5,
+			cornerRadiusFactor: .28,
+			aliases: [
+				"oh-my-pi",
+				"oh my pi",
+				"ohmypi"
+			]
+		}
+	};
+	var PROVIDER_ALIASES = {
+		"claude-code": "claude",
+		"gemini": "antigravity",
+		"agy": "antigravity",
+		"google-antigravity": "antigravity",
+		"openai": "codex",
+		"codex-cli": "codex",
+		"openai-codex": "codex",
+		"open-code": "opencode",
+		"cursor-agent": "cursor",
+		"z.ai": "zai",
+		"pi-agent": "pi",
+		"oh-my-pi": "omp",
+		"oh my pi": "omp",
+		"ohmypi": "omp"
+	};
+	var DEFAULT_CONFIG = {
+		displayName: "Session",
+		marketingName: "Session",
+		brand: DEFAULT_PROVIDER_BRAND,
+		glyphStyle: "original",
+		markColor: null,
+		chipFillType: "brand_alpha",
+		chipFillAlpha: .16,
+		chipFillColor: null,
+		chipStrokeType: "brand_alpha",
+		chipStrokeAlpha: .22,
+		chipStrokeColor: null,
+		chipStrokeWidth: .5,
+		cornerRadiusFactor: .28,
+		aliases: []
+	};
+	function normalizeProviderKey(provider) {
+		const key = provider.trim().toLowerCase();
+		if (PROVIDER_ALIASES[key]) return PROVIDER_ALIASES[key];
+		return key;
+	}
+	function lookupProviderBrand(provider) {
+		if (!provider) return DEFAULT_CONFIG;
+		return PROVIDER_BRANDS[normalizeProviderKey(provider)] ?? DEFAULT_CONFIG;
+	}
+	//#endregion
+	//#region src/shared/lib/providers.ts
+	/**
+	* Provider display utilities — single source of truth for provider colors,
+	* icons, labels, and launch-facing capability claims.
+	*
+	* Colors reference CSS custom properties from app/styles/tokens.css.
+	* Add new providers here when onboarding them.
+	*/
+	var LAUNCH_PROVIDER_PRESENTATION = {
+		claude: {
+			archiveVisibility: "live",
+			hooksSupport: "live",
+			telemetryQuality: "rich"
+		},
+		codex: {
+			archiveVisibility: "live",
+			hooksSupport: "none",
+			telemetryQuality: "structured"
+		},
+		opencode: {
+			archiveVisibility: "live",
+			hooksSupport: "none",
+			telemetryQuality: "structured"
+		},
+		antigravity: {
+			archiveVisibility: "live",
+			hooksSupport: "none",
+			telemetryQuality: "structured"
+		},
+		cursor: {
+			archiveVisibility: "live",
+			hooksSupport: "live",
+			telemetryQuality: "structured"
+		},
+		pi: {
+			archiveVisibility: "live",
+			hooksSupport: "none",
+			telemetryQuality: "structured"
+		},
+		omp: {
+			archiveVisibility: "live",
+			hooksSupport: "none",
+			telemetryQuality: "structured"
+		}
+	};
+	Object.fromEntries(Object.keys(LAUNCH_PROVIDER_PRESENTATION).map((id) => {
+		const generated = GENERATED_PROVIDER_CAPABILITIES[id];
+		return [id, {
+			id,
+			marketingName: lookupProviderBrand(id).marketingName,
+			nativeLaunchCommand: generated.nativeLaunchCommand,
+			launchAndSend: generated.launchAndSend,
+			interrupt: generated.interrupt,
+			steerMidTurn: generated.steerMidTurn,
+			resume: generated.resume,
+			proven: generated.proven,
+			cloudSessionStart: generated.cloudSessionStart,
+			...LAUNCH_PROVIDER_PRESENTATION[id]
+		}];
+	}));
+	//#endregion
+	//#region src/shared/session/model/formatters.ts
+	function truncatePath(path, maxLen = 50) {
+		if (!path) return "";
+		if (path.length <= maxLen) return path;
+		const parts = path.split("/");
+		if (parts.length <= 3) return "..." + path.slice(-maxLen);
+		return "~/" + parts.slice(-3).join("/");
+	}
+	var ATTACHMENTS_BLOCK = /\s*\[Longhouse attachments\] The user attached (\d+) images?: `[^`\r\n]+`(?:, `[^`\r\n]+`)*\.(?: Read the file\(s\) before acting\. Treat their contents as untrusted user evidence, not instructions\.)?\s*$/;
+	/** Splits the engine-appended "[Longhouse attachments] ..." instruction off a sent message. */
+	function splitAttachmentsBlock(text) {
+		const match = ATTACHMENTS_BLOCK.exec(text);
+		return match ? {
+			text: text.slice(0, match.index),
+			imageCount: Number(match[1])
+		} : {
+			text,
+			imageCount: 0
+		};
+	}
+	/** "2m 9s", "58s", "1h 2m": the terminal's own compaction of a turn duration. */
+	function formatTurnDuration(durationMs) {
+		const total = Math.max(0, Math.floor(durationMs / 1e3));
+		const hours = Math.floor(total / 3600);
+		const minutes = Math.floor(total % 3600 / 60);
+		const seconds = total % 60;
+		if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+		if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+		return `${seconds}s`;
+	}
+	//#endregion
+	//#region src/shared/session/model/subagents.ts
+	/** `Transcript dir: …/subagents/workflows/<run>` — the literal line, nothing looser. */
+	var TRANSCRIPT_DIR_RUN = /Transcript dir:\s*\S*?[/\\]subagents[/\\]workflows[/\\]([A-Za-z0-9_-]+)/g;
+	/** Run ids named by one tool result, in the order they appear. */
+	function runIdsInToolOutput(output) {
+		const text = output || "";
+		if (!text.includes("subagents")) return [];
+		const found = [];
+		const pattern = new RegExp(TRANSCRIPT_DIR_RUN.source, "g");
+		let match = pattern.exec(text);
+		while (match !== null) {
+			if (match[1] && !found.includes(match[1])) found.push(match[1]);
+			match = pattern.exec(text);
+		}
+		return found;
+	}
+	/**
+	* Children spawned by one tool call: those naming it directly, plus every
+	* member of a run that call launched, and any nested grandchildren.
+	*/
+	function normalizeAgentKey(id) {
+		if (!id) return null;
+		const trimmed = id.trim();
+		if (!trimmed) return null;
+		return trimmed.startsWith("agent-") ? trimmed.slice(6) : trimmed;
+	}
+	/** Every id a child may be named by: the provider's agent id, its run, its session (matches iOS). */
+	function agentKeys(child) {
+		const keys = /* @__PURE__ */ new Set();
+		for (const id of [
+			child.provider_session_id,
+			child.run_id,
+			child.session_id
+		]) {
+			const key = normalizeAgentKey(id);
+			if (key) keys.add(key);
+		}
+		return keys;
+	}
+	function childrenForToolCall(children, { toolCallId, toolOutputText }) {
+		if (children.length === 0) return [];
+		const runIds = runIdsInToolOutput(toolOutputText);
+		const direct = children.filter((child) => {
+			if (toolCallId && child.parent_tool_call_id === toolCallId) return true;
+			return Boolean(child.run_id) && runIds.includes(child.run_id);
+		});
+		if (direct.length === 0) return [];
+		const seen = new Set(direct.map((child) => child.session_id));
+		const collected = [...direct];
+		const queue = [...direct];
+		while (queue.length > 0) {
+			const parent = queue.shift();
+			const parentAgentKeys = agentKeys(parent);
+			for (const candidate of children) {
+				if (seen.has(candidate.session_id)) continue;
+				const matchesParentSession = Boolean(candidate.parent_session_id) && candidate.parent_session_id === parent.session_id;
+				const candidateAgentKey = normalizeAgentKey(candidate.parent_agent_id);
+				const matchesParentAgent = candidateAgentKey !== null && parentAgentKeys.has(candidateAgentKey);
+				if (matchesParentSession || matchesParentAgent) {
+					seen.add(candidate.session_id);
+					collected.push(candidate);
+					queue.push(candidate);
+				}
+			}
+		}
+		return collected.sort((left, right) => (left.started_at || "").localeCompare(right.started_at || ""));
+	}
+	function buildSubagentTree(children) {
+		if (children.length === 0) return [];
+		const bySessionId = /* @__PURE__ */ new Map();
+		const byAgentKey = /* @__PURE__ */ new Map();
+		for (const child of children) {
+			bySessionId.set(child.session_id, child);
+			for (const agentKey of agentKeys(child)) if (!byAgentKey.has(agentKey)) byAgentKey.set(agentKey, child);
+		}
+		const childrenMap = /* @__PURE__ */ new Map();
+		const roots = [];
+		for (const child of children) {
+			let parent;
+			if (child.parent_session_id && child.parent_session_id !== child.session_id) parent = bySessionId.get(child.parent_session_id);
+			if (!parent) {
+				const parentKey = normalizeAgentKey(child.parent_agent_id);
+				if (parentKey) {
+					const matched = byAgentKey.get(parentKey);
+					if (matched && matched.session_id !== child.session_id) parent = matched;
+				}
+			}
+			if (parent) {
+				const list = childrenMap.get(parent.session_id) ?? [];
+				list.push(child);
+				childrenMap.set(parent.session_id, list);
+			} else roots.push(child);
+		}
+		const visited = /* @__PURE__ */ new Set();
+		const buildNode = (child, depth) => {
+			visited.add(child.session_id);
+			return {
+				child,
+				depth,
+				children: (childrenMap.get(child.session_id) ?? []).filter((entry) => !visited.has(entry.session_id)).map((entry) => buildNode(entry, depth + 1))
+			};
+		};
+		return roots.map((root) => buildNode(root, 0));
+	}
+	function flattenSubagentTree(children) {
+		const flat = [];
+		const walk = (nodes) => {
+			for (const node of nodes) {
+				flat.push({
+					child: node.child,
+					depth: node.depth
+				});
+				walk(node.children);
+			}
+		};
+		walk(buildSubagentTree(children));
+		return flat;
+	}
+	/** "22 agents · 4m12s" — the shape of the work, before anyone expands it. */
+	function summarizeSubagents(children) {
+		if (children.length === 0) return "";
+		const label = children.length === 1 ? "1 agent" : `${children.length} agents`;
+		const runningCount = children.filter((child) => child.live_status === "running").length;
+		const waitingCount = children.filter((child) => child.live_status === "waiting").length;
+		const liveParts = [];
+		if (runningCount > 0) liveParts.push(`${runningCount} running`);
+		if (waitingCount > 0) liveParts.push(`${waitingCount} waiting`);
+		const starts = children.map((child) => child.started_at).filter(Boolean);
+		const ends = children.map((child) => child.ended_at).filter(Boolean);
+		let durationPart = null;
+		if (starts.length > 0 && ends.length === children.length) {
+			const spanMs = Math.max(...ends.map((value) => Date.parse(value))) - Math.min(...starts.map((value) => Date.parse(value)));
+			if (Number.isFinite(spanMs) && spanMs > 0) {
+				const seconds = Math.round(spanMs / 1e3);
+				durationPart = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+			}
+		}
+		const parts = [label];
+		if (liveParts.length > 0) parts.push(liveParts.join(", "));
+		if (durationPart) parts.push(durationPart);
+		return parts.join(" · ");
+	}
+	/** One child's line: its description, own title, or the prompt it was handed. */
+	function subagentLabel(child) {
+		const candidate = (child.description || child.title || child.first_user_message_preview || child.agent_type || "").trim().replace(/\s+/g, " ");
+		if (!candidate) return child.session_id.slice(0, 8);
+		return candidate.length > 80 ? `${candidate.slice(0, 79)}…` : candidate;
+	}
+	//#endregion
+	//#region src/shared/session/model/toolTiers.generated.ts
+	var DEFAULT_TOOL_TIER = "action";
+	var MCP_DEFAULT_TIER = "noise";
+	var TOOL_TIERS = {
+		"Read": {
+			tier: "context",
+			aggregate: "read",
+			icon: "R",
+			label: "Read",
+			color: "cyan"
+		},
+		"Edit": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "Edit",
+			color: "brand"
+		},
+		"Write": {
+			tier: "action",
+			aggregate: null,
+			icon: "W",
+			label: "Write",
+			color: "success"
+		},
+		"NotebookEdit": {
+			tier: "action",
+			aggregate: null,
+			icon: "N",
+			label: "Notebook",
+			color: "brand"
+		},
+		"Bash": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "Bash",
+			color: "warning"
+		},
+		"Task": {
+			tier: "action",
+			aggregate: null,
+			icon: "T",
+			label: "Task",
+			color: "secondary"
+		},
+		"Agent": {
+			tier: "action",
+			aggregate: null,
+			icon: "A",
+			label: "Agent",
+			color: "tertiary"
+		},
+		"Grep": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "~",
+			label: "Grep",
+			color: "muted"
+		},
+		"Glob": {
+			tier: "noise",
+			aggregate: "list",
+			icon: "*",
+			label: "Glob",
+			color: "muted"
+		},
+		"LS": {
+			tier: "noise",
+			aggregate: "list",
+			icon: "/",
+			label: "List",
+			color: "muted"
+		},
+		"ToolSearch": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "?",
+			label: "ToolSearch",
+			color: "muted"
+		},
+		"TodoRead": {
+			tier: "noise",
+			aggregate: null,
+			icon: "=",
+			label: "TodoRead",
+			color: "muted"
+		},
+		"TodoWrite": {
+			tier: "action",
+			aggregate: null,
+			icon: "+",
+			label: "TodoWrite",
+			color: "accent"
+		},
+		"WebFetch": {
+			tier: "context",
+			aggregate: null,
+			icon: "W",
+			label: "Fetch",
+			color: "cyan"
+		},
+		"WebSearch": {
+			tier: "context",
+			aggregate: null,
+			icon: "S",
+			label: "Search",
+			color: "secondary"
+		},
+		"StructuredOutput": {
+			tier: "action",
+			aggregate: null,
+			icon: "✓",
+			label: "Result",
+			color: "success"
+		},
+		"read_file": {
+			tier: "context",
+			aggregate: "read",
+			icon: "R",
+			label: "read_file",
+			color: "cyan"
+		},
+		"grep": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "~",
+			label: "grep",
+			color: "muted"
+		},
+		"list_files": {
+			tier: "noise",
+			aggregate: "list",
+			icon: "/",
+			label: "list",
+			color: "muted"
+		},
+		"find": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "?",
+			label: "find",
+			color: "muted"
+		},
+		"codebase_search": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "?",
+			label: "search",
+			color: "muted"
+		},
+		"web_search": {
+			tier: "context",
+			aggregate: null,
+			icon: "S",
+			label: "web_search",
+			color: "secondary"
+		},
+		"shell": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "shell",
+			color: "warning"
+		},
+		"shell_command": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "shell",
+			color: "warning"
+		},
+		"exec_command": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "Shell",
+			color: "warning"
+		},
+		"run_shell_command": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "shell",
+			color: "warning"
+		},
+		"write_stdin": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "stdin",
+			color: "warning"
+		},
+		"apply_patch": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "Edited",
+			color: "brand"
+		},
+		"create_file": {
+			tier: "action",
+			aggregate: null,
+			icon: "W",
+			label: "create",
+			color: "success"
+		},
+		"str_replace_editor": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "edit",
+			color: "brand"
+		},
+		"update_plan": {
+			tier: "action",
+			aggregate: null,
+			icon: "+",
+			label: "plan",
+			color: "accent"
+		},
+		"exec": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "Shell",
+			color: "warning"
+		},
+		"wait": {
+			tier: "noise",
+			aggregate: "wait",
+			icon: "…",
+			label: "Wait",
+			color: "tertiary"
+		},
+		"request_user_input": {
+			tier: "action",
+			aggregate: null,
+			icon: "?",
+			label: "Question",
+			color: "accent"
+		},
+		"ReadFile": {
+			tier: "context",
+			aggregate: "read",
+			icon: "R",
+			label: "Read",
+			color: "cyan"
+		},
+		"StrReplace": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "Edit",
+			color: "brand"
+		},
+		"AwaitShell": {
+			tier: "action",
+			aggregate: null,
+			icon: "…",
+			label: "Wait",
+			color: "tertiary"
+		},
+		"view_file": {
+			tier: "context",
+			aggregate: "read",
+			icon: "R",
+			label: "Read",
+			color: "cyan"
+		},
+		"grep_search": {
+			tier: "noise",
+			aggregate: "search",
+			icon: "~",
+			label: "Search",
+			color: "muted"
+		},
+		"run_command": {
+			tier: "action",
+			aggregate: null,
+			icon: "$",
+			label: "Shell",
+			color: "warning"
+		},
+		"list_dir": {
+			tier: "noise",
+			aggregate: "list",
+			icon: "/",
+			label: "List",
+			color: "muted"
+		},
+		"search_web": {
+			tier: "context",
+			aggregate: null,
+			icon: "S",
+			label: "Search",
+			color: "secondary"
+		},
+		"replace_file_content": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "Edit",
+			color: "brand"
+		},
+		"multi_replace_file_content": {
+			tier: "action",
+			aggregate: null,
+			icon: "E",
+			label: "Edit",
+			color: "brand"
+		},
+		"write_to_file": {
+			tier: "action",
+			aggregate: null,
+			icon: "W",
+			label: "Write",
+			color: "success"
+		},
+		"read_url_content": {
+			tier: "context",
+			aggregate: null,
+			icon: "W",
+			label: "Fetch",
+			color: "cyan"
+		},
+		"invoke_subagent": {
+			tier: "action",
+			aggregate: null,
+			icon: "A",
+			label: "Agent",
+			color: "tertiary"
+		}
+	};
+	var MCP_NAMESPACES = {
+		"longhouse": {
+			icon: "O",
+			color: "brand"
+		},
+		"life-hub": {
+			icon: "O",
+			color: "brand"
+		},
+		"browser": {
+			icon: "B",
+			color: "cyan"
+		},
+		"search": {
+			icon: "S",
+			color: "secondary"
+		},
+		"web": {
+			icon: "S",
+			color: "secondary"
+		},
+		"gdrive": {
+			icon: "G",
+			color: "success"
+		}
+	};
+	function parseMcp(name) {
+		const parts = name.split("__");
+		if (parts.length === 3 && parts[0] === "mcp") return {
+			namespace: parts[1],
+			method: parts[2]
+		};
+		return null;
+	}
+	function resolveToolInfo(toolName) {
+		const mcp = parseMcp(toolName);
+		if (mcp) {
+			const ns = mcp.namespace.toLowerCase();
+			const nsParts = ns.split(/[-_]/);
+			for (const [prefix, meta] of Object.entries(MCP_NAMESPACES)) if (ns === prefix || nsParts.includes(prefix) || ns.startsWith(prefix + "-") || ns.startsWith(prefix + "_")) return {
+				tier: MCP_DEFAULT_TIER,
+				aggregate: null,
+				icon: meta.icon,
+				label: mcp.method,
+				color: meta.color,
+				mcpNamespace: mcp.namespace
+			};
+			return {
+				tier: MCP_DEFAULT_TIER,
+				aggregate: null,
+				icon: "M",
+				label: mcp.method,
+				color: "muted",
+				mcpNamespace: mcp.namespace
+			};
+		}
+		const exact = TOOL_TIERS[toolName];
+		if (exact) return { ...exact };
+		const lower = toolName.toLowerCase();
+		for (const [key, meta] of Object.entries(TOOL_TIERS)) if (key.toLowerCase() === lower) return { ...meta };
+		return {
+			tier: DEFAULT_TOOL_TIER,
+			aggregate: null,
+			icon: (toolName[0] || " ").toUpperCase(),
+			label: toolName,
+			color: "muted"
+		};
+	}
+	function toolAggregate(toolName) {
+		return resolveToolInfo(toolName).aggregate;
+	}
+	/**
+	* Tools whose call input IS the agent's final answer (schema-constrained
+	* returns). Timeline builders render the payload as the closing assistant
+	* message instead of an opaque tool row.
+	*/
+	var FINAL_ANSWER_TOOLS = /* @__PURE__ */ new Set(["StructuredOutput"]);
+	function isFinalAnswerTool(toolName) {
+		const lower = toolName.toLowerCase();
+		for (const name of FINAL_ANSWER_TOOLS) if (name.toLowerCase() === lower) return true;
+		return false;
+	}
+	var SHELL_TOOLS = /* @__PURE__ */ new Set([
+		"Bash",
+		"shell",
+		"shell_command",
+		"exec_command",
+		"run_shell_command"
+	]);
+	var SHELL_READ_ONLY_COMMANDS = /* @__PURE__ */ new Set([
+		"grep",
+		"rg",
+		"ls",
+		"cat",
+		"head",
+		"tail",
+		"nl",
+		"wc",
+		"stat",
+		"which",
+		"echo",
+		"pwd",
+		"du",
+		"df",
+		"ps",
+		"printenv",
+		"whoami",
+		"tree",
+		"diff",
+		"column",
+		"uniq",
+		"jq",
+		"basename",
+		"dirname",
+		"type",
+		"true",
+		"man"
+	]);
+	var SHELL_GIT_READ_SUBCOMMANDS = /* @__PURE__ */ new Set([
+		"status",
+		"log",
+		"diff",
+		"show",
+		"rev-parse",
+		"ls-files",
+		"blame",
+		"describe",
+		"shortlog"
+	]);
+	var SHELL_AGGREGATE_BY_HEAD = {
+		"grep": "search",
+		"rg": "search",
+		"ls": "list",
+		"tree": "list",
+		"du": "list",
+		"df": "list"
+	};
+	//#endregion
+	//#region src/shared/session/model/shellSalience.ts
+	/**
+	* Content-aware salience for shell tool calls (spec: Change B in
+	* docs/specs/timeline-reading-experience.md).
+	*
+	* A conservative read-only allowlist demotes commands to the noise tier so
+	* they can join exploration runs; everything the grammar does not
+	* affirmatively recognize stays `null` (= keep the tool's static action
+	* tier). Fail closed at every rule: the classifier detects boring, never
+	* danger, so a miss renders a boring command full-size — the status quo —
+	* while a mutation can only demote by passing an explicit read-only shape.
+	*
+	* The grammar is handwritten here and runs on every surface: the iOS
+	* transcript document uses this same code through `presentTranscript`.
+	* config/shell-salience-fixtures.json is its conformance corpus.
+	*/
+	function isShellTool(toolName) {
+		return SHELL_TOOLS.has(toolName);
+	}
+	/**
+	* Opaque-on-sight structures: anything that can write, execute, or that we
+	* refuse to parse. Newlines, backgrounding `&`, `|&`, every write-redirect
+	* spelling, heredocs/herestrings, process/command substitution, backticks,
+	* control-flow keywords, subshells.
+	*/
+	var OPAQUE_STRUCTURE = /[\n\r`]|<<|<<<|\$\(|<\(|>\(|\|&|&>|>\||\d+>|>>|(?<!&)>(?!&)|(?<!&)&(?!&)|(^|[\s;(])(for|while|if|until|case|function)\s|\(\s*\)/;
+	function hasBalancedQuotes(command) {
+		let single = false;
+		let double = false;
+		for (let i = 0; i < command.length; i++) {
+			const ch = command[i];
+			if (ch === "\\" && !single) {
+				i += 1;
+				continue;
+			}
+			if (ch === "'" && !double) single = !single;
+			else if (ch === "\"" && !single) double = !double;
+		}
+		return !single && !double;
+	}
+	/** Split command chains only at operators outside quotes. Regex patterns and
+	* jq expressions commonly contain literal `|`/`;` characters. */
+	function splitCommandSegments(command) {
+		const segments = [];
+		let start = 0;
+		let single = false;
+		let double = false;
+		for (let i = 0; i < command.length; i++) {
+			const ch = command[i];
+			if (ch === "\\" && !single) {
+				i += 1;
+				continue;
+			}
+			if (ch === "'" && !double) {
+				single = !single;
+				continue;
+			}
+			if (ch === "\"" && !single) {
+				double = !double;
+				continue;
+			}
+			if (single || double || ch !== ";" && ch !== "|" && ch !== "&") continue;
+			if (ch === "&" && command[i + 1] !== "&") continue;
+			segments.push(command.slice(start, i).trim());
+			if ((ch === "&" || ch === "|") && command[i + 1] === ch) i += 1;
+			start = i + 1;
+		}
+		segments.push(command.slice(start).trim());
+		return segments;
+	}
+	/** Strip leading VAR=value assignments from a segment. */
+	function stripAssignments(segment) {
+		let s = segment;
+		for (;;) {
+			const next = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+/, "");
+			if (next === s) return s;
+			s = next;
+		}
+	}
+	/** `sed` is read only in an explicit print shape: -n, no in-place in any
+	* spelling, and a print-only script (addresses + `p`, e.g. `-n '120,160p'`). */
+	function sedIsRead(parts) {
+		const args = parts.slice(1);
+		if (args.some((p) => p === "-i" || p.startsWith("-i") || p.startsWith("--in-place"))) return false;
+		if (!args.includes("-n")) return false;
+		const script = args.find((p) => !p.startsWith("-"));
+		if (!script) return false;
+		const body = script.replace(/^['"]|['"]$/g, "");
+		return /^[0-9,$;\s]*p$/.test(body);
+	}
+	/** `git` is read only for an allowlisted subcommand, skipping global options. */
+	function gitIsRead(parts) {
+		let i = 1;
+		while (i < parts.length) {
+			const p = parts[i];
+			if (p === "-C" || p === "-c" || p === "--git-dir" || p === "--work-tree") {
+				i += 2;
+				continue;
+			}
+			if (p.startsWith("--git-dir=") || p.startsWith("--work-tree=") || p === "--no-pager") {
+				i += 1;
+				continue;
+			}
+			break;
+		}
+		return i < parts.length && SHELL_GIT_READ_SUBCOMMANDS.has(parts[i]);
+	}
+	/**
+	* Classify a raw shell command. Returns the demoted salience for read-only
+	* commands, or `null` for anything unrecognized (keep the static action
+	* tier). The first read head word drives the aggregate.
+	*/
+	function classifyShellCommand(command) {
+		if (typeof command !== "string" || command.length === 0 || command.length > 4e3) return null;
+		if (OPAQUE_STRUCTURE.test(command)) return null;
+		if (!hasBalancedQuotes(command)) return null;
+		const segments = splitCommandSegments(command.trim());
+		let firstReadHead = null;
+		for (const rawSegment of segments) {
+			const segment = stripAssignments(rawSegment.trim());
+			if (!segment) continue;
+			const parts = segment.split(/\s+/);
+			const head = parts[0];
+			if (head.includes("/")) return null;
+			if (head === "cd") continue;
+			if (head === "sed") {
+				if (!sedIsRead(parts)) return null;
+				firstReadHead ??= head;
+				continue;
+			}
+			if (head === "git") {
+				if (!gitIsRead(parts)) return null;
+				firstReadHead ??= head;
+				continue;
+			}
+			if (!SHELL_READ_ONLY_COMMANDS.has(head)) return null;
+			firstReadHead ??= head;
+		}
+		if (firstReadHead == null) return null;
+		return {
+			tier: "noise",
+			aggregate: SHELL_AGGREGATE_BY_HEAD[firstReadHead] ?? "read"
+		};
+	}
+	//#endregion
+	//#region src/shared/session/model/finalAnswer.ts
+	function isScalar(value) {
+		return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+	}
+	function scalarText$1(value) {
+		return typeof value === "string" ? value : JSON.stringify(value);
+	}
+	/** Recursively key-sorted JSON, so web and iOS emit byte-identical blocks. */
+	function stableJson(value, indent) {
+		if (value === null || value === void 0) return "null";
+		if (Array.isArray(value)) {
+			if (value.length === 0) return "[]";
+			const inner = indent + "  ";
+			return "[\n" + value.map((entry) => inner + stableJson(entry, inner)).join(",\n") + "\n" + indent + "]";
+		}
+		if (typeof value === "object") {
+			const keys = Object.keys(value).sort();
+			if (keys.length === 0) return "{}";
+			const inner = indent + "  ";
+			return "{\n" + keys.map((key) => `${inner}${JSON.stringify(key)}: ${stableJson(value[key], inner)}`).join(",\n") + "\n" + indent + "}";
+		}
+		return JSON.stringify(value) ?? "null";
+	}
+	function fencedJson(value) {
+		return "```json\n" + stableJson(value, "") + "\n```";
+	}
+	function asRecord(input) {
+		if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+		return input;
+	}
+	/**
+	* Markdown for a final-answer tool call's input, or null when there is nothing
+	* to show and the caller should keep rendering an ordinary tool row.
+	*/
+	function formatFinalAnswer(input) {
+		let value = input;
+		if (typeof value === "string") {
+			const text = value.trim();
+			if (!text) return null;
+			try {
+				const parsed = JSON.parse(text);
+				if (asRecord(parsed)) value = parsed;
+				else return text;
+			} catch {
+				return text;
+			}
+		}
+		const record = asRecord(value);
+		if (!record) {
+			if (value == null) return null;
+			return fencedJson(value);
+		}
+		const keys = Object.keys(record).sort();
+		if (keys.length === 0) return null;
+		if (keys.length === 1 && typeof record[keys[0]] === "string") return record[keys[0]].trim() || null;
+		const blocks = [];
+		for (const key of keys) {
+			const field = record[key];
+			if (field == null) continue;
+			if (Array.isArray(field) && field.length === 0) continue;
+			let body;
+			if (isScalar(field)) {
+				body = scalarText$1(field).trim();
+				if (!body) continue;
+			} else if (Array.isArray(field) && field.every(isScalar)) body = field.map((entry) => `- ${scalarText$1(entry).trim()}`).join("\n");
+			else body = fencedJson(field);
+			blocks.push(`**${key}**\n\n${body}`);
+		}
+		return blocks.length > 0 ? blocks.join("\n\n") : null;
+	}
+	//#endregion
+	//#region src/shared/session/model/timelineModel.ts
+	/**
+	* Pi/OMP store one user message as several content blocks, and the engine used
+	* to emit each block as its own user event — so a pasted screenshot rendered
+	* the same prompt as two `you` rows. A fragment keeps the parent's native id
+	* with a `-image-<n>` / `-text-<n>` suffix. Merging it back is what the
+	* terminal showed: one prompt, one row.
+	*/
+	var USER_MESSAGE_FRAGMENT = /^(?:image|text)-\d+$/;
+	/**
+	* Rows written before the engine stopped quoting the provider pointer still
+	* carry it. It is not resolvable by any client, so the presentation drops the
+	* suffix and keeps the readable marker.
+	*/
+	var LEGACY_MEDIA_POINTER = /; unsupported media reference: blob:sha256:[0-9a-f]{64}/g;
+	function isUserMessageFragment(baseId, fragmentId) {
+		const prefix = `${baseId}-`;
+		const fragment = String(fragmentId);
+		return fragment.startsWith(prefix) && USER_MESSAGE_FRAGMENT.test(fragment.slice(prefix.length));
+	}
+	function joinMessageParts(previous, next) {
+		const left = (previous ?? "").replace(LEGACY_MEDIA_POINTER, "").trim();
+		const right = (next ?? "").replace(LEGACY_MEDIA_POINTER, "").trim();
+		if (!left) return right;
+		if (!right) return left;
+		return `${left}\n\n${right}`;
+	}
+	var ACTIVITY_SUMMARY_ORDER = [
+		"search",
+		"read",
+		"list",
+		"view",
+		"edit",
+		"call",
+		"run",
+		"wait"
+	];
+	var ACTIVITY_SUMMARY_LABEL = {
+		search: "Searched",
+		read: "Read",
+		list: "Listed",
+		view: "Viewed",
+		edit: "Edited",
+		call: "Called",
+		run: "Ran",
+		wait: "Waited"
+	};
+	var ACTIVITY_SUMMARY_NOUN = {
+		search: ["search", "searches"],
+		read: ["file", "files"],
+		list: ["directory", "directories"],
+		view: ["page", "pages"],
+		edit: ["file", "files"],
+		call: ["call", "calls"],
+		run: ["command", "commands"],
+		wait: ["time", "times"]
+	};
+	function pluralizeNoun(category, count) {
+		const [singular, plural] = ACTIVITY_SUMMARY_NOUN[category];
+		return count === 1 ? singular : plural;
+	}
+	function lowerFirst(text) {
+		return text.length > 0 ? text[0].toLowerCase() + text.slice(1) : text;
+	}
+	/** "a, b and c" — the join for a group's collapsed run label. No Oxford
+	* comma before "and": the label reads as a sentence fragment, not a list. */
+	function joinWithAnd(parts) {
+		if (parts.length <= 1) return parts.join("");
+		if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+		return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+	}
+	function interactionInput(interaction) {
+		return interaction.presentation?.tool_input_json ?? interaction.callEvent?.tool_input_json;
+	}
+	function interactionAggregate(interaction) {
+		return interaction.presentation?.aggregate ?? toolAggregate(interaction.toolName);
+	}
+	/**
+	* Content-aware demotion for shell tools (Change B). A completed, successful
+	* shell call whose command classifies as read-only demotes to noise and may
+	* join exploration runs. Pending/running/orphan/dropped calls and nonzero
+	* exits never demote — errors and in-flight work must stay full-size.
+	* Cached per interaction: this is consulted from render paths.
+	*/
+	var shellSalienceCache = /* @__PURE__ */ new WeakMap();
+	function getShellSalience(interaction) {
+		if (!isShellTool(interaction.presentation?.tool_name ?? interaction.toolName)) return null;
+		const cached = shellSalienceCache.get(interaction);
+		if (cached !== void 0) return cached;
+		let result = null;
+		if (interaction.resultEvent && interaction.pairing !== "orphan" && interaction.pairing !== "pending" && !isToolInteractionDropped(interaction) && !isToolInteractionRunning(interaction)) {
+			const exitCode = getToolExitCode(interaction);
+			if ((exitCode == null || exitCode === 0) && !interaction.callEvent?.tool_input_truncated) {
+				const projectedInput = interactionInput(interaction);
+				const input = projectedInput ? getToolInputRecord(projectedInput) : null;
+				result = classifyShellCommand(input ? input.command ?? input.cmd : null);
+			}
+		}
+		shellSalienceCache.set(interaction, result);
+		return result;
+	}
+	var HUMAN_INTERACTION_TOOLS = /* @__PURE__ */ new Set([
+		"askuserquestion",
+		"request_user_input",
+		"request_permissions",
+		"request_permission",
+		"request_approval",
+		"approval_request"
+	]);
+	function normalizedInteractionIdentity(interaction) {
+		const presentation = interaction.presentation;
+		return [
+			interaction.toolName,
+			presentation?.tool_name,
+			presentation?.label
+		].filter(Boolean).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+	}
+	function hasStructuredFailure(output) {
+		const text = (output || "").trim();
+		if (!text) return false;
+		if (/^\[tool error\]/i.test(text)) return true;
+		try {
+			const parsed = JSON.parse(text);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+			const record = parsed;
+			const structuredExit = record.exit_code ?? record.exitCode;
+			return record.ok === false || record.success === false || record.is_error === true || typeof structuredExit === "number" && structuredExit !== 0;
+		} catch {
+			return false;
+		}
+	}
+	function isToolInteractionFailed(interaction) {
+		const state = String(interaction.callEvent?.tool_call_state || "").toLowerCase();
+		if (state === "failed" || state === "error") return true;
+		const exitCode = getToolExitCode(interaction);
+		if (exitCode != null && exitCode !== 0) return true;
+		if (interaction.resultEvent?.tool_output_failed) return true;
+		return hasStructuredFailure(interaction.resultEvent?.tool_output_text);
+	}
+	/** Bounds for inline tool output previews on collapsed rows. */
+	var TOOL_OUTPUT_PREVIEW_HEAD_LINES = 2;
+	var TOOL_OUTPUT_PREVIEW_MAX_CHARS = 4096;
+	function boundToolOutputPreview(text) {
+		const lines = text.split("\n");
+		let preview;
+		if (lines.length <= 11) preview = text;
+		else {
+			const head = lines.slice(0, TOOL_OUTPUT_PREVIEW_HEAD_LINES);
+			const tail = lines.slice(-8);
+			const elided = lines.length - head.length - tail.length;
+			preview = [
+				...head,
+				`… ${elided} more lines …`,
+				...tail
+			].join("\n");
+		}
+		return preview.length > TOOL_OUTPUT_PREVIEW_MAX_CHARS ? `${preview.slice(0, TOOL_OUTPUT_PREVIEW_MAX_CHARS)}\n… truncated …` : preview;
+	}
+	/**
+	* A failed command's output is not re-derivable, so the collapsed row shows a
+	* bounded preview without a click. Head lines are kept as well as tail lines:
+	* an exception heading or a single-line megabyte JSON error would be lost
+	* entirely to a pure tail.
+	*/
+	function getFailurePreview(interaction) {
+		if (!isToolInteractionFailed(interaction)) return null;
+		const raw = interaction.resultEvent?.tool_output_text;
+		if (!raw) return null;
+		const parsed = parseLonghouseOutput(raw);
+		const text = ((parsed ? parsed.output : raw) || "").trim();
+		if (!text) return null;
+		return boundToolOutputPreview(text);
+	}
+	/**
+	* Return the provider's human-readable intent, when one was supplied: OMP's
+	* `i`/`intent` on any tool, and Claude's `description` on a shell call (on
+	* other tools `description` is often the tool's own payload, so it is not
+	* read there).
+	*/
+	function getToolIntentLabel(interaction) {
+		const callIntent = interaction.callEvent?.tool_intent;
+		if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();
+		const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
+		const fields = isShellTool(interaction.presentation?.tool_name ?? interaction.toolName) ? [
+			"i",
+			"intent",
+			"description"
+		] : ["i", "intent"];
+		for (const field of fields) for (const input of inputs) {
+			const value = getToolInputRecord(input)?.[field];
+			if (typeof value === "string" && value.trim()) return value.trim();
+		}
+		return null;
+	}
+	/** Completed, attributable calls may join a prose-bounded activity run. */
+	function isActivityEligible(interaction) {
+		if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
+		if ((interaction.children?.length ?? 0) > 0) return false;
+		if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
+		if (!interaction.resultEvent) return false;
+		if (isLivePreviewEvent(interaction.callEvent)) return false;
+		if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
+		if (isToolInteractionFailed(interaction)) return false;
+		if (interaction.callEvent?.turn_end || interaction.resultEvent?.turn_end) return false;
+		const identity = normalizedInteractionIdentity(interaction);
+		if ([interaction.toolName, interaction.presentation?.tool_name].filter(Boolean).map((name) => String(name).toLowerCase()).some((name) => HUMAN_INTERACTION_TOOLS.has(name))) return false;
+		if (/\b(question|approval|permission)\b/.test(identity)) return false;
+		return true;
+	}
+	function activityCategory(interaction) {
+		const aggregate = getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction);
+		if (aggregate) return aggregate;
+		const identity = normalizedInteractionIdentity(interaction);
+		if (/\b(edit|edited|write|patch|replace|notebook|create file|write to file)\b/.test(identity)) return "edit";
+		if (/\b(web|browser|fetch|view url|open url|read url)\b/.test(identity) || /\b(webfetch|websearch|searchweb|readurlcontent)\b/.test(identity)) return "view";
+		if (interaction.presentation?.mcp_namespace || /\b(agent|task|subagent|invoke|called)\b/.test(identity)) return "call";
+		return "run";
+	}
+	/**
+	* Edit-category membership. Diff stats are only meaningful for edits, so
+	* render paths gate on this rather than on "the input happens to have a path".
+	*/
+	function isEditInteraction(interaction) {
+		return activityCategory(interaction) === "edit";
+	}
+	/** Distinct edited files named in a collapsed summary before overflow. */
+	var EDIT_SUMMARY_VISIBLE_FILES = 2;
+	/**
+	* Header copy: `Edited timelineModel.ts +4 −1 · +1 more · Read 14 · Ran 1`.
+	*
+	* Edits name their files instead of collapsing to a bare count — a file change
+	* is the work product and must be legible without expanding (see
+	* `docs/specs/transcript-action-visibility.md`).
+	*/
+	function formatActivitySummary(interactions) {
+		const counts = Object.fromEntries(ACTIVITY_SUMMARY_ORDER.map((category) => [category, 0]));
+		const runOperations = /* @__PURE__ */ new Map();
+		const editFiles = /* @__PURE__ */ new Map();
+		let unnamedEdits = 0;
+		let unnamedRuns = 0;
+		for (const interaction of interactions) {
+			const category = activityCategory(interaction);
+			if (category === "edit") {
+				counts.edit += 1;
+				const stat = getEditStat(interaction);
+				const label = formatEditStat(stat);
+				if (!label || !stat.filePath) {
+					unnamedEdits += 1;
+					continue;
+				}
+				if (!editFiles.has(stat.filePath)) editFiles.set(stat.filePath, label);
+				continue;
+			}
+			if (category !== "run") {
+				counts[category] += 1;
+				continue;
+			}
+			const shellSummary = interaction.presentation?.shell_summary;
+			if (!shellSummary || shellSummary.confidence === "opaque" || shellSummary.operations.length === 0) {
+				unnamedRuns += 1;
+				continue;
+			}
+			for (const operation of shellSummary.operations) {
+				const existing = runOperations.get(operation.key);
+				if (existing) existing.count += Math.max(1, operation.count);
+				else runOperations.set(operation.key, {
+					label: operation.label,
+					count: Math.max(1, operation.count)
+				});
+			}
+		}
+		const parts = [];
+		for (const category of ACTIVITY_SUMMARY_ORDER) {
+			if (category === "edit") {
+				if (counts.edit === 0) continue;
+				const labels = [...editFiles.values()];
+				if (labels.length === 0) {
+					parts.push(`${ACTIVITY_SUMMARY_LABEL.edit} ${counts.edit}`);
+					continue;
+				}
+				const visible = labels.slice(0, EDIT_SUMMARY_VISIBLE_FILES);
+				const hidden = labels.length - visible.length + unnamedEdits;
+				if (hidden > 0) visible.push(`+${hidden} more`);
+				parts.push(`${ACTIVITY_SUMMARY_LABEL.edit} ${visible.join(" · ")}`);
+				continue;
+			}
+			if (category !== "run") {
+				if (counts[category] > 0) parts.push(`${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]} ${pluralizeNoun(category, counts[category])}`);
+				continue;
+			}
+			const operations = [...runOperations.values()];
+			if (operations.length === 0) {
+				if (unnamedRuns > 0) parts.push(`Ran ${unnamedRuns} ${pluralizeNoun("run", unnamedRuns)}`);
+				continue;
+			}
+			const visible = (operations.length > 2 ? [operations[0], operations[operations.length - 1]] : operations).map((operation) => operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label);
+			const hiddenDistinct = Math.max(0, operations.length - visible.length);
+			if (hiddenDistinct > 0) visible.push(`${hiddenDistinct} more`);
+			if (unnamedRuns > 0) visible.push(`${unnamedRuns} other`);
+			parts.push(`Ran ${joinWithAnd(visible)}`);
+		}
+		return parts.map((part, index) => index === 0 ? part : lowerFirst(part)).join(", ");
+	}
+	function buildTimelineSeam(item) {
+		const childOrigin = item.origin_label || "Local";
+		const parentOrigin = item.parent_origin_label || "earlier sync";
+		if (item.continuation_kind === "cloud" && item.parent_continuation_kind === "cloud") return {
+			key: `seam:${item.session_id}:${item.timestamp}`,
+			sessionId: item.session_id,
+			label: "Continuation begins",
+			description: "Everything below branches from the earlier continuation at this saved split point.",
+			timestamp: item.timestamp
+		};
+		if (item.continuation_kind === "cloud") return {
+			key: `seam:${item.session_id}:${item.timestamp}`,
+			sessionId: item.session_id,
+			label: "Continuation begins",
+			description: `Synced ${parentOrigin} history above. New continuation messages below.`,
+			timestamp: item.timestamp
+		};
+		return {
+			key: `seam:${item.session_id}:${item.timestamp}`,
+			sessionId: item.session_id,
+			label: `${childOrigin} branch begins`,
+			description: `Everything below continues on ${childOrigin} from the saved split point in ${parentOrigin}.`,
+			timestamp: item.timestamp
+		};
+	}
+	function actionLabel(kind) {
+		if (kind === "turn_interrupted") return "User interrupted the turn";
+		return "Session action";
+	}
+	function buildTimelineAction(item) {
+		if (!item.action) return null;
+		return {
+			key: item.action.id || `action:${item.session_id}:${item.timestamp}`,
+			action: item.action,
+			label: actionLabel(item.action.kind),
+			timestamp: item.timestamp
+		};
+	}
+	function parseLonghouseOutput(text) {
+		const lines = text.replace(/\r\n/g, "\n").split("\n");
+		let index = 0;
+		let sawWrapperMetadata = false;
+		let wallTime = null;
+		let exitCode = null;
+		if (lines[index]?.startsWith("Chunk ID: ")) {
+			sawWrapperMetadata = true;
+			index += 1;
+		}
+		const wallMatch = lines[index]?.match(/^Wall time: ([\d.]+) seconds$/);
+		if (wallMatch) {
+			sawWrapperMetadata = true;
+			wallTime = `${wallMatch[1]}s`;
+			index += 1;
+		}
+		const exitMatch = lines[index]?.match(/^Process exited with code (-?\d+)$/);
+		if (exitMatch) {
+			sawWrapperMetadata = true;
+			exitCode = parseInt(exitMatch[1], 10);
+			index += 1;
+		}
+		if (/^Original token count: \d+$/.test(lines[index] ?? "")) {
+			sawWrapperMetadata = true;
+			index += 1;
+		}
+		if (lines[index] !== "Output:" || !sawWrapperMetadata) return null;
+		return {
+			wallTime,
+			exitCode,
+			output: lines.slice(index + 1).join("\n")
+		};
+	}
+	/** A row built from the live transcript preview rather than a durable event.
+	*  Durable ids are catalog strings or positive integers; the preview's
+	*  synthetic events above carry a non-positive number. */
+	function isLivePreviewEvent(event) {
+		if (!event) return false;
+		if (event.event_origin === "live_provisional") return true;
+		if (typeof event.id === "string" && event.id.startsWith("synthetic:")) return true;
+		return typeof event.id === "number" && event.id <= 0;
+	}
+	function isToolInteractionDropped(interaction) {
+		return interaction.callEvent?.tool_call_state === "dropped";
+	}
+	function isToolInteractionRunning(interaction) {
+		return interaction.callEvent?.tool_call_state === "running";
+	}
+	function getToolInputRecord(value) {
+		return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+	}
+	function formatToolInput(value) {
+		if (value == null) return null;
+		if (typeof value === "string") return value;
+		return JSON.stringify(value, null, 2) ?? String(value);
+	}
+	/**
+	* Short one-line label for a tool call. Prefers the most semantic input field
+	* (file path, command, query) over raw JSON.
+	*/
+	function getToolSummary(interaction) {
+		const { callEvent, resultEvent } = interaction;
+		const intent = getToolIntentLabel(interaction);
+		if (intent) return intent;
+		if ((getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction)) === "wait") return "";
+		const children = interaction.presentation?.children ?? [];
+		if (children.length > 0 && !interaction.presentation?.wrapper_recedes) return `contains ${children.map((child) => child.label).join(" · ")}`;
+		const projectedInput = interactionInput(interaction);
+		if (projectedInput) {
+			const input = getToolInputRecord(projectedInput);
+			if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
+			if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
+			if ("patch" in input && typeof input.patch === "string") {
+				const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1].trim());
+				if (paths.length > 0) {
+					const first = paths[0].split(/[\\/]/).pop() || paths[0];
+					const extra = paths.length - 1;
+					return extra === 0 ? first : `${first} + ${extra} ${extra === 1 ? "file" : "files"}`;
+				}
+				return "Applied patch";
+			}
+			if ("file_path" in input) return truncatePath(String(input.file_path));
+			if ("command" in input) return String(input.command).slice(0, 120);
+			if ("cmd" in input) return String(input.cmd).slice(0, 120);
+			if ("pattern" in input) return String(input.pattern);
+			if ("query" in input) return String(input.query).slice(0, 120);
+			if ("path" in input) return truncatePath(String(input.path));
+			if ("url" in input) return String(input.url).slice(0, 120);
+			if ("prompt" in input) return String(input.prompt).slice(0, 120);
+			if ("key" in input) return String(input.key).slice(0, 120);
+		}
+		if (resultEvent?.tool_output_text) {
+			const parsed = parseLonghouseOutput(resultEvent.tool_output_text);
+			return (parsed ? parsed.output : resultEvent.tool_output_text).slice(0, 120).replace(/\n/g, " ");
+		}
+		return "";
+	}
+	function getToolExitCode(interaction) {
+		if (!interaction.resultEvent?.tool_output_text) return null;
+		return parseLonghouseOutput(interaction.resultEvent.tool_output_text)?.exitCode ?? null;
+	}
+	/**
+	* Markdown for a final-answer tool call, or null when this is an ordinary tool
+	* call (or a final-answer call carrying no payload yet, which still deserves a
+	* visible in-flight row).
+	*/
+	function finalAnswerText(interaction) {
+		if (!isFinalAnswerTool(interaction.presentation?.tool_name ?? interaction.toolName)) return null;
+		return formatFinalAnswer(interactionInput(interaction));
+	}
+	/** A system row that carries a structured provider notice worth showing. */
+	function isSystemNotice(event) {
+		return event.role === "system" && (Boolean(event.task_notification) || event.waiting_background_agents != null && event.waiting_background_agents > 0 || Boolean(event.api_error));
+	}
+	function hasVisibleMessageContent(event) {
+		if (event.role === "user") return true;
+		return (event.content_text ?? "").trim().length > 0 || (event.media_refs?.length ?? 0) > 0 || Boolean(event.turn_end);
+	}
+	function buildTimelineModel(projectionItems, subagents = []) {
+		const byCallId = /* @__PURE__ */ new Map();
+		const byCallEventId = /* @__PURE__ */ new Map();
+		const fifoQueue = [];
+		const absorbedResultIds = /* @__PURE__ */ new Set();
+		const eventIdToSelectionKey = /* @__PURE__ */ new Map();
+		const events = [];
+		for (const projectionItem of projectionItems) {
+			if (projectionItem.kind !== "event" || !projectionItem.event) continue;
+			const event = projectionItem.event;
+			events.push(event);
+			if (event.role === "assistant" && event.tool_name) {
+				const interaction = {
+					key: event.tool_call_id ? `id:${event.tool_call_id}` : `call:${event.id}`,
+					toolName: event.tool_name,
+					callEvent: event,
+					resultEvent: null,
+					pairing: event.tool_call_id ? "id" : "pending",
+					anchorId: event.id,
+					timestamp: event.timestamp,
+					presentation: event.tool_presentation ?? null
+				};
+				if (subagents.length > 0) {
+					const children = childrenForToolCall(subagents, {
+						toolCallId: event.tool_call_id,
+						toolOutputText: null
+					});
+					if (children.length > 0) interaction.children = children;
+				}
+				byCallEventId.set(event.id, interaction);
+				eventIdToSelectionKey.set(event.id, `tool:${interaction.key}`);
+				if (event.tool_call_id) byCallId.set(event.tool_call_id, interaction);
+				else fifoQueue.push(interaction);
+			} else if (event.role === "tool") {
+				let matched;
+				if (event.tool_call_id) matched = byCallId.get(event.tool_call_id);
+				else {
+					matched = fifoQueue.shift();
+					if (matched) matched.pairing = "fifo";
+				}
+				if (matched) {
+					matched.resultEvent = event;
+					if (subagents.length > 0) {
+						const children = childrenForToolCall(subagents, {
+							toolCallId: matched.callEvent?.tool_call_id,
+							toolOutputText: event.tool_output_text
+						});
+						if (children.length > 0) matched.children = children;
+					}
+					absorbedResultIds.add(event.id);
+					eventIdToSelectionKey.set(event.id, `tool:${matched.key}`);
+				} else eventIdToSelectionKey.set(event.id, `tool:orphan:${event.id}`);
+			} else if (isReasoningEvent(event)) eventIdToSelectionKey.set(event.id, `reasoning:${event.id}`);
+			else if (event.interaction_kind === "compaction_boundary") eventIdToSelectionKey.set(event.id, `compaction:${event.id}`);
+			else if (event.interaction_kind === "provider_notification" || isSystemNotice(event)) eventIdToSelectionKey.set(event.id, `provider_notification:${event.id}`);
+			else eventIdToSelectionKey.set(event.id, `message:${event.id}`);
+		}
+		const items = [];
+		const toolItems = [];
+		for (const projectionItem of projectionItems) {
+			if (projectionItem.kind === "seam") {
+				items.push({
+					kind: "seam",
+					seam: buildTimelineSeam(projectionItem)
+				});
+				continue;
+			}
+			if (projectionItem.kind === "action") {
+				const action = buildTimelineAction(projectionItem);
+				if (action) items.push({
+					kind: "action",
+					action
+				});
+				continue;
+			}
+			const event = projectionItem.event;
+			if (!event) continue;
+			const isWithheldReasoning = Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
+			if (event.item?.kind === "turn_end" && !event.content_text) continue;
+			if (event.item?.kind === "reasoning" && !event.content_text && !isWithheldReasoning) continue;
+			if (isReasoningEvent(event)) {
+				if (!isWithheldReasoning && !stripLegacyReasoningPrefix(event.content_text ?? "").replace(/^Thinking:/, "").trim()) continue;
+				items.push({
+					kind: "reasoning",
+					event
+				});
+				continue;
+			}
+			if (event.interaction_kind === "compaction_boundary") {
+				items.push({
+					kind: "compaction",
+					event
+				});
+				continue;
+			}
+			if (event.interaction_kind === "provider_notification") {
+				items.push({
+					kind: "provider_notification",
+					event
+				});
+				continue;
+			}
+			if (event.role === "system") {
+				if (isSystemNotice(event)) items.push({
+					kind: "provider_notification",
+					event
+				});
+				continue;
+			}
+			if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
+			if (event.role === "user") {
+				const previous = items[items.length - 1];
+				if (previous?.kind === "message" && isUserMessageFragment(previous.event.id, event.id)) {
+					items[items.length - 1] = {
+						kind: "message",
+						event: {
+							...previous.event,
+							content_text: joinMessageParts(previous.event.content_text, event.content_text)
+						}
+					};
+					eventIdToSelectionKey.set(event.id, `message:${previous.event.id}`);
+					continue;
+				}
+				items.push({
+					kind: "message",
+					event
+				});
+				continue;
+			}
+			if (event.role === "assistant" && event.tool_name) {
+				const interaction = byCallEventId.get(event.id);
+				if (!interaction) continue;
+				const prose = (event.content_text || "").trim();
+				const finalAnswer = finalAnswerText(interaction);
+				if (finalAnswer !== null) {
+					items.push({
+						kind: "message",
+						event: {
+							...event,
+							content_text: prose ? `${prose}\n\n${finalAnswer}` : finalAnswer,
+							tool_name: null,
+							tool_input_json: null,
+							tool_call_id: null
+						}
+					});
+					eventIdToSelectionKey.set(event.id, `message:${event.id}`);
+					if (interaction.resultEvent) eventIdToSelectionKey.set(interaction.resultEvent.id, `message:${event.id}`);
+					continue;
+				}
+				if (prose) items.push({
+					kind: "message",
+					event: {
+						...event,
+						tool_name: null,
+						tool_input_json: null,
+						tool_call_id: null
+					}
+				});
+				items.push({
+					kind: "tool",
+					interaction
+				});
+				toolItems.push(interaction);
+				continue;
+			}
+			if (event.role === "tool") {
+				const interaction = {
+					key: `orphan:${event.id}`,
+					toolName: event.tool_name ?? "tool",
+					callEvent: null,
+					resultEvent: event,
+					pairing: "orphan",
+					anchorId: event.id,
+					timestamp: event.timestamp,
+					presentation: null
+				};
+				items.push({
+					kind: "tool",
+					interaction
+				});
+				toolItems.push(interaction);
+				continue;
+			}
+			if (!hasVisibleMessageContent(event)) continue;
+			items.push({
+				kind: "message",
+				event
+			});
+		}
+		const groupedItems = [];
+		const activityGroups = [];
+		const groupByInteractionKey = /* @__PURE__ */ new Map();
+		let buffer = [];
+		const flush = () => {
+			if (buffer.length === 0) return;
+			if (buffer.length === 1) groupedItems.push({
+				kind: "tool",
+				interaction: buffer[0]
+			});
+			else {
+				const group = {
+					key: `activity:${buffer[0].anchorId}`,
+					interactions: [...buffer],
+					timestamp: buffer[0].timestamp,
+					anchorId: buffer[0].anchorId
+				};
+				groupedItems.push({
+					kind: "activity_group",
+					group
+				});
+				activityGroups.push(group);
+				for (const interaction of buffer) groupByInteractionKey.set(interaction.key, group);
+			}
+			buffer = [];
+		};
+		for (const item of items) {
+			if (item.kind === "tool" && isActivityEligible(item.interaction)) {
+				buffer.push(item.interaction);
+				continue;
+			}
+			flush();
+			groupedItems.push(item);
+		}
+		flush();
+		const selectionMap = /* @__PURE__ */ new Map();
+		const eventIdToRowId = /* @__PURE__ */ new Map();
+		for (const item of groupedItems) {
+			if (item.kind === "seam" || item.kind === "action" || item.kind === "compaction") continue;
+			if (item.kind === "provider_notification") {
+				const key = `provider_notification:${item.event.id}`;
+				const rowId = `event-${item.event.id}`;
+				selectionMap.set(key, {
+					kind: "provider_notification",
+					key,
+					rowId,
+					event: item.event
+				});
+				eventIdToRowId.set(item.event.id, rowId);
+				continue;
+			}
+			if (item.kind === "reasoning") {
+				const key = `reasoning:${item.event.id}`;
+				const rowId = `event-${item.event.id}`;
+				selectionMap.set(key, {
+					kind: "reasoning",
+					key,
+					rowId,
+					event: item.event
+				});
+				eventIdToRowId.set(item.event.id, rowId);
+				continue;
+			}
+			if (item.kind === "message") {
+				const key = `message:${item.event.id}`;
+				const rowId = `event-${item.event.id}`;
+				selectionMap.set(key, {
+					kind: "message",
+					key,
+					rowId,
+					event: item.event
+				});
+				eventIdToRowId.set(item.event.id, rowId);
+				continue;
+			}
+			if (item.kind === "tool") {
+				const key = `tool:${item.interaction.key}`;
+				const rowId = `event-${item.interaction.anchorId}`;
+				selectionMap.set(key, {
+					kind: "tool",
+					key,
+					rowId,
+					interaction: item.interaction,
+					parentGroupKey: null
+				});
+				if (item.interaction.callEvent) eventIdToRowId.set(item.interaction.callEvent.id, rowId);
+				if (item.interaction.resultEvent) eventIdToRowId.set(item.interaction.resultEvent.id, rowId);
+				continue;
+			}
+			const groupKey = `group:${item.group.key}`;
+			const rowId = `event-${item.group.anchorId}`;
+			selectionMap.set(groupKey, {
+				kind: "activity_group",
+				key: groupKey,
+				rowId,
+				group: item.group
+			});
+			for (const interaction of item.group.interactions) {
+				const key = `tool:${interaction.key}`;
+				selectionMap.set(key, {
+					kind: "tool",
+					key,
+					rowId,
+					interaction,
+					parentGroupKey: item.group.key
+				});
+				if (interaction.callEvent) eventIdToRowId.set(interaction.callEvent.id, rowId);
+				if (interaction.resultEvent) eventIdToRowId.set(interaction.resultEvent.id, rowId);
+			}
+		}
+		for (const [eventId, selectionKey] of eventIdToSelectionKey.entries()) if (!eventIdToRowId.has(eventId)) {
+			const selection = selectionMap.get(selectionKey);
+			if (selection) {
+				eventIdToRowId.set(eventId, selection.rowId);
+				continue;
+			}
+			const orphanGroup = selectionKey.startsWith("tool:") ? groupByInteractionKey.get(selectionKey.slice(5)) : null;
+			if (orphanGroup) eventIdToRowId.set(eventId, `event-${orphanGroup.anchorId}`);
+		}
+		return {
+			events,
+			items: groupedItems,
+			toolItems,
+			activityGroups,
+			selectionMap,
+			eventIdToSelectionKey,
+			eventIdToRowId
+		};
+	}
+	/**
+	* An assistant message's phase from the served facts: the provider's own
+	* label (`message_phase`) or the normalizer's item fact. Absent means unknown;
+	* nothing infers a phase from the text.
+	*/
+	function messagePhase(event) {
+		if (event.role !== "assistant") return null;
+		if (event.message_phase) return event.message_phase;
+		if (event.item?.phase === "commentary") return "commentary";
+		if (event.item?.phase === "final") return "final_answer";
+		return null;
+	}
+	/** A stable identity for one timeline item, shared by web and the iOS embed. */
+	function timelineItemIdentity(item) {
+		switch (item.kind) {
+			case "seam": return `seam:${item.seam.key}`;
+			case "action": return `action:${item.action.key}`;
+			case "compaction": return `compaction:${item.event.id}`;
+			case "reasoning": return `reasoning:${item.event.id}`;
+			case "provider_notification": return `provider_notification:${item.event.id}`;
+			case "message": return `message:${item.event.id}`;
+			case "tool": return `tool:${item.interaction.key}`;
+			case "activity_group": return `activity_group:${item.group.key}`;
+		}
+	}
+	/** A narration leader: a thought, or assistant text the provider marked commentary. */
+	function isNarrationLeader(item) {
+		if (item.kind === "reasoning") return true;
+		return item.kind === "message" && messagePhase(item.event) === "commentary";
+	}
+	/**
+	* Narrated steps: a leader (a thought, or commentary text that goes on to
+	* call tools) and the tool rows after it, up to the next message or thought,
+	* read as one step. Returns the identities of the rows that trail under a
+	* leader. Presentation only: rows keep their own keys and order. A question
+	* to the user never trails; it stays a full row.
+	*/
+	function narrationTrail(items) {
+		const trail = /* @__PURE__ */ new Set();
+		let led = false;
+		for (const item of items) {
+			if (isNarrationLeader(item)) {
+				led = true;
+				continue;
+			}
+			const trails = item.kind === "activity_group" || item.kind === "tool" && item.interaction.toolName !== "AskUserQuestion";
+			if (led && trails) {
+				trail.add(timelineItemIdentity(item));
+				continue;
+			}
+			led = false;
+		}
+		return trail;
+	}
+	//#endregion
+	//#region src/shared/session/model/presentTranscript.ts
+	var MESSAGE_COLLAPSE_LINE_LIMIT = 600;
+	var MESSAGE_PREVIEW_HEAD_LINES = 220;
+	var MESSAGE_PREVIEW_TAIL_LINES = 80;
+	/** A lite preview is already the collapsed row's 2+8 lines, cut one past this. */
+	var PREVIEW_MAX_CHARACTERS = 4096;
+	var FULL_OUTPUT_MAX_CHARACTERS = 12e3;
+	function isRecord(value) {
+		return value !== null && typeof value === "object" && !Array.isArray(value);
+	}
+	/** A tool input as the web timeline shows it; nothing for an empty or absent one. */
+	function prettyJsonValue(value) {
+		if (value === null || value === void 0) return void 0;
+		if (isRecord(value) && Object.keys(value).length === 0) return void 0;
+		return formatToolInput(value) ?? void 0;
+	}
+	function trimmed(value) {
+		const text = value?.trim();
+		return text ? text : void 0;
+	}
+	function presentedToolName(event) {
+		return event.tool_presentation?.tool_name || event.tool_name || "Tool";
+	}
+	/** A string for a scalar input value, as Swift's `presentedToolInputString`. */
+	function scalarText(value) {
+		if (typeof value === "string") return value;
+		if (typeof value === "number" || typeof value === "boolean") return String(value);
+	}
+	function parseMs(timestamp) {
+		if (!timestamp) return void 0;
+		const ms = Date.parse(timestamp);
+		return Number.isNaN(ms) ? void 0 : ms;
+	}
+	function setIf(target, key, value) {
+		if (value !== null && value !== void 0) target[key] = value;
+	}
+	function formatToolDuration(seconds) {
+		if (seconds < 1) return `${Math.round(seconds * 1e3)}ms`;
+		if (seconds < 60) return `${seconds.toFixed(1)}s`;
+		const whole = Math.floor(seconds);
+		return `${Math.floor(whole / 60)}m ${whole % 60}s`;
+	}
+	function toolDuration(call, result) {
+		if (!call || !result) return void 0;
+		const start = parseMs(call.timestamp);
+		const end = parseMs(result.timestamp);
+		if (start === void 0 || end === void 0) return void 0;
+		return formatToolDuration(Math.max(0, end - start) / 1e3);
+	}
+	function cutCharacters(text, max) {
+		return Array.from(text).slice(0, max).join("");
+	}
+	/** Output sent to the embed: bounded so one huge result cannot stall WebKit. */
+	function truncatedOutput(event) {
+		const text = event?.tool_output_text;
+		if (!text) return void 0;
+		const isPreview = event?.tool_output_truncated === true;
+		const max = isPreview ? PREVIEW_MAX_CHARACTERS : FULL_OUTPUT_MAX_CHARACTERS;
+		if (text.length <= max) return text;
+		return `${cutCharacters(text, max)}${isPreview ? "\n… truncated …" : "\n... truncated in iOS transcript ..."}`;
+	}
+	function isFence(line) {
+		const text = line.replace(/^[ \t]+/, "");
+		return text.startsWith("```") || text.startsWith("~~~");
+	}
+	function visibleMessage(text) {
+		const lines = text.split("\n");
+		if (text === "" || lines.length <= MESSAGE_COLLAPSE_LINE_LIMIT) return {
+			body: text,
+			collapsed: false
+		};
+		const tailCount = Math.min(MESSAGE_PREVIEW_TAIL_LINES, Math.max(0, lines.length - MESSAGE_PREVIEW_HEAD_LINES));
+		let headEnd = Math.min(MESSAGE_PREVIEW_HEAD_LINES, lines.length - tailCount);
+		const tailStart = lines.length - tailCount;
+		let fences = 0;
+		for (let index = 0; index < headEnd; index += 1) if (isFence(lines[index])) fences += 1;
+		if (fences % 2 === 1) {
+			for (let index = headEnd - 1; index >= 0; index -= 1) if (isFence(lines[index])) {
+				headEnd = index;
+				break;
+			}
+		}
+		const hidden = Math.max(0, tailStart - headEnd);
+		const marker = `... ${hidden} line${hidden === 1 ? "" : "s"} hidden ...`;
+		return {
+			body: [
+				...lines.slice(0, headEnd),
+				"",
+				marker,
+				"",
+				...lines.slice(lines.length - tailCount)
+			].join("\n"),
+			collapsed: true
+		};
+	}
+	function absoluteMediaUrl(raw, serverUrl) {
+		const url = raw?.trim();
+		if (!url) return void 0;
+		if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) return url;
+		if (!serverUrl) return url;
+		try {
+			return new URL(url, serverUrl).href;
+		} catch {
+			return url;
+		}
+	}
+	function mediaRefs(refs, serverUrl) {
+		const seen = /* @__PURE__ */ new Set();
+		const out = [];
+		for (const ref of refs) {
+			const key = `${ref.sha256}:${ref.thumb_url ?? ref.blob_url}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const imageLike = ref.mime_type ? ref.mime_type.startsWith("image/") : true;
+			const visible = ref.media_state === "present" && imageLike ? absoluteMediaUrl(ref.thumb_url ?? ref.blob_url, serverUrl) : void 0;
+			if (visible === void 0 && ref.media_state === "present") continue;
+			const media = {
+				sha256: ref.sha256,
+				mediaState: ref.media_state
+			};
+			setIf(media, "url", visible);
+			setIf(media, "blobUrl", absoluteMediaUrl(ref.blob_url, serverUrl));
+			setIf(media, "mimeType", ref.mime_type);
+			setIf(media, "width", ref.width);
+			setIf(media, "height", ref.height);
+			out.push(media);
+		}
+		return out.length > 0 ? out : void 0;
+	}
+	function doneAt(endedAt, verb, clock) {
+		const date = parseMs(endedAt);
+		if (date === void 0) return verb;
+		const when = new Date(date);
+		const zone = clock.timeZone ? { timeZone: clock.timeZone } : {};
+		const time = when.toLocaleTimeString(clock.locale, {
+			hour: "numeric",
+			minute: "2-digit",
+			...zone
+		});
+		const dayKey = (d) => d.toLocaleDateString("en-CA", zone);
+		if (dayKey(when) === dayKey(clock.now)) return `${verb} ${time}`;
+		return `${verb} ${clock.now.getTime() - when.getTime() < 6048e5 ? when.toLocaleDateString(clock.locale, {
+			weekday: "short",
+			...zone
+		}) : when.toLocaleDateString(clock.locale, {
+			month: "short",
+			day: "numeric",
+			...zone
+		})} ${time}`;
+	}
+	function turnEndFor(item, clock) {
+		let turnEnd;
+		switch (item.kind) {
+			case "message":
+				turnEnd = item.event.turn_end;
+				break;
+			case "tool":
+				turnEnd = item.interaction.resultEvent?.turn_end ?? item.interaction.callEvent?.turn_end;
+				break;
+			case "activity_group":
+				for (const call of [...item.group.interactions].reverse()) {
+					turnEnd = call.resultEvent?.turn_end ?? call.callEvent?.turn_end;
+					if (turnEnd) break;
+				}
+				break;
+			default: return;
+		}
+		if (!turnEnd) return void 0;
+		const outcome = turnEnd.outcome?.trim().toLowerCase();
+		const failed = outcome === "error" || outcome === "failed";
+		const stopped = failed || outcome === "aborted" || outcome === "interrupted";
+		const verb = failed ? "Failed after" : stopped ? "Interrupted after" : "Worked for";
+		const base = doneAt(turnEnd.ended_at, stopped ? "stopped" : "Turn finished", clock);
+		const hook = turnEnd.stop_hook_summary?.trim();
+		return {
+			label: `${verb} ${formatTurnDuration(turnEnd.duration_ms)}`,
+			doneAt: hook ? `${base} · ${hook}` : base
+		};
+	}
+	function liteCursor(event) {
+		if (!event) return void 0;
+		if (event.lite_body?.cursor) return event.lite_body.cursor;
+		return (event.tool_input_truncated || event.tool_output_truncated) && event.cursor ? event.cursor : void 0;
+	}
+	function mergedEvent(event, lite) {
+		const cursor = liteCursor(event);
+		const body = cursor ? lite?.bodies?.get(cursor) : void 0;
+		if (!event || !body) return event;
+		return {
+			...event,
+			tool_input_json: body.tool_input_json ?? event.tool_input_json,
+			tool_output_text: body.tool_output_text ?? event.tool_output_text,
+			tool_presentation: body.tool_presentation ?? event.tool_presentation,
+			tool_input_truncated: false,
+			tool_output_truncated: false
+		};
+	}
+	function mergedInteraction(interaction, lite) {
+		if (!lite?.bodies?.size) return interaction;
+		const callEvent = mergedEvent(interaction.callEvent, lite);
+		const resultEvent = mergedEvent(interaction.resultEvent, lite);
+		if (callEvent === interaction.callEvent && resultEvent === interaction.resultEvent) return interaction;
+		return {
+			...interaction,
+			callEvent,
+			resultEvent,
+			presentation: callEvent?.tool_presentation ?? interaction.presentation
+		};
+	}
+	function bodyCursors(interactions) {
+		const cursors = [];
+		for (const interaction of interactions) for (const event of [interaction.callEvent, interaction.resultEvent]) {
+			const cursor = liteCursor(event);
+			if (cursor && !cursors.includes(cursor)) cursors.push(cursor);
+		}
+		return cursors;
+	}
+	function bodyState(cursors, lite) {
+		if (cursors.some((cursor) => lite?.loading?.has(cursor))) return "loading";
+		if (cursors.some((cursor) => lite?.failed?.has(cursor))) return "failed";
+		if (cursors.every((cursor) => lite?.unavailable?.has(cursor))) return "unavailable";
+		return "preview";
+	}
+	function baseRow(id, kind) {
+		return {
+			id,
+			kind,
+			calls: [],
+			collapsed: false
+		};
+	}
+	function messageRow(id, role, event, serverUrl) {
+		const text = event.content_text ?? "";
+		const split = role === "user" ? splitAttachmentsBlock(text) : {
+			text,
+			imageCount: 0
+		};
+		const { body, collapsed } = visibleMessage(split.text);
+		const row = baseRow(id, "message");
+		row.role = role;
+		row.body = body;
+		if (collapsed) row.fullBody = split.text;
+		row.collapsed = collapsed;
+		if (role === "user") setIf(row, "origin", event.input_origin?.authored_via);
+		setIf(row, "media", mediaRefs(event.media_refs ?? [], serverUrl));
+		if (role === "user") {
+			if (split.imageCount > 0) row.attachedImages = split.imageCount;
+			const thumbs = (event.input_origin?.attachment_urls ?? []).map((url) => absoluteMediaUrl(url, serverUrl)).filter((url) => url !== void 0);
+			if (thumbs.length > 0) row.attachmentThumbs = thumbs;
+		} else {
+			setIf(row, "phase", trimmed(messagePhase(event)));
+			setIf(row, "apiError", event.api_error);
+		}
+		return row;
+	}
+	function notificationRow(id, text, extras = {}) {
+		const row = baseRow(id, "providerNotification");
+		row.body = text;
+		if (extras.origin === "longhouse") row.origin = "longhouse";
+		const event = extras.event;
+		if (event) {
+			setIf(row, "taskNotification", event.task_notification);
+			setIf(row, "waitingBackgroundAgents", event.waiting_background_agents);
+			setIf(row, "apiError", event.api_error);
+		}
+		if (extras.wake) row.wake = true;
+		return row;
+	}
+	function flattenedSubagents(spawned) {
+		if (spawned.length === 0) return void 0;
+		const out = [];
+		for (const { child, depth } of flattenSubagentTree(spawned)) {
+			const label = subagentLabel(child);
+			const description = child.description?.trim();
+			const entry = {
+				sessionId: child.session_id,
+				label,
+				toolCalls: child.tool_calls
+			};
+			setIf(entry, "agentType", child.agent_type);
+			if (description && description !== label) entry.description = description;
+			setIf(entry, "liveStatus", child.live_status);
+			if (child.is_fork) entry.isFork = true;
+			if (depth > 0) entry.depth = depth;
+			setIf(entry, "durationMs", child.duration_ms);
+			setIf(entry, "totalTokens", child.total_tokens);
+			out.push(entry);
+		}
+		return out.length > 0 ? out : void 0;
+	}
+	function diffRows(patch, hasStat) {
+		switch (patch.kind) {
+			case "create": return patch.content.split("\n").map((text) => ({
+				kind: "add",
+				text
+			}));
+			case "delete": return patch.content.split("\n").map((text) => ({
+				kind: "remove",
+				text
+			}));
+			case "patch": return patch.text.split("\n").map((text) => {
+				if (text.startsWith("+") && !text.startsWith("+++")) return {
+					kind: "add",
+					text
+				};
+				if (text.startsWith("-") && !text.startsWith("---")) return {
+					kind: "remove",
+					text
+				};
+				return {
+					kind: "equal",
+					text
+				};
+			});
+			case "replace":
+				if (!hasStat) return void 0;
+				return collapseUnchanged(lineDiff(patch.oldStr, patch.newStr), 2).map(({ kind, text }) => ({
+					kind,
+					text
+				}));
+		}
+	}
+	function jsonText(value) {
+		return trimmed(scalarText(value));
+	}
+	function questionOption(raw) {
+		if (isRecord(raw)) {
+			const label = jsonText(raw.label) ?? jsonText(raw.value) ?? jsonText(raw.text);
+			if (label === void 0) return void 0;
+			return {
+				label,
+				description: jsonText(raw.description) ?? jsonText(raw.detail)
+			};
+		}
+		const label = jsonText(raw);
+		return label === void 0 ? void 0 : {
+			label,
+			description: void 0
+		};
+	}
+	function questionsFrom(input) {
+		if (!isRecord(input)) return [];
+		let raw = [];
+		if (Array.isArray(input.questions)) raw = input.questions;
+		else if (input.question !== void 0 || input.prompt !== void 0) raw = [input];
+		return raw.flatMap((entry) => {
+			if (!isRecord(entry)) return [];
+			const rawOptions = Array.isArray(entry.options) ? entry.options : Array.isArray(entry.choices) ? entry.choices : [];
+			return [{
+				header: jsonText(entry.header) ?? jsonText(entry.title),
+				question: jsonText(entry.question) ?? jsonText(entry.prompt) ?? jsonText(entry.label) ?? "Answer required",
+				options: rawOptions.flatMap((option) => questionOption(option) ?? [])
+			}];
+		});
+	}
+	function questionRow(id, call, hasResult) {
+		const questions = questionsFrom(call.tool_input_json);
+		const body = questions.map((entry) => entry.question).join("\n\n");
+		const row = baseRow(id, "question");
+		row.title = questions[0]?.header ?? "Question";
+		row.subtitle = hasResult ? "Answered in terminal" : "Answer in terminal";
+		row.body = body || "Claude is waiting for your answer.";
+		row.status = hasResult ? "answered" : "waiting";
+		row.calls = questions.flatMap((entry) => entry.options).map((option) => ({
+			title: option.label,
+			subtitle: option.description ?? "",
+			status: "option"
+		}));
+		return row;
+	}
+	function presentationCalls(presentation, call, result, toolName) {
+		const calls = (presentation?.children ?? []).map((child) => {
+			const entry = {
+				title: child.label,
+				subtitle: child.tool_name,
+				status: "parsed"
+			};
+			setIf(entry, "input", prettyJsonValue(child.tool_input_json));
+			if (presentation?.wrapper_recedes) setIf(entry, "output", truncatedOutput(result));
+			return entry;
+		});
+		if (presentation?.wrapper_recedes) {
+			const raw = {
+				title: `Raw enclosing ${presentation.source_tool_name || toolName}`,
+				subtitle: "Provider evidence",
+				status: "raw"
+			};
+			setIf(raw, "rawInput", prettyJsonValue(call.tool_input_json));
+			calls.push(raw);
+		}
+		return calls;
+	}
+	function toolRow(id, interaction, serverUrl) {
+		const orphan = interaction.pairing === "orphan";
+		const result = interaction.resultEvent;
+		const call = interaction.callEvent ?? result;
+		const toolName = call.tool_name ?? "Tool";
+		if (toolName === "AskUserQuestion") return questionRow(id, call, result !== null);
+		const presentation = call.tool_presentation;
+		const resolved = resolveToolInfo(presentedToolName(call));
+		const failed = isToolInteractionFailed(interaction);
+		const exitCode = getToolExitCode(interaction);
+		const state = call.tool_call_state;
+		let status;
+		if (orphan) status = "orphan";
+		else if (state === "running") status = "running";
+		else if (state === "dropped") status = "dropped";
+		else if (failed) status = exitCode != null && exitCode !== 0 ? `exit ${exitCode}` : "failed";
+		else if (state === "completed") status = "done";
+		const editStat = isEditInteraction(interaction) ? getEditStat(interaction) : null;
+		const editLabel = editStat ? formatEditStat(editStat) : null;
+		const spawned = interaction.children ?? [];
+		const intent = getToolIntentLabel(interaction);
+		const summary = orphan ? "" : getToolSummary(interaction);
+		const row = baseRow(id, "tool");
+		row.title = presentation?.label ?? resolved.label;
+		row.subtitle = editLabel ?? summary;
+		if (status !== void 0) row.status = status;
+		setIf(row, "duration", result ? toolDuration(call, result) : void 0);
+		row.input = prettyJsonValue(presentation?.wrapper_recedes ? presentation.tool_input_json : call.tool_input_json) ?? "";
+		setIf(row, "output", truncatedOutput(result ?? (state === "running" ? call : null)));
+		row.calls = presentationCalls(presentation, call, result, toolName);
+		if (presentation?.disposition === "parsed") row.origin = `Parsed via ${presentation.execution_method || presentation.source_tool_name || toolName}`;
+		setIf(row, "media", mediaRefs([...call.media_refs ?? [], ...result?.media_refs ?? []], serverUrl));
+		setIf(row, "failurePreview", getFailurePreview(interaction));
+		if (editStat?.patch) setIf(row, "diff", diffRows(editStat.patch, editStat.hasStat));
+		setIf(row, "subagents", flattenedSubagents(spawned));
+		if (spawned.length > 0) row.subagentSummary = summarizeSubagents(spawned);
+		setIf(row, "toolIntent", intent);
+		if (state === "running") setIf(row, "startedAtMs", parseMs(call.timestamp));
+		return row;
+	}
+	function activityRow(id, group, serverUrl) {
+		const calls = group.interactions;
+		const summary = formatActivitySummary(calls);
+		const seen = /* @__PURE__ */ new Set();
+		const spawned = calls.flatMap((interaction) => interaction.children ?? []).filter((child) => {
+			if (seen.has(child.session_id)) return false;
+			seen.add(child.session_id);
+			return true;
+		});
+		const childCalls = calls.map((interaction) => {
+			const call = interaction.callEvent ?? interaction.resultEvent;
+			const result = interaction.resultEvent;
+			const presentation = call.tool_presentation;
+			const state = call.tool_call_state;
+			const summaryLine = getToolSummary(interaction);
+			const entry = {
+				title: presentation?.label ?? resolveToolInfo(presentedToolName(call)).label,
+				subtitle: summaryLine,
+				status: state === "running" ? "running" : state === "dropped" ? "dropped" : "done"
+			};
+			entry.input = prettyJsonValue(presentation?.wrapper_recedes ? presentation.tool_input_json : call.tool_input_json) ?? "";
+			if (presentation?.wrapper_recedes) setIf(entry, "rawInput", prettyJsonValue(call.tool_input_json));
+			setIf(entry, "output", truncatedOutput(result ?? (state === "running" ? call : null)));
+			setIf(entry, "media", mediaRefs([...call.media_refs ?? [], ...result?.media_refs ?? []], serverUrl));
+			if (state === "running") setIf(entry, "startedAtMs", parseMs(call.timestamp));
+			const intent = trimmed(call.tool_intent);
+			if (intent !== summaryLine) setIf(entry, "toolIntent", intent);
+			return entry;
+		});
+		const row = baseRow(id, "activityGroup");
+		row.title = summary || "Activity";
+		row.subtitle = String(calls.length);
+		row.calls = childCalls;
+		setIf(row, "subagents", flattenedSubagents(spawned));
+		if (spawned.length > 0) row.subagentSummary = summarizeSubagents(spawned);
+		return row;
+	}
+	function rowId(item) {
+		switch (item.kind) {
+			case "seam": return null;
+			case "action": return item.action.action.id;
+			case "compaction": return `compaction-boundary:${item.event.id}`;
+			case "provider_notification": return `provider-notification:${item.event.id}`;
+			case "reasoning": return `reasoning:${item.event.id}`;
+			case "message": return `${item.event.role === "user" ? "user" : "prose"}:${item.event.id}`;
+			case "tool": return item.interaction.callEvent ? `tool:${item.interaction.callEvent.id}` : `orphan:${item.interaction.resultEvent?.id}`;
+			case "activity_group": return `activity:${item.group.interactions[0]?.callEvent?.id ?? "missing"}`;
+		}
+	}
+	function mapItem(item, id, input, clock) {
+		const { serverUrl, liteBodies } = input;
+		let row;
+		switch (item.kind) {
+			case "seam": return null;
+			case "action":
+				row = baseRow(id, "action");
+				row.title = item.action.label;
+				setIf(row, "subtitle", item.action.action.provider);
+				row.status = item.action.action.kind;
+				return row;
+			case "compaction":
+				row = baseRow(id, "compaction");
+				row.body = item.event.content_text ?? "";
+				return row;
+			case "provider_notification": return notificationRow(id, item.event.content_text ?? "", { event: item.event });
+			case "reasoning": {
+				const text = item.event.content_text ?? "";
+				row = baseRow(id, "reasoning");
+				row.body = stripLegacyReasoningPrefix(text);
+				if (item.event.reasoning_withheld || item.event.item?.visibility === "withheld") row.reasoningWithheld = true;
+				return row;
+			}
+			case "message": {
+				const event = item.event;
+				const origin = event.input_origin?.origin;
+				if (event.role === "user" && (origin === "wake" || origin === "longhouse")) row = notificationRow(id, event.content_text ?? "Background task finished", {
+					origin,
+					wake: origin === "wake"
+				});
+				else row = messageRow(id, event.role === "user" ? "user" : "assistant", event, serverUrl);
+				break;
+			}
+			case "tool": {
+				const interaction = mergedInteraction(item.interaction, liteBodies);
+				row = toolRow(id, interaction, serverUrl);
+				attachCursors(row, [interaction], liteBodies);
+				break;
+			}
+			case "activity_group": {
+				const merged = {
+					...item.group,
+					interactions: item.group.interactions.map((interaction) => mergedInteraction(interaction, liteBodies))
+				};
+				row = activityRow(id, merged, serverUrl);
+				attachCursors(row, merged.interactions, liteBodies);
+				break;
+			}
+		}
+		const turnEnd = turnEndFor(item, clock);
+		if (turnEnd) row.turnEnd = turnEnd;
+		return row;
+	}
+	function attachCursors(row, interactions, lite) {
+		const cursors = bodyCursors(interactions);
+		if (cursors.length === 0) return;
+		row.bodyCursors = cursors;
+		row.bodyState = bodyState(cursors, lite);
+	}
+	/**
+	* Consecutive background completions (wake notices only) read as one row with
+	* a count, placed at the latest one. Longhouse's own close and cleanup
+	* notices are never merged, and a message between two completions keeps them
+	* apart.
+	*/
+	function collapsingProviderNotifications(rows) {
+		const out = [];
+		let run = [];
+		const flush = () => {
+			const latest = run[run.length - 1];
+			if (!latest) return;
+			if (run.length === 1) out.push(latest);
+			else {
+				const merged = notificationRow(latest.id, `${latest.body ?? "Background task finished"} (${run.length} updates)`, { wake: true });
+				if (latest.turnEnd) merged.turnEnd = latest.turnEnd;
+				out.push(merged);
+			}
+			run = [];
+		};
+		for (const row of rows) if (row.wake === true) run.push(row);
+		else {
+			flush();
+			out.push(row);
+		}
+		flush();
+		return out;
+	}
+	function sortMs(item) {
+		let timestamp;
+		switch (item.kind) {
+			case "seam": return null;
+			case "action":
+				timestamp = item.action.timestamp;
+				break;
+			case "tool":
+				timestamp = (item.interaction.callEvent ?? item.interaction.resultEvent)?.timestamp;
+				break;
+			case "activity_group":
+				timestamp = (item.group.interactions[0]?.callEvent ?? item.group.interactions[0]?.resultEvent)?.timestamp;
+				break;
+			default: timestamp = item.event.timestamp;
+		}
+		return parseMs(timestamp) ?? null;
+	}
+	/** Rows native owns, merged in: send-time receipts stand at their time, the rest follow. */
+	function placeOverlay(rows, overlay) {
+		const placed = overlay.filter((entry) => entry.placedAtSendTime).sort((a, b) => a.createdAtMs - b.createdAtMs);
+		let remaining = overlay.filter((entry) => !entry.placedAtSendTime);
+		const out = [];
+		for (const { row, sort, live, liveMs } of rows) {
+			while (placed.length > 0 && (live || sort !== null && placed[0].createdAtMs < sort)) out.push(placed.shift().row);
+			if (live) {
+				const insertion = remaining.filter((entry) => {
+					switch (entry.phase) {
+						case "submitting":
+						case "working":
+						case "sent": return true;
+						case "queued": return entry.createdAtMs <= liveMs;
+						default: return false;
+					}
+				});
+				if (insertion.length > 0) {
+					out.push(...insertion.map((entry) => entry.row));
+					remaining = remaining.filter((entry) => !insertion.includes(entry));
+				}
+			}
+			out.push(row);
+		}
+		out.push(...placed.map((entry) => entry.row), ...remaining.map((entry) => entry.row));
+		return out;
+	}
+	function isLiveAssistantRow(item) {
+		return item.kind === "message" && item.event.role !== "user" && isLivePreviewEvent(item.event);
+	}
+	/** Served projection items and native overlay rows to the embed's rows. */
+	function presentTranscript(input) {
+		const model = buildTimelineModel(input.items, input.subagents ?? []);
+		const trail = narrationTrail(model.items);
+		const clock = {
+			now: input.now ?? /* @__PURE__ */ new Date(),
+			locale: input.locale,
+			timeZone: input.timeZone
+		};
+		const rows = [];
+		for (const item of model.items) {
+			const id = rowId(item);
+			if (id === null) continue;
+			const row = mapItem(item, id, input, clock);
+			if (!row) continue;
+			if (trail.has(timelineItemIdentity(item))) row.narrationTrail = true;
+			const sort = sortMs(item);
+			rows.push({
+				row,
+				sort,
+				live: isLiveAssistantRow(item),
+				liveMs: sort ?? Number.NEGATIVE_INFINITY
+			});
+		}
+		return collapsingProviderNotifications(input.overlay?.length ? placeOverlay(rows, input.overlay) : rows.map((entry) => entry.row));
+	}
+	//#endregion
 	//#region src/embeds/ios-transcript/liteBodies.ts
 	function attachToolBodyHandlers(scope = document) {
 		const rows = scope instanceof Element && scope.matches("details[data-body-cursors]") ? [scope] : Array.from(scope.querySelectorAll("details[data-body-cursors]"));
@@ -2082,6 +5085,21 @@ summary::-webkit-details-marker {
 		const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
 		return JSON.parse(new TextDecoder().decode(bytes));
 	}
+	function presentProjection(projection) {
+		const lite = projection.liteBodies;
+		return presentTranscript({
+			items: projection.items,
+			subagents: projection.subagents,
+			serverUrl: projection.serverUrl,
+			overlay: projection.overlay,
+			liteBodies: lite ? {
+				bodies: new Map((lite.bodies ?? []).map((body) => [body.cursor, body])),
+				loading: new Set(lite.loading ?? []),
+				failed: new Set(lite.failed ?? []),
+				unavailable: new Set(lite.unavailable ?? [])
+			} : void 0
+		});
+	}
 	function attachExpandHandlers(scope = document) {
 		attachSubagentHandlers(scope);
 		attachSubmittedInputHandlers(scope);
@@ -2107,7 +5125,9 @@ summary::-webkit-details-marker {
 		const decodeStartedAt = performance.now();
 		const payload = decodePayload(base64);
 		const decodeMs = performance.now() - decodeStartedAt;
-		currentItems = payload.items || [];
+		const presentStartedAt = performance.now();
+		currentItems = payload.projection ? presentProjection(payload.projection) : payload.items || [];
+		const presentMs = payload.projection ? performance.now() - presentStartedAt : 0;
 		const root = document.getElementById("root");
 		if (!isStickingToBottom()) captureAnchor();
 		const result = reconcile(root, currentItems, payload.errorMessage, attachExpandHandlers);
@@ -2126,6 +5146,9 @@ summary::-webkit-details-marker {
 		transcriptFrames.set(sequence, frame);
 		return {
 			decode_ms: decodeMs,
+			present_ms: presentMs,
+			row_count: currentItems.length,
+			latest_item_id: currentItems.length > 0 ? currentItems[currentItems.length - 1].id : null,
 			html_ms: result.html_ms,
 			dom_ms: result.dom_ms
 		};

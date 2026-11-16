@@ -1,5 +1,5 @@
 {
-  "_description": "Shared conformance corpus for the shell salience classifier (Change B, docs/specs/timeline-reading-experience.md). Web (shellSalience.test.ts) and iOS (ShellSalienceTests.swift) both run every case; any divergence or false demotion fails CI. 'read' cases must demote with the given aggregate; 'opaque' cases must NOT demote — the adversarial set below is the safety property of the whole design.",
+  "_description": "Shared conformance corpus for the shell salience classifier (Change B, docs/specs/timeline-reading-experience.md). Web (shellSalience.test.ts) runs every case (the iOS transcript document runs the same code); any divergence or false demotion fails CI. 'read' cases must demote with the given aggregate; 'opaque' cases must NOT demote — the adversarial set below is the safety property of the whole design.",
   "cases": [
     { "command": "grep -rn \"toolTier\" web/src", "expect": "read", "aggregate": "search" },
     { "command": "rg --files-with-matches session_state server", "expect": "read", "aggregate": "search" },

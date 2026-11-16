@@ -300,68 +300,7 @@ struct SessionInputReconciliationTests {
         #expect(placed.allSatisfy { $0.placedAtSendTime })
     }
 
-    @Test
-    func placedReceiptStandsAtItsSendTimeAmongTranscriptRows() {
-        let items = TimelineBuilder.build(events: [
-            userEvent("e1", text: "first", at: "2026-10-07T04:00:00Z"),
-            userEvent("e2", text: "second", at: "2026-10-07T05:00:00Z"),
-        ])
-        let placed = UnrecordedInputs.placedInputs(
-            receipts: [
-                served("ios-steer", text: "TLDR please", at: "2026-10-07T04:35:20Z", intent: "steer", turnState: nil),
-                served("ios-old", text: "before the page", at: "2026-10-07T03:00:00Z"),
-            ],
-            userEvents: [],
-            excluding: []
-        )
-        // While an older page is unloaded, the send before it waits for it.
-        let withheld = UnrecordedInputs.placedInputs(
-            receipts: [
-                served("ios-steer", text: "TLDR please", at: "2026-10-07T04:35:20Z", intent: "steer", turnState: nil),
-                served("ios-old", text: "before the page", at: "2026-10-07T03:00:00Z"),
-            ],
-            userEvents: [],
-            excluding: [],
-            loadedFrom: LonghouseDateParser.parse("2026-10-07T04:00:00Z")
-        )
-        #expect(withheld.map(\.clientRequestId) == ["ios-steer"])
 
-        let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: placed)
-        // With every row loaded, a send older than the first row leads.
-        #expect(rows.map(\.body) == ["before the page", "first", "TLDR please", "second"])
-        #expect(rows[2].status == "sent placed")
-    }
-
-    @Test
-    func backgroundCompletionReceiptsStayAtTheirTimeAsNewMessagesArrive() {
-        let receipts = [
-            served("wake:second", text: "Second task finished", at: "2026-10-08T04:30:00Z", origin: "wake"),
-            served("wake:first", text: "First task finished", at: "2026-10-08T04:10:00Z", origin: "wake"),
-            served("close:1", text: "Session closed", at: "2026-10-08T04:40:00Z", origin: "longhouse"),
-        ]
-        let placed = UnrecordedInputs.placedInputs(receipts: receipts, userEvents: [], excluding: [])
-        let events = [
-            userEvent("before", text: "Before tasks", at: "2026-10-08T04:00:00Z"),
-            userEvent("between", text: "Between tasks", at: "2026-10-08T04:20:00Z"),
-            userEvent("after", text: "After tasks", at: "2026-10-08T04:50:00Z"),
-        ]
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: events),
-            submittedInputs: placed
-        )
-        #expect(rows.map(\.body) == [
-            "Before tasks", "First task finished", "Between tasks",
-            "Second task finished", "Session closed", "After tasks",
-        ])
-        let updated = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: events + [
-                userEvent("newest", text: "New message", at: "2026-10-08T05:00:00Z")
-            ]),
-            submittedInputs: placed
-        )
-        #expect(updated.map(\.body) == rows.map(\.body) + ["New message"])
-        #expect(rows.filter { $0.kind == "providerNotification" }.map(\.origin) == [nil, nil, "longhouse"])
-    }
 
     @Test
     func backgroundReceiptOutsideLoadedPageWaitsForOlderHistory() {
@@ -378,28 +317,6 @@ struct SessionInputReconciliationTests {
         #expect(Set(all.map(\.clientRequestId)) == ["wake:old", "wake:loaded"])
     }
 
-    @Test
-    func echoedBackgroundReceiptIsNotDuplicatedAndUndatedNoticeIsRetained() {
-        let echo = userEvent(
-            id: "echo",
-            origin: SessionInputOrigin(authoredVia: .longhouse, origin: "wake", sessionInputId: nil, clientRequestId: "wake:echo"),
-            text: "Task finished"
-        )
-        let placed = UnrecordedInputs.placedInputs(
-            receipts: [
-                served("wake:echo", text: "Task finished", at: echo.timestamp, eventId: "echo", origin: "wake"),
-                served("wake:undated", text: "Undated completion", at: "not-a-date", origin: "wake"),
-            ],
-            userEvents: [echo], excluding: []
-        )
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: [echo]), submittedInputs: placed
-        )
-        #expect(rows.map(\.body) == ["Undated completion (2 updates)"])
-        #expect(rows.first?.wake == true)
-        #expect(placed.map(\.clientRequestId) == ["wake:undated"])
-        #expect(placed.first?.placedAtSendTime == false)
-    }
 
     private func notification(_ id: String, text: String, at timestamp: String) -> SessionEvent {
         SessionEvent(
@@ -410,42 +327,7 @@ struct SessionInputReconciliationTests {
         )
     }
 
-    @Test
-    func nativeCompletionReplacesOnlyItsUnambiguousWakeReceipt() {
-        let body = "Background command \"Run checks\" completed (exit code 0)"
-        let events = [notification("native", text: body, at: "2026-10-08T04:10:00Z")]
-        let placed = UnrecordedInputs.placedInputs(
-            receipts: [
-                served("wake:echo", text: "Background task finished: \(body)", at: "2026-10-08T04:10:04.107Z", origin: "wake"),
-                served("wake:later", text: "Background task finished: \(body)", at: "2026-10-08T04:11:00Z", origin: "wake"),
-                served("wake:different", text: "Background task finished: Another command", at: "2026-10-08T04:10:01Z", origin: "wake"),
-            ],
-            userEvents: [], notificationEvents: events, excluding: []
-        )
-        #expect(placed.map(\.clientRequestId) == ["wake:later", "wake:different"])
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: events), submittedInputs: placed
-        )
-        #expect(rows.map(\.body) == [body, "Background task finished: \(body) (2 updates)"])
-    }
 
-    @Test
-    func truncatedTaskAndAgentWakeSummariesKeepOneCompleteNativeResult() {
-        // The server's scalar boundary splits this multi-scalar emoji.
-        let summary = String(repeating: "x", count: 511) + "👩‍💻 full result beyond the receipt summary"
-        let receiptSummary = String(summary.unicodeScalars.prefix(512))
-        for prefix in ["Background task finished: ", "Background agent finished: "] {
-            let event = notification("native-long", text: summary, at: "2026-10-08T04:10:00Z")
-            let inputs = UnrecordedInputs.placedInputs(
-                receipts: [served("wake:long", text: prefix + receiptSummary, at: "2026-10-08T04:10:01Z", origin: "wake")],
-                userEvents: [], notificationEvents: [event], excluding: []
-            )
-            let rows = WebTranscriptView.payloadItems(
-                timelineItems: TimelineBuilder.build(events: [event]), submittedInputs: inputs
-            )
-            #expect(rows.map(\.body) == [summary])
-        }
-    }
 
     @Test
     func wrappedAndEngineCappedSummariesKeepOneNativeResult() {
@@ -478,22 +360,6 @@ struct SessionInputReconciliationTests {
         #expect(inputs.map(\.clientRequestId) == ["wake:short"])
     }
 
-    @Test
-    func identicalTruncatedSummariesDoNotCollapseDifferentNativeResults() {
-        let shared = String(repeating: "x", count: 512)
-        let events = [
-            notification("native-a", text: shared + " result A", at: "2026-10-08T04:10:00Z"),
-            notification("native-b", text: shared + " result B", at: "2026-10-08T04:10:01Z"),
-        ]
-        let inputs = UnrecordedInputs.placedInputs(
-            receipts: [served("wake:ambiguous", text: "Background task finished: " + shared, at: "2026-10-08T04:10:02Z", origin: "wake")],
-            userEvents: [], notificationEvents: events, excluding: []
-        )
-        let rows = WebTranscriptView.payloadItems(
-            timelineItems: TimelineBuilder.build(events: events), submittedInputs: inputs
-        )
-        #expect(rows.map(\.body) == [shared + " result A", shared + " result B", "Background task finished: " + shared])
-    }
 
     @Test
     func ambiguousOrOutOfWindowCompletionsNeverEraseWakeEvidence() {

@@ -183,7 +183,7 @@ Features import across folders with `@/`; within a folder, relative.
 | `ios/Sources/Shared/API/` | `LonghouseAPI.swift` and DTO adapters |
 | `ios/Sources/Shared/Models/` | Session DTOs, one file per family (`SessionStateFacts.swift`, `SessionSummary.swift`, `SessionDetail.swift`, `SessionEvent.swift`, `SessionInputModels.swift`, ...), `TimelineSignal.swift`, runtime copy, subagents |
 | `ios/Sources/Shared/Streams/` | SSE reader, timeline and workspace streams |
-| `ios/Sources/Shared/Transcript/` | `TimelineBuilder.swift` (turns events into transcript rows), final answer, edit summary |
+| `ios/Sources/Shared/Transcript/` | Lite-body state and date parsing. Transcript rows are not built in Swift: the WebKit document runs the shared `presentTranscript` over the served events |
 | `ios/Sources/Shared/Auth/` | Hosted auth flow, keychain, shared auth store |
 | `ios/Sources/Shared/Persistence/` | Timeline cache, transcript snapshots, pending inputs |
 | `ios/Sources/Shared/LiveActivity/` | Live Activity and widget models |

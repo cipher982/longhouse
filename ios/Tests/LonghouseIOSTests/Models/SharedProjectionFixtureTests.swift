@@ -2,37 +2,6 @@ import XCTest
 @testable import Longhouse
 
 final class SharedProjectionFixtureTests: XCTestCase {
-    private struct Fixture: Decodable {
-        let name: String
-        let projection: SessionProjectionResponse
-        let expectations: Expectations
-    }
-
-    private struct Expectations: Decodable {
-        let rows: [ExpectedRow]
-        let toolCount: Int
-        let activityGroupCount: Int
-        let orphanToolIds: [Int]
-        /// Present only for fixtures whose last row is a projected final answer.
-        let finalAnswerMarkdown: String?
-    }
-
-    private struct ExpectedRow: Decodable, Equatable {
-        let kind: String
-        let role: String?
-        let eventId: Int?
-        let toolName: String?
-        let callEventId: Int?
-        let resultEventId: Int?
-        let pairing: String?
-        let toolNames: [String]?
-        let callEventIds: [Int]?
-        let resultEventIds: [Int?]?
-        let pairings: [String]?
-        let actionKind: String?
-        let provider: String?
-    }
-
     private struct TranscriptPreviewFixture: Decodable {
         let cases: [TranscriptPreviewCase]
     }
@@ -55,34 +24,6 @@ final class SharedProjectionFixtureTests: XCTestCase {
         let rendersPreview: Bool
     }
 
-    func testSharedProjectionFixtures() throws {
-        for fixtureName in [
-            "tool-pairing-fifo.json",
-            "context-boundary-noise-collapse.json",
-            "session-action-interrupt.json",
-            "exploration-run-web-breaks.json",
-            "parallel-tool-id-pairing.json",
-            "codex-wrapper-presentation.json",
-            "live-claude-session.json",
-            "structured-output-final-answer.json",
-        ] {
-            let fixture = try loadFixture(fixtureName)
-            let items = TimelineBuilder.build(items: fixture.projection.items)
-
-            XCTAssertEqual(summarizeRows(items), fixture.expectations.rows, fixtureName)
-            XCTAssertEqual(toolInteractionCount(items), fixture.expectations.toolCount, fixtureName)
-            XCTAssertEqual(activityGroupCount(items), fixture.expectations.activityGroupCount, fixtureName)
-            XCTAssertEqual(orphanToolIds(items), fixture.expectations.orphanToolIds, fixtureName)
-
-            if let expectedAnswer = fixture.expectations.finalAnswerMarkdown {
-                guard case .assistant(let last)? = items.last else {
-                    return XCTFail("\(fixtureName): expected the final answer to close the transcript")
-                }
-                XCTAssertEqual(last.contentText, expectedAnswer, fixtureName)
-            }
-        }
-    }
-
     func testSharedTranscriptPreviewFixtures() throws {
         let fixture = try loadTranscriptPreviewFixture()
         for fixtureCase in fixture.cases {
@@ -91,8 +32,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
                 durableEvents: durableEvents,
                 preview: fixtureCase.session.transcriptPreview
             )
-            let items = TimelineBuilder.build(events: visibleEvents)
-            let messages = messageRows(items)
+            let messages = messageRows(visibleEvents)
 
             XCTAssertEqual(messages.ids, fixtureCase.expectations.renderedEventIds, fixtureCase.name)
             XCTAssertEqual(messages.texts, fixtureCase.expectations.renderedMessageTexts, fixtureCase.name)
@@ -100,7 +40,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
         }
     }
 
-    func testLiveToolPreviewPreservesTerminalMetadata() {
+    func testLiveToolPreviewPreservesTerminalMetadata() throws {
         let preview = SessionTranscriptPreview(
             eventId: 7,
             text: "/tmp/project",
@@ -120,26 +60,17 @@ final class SharedProjectionFixtureTests: XCTestCase {
         )
 
         let events = TranscriptPreviewProjection.visibleEvents(durableEvents: [], preview: preview)
-        let items = TimelineBuilder.build(events: events)
 
+        // The preview becomes a call and its result; the document pairs them.
         XCTAssertEqual(events.count, 2)
-        guard case .tool(let call, let result, let pairing) = items.first else {
-            return XCTFail("expected one paired live tool row")
-        }
+        let call = try XCTUnwrap(events.first)
+        let result = try XCTUnwrap(events.last)
         XCTAssertEqual(call.toolName, "exec")
         XCTAssertEqual(call.toolInputJSON?["command"], .string("pwd"))
-        XCTAssertEqual(result?.toolOutputText, "/tmp/project\n")
         XCTAssertEqual(call.toolCallId, "exec-1")
         XCTAssertEqual(call.toolCallState, .completed)
-        XCTAssertEqual(pairing, .id)
-    }
-
-    private func loadFixture(_ name: String) throws -> Fixture {
-        let fixtureURL = RepoRoot.url()
-            .appendingPathComponent("tests/fixtures/session-projection")
-            .appendingPathComponent(name)
-        let data = try Data(contentsOf: fixtureURL)
-        return try JSONDecoder.snakeCase.decode(Fixture.self, from: data)
+        XCTAssertEqual(result.toolCallId, "exec-1")
+        XCTAssertEqual(result.toolOutputText, "/tmp/project\n")
     }
 
     private func loadTranscriptPreviewFixture() throws -> TranscriptPreviewFixture {
@@ -149,189 +80,16 @@ final class SharedProjectionFixtureTests: XCTestCase {
         return try JSONDecoder.snakeCase.decode(TranscriptPreviewFixture.self, from: data)
     }
 
-    private func summarizeRows(_ items: [TimelineItem]) -> [ExpectedRow] {
-        items.map { item in
-            switch item {
-            case .user(let event), .assistant(let event):
-                return ExpectedRow(
-                    kind: "message",
-                    role: event.role,
-                    eventId: event.legacyNumericId,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .compactionBoundary(let event):
-                return ExpectedRow(
-                    kind: "compaction_boundary",
-                    role: event.role,
-                    eventId: event.legacyNumericId,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .providerNotification(let event):
-                return ExpectedRow(
-                    kind: "provider_notification",
-                    role: event.role,
-                    eventId: event.legacyNumericId,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .reasoning(let event):
-                return ExpectedRow(
-                    kind: "reasoning",
-                    role: event.role,
-                    eventId: event.legacyNumericId,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .action(let action, _):
-                return ExpectedRow(
-                    kind: "action",
-                    role: nil,
-                    eventId: action.eventId,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: action.kind,
-                    provider: action.provider
-                )
-            case .tool(let call, let result, let pairing):
-                return ExpectedRow(
-                    kind: "tool",
-                    role: nil,
-                    eventId: nil,
-                    toolName: call.toolName,
-                    callEventId: call.legacyNumericId,
-                    resultEventId: result?.legacyNumericId,
-                    pairing: pairing.rawValue,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .orphanTool(let event):
-                return ExpectedRow(
-                    kind: "orphan_tool",
-                    role: nil,
-                    eventId: nil,
-                    toolName: event.toolName,
-                    callEventId: nil,
-                    resultEventId: event.legacyNumericId,
-                    pairing: nil,
-                    toolNames: nil,
-                    callEventIds: nil,
-                    resultEventIds: nil,
-                    pairings: nil,
-                    actionKind: nil,
-                    provider: nil
-                )
-            case .activityGroup(let calls):
-                return ExpectedRow(
-                    kind: "activity_group",
-                    role: nil,
-                    eventId: nil,
-                    toolName: nil,
-                    callEventId: nil,
-                    resultEventId: nil,
-                    pairing: nil,
-                    toolNames: calls.map { $0.call.toolName ?? "" },
-                    callEventIds: calls.compactMap(\.call.legacyNumericId),
-                    resultEventIds: calls.map { $0.result?.legacyNumericId },
-                    pairings: calls.map { $0.pairing.rawValue },
-                    actionKind: nil,
-                    provider: nil
-                )
-            }
-        }
-    }
-
-    private func toolInteractionCount(_ items: [TimelineItem]) -> Int {
-        items.reduce(0) { count, item in
-            switch item {
-            case .tool, .orphanTool:
-                return count + 1
-            case .activityGroup(let calls):
-                return count + calls.count
-            case .user, .assistant, .compactionBoundary, .providerNotification, .reasoning, .action:
-                return count
-            }
-        }
-    }
-
-    private func activityGroupCount(_ items: [TimelineItem]) -> Int {
-        items.reduce(0) { count, item in
-            if case .activityGroup = item {
-                return count + 1
-            }
-            return count
-        }
-    }
-
-    private func orphanToolIds(_ items: [TimelineItem]) -> [Int] {
-        items.compactMap { item in
-            if case .orphanTool(let event) = item {
-                return event.legacyNumericId
-            }
-            return nil
-        }
-    }
-
-    private func messageRows(_ items: [TimelineItem]) -> (ids: [Int], texts: [String]) {
-        let events = items.compactMap { item -> SessionEvent? in
-            switch item {
-            case .user(let event), .assistant(let event):
-                return event
-            case .tool, .orphanTool, .activityGroup, .compactionBoundary, .providerNotification, .reasoning, .action:
-                return nil
-            }
-        }
-        let compatibilityIds = events.compactMap { event -> Int? in
+    private func messageRows(_ events: [SessionEvent]) -> (ids: [Int], texts: [String]) {
+        let messages = events.filter { $0.role == "user" || $0.role == "assistant" }
+            .filter { $0.toolName == nil && $0.interactionKind == nil }
+        let compatibilityIds = messages.compactMap { event -> Int? in
             if let legacy = event.legacyNumericId { return legacy }
             guard event.id.hasPrefix("synthetic:preview:"),
                   let previewId = Int(event.id.dropFirst("synthetic:preview:".count))
             else { return nil }
             return -abs(previewId)
         }
-        return (compatibilityIds, events.map { $0.contentText ?? "" })
+        return (compatibilityIds, messages.map { $0.contentText ?? "" })
     }
-
 }
