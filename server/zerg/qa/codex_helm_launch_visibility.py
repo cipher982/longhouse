@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_json
@@ -51,7 +52,6 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 _EXECUTION_VARIANT = execution_variant_key(
     provider="codex",

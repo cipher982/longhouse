@@ -1879,7 +1879,7 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
     code = textwrap.dedent(
         f"""
         from pathlib import Path
-        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.provider_contract.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
         path = _ensure_antigravity_runtime_plugin(
             config_dir=Path({str(config_dir)!r}),
             antigravity_cli_root=Path({str(root / "ag-cli")!r}),
@@ -1959,9 +1959,9 @@ def _resolve_antigravity_binary() -> str | None:
 def _install_real_antigravity_hook(args: argparse.Namespace, binary: str) -> Path:
     code = textwrap.dedent(
         f"""
-        from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
-        from zerg.services.antigravity_hook_inbox import _antigravity_plugin_source_root
-        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.provider_contract.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
+        from zerg.provider_contract.antigravity_hook_inbox import _antigravity_plugin_source_root
+        from zerg.provider_contract.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
         _ensure_antigravity_runtime_plugin(antigravity_bin={binary!r})
         print(_antigravity_plugin_source_root() / _ANTIGRAVITY_HOOK_SCRIPT_NAME)
         """
@@ -2057,7 +2057,7 @@ def _enqueue_antigravity_direct(
         f"""
         import json
         from pathlib import Path
-        from zerg.services.antigravity_hook_inbox import enqueue_antigravity_message
+        from zerg.provider_contract.antigravity_hook_inbox import enqueue_antigravity_message
         print(json.dumps(enqueue_antigravity_message(
             session_id={session_id!r},
             text={text!r},
@@ -2315,7 +2315,7 @@ def _install_unwatched_antigravity_hook(args: argparse.Namespace, home: Path, co
     code = textwrap.dedent(
         f"""
         from pathlib import Path
-        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.provider_contract.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
         path = _ensure_antigravity_runtime_plugin(
             config_dir=Path({str(config_dir)!r}),
             antigravity_cli_root=Path({str(gemini_dir / "antigravity-cli")!r}),

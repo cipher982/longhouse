@@ -60,12 +60,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 from zerg.qa import opencode_server_qualification
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.services.provider_capability_proof import AssertionOutcome
 
 REGISTRATION = ProducerRegistration(
     producer_id="opencode.server_contract.v1",

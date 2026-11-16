@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 from zerg.qa import antigravity_release_identity
 from zerg.qa import claude_release_identity
 from zerg.qa import codex_release_identity
@@ -17,8 +19,6 @@ from zerg.qa.conversation_reset import evaluate_reset_observation
 from zerg.qa.conversation_reset import load_reset_observation
 from zerg.qa.conversation_reset import produce_live_reset_artifact
 from zerg.qa.conversation_reset import reset_artifact_env
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
 
 PROFILE_BY_PROVIDER = {
     provider: f"{provider}_conversation_reset_v1" for provider in ("codex", "claude", "opencode", "antigravity", "cursor")

@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any
 from typing import Callable
 
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import provider_release_identity
@@ -21,12 +27,6 @@ from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 PROFILE = "codex_helm_interrupt_v1"
 SCENARIO_ID = "codex_helm_interrupt"

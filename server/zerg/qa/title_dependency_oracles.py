@@ -30,14 +30,14 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
+from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_artifacts import artifact_manifest
 from zerg.qa.provider_artifacts import now
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
-from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"

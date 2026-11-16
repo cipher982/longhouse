@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 @dataclass(frozen=True)

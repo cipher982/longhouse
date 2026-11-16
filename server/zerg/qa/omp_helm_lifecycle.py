@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 from zerg.qa import pi_family_helm as helm
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
@@ -28,8 +30,6 @@ from zerg.qa.producer_shell import ProducerFailure
 from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
 
 SCENARIO_ID = "omp_helm_lifecycle"
 ASSERTIONS = (

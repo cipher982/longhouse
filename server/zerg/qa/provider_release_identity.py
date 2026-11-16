@@ -15,16 +15,16 @@ from typing import Any
 from typing import Callable
 from typing import Pattern
 
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.qa import qualification_request
 from zerg.qa.provider_artifacts import artifact_manifest as artifact_manifest
 from zerg.qa.provider_artifacts import now
 from zerg.qa.provider_artifacts import sha256_file
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 SCHEMA_VERSION = 1
 SCENARIO_REVISION = 1

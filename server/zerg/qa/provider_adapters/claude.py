@@ -13,6 +13,7 @@ from typing import Mapping
 from uuid import NAMESPACE_URL
 from uuid import uuid5
 
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
@@ -24,7 +25,6 @@ from zerg.qa.universal_agent_harness import _subprocess_runtime_env
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
 from zerg.qa.universal_agent_harness import register_adapter
 from zerg.qa.universal_agent_harness import run_provider_control_e2e_canary
-from zerg.services.managed_provider_contracts import contract_for_provider
 
 
 def _claude_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:

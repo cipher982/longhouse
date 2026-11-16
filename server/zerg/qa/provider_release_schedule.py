@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from zerg.services.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SCHEDULE_PATH = REPO_ROOT / "config" / "provider-release-schedule.yml"

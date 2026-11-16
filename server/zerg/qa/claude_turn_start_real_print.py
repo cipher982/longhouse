@@ -32,6 +32,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 from zerg.qa import claude_real_print_qualification as real_print_qual
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
@@ -43,7 +44,6 @@ from zerg.qa.provider_semantic_qualification import _scrub_tree as scrub_semanti
 from zerg.qa.provider_semantic_qualification import temporary_environment
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_proof import AssertionOutcome
 
 _SCENARIO_ID = "claude_real_print"
 _ASSERTION_ID = "real_print_marker_returned"

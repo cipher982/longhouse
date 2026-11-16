@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
+from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 ASSERTION_ID = "helm_launch_visibility_preserved"
 SCENARIO_ID = "codex_helm_launch_visibility"

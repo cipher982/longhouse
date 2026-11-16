@@ -11,6 +11,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
@@ -19,9 +22,6 @@ from zerg.qa.producer_shell import Run
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 SCENARIO_ID = "omp_console_lifecycle"
 ASSERTION_ID = "omp_console_turn_settled_and_bound"

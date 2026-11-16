@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.qa import antigravity_scripted_lane
 from zerg.qa.answer_markers import marker_answer_count
 from zerg.qa.answer_markers import marker_answered
@@ -73,7 +74,6 @@ from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import waited_on
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor", "antigravity")
 # Only OMP's retained JSONL stream carries the terminal agent_end contract used

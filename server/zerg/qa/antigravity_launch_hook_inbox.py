@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa.antigravity_hook_qualification import _NO_TOKEN_REQUIRED_CANARIES
@@ -48,7 +49,6 @@ from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
-from zerg.services.provider_capability_proof import AssertionOutcome
 
 SCENARIO_ID = "antigravity_hook_inbox"
 ASSERTION_ID = "hook_inbox_contract_preserved"

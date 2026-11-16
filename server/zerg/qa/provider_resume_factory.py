@@ -33,9 +33,9 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveUser
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.provider_resume_oracles import assertions_for
-from zerg.services.managed_provider_contracts import contract_for_provider
 
 SCENARIOS = tuple(ASSERTIONS_BY_SCENARIO)
 

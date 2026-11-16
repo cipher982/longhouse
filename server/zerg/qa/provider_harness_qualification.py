@@ -36,6 +36,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
@@ -61,8 +63,6 @@ from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
 from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import run_harness
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
 
 RequestError = identity_bridge.RequestError
 _REPO_ROOT = Path(__file__).resolve().parents[3]

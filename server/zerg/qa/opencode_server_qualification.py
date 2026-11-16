@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 from zerg.qa import opencode_release_identity
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.provider_live_canary import run_provider_live_canary
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
 
 PROFILE = "opencode_server_contract_v1"
 SCENARIO_ID = "opencode_server_contract"

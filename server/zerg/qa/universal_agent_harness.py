@@ -30,8 +30,14 @@ from typing import Any
 from typing import Protocol
 from uuid import uuid4
 
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
-from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage
+from zerg.provider_contract.provider_action_coverage import serialize_provider_action_coverage
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.qa import qualification_request as qualification_request_contract
 from zerg.qa.background_fidelity import combine_real_replay_results
 from zerg.qa.background_fidelity import run_claude_lifecycle_hook_replay
@@ -45,12 +51,6 @@ from zerg.qa.provider_evidence_measurement import measure_evidence_package
 from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
 from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.repo_root import default_repo_root
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import factory_provider_names
-from zerg.services.provider_action_coverage import derive_provider_action_coverage
-from zerg.services.provider_action_coverage import serialize_provider_action_coverage
-from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.services.tool_translation_evaluator import evaluate_manifest
 

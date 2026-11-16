@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from typing import Mapping
 
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.qa.repo_root import default_repo_root
 from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
@@ -25,7 +26,6 @@ from zerg.qa.universal_agent_harness import _project_managed_transport
 from zerg.qa.universal_agent_harness import _seed_managed_kernel_rows
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
 from zerg.qa.universal_agent_harness import register_adapter
-from zerg.services.managed_provider_contracts import contract_for_provider
 
 
 def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
@@ -342,8 +342,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
+        from zerg.provider_contract.session_execution_home import ManagedSessionTransport
         from zerg.services import managed_local_control as control
-        from zerg.session_execution_home import ManagedSessionTransport
 
         db_path = package.path("longhouse", "codex-steer-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -842,8 +842,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
+        from zerg.provider_contract.session_execution_home import ManagedSessionTransport
         from zerg.services import managed_local_control as control
-        from zerg.session_execution_home import ManagedSessionTransport
 
         db_path = package.path("longhouse", "codex-interrupt-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1089,8 +1089,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         canary_evidence_root: Path,
         source_artifact_kind: object,
     ) -> dict[str, Any]:
+        from zerg.provider_contract.session_execution_home import ManagedSessionTransport
         from zerg.services.managed_local_transport import build_managed_local_attach_command
-        from zerg.session_execution_home import ManagedSessionTransport
 
         longhouse_session_id = "33333333-3333-4333-8333-333333333333"
         session = SimpleNamespace(

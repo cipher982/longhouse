@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import scripted_model_profiles
 from zerg.qa import scripted_model_server
@@ -92,7 +93,6 @@ from zerg.qa.wait_kind import PROVIDER_PROCESS
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 # Hosted ends a run only when it receives a terminal_signal runtime event, and
 # that event ships through the machine's outbox rather than straight from the

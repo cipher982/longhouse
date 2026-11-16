@@ -31,14 +31,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
-from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
+from zerg.provider_contract.longhouse_paths import get_provider_live_proof_dir
+from zerg.provider_contract.managed_provider_contracts import ManagedProviderContract
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
+from zerg.provider_contract.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
 from zerg.qa.managed_claude_live import ManagedClaudeLiveConfig
 from zerg.qa.managed_claude_live import run_managed_claude_live_session
 from zerg.qa.repo_root import provider_live_evidence_base
-from zerg.services.longhouse_paths import get_provider_live_proof_dir
-from zerg.services.managed_provider_contracts import ManagedProviderContract
-from zerg.services.managed_provider_contracts import contract_for_provider
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
@@ -1480,12 +1480,12 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
     """
 
     try:
-        from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
-        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
-        from zerg.services.antigravity_hook_inbox import antigravity_inbox_dir
-        from zerg.services.antigravity_hook_inbox import antigravity_state_dir
-        from zerg.services.antigravity_hook_inbox import enqueue_antigravity_message
-        from zerg.services.antigravity_hook_inbox import wait_for_antigravity_message_claim
+        from zerg.provider_contract.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
+        from zerg.provider_contract.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.provider_contract.antigravity_hook_inbox import antigravity_inbox_dir
+        from zerg.provider_contract.antigravity_hook_inbox import antigravity_state_dir
+        from zerg.provider_contract.antigravity_hook_inbox import enqueue_antigravity_message
+        from zerg.provider_contract.antigravity_hook_inbox import wait_for_antigravity_message_claim
     except Exception as exc:
         return _fail("antigravity_hook_import_failed", f"{type(exc).__name__}: {exc}")
 

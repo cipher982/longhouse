@@ -16,15 +16,15 @@ from types import ModuleType
 from typing import Any
 from typing import Callable
 
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof import proof_record_from_mapping
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import qualification_request
 from zerg.qa.provider_event_digest import raw_event_digest as _native_event_digest
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof import proof_record_from_mapping
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 @dataclass(frozen=True)

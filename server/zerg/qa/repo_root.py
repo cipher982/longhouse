@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 
 def source_checkout_root(repo_root: Path) -> bool:

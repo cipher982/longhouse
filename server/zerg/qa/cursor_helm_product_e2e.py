@@ -24,6 +24,8 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.provider_contract.longhouse_paths import get_agent_log_dir
+from zerg.provider_contract.longhouse_paths import get_managed_local_dir
 from zerg.qa.answer_markers import any_marker_answered
 from zerg.qa.answer_markers import marker_answered
 from zerg.qa.live_kit import poll
@@ -38,8 +40,6 @@ from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
 from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
-from zerg.services.longhouse_paths import get_agent_log_dir
-from zerg.services.longhouse_paths import get_managed_local_dir
 
 
 def steer_task_prompt(step: str, done: str) -> str:

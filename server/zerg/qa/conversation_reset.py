@@ -13,7 +13,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 RESET_SCHEMA_VERSION = 1
 RESET_SCENARIO = "conversation_reset"

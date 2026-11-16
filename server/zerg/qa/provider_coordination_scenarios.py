@@ -14,12 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
-from zerg.services.longhouse_paths import resolve_longhouse_home
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.provider_capability_local_proof import executable_identity
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_capability_local_proof import executable_identity
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
 from zerg.services.shipper.hooks import COORDINATION_BOOTSTRAP
 

@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
+from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
+from zerg.provider_contract.provider_interaction_semantics import interaction_contract_snapshot
 from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.provider_sqlite import open_readonly
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
-from zerg.services.provider_interaction_semantics import classify_provider_interaction
-from zerg.services.provider_interaction_semantics import interaction_contract_snapshot
 
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"

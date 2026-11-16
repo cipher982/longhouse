@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import register_adapter
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 
 @register_adapter("omp")

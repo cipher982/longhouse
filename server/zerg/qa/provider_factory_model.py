@@ -42,20 +42,19 @@ from pathlib import Path
 
 import yaml
 
-from zerg.qa.codex_native_resume import REGISTRATION as CODEX_NATIVE_RESUME_PRODUCER
-from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
-from zerg.qa.resume_assurance import ProducerRegistration
-
 # The declared-contract slice (schema resolution, CapabilityAssertion, the
 # assertion loader) lives in zerg/services/ because the served capability
 # endpoint needs it and zerg/qa/ is excluded from the published wheel. Only
 # the public surface is re-exported here, so the factory keeps one import
 # surface; anything reaching for the schema-resolution internals should
-# import zerg.services.provider_capability_schema directly rather than
+# import zerg.provider_contract.provider_capability_schema directly rather than
 # monkeypatching a name that is only an alias of another module's global.
-from zerg.services.provider_capability_schema import CapabilityAssertion
-from zerg.services.provider_capability_schema import _load_capability_assertions
-from zerg.services.provider_capability_schema import load_capability_assertions  # noqa: F401
+from zerg.provider_contract.provider_capability_schema import CapabilityAssertion
+from zerg.provider_contract.provider_capability_schema import _load_capability_assertions
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions  # noqa: F401
+from zerg.qa.codex_native_resume import REGISTRATION as CODEX_NATIVE_RESUME_PRODUCER
+from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
+from zerg.qa.resume_assurance import ProducerRegistration
 
 ROOT = Path(__file__).resolve().parents[3]
 MAKEFILE_PATH = ROOT / "Makefile"

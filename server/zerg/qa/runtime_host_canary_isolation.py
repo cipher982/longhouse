@@ -16,11 +16,11 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from zerg.provider_contract.session_title import is_resume_seed_marker
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.provider_console_lifecycle import _wait_served_run_retirement
-from zerg.services.session_title import is_resume_seed_marker
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
 RuntimeRequest = Callable[[str, str, dict[str, Any] | None], dict[str, Any]]
 

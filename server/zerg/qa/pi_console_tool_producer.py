@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
@@ -15,8 +17,6 @@ from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
 
 SCENARIO_ID = "pi_console_tool_lifecycle"
 ASSERTION_ID = "pi_console_tool_enabled"
