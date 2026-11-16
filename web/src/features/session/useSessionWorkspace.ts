@@ -44,6 +44,11 @@ const STREAM_FRAME_FRESHNESS_MS = 45_000;
 // reading them over HTTP. The server reads them in the background, usually in
 // well under a second; past this the push is late or lost.
 const PUSHED_DELTA_WAIT_MS = 2_000;
+// Header refreshes start at most this often. A wake can arrive several times a
+// second during a turn; once each header read took ~0.2 s the lane ran back to
+// back (~2 reads a second per tab). The header is a status bar: a second of
+// lag is invisible, and the transcript has its own revision-driven lane.
+export const BASE_REFRESH_MIN_INTERVAL_MS = 1_000;
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
@@ -297,7 +302,12 @@ export function useSessionWorkspace(
     // transcript. Each lane runs one round at a time and queues at most one
     // more, so a burst of wakes costs two reads, and neither lane waits for the
     // other (stranger run F6).
-    const base = { inFlight: false, queued: false };
+    const base: { inFlight: boolean; queued: boolean; lastStartedAt: number; timer: number | null } = {
+      inFlight: false,
+      queued: false,
+      lastStartedAt: Number.NEGATIVE_INFINITY,
+      timer: null,
+    };
     const transcript = {
       inFlight: false,
       queued: false,
@@ -357,11 +367,21 @@ export function useSessionWorkspace(
     };
 
     const runBase = () => {
-      if (base.inFlight) {
-        base.queued = true;
+      if (base.inFlight || base.timer !== null) {
+        base.queued = base.queued || base.inFlight;
+        return;
+      }
+      // Wakes inside the interval collapse into one refresh at its end.
+      const wait = base.lastStartedAt + BASE_REFRESH_MIN_INTERVAL_MS - Date.now();
+      if (wait > 0) {
+        base.timer = window.setTimeout(() => {
+          base.timer = null;
+          if (!disposed) runBase();
+        }, wait);
         return;
       }
       base.inFlight = true;
+      base.lastStartedAt = Date.now();
       void Promise.all(
         baseRefreshQueryKeys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
@@ -635,6 +655,7 @@ export function useSessionWorkspace(
       observeTranscriptRevisionRef.current = null;
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
       if (retryTimer !== null) window.clearTimeout(retryTimer);
+      if (base.timer !== null) window.clearTimeout(base.timer);
       stopWaitingForDelta();
       cleanup();
     };

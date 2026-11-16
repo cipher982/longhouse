@@ -875,9 +875,65 @@ describe("useSessionWorkspace", () => {
       await pendingRefresh;
     });
 
-    await waitFor(() => {
-      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(2);
-    });
+    // The queued wake runs once the one-per-second interval has passed.
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(1);
+    await waitFor(
+      () => {
+        expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 2_500 },
+    );
+  });
+
+  it("refreshes the header at most once a second however often the stream wakes", async () => {
+    vi.useFakeTimers();
+    try {
+      let handlers:
+        | {
+            onWorkspaceChanged?: (data: {
+              session_id: string;
+              change_kind?: string | null;
+              latest_event_id: number;
+              thread_session_count: number;
+            }) => void;
+          }
+        | undefined;
+      queryClientMocks.invalidateQueries.mockResolvedValue(undefined);
+      streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+        handlers = nextHandlers;
+        return vi.fn();
+      });
+
+      renderHook(() => useSessionWorkspace(baseSession.id));
+      const wake = (id: number) =>
+        handlers?.onWorkspaceChanged?.({
+          session_id: baseSession.id,
+          change_kind: "runtime",
+          latest_event_id: id,
+          thread_session_count: 1,
+        });
+
+      // Four wakes a second for three seconds, as during an active turn.
+      for (let tick = 0; tick < 12; tick += 1) {
+        await act(async () => {
+          wake(tick + 1);
+          await vi.advanceTimersByTimeAsync(250);
+        });
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      const headerReads = queryClientMocks.invalidateQueries.mock.calls.filter(
+        ([filters]) => JSON.stringify(filters) === JSON.stringify({ queryKey: ["agent-session-workspace", baseSession.id] }),
+      ).length;
+      // The first wake reads at once, the last is not lost, nothing in between
+      // runs faster than once a second.
+      expect(headerReads).toBeGreaterThanOrEqual(3);
+      expect(headerReads).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 
