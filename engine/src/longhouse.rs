@@ -44,10 +44,17 @@ mod managed_launch_payload;
 mod managed_terminal;
 #[path = "plaintext_http.rs"]
 mod plaintext_http;
+// Antigravity Helm runs agy under this PTY relay; the rest of its surface
+// belongs to the engine's Cursor and Claude Helm.
+#[path = "antigravity_helm_pty.rs"]
+mod antigravity_helm_pty;
 #[cfg(all(target_os = "linux", not(test)))]
 #[allow(dead_code)]
 #[path = "process_identity.rs"]
 mod process_identity;
+#[allow(dead_code)]
+#[path = "pty_relay.rs"]
+mod pty_relay;
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;
 
@@ -1792,13 +1799,25 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         degraded_registration,
         &deferred_notices,
         |cmd, after_spawn| {
-            run_foreground_command_after_spawn(cmd, || {
+            // agy runs under a PTY this launcher owns, so it can type an idle
+            // remote send into the TUI and sees the exit itself.
+            antigravity_helm_pty::run(cmd, &session_id, |pid| {
+                FOREGROUND_CHILD_PGRP.store(pid, std::sync::atomic::Ordering::Release);
                 after_spawn()?;
                 record_antigravity_provider_process(&session_id);
                 Ok(())
             })
         },
     )?;
+    // The launcher saw agy exit (a remote terminate kills its process group,
+    // which closes the PTY), so it reports the run's end like the other Helm
+    // launchers. Without it the served run stayed `running`.
+    if let Err(error) = record_antigravity_terminal_event(&session_id, &run_id, &machine_name, exit)
+    {
+        eprintln!(
+            "Longhouse warning: could not queue Antigravity terminal lifecycle event: {error}"
+        );
+    }
     warp_cli_agent::emit_session_event(
         "antigravity",
         "stop",
@@ -1807,6 +1826,34 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         args.project.as_deref(),
     );
     std::process::exit(exit);
+}
+
+fn record_antigravity_terminal_event(
+    session_id: &str,
+    run_id: &str,
+    machine_name: &str,
+    exit_code: i32,
+) -> anyhow::Result<()> {
+    let runtime_key = format!("antigravity:{session_id}");
+    let event = managed_terminal::ManagedTerminalEvent {
+        runtime_key: &runtime_key,
+        session_id,
+        run_id,
+        provider: "antigravity",
+        managed_transport: "antigravity_hook_inbox",
+        provider_session_id: None,
+        device_id: Some(machine_name),
+        source: "antigravity_helm_launcher",
+        dedupe_prefix: "antigravity-terminal",
+        terminal_state: managed_terminal::terminal_state_for_exit(exit_code),
+        terminal_reason: "provider_exit",
+        exit_code: Some(exit_code),
+    }
+    .to_json();
+    managed_terminal::enqueue(
+        &longhouse_home()?.join("agent/runtime-events-outbox"),
+        &event,
+    )
 }
 
 fn run_antigravity_foreground_with<F>(
@@ -7095,6 +7142,32 @@ mod tests {
         assert_eq!(event["kind"], "terminal_signal");
         assert_eq!(event["run_id"], "run");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
+    }
+
+    #[test]
+    fn antigravity_exit_is_queued_as_a_terminal_runtime_event() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                record_antigravity_terminal_event("session", "run", "device", 143).unwrap();
+            },
+        );
+        let event_path = std::fs::read_dir(temp.path().join("agent/runtime-events-outbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["kind"], "terminal_signal");
+        assert_eq!(event["run_id"], "run");
+        assert_eq!(event["provider"], "antigravity");
+        assert_eq!(event["runtime_key"], "antigravity:session");
+        assert_eq!(event["payload"]["terminal_state"], "process_gone");
+        assert_eq!(event["payload"]["exit_code"], 143);
     }
 
     #[test]

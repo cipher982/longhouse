@@ -170,6 +170,12 @@ lands, never whether it survives. Full contract:
 - Antigravity Console ownership comes from stock stream-json `init.conversation_id`,
   not result timing or log text. A pending identity must not let its transcript
   become an unrelated Shadow session.
+- Helm runs agy under a PTY the launcher owns (`engine/src/antigravity_helm_pty.rs`,
+  `pty_relay`). The hook inbox is claimed only at model invocations, so an idle
+  `send` is claimed and typed into the TUI by the launcher (claim receipt
+  `hook_event: IdleWake`); mid-turn sends and steers still go through the hook.
+  The launcher also queues the terminal event when agy exits, which is what ends
+  the served run after a terminate.
 - Its source is `.system_generated/logs/transcript_full.jsonl`. The shorter
   `transcript.jsonl` truncates tool output; never ingest both or prefer it.
 
