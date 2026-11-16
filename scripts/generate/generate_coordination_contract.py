@@ -9,7 +9,7 @@ peers line vectors, pending and delivery wording). This writes:
 - server/zerg/config/coordination_contract.json      (delivery facts)
 - the generated block in engine/assets/longhouse-omp-helm.ts (the extension ships
   as one file, so it cannot import JSON)
-- the generated block in server/zerg/services/shipper/hooks.py. The provider
+- the generated block in server/zerg/provider_contract/hook_scripts.py. The provider
   factory's verifier imports it, and its pinned bundle may never gain a file
   (SUBJECT_PINNED only shrinks), so it carries the contract inline instead of
   reading the JSON.
@@ -36,7 +36,7 @@ RUNTIME_BEGIN = "// BEGIN GENERATED COORDINATION RUNTIME (scripts/generate/gener
 RUNTIME_END = "// END GENERATED COORDINATION RUNTIME"
 OMP_BEGIN = "// BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)"
 OMP_END = "// END GENERATED COORDINATION CONTRACT"
-SHIPPER_HOOKS = ROOT / "server" / "zerg" / "services" / "shipper" / "hooks.py"
+SHIPPER_HOOKS = ROOT / "server" / "zerg" / "provider_contract" / "hook_scripts.py"
 PY_BEGIN = "# BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)"
 PY_END = "# END GENERATED COORDINATION CONTRACT"
 
