@@ -2802,3 +2802,20 @@ async def test_nested_subagent_bfs_and_child_token_duration_enrichment(daemon_pa
     assert gc2.context_window == 1_000_000
     assert gc2.duration_ms == 4200
     assert gc2.finished is True
+
+
+@pytest.mark.asyncio
+async def test_timeline_subagent_read_gets_the_session_detail_deadline(monkeypatch):
+    """A 1 s default deadline ran out behind a busy read lane and 503'd."""
+    from zerg.routers import timeline
+
+    seen: dict = {}
+
+    class _Catalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            seen["timeout_seconds"] = timeout_seconds
+            return {"found": True, "children": [], "child_references": []}
+
+    monkeypatch.setattr(timeline, "get_catalogd_client", lambda: _Catalog())
+    await timeline.get_timeline_session_subagents(session_id=uuid4(), current_user=SimpleNamespace(id=42))
+    assert seen["timeout_seconds"] == 4.25

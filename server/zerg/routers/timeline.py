@@ -905,6 +905,9 @@ async def get_timeline_session_thread(
     )
 
 
+_SUBAGENTS_CATALOG_TIMEOUT_SECONDS = 4.25
+
+
 @router.get("/sessions/{session_id}/subagents")
 async def get_timeline_session_subagents(
     session_id: UUID,
@@ -929,6 +932,10 @@ async def get_timeline_session_subagents(
         return await catalog.call(
             "session.subagents.list.v2",
             {"session_id": str(session_id), "owner_id": str(owner_id)},
+            # The detail page's other reads get 4.25 s. With the 1 s default a
+            # busy two-slot read lane (a workspace read holds a slot for about
+            # a second during a turn) outlasted the busy retries and 503'd.
+            timeout_seconds=_SUBAGENTS_CATALOG_TIMEOUT_SECONDS,
         )
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         raise HTTPException(
