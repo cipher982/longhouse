@@ -33,6 +33,7 @@ class World:
         self.older: list[str] = []
         self.needs: dict[str, str | None] = {}  # candidate -> the Terminal Truth commit its range needs
         self.gone: set[str] = set()  # ring health URLs that answer 410 Gone
+        self.pointer: str | None = None  # the control plane's newest production promotion
         self.answers: dict[str, tuple[int, str, str]] = {}  # script key -> (rc, stdout, stderr)
         self.gates: dict | None = None  # the receipt promote-production saves
         self.calls: list[list[str]] = []
@@ -61,6 +62,7 @@ class PromoterTests(unittest.TestCase):
         self.world = World()
         patches = {
             "served": lambda url: self.world.served.get(url),
+            "production_pointer": lambda: self.world.pointer,
             "gone": lambda url: url in self.world.gone,
             "published_candidates": lambda main: [self.world.published, *self.world.older],
             "required_terminal_truth_commit": lambda base, head: self.world.needs.get(head),
@@ -208,6 +210,19 @@ class PromoterTests(unittest.TestCase):
         self.assertEqual(self.world.calls, [])
         self.world.gone.clear()
         self.assertEqual(promoter.decide_production(dry_run=False)["action"], "waiting")
+
+    def test_the_control_plane_pointer_is_production_even_when_the_demo_url_is_gone(self):
+        # The retired demo answers 404; production is the tenants and the new-tenant image the control plane records.
+        self.world.served[promoter.PRODUCTION_HEALTH] = None
+        self.world.gone.add(promoter.PRODUCTION_HEALTH)
+        self.world.pointer = A
+        self.world.served[promoter.DOGFOOD_HEALTH] = C
+        self.world.gates = {"gates": {}}
+        d = promoter.decide_production(dry_run=False)
+        self.assertEqual(d["action"], "promoted")
+        self.assertEqual(d["served"], A)
+        self.world.pointer = C
+        self.assertEqual(promoter.decide_production(dry_run=False)["action"], "up_to_date")
 
     def test_production_never_moves_backwards(self):
         self.world.served[promoter.PRODUCTION_HEALTH] = C

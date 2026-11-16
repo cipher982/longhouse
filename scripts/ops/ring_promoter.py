@@ -215,11 +215,40 @@ def attempt_dogfood(d: dict, target: str) -> dict:
     return {**d, "action": "failed", "lane": "canary-qualified", "elapsed_s": elapsed, "reason": tail(err)}
 
 
+def production_pointer() -> str | None:
+    """The commit production serves: the newest successful production promotion on the control plane.
+
+    Production is the hosted tenants plus the image new tenants start on; it has no health URL of its own
+    (`longhouse.ai` is the retired demo's address and serves a static placeholder). None when the control
+    plane is not configured or not readable, which leaves the health-URL fallback in charge.
+    """
+    url = os.environ.get("CONTROL_PLANE_URL")
+    token = os.environ.get("CONTROL_PLANE_ADMIN_TOKEN")
+    if not url or not token:
+        return None
+    request = urllib.request.Request(
+        url.rstrip("/") + "/api/deployments?limit=200",
+        headers={"X-Admin-Token": token, "Authorization": f"Bearer {token}", "User-Agent": "longhouse-ring-promoter/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as resp:  # noqa: S310 - fixed control plane URL
+            rows = json.load(resp)
+    except (OSError, ValueError):
+        return None
+    if isinstance(rows, dict):
+        rows = rows.get("deployments") or rows.get("items") or []
+    done = [r for r in rows if r.get("production_promotion") and r.get("status") == "success" and r.get("source_sha")]
+    done.sort(key=lambda r: str(r.get("completed_at") or r.get("created_at") or ""), reverse=True)
+    sha = str(done[0]["source_sha"]) if done else ""
+    return sha if SHA_RE.match(sha) else None
+
+
 def decide_production(dry_run: bool) -> dict:
     dogfood = served(DOGFOOD_HEALTH)
-    current = served(PRODUCTION_HEALTH)
+    pointer = production_pointer()
+    current = pointer or served(PRODUCTION_HEALTH)
     d = {"ring": "production", "served": current, "target": dogfood}
-    if dogfood is not None and current is None and gone(PRODUCTION_HEALTH):
+    if pointer is None and dogfood is not None and current is None and gone(PRODUCTION_HEALTH):
         return {**d, "action": "paused", "reason": "production is paused: its health answers 404 or 410"}
     if dogfood is None or current is None:
         return {**d, "action": "waiting", "reason": "a ring's health is unreadable"}
