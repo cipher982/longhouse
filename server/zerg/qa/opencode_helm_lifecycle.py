@@ -204,6 +204,48 @@ def _runtime_post(url: str, token: str, path: str, payload: dict[str, Any] | Non
         }
 
 
+_MANAGED_CONTROL_UNAVAILABLE = "Managed control channel is not connected or does not advertise this capability"
+# The abort task runs about 20 s; a retry window past a few seconds would let it finish on its own.
+_CONTROL_RECONNECT_WINDOW_S = 8.0
+
+
+def _refused_before_dispatch(receipt: dict[str, Any]) -> bool:
+    """True when the Runtime Host refused a control before sending anything to the Machine Agent.
+
+    Interrupt answers 502 with the managed-control-unavailable message only when
+    transport selection or grant preparation refused; a dispatched failure carries
+    a different message and is never retried.
+    """
+
+    if receipt.get("accepted") or receipt.get("http_status") != 502:
+        return False
+    try:
+        body = json.loads(str(receipt.get("detail") or ""))
+    except ValueError:
+        return False
+    error = body.get("detail") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("message") == _MANAGED_CONTROL_UNAVAILABLE
+
+
+def _runtime_interrupt(url: str, token: str, session_id: str) -> dict[str, Any]:
+    """Interrupt the live run, retrying briefly while the control channel re-registers.
+
+    The Machine Agent's control websocket can be down for a moment mid-run; the
+    refusal is recorded, never hidden, and only a not-dispatched refusal retries.
+    """
+
+    deadline = time.monotonic() + _CONTROL_RECONNECT_WINDOW_S
+    refusals: list[dict[str, Any]] = []
+    while True:
+        receipt = _runtime_post(url, token, f"{session_id}/interrupt-live", None)
+        if not _refused_before_dispatch(receipt) or time.monotonic() >= deadline:
+            if refusals:
+                receipt["retried_refusals"] = refusals
+            return receipt
+        refusals.append({"detail": str(receipt.get("detail"))[:300], "elapsed_s": receipt.get("elapsed_s")})
+        time.sleep(0.5)
+
+
 def _runtime_input(url: str, token: str, session_id: str, text: str, *, intent: str, timeout: float = 90) -> dict[str, Any]:
     """Deliver input, retrying only while live control is not yet attached."""
 
@@ -763,7 +805,7 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
                 args.api_url, args.agents_token, session_id, abort_task, intent="auto", timeout=timeout
             )
             _wait_first_tool_completed(state, abort_task, timeout=timeout)
-            control_receipts["abort"] = _runtime_post(args.api_url, args.agents_token, f"{session_id}/interrupt-live", None)
+            control_receipts["abort"] = _runtime_interrupt(args.api_url, args.agents_token, session_id)
             abort_samples = _watch_until_idle(state, timeout=timeout)
             idle_after_abort = not abort_samples[-1].get("timeout")
             follow_marker = _marker("AFTER_ABORT")

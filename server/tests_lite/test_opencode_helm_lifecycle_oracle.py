@@ -297,3 +297,47 @@ def test_a_control_that_never_reached_its_own_target_still_reads_failed_there() 
     # Everything else the run never reached is left out; what it did evaluate stays.
     assert "opencode_helm_abort_native" not in reported
     assert reported["opencode_helm_launch_registration"] is False
+
+
+# --- interrupt while the control channel re-registers -------------------------
+
+_UNAVAILABLE = (
+    '{"detail":{"error_code":"interrupt_failed","message":"Managed control channel is not connected '
+    'or does not advertise this capability","exit_code":null,"released_lock":true,"confirmed_stopped":false}}'
+)
+
+
+def _interrupt_with(monkeypatch, receipts: list[dict]) -> tuple[dict, list[str]]:
+    from zerg.qa import opencode_helm_lifecycle as lifecycle
+
+    paths: list[str] = []
+
+    def post(url, token, path, payload, **kw):
+        paths.append(path)
+        return dict(receipts.pop(0))
+
+    monkeypatch.setattr(lifecycle, "_runtime_post", post)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _s: None)
+    return lifecycle._runtime_interrupt("http://host", "tok", "sid"), paths
+
+
+def test_an_interrupt_refused_before_dispatch_is_retried_and_the_refusal_kept(monkeypatch) -> None:
+    refused = {"http_status": 502, "detail": _UNAVAILABLE, "accepted": False, "elapsed_s": 0.08}
+    accepted = {"http_status": 200, "body": {}, "accepted": True, "elapsed_s": 0.1}
+    receipt, paths = _interrupt_with(monkeypatch, [refused, refused, accepted])
+    assert receipt["accepted"] is True
+    assert len(paths) == 3
+    assert len(receipt["retried_refusals"]) == 2
+
+
+def test_an_interrupt_failure_after_dispatch_is_not_retried(monkeypatch) -> None:
+    dispatched = {
+        "http_status": 502,
+        "detail": '{"detail":{"error_code":"interrupt_failed","message":"engine said no"}}',
+        "accepted": False,
+        "elapsed_s": 0.3,
+    }
+    receipt, paths = _interrupt_with(monkeypatch, [dispatched])
+    assert receipt["accepted"] is False
+    assert len(paths) == 1
+    assert "retried_refusals" not in receipt
