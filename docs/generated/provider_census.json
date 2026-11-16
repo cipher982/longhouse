@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 360,
+  "file_count": 361,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2372,6 +2372,14 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_transcript_revision_sync.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_universal_agent_harness.py",
       "providers": [
         "antigravity",
@@ -3098,7 +3106,8 @@
       "path": "web/src/features/session/__tests__/useSessionWorkspace.test.tsx",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

@@ -1,16 +1,17 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useSessionWorkspace } from "../useSessionWorkspace";
+import { settleRunningTools, useSessionWorkspace } from "../useSessionWorkspace";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
 
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionWorkspace: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
-  holdsOlderPages: vi.fn(() => false),
-  refreshAgentSessionProjectionTail: vi.fn(() => Promise.resolve()),
+  refreshAgentSessionProjectionTail: vi.fn(() => Promise.resolve(true)),
   applyPushedProjectionDelta: vi.fn(() => true),
   pushedProjectionDeltaMayApply: vi.fn(() => true),
-  sessionHoldsOlderProjectionPages: vi.fn(() => false),
+  // The revision of the held transcript tail; tests move it as reads land.
+  heldTranscriptRevision: vi.fn((): number | null => 10),
+  heldTailHasRunningTool: vi.fn(() => false),
 }));
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
@@ -309,7 +310,6 @@ describe("useSessionWorkspace", () => {
       initialPage: expect.objectContaining({
         focus_session_id: baseSession.id,
       }),
-      refetchInterval: 5_000,
     });
   });
 
@@ -349,12 +349,10 @@ describe("useSessionWorkspace", () => {
     rerender();
 
     expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
-    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
 
-    // The connected-Console reconciliation path must not revive either poll.
+    // The connected-Console reconciliation path must not revive the poll.
     act(() => handlers?.onConnected?.());
     expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
-    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
   });
 
   it("opens the stream conservatively when the first workspace snapshot errors", () => {
@@ -588,11 +586,13 @@ describe("useSessionWorkspace", () => {
   });
 
 
-  describe("pushed transcript rows", () => {
+  describe("transcript revision sync", () => {
     type Handlers = {
+      onConnected?: (data: Record<string, unknown>) => void;
       onWorkspaceChanged?: (data: Record<string, unknown>) => void;
       onProjectionDelta?: (data: Record<string, unknown>) => void;
     };
+    let held: number | null = 10;
     const capture = () => {
       let handlers: Handlers | undefined;
       streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
@@ -603,87 +603,220 @@ describe("useSessionWorkspace", () => {
       agentSessionMocks.refreshAgentSessionProjectionTail.mockClear();
       return () => handlers;
     };
-    const ingestFollowedByDelta = {
+    const flush = () => act(async () => {});
+    const wait = (ms: number) =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      });
+    beforeEach(() => {
+      held = 10;
+      agentSessionMocks.heldTranscriptRevision.mockImplementation(() => held);
+      // A read brings the held tail up to the newest revision the test reported.
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementation(() => Promise.resolve(true));
+    });
+    const ingest = (revision: number, extra: Record<string, unknown> = {}) => ({
       session_id: baseSession.id,
       change_kind: "ingest",
       latest_event_id: 0,
       thread_session_count: 1,
       transcript_preview: null,
-      projection_delta: "follows",
-    };
-    const delta = { session_id: baseSession.id, delta: { items: [], anchor_cursor: "c-1" } };
+      transcript_revision: revision,
+      ...extra,
+    });
+    const delta = (revision: number) => ({
+      session_id: baseSession.id,
+      delta: { items: [], anchor_cursor: "c-1", transcript_revision: revision },
+    });
+
+    it("reads the transcript on the reattach frame when the server is ahead (2026-11-15 freeze)", async () => {
+      const handlers = capture();
+      // Exactly what the live-catalog stream sends on a fresh attachment.
+      act(() =>
+        handlers()?.onWorkspaceChanged?.({
+          session_id: baseSession.id,
+          stream_epoch: "same",
+          latest_event_id: 0,
+          server_now_ms: Date.now(),
+          pubsub_seq: 0,
+          transcript_revision: 15,
+        }),
+      );
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads on connect when the server is ahead and not when it is level", async () => {
+      const handlers = capture();
+      act(() => handlers()?.onConnected?.({ session_id: baseSession.id, transcript_revision: 10 }));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
+      act(() => handlers()?.onConnected?.({ session_id: baseSession.id, transcript_revision: 12 }));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads when nothing is held yet", async () => {
+      held = null;
+      const handlers = capture();
+      act(() => handlers()?.onConnected?.({ session_id: baseSession.id, transcript_revision: 3 }));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the transcript alone on a wake that is not about it", async () => {
+      const handlers = capture();
+      act(() =>
+        handlers()?.onWorkspaceChanged?.({
+          session_id: baseSession.id,
+          change_kind: "runtime",
+          latest_event_id: 0,
+          thread_session_count: 1,
+        }),
+      );
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(10)));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
+    });
+
+    it("reads to be safe on an ingest that could not report a revision", async () => {
+      const handlers = capture();
+      const { transcript_revision: _omitted, ...withoutRevision } = ingest(0);
+      act(() => handlers()?.onWorkspaceChanged?.(withoutRevision));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("coalesces a burst of newer revisions into one queued round", async () => {
+      const handlers = capture();
+      let finish: (value: boolean) => void = () => {};
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finish = resolve)),
+      );
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11)));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(12)));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(13)));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+      held = 11;
+      await act(async () => finish(true));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not queue a round for a revision the running round already covers", async () => {
+      const handlers = capture();
+      let finish: (value: boolean) => void = () => {};
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finish = resolve)),
+      );
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(12)));
+      // The workspace snapshot read beside it reports the same revision.
+      act(() => handlers()?.onConnected?.({ session_id: baseSession.id, transcript_revision: 12 }));
+      held = 12;
+      await act(async () => finish(true));
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps retrying with backoff while behind, and stops once caught up", async () => {
+      const handlers = capture();
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementation(() => Promise.resolve(false));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11)));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+      // A turn's last reply may be the last report for a while: no new frame
+      // arrives, yet the page must still catch up.
+      await wait(1_100);
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(2);
+      await wait(1_000);
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(2);
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementation(() => {
+        held = 11;
+        return Promise.resolve(true);
+      });
+      await wait(1_100);
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(3);
+      await wait(4_200);
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(3);
+    }, 15_000);
+
+    it("recovers from a hung read on the next newer report", async () => {
+      const handlers = capture();
+      // The read's deadline fires: the round settles as a failure.
+      let fail: (value: boolean) => void = () => {};
+      agentSessionMocks.refreshAgentSessionProjectionTail.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (fail = resolve)),
+      );
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11)));
+      await act(async () => fail(false));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(12)));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(2);
+    });
 
     it("applies pushed rows instead of reading the transcript over HTTP", async () => {
       const handlers = capture();
-      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
-      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
-      act(() => handlers()?.onProjectionDelta?.(delta));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 2_200));
+      agentSessionMocks.applyPushedProjectionDelta.mockImplementation(() => {
+        held = 11;
+        return true;
       });
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11, { projection_delta: "follows" })));
+      act(() => handlers()?.onProjectionDelta?.(delta(11)));
+      await wait(2_200);
       expect(agentSessionMocks.applyPushedProjectionDelta).toHaveBeenCalledWith(
         expect.anything(),
         baseSession.id,
-        delta.delta,
+        delta(11).delta,
       );
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
     });
 
-    it("reads over HTTP when the pushed rows cannot be applied", () => {
+    it("reads over HTTP when the pushed rows cannot be applied", async () => {
       const handlers = capture();
       agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(false);
-      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
-      act(() => handlers()?.onProjectionDelta?.(delta));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11, { projection_delta: "follows" })));
+      act(() => handlers()?.onProjectionDelta?.(delta(11)));
+      await flush();
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
     });
 
     it("reads over HTTP when the pushed rows never come", async () => {
       const handlers = capture();
-      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11, { projection_delta: "follows" })));
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 2_100));
-      });
+      await wait(2_100);
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
     });
 
-    it("reads once more after a projection refetch that was already running", () => {
-      const handlers = capture();
-      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
-      let notify: (() => void) | undefined;
-      queryClientMocks.getQueryCache.mockReturnValueOnce({
-        subscribe: (listener: () => void) => {
-          notify = listener;
-          return () => {};
-        },
-      });
-      queryClientMocks.isFetching.mockReturnValue(1);
-      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
-      act(() => handlers()?.onProjectionDelta?.(delta));
-      expect(agentSessionMocks.refreshAgentSessionProjectionTail).not.toHaveBeenCalled();
-      queryClientMocks.isFetching.mockReturnValue(0);
-      act(() => notify?.());
-      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
-    });
-
-    it("reads over HTTP at once when the pushed rows could not apply anyway", () => {
+    it("reads over HTTP at once when the pushed rows could not apply anyway", async () => {
       const handlers = capture();
       agentSessionMocks.pushedProjectionDeltaMayApply.mockReturnValueOnce(false);
-      act(() => handlers()?.onWorkspaceChanged?.(ingestFollowedByDelta));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11, { projection_delta: "follows" })));
+      await flush();
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
     });
 
-    it("keeps waiting when the pushed rows were read before a later ingest", async () => {
+    it("keeps waiting when the pushed rows stop short of a later ingest", async () => {
       const handlers = capture();
-      agentSessionMocks.applyPushedProjectionDelta.mockReturnValue(true);
-      act(() => handlers()?.onWorkspaceChanged?.({ ...ingestFollowedByDelta, pubsub_seq: 7 }));
-      act(() => handlers()?.onWorkspaceChanged?.({ ...ingestFollowedByDelta, pubsub_seq: 8 }));
-      // The push for wake 7 lands; wake 8's rows may not be in it.
-      act(() => handlers()?.onProjectionDelta?.({ ...delta, pubsub_seq: 7 }));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 2_100));
+      agentSessionMocks.applyPushedProjectionDelta.mockImplementation(() => {
+        held = 11;
+        return true;
       });
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(11, { projection_delta: "follows" })));
+      act(() => handlers()?.onWorkspaceChanged?.(ingest(12, { projection_delta: "follows" })));
+      // The push for revision 11 lands; revision 12's rows are not in it.
+      act(() => handlers()?.onProjectionDelta?.(delta(11)));
+      await wait(2_100);
       expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads when a polled workspace snapshot reports a newer revision", async () => {
+      capture();
+      const current = agentSessionMocks.useAgentSessionWorkspace.mock.results.at(-1)?.value;
+      agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+        ...current,
+        data: { ...current.data, projection: { ...current.data.projection, transcript_revision: 14 } },
+      });
+      renderHook(() => useSessionWorkspace(baseSession.id));
+      await flush();
+      expect(agentSessionMocks.refreshAgentSessionProjectionTail).toHaveBeenCalled();
     });
   });
 
@@ -1519,4 +1652,29 @@ describe("useSessionWorkspace", () => {
 
   // Search/filter state tests moved to TimelinePane component tests —
   // that state now lives inside TimelinePane, not the hook.
+});
+
+describe("settleRunningTools", () => {
+  const running = { kind: "event", session_id: "s", timestamp: "t", event: { id: 1, tool_call_state: "running" } };
+  const done = { kind: "event", session_id: "s", timestamp: "t", event: { id: 2, tool_call_state: "completed" } };
+  const items = [running, done] as never[];
+  const session = (lifecycle: string, provider = "claude", run: string | null = null) =>
+    ({ provider, runtime_display: { lifecycle }, session_state: { run: run ? { lifecycle: run } : null } }) as never;
+
+  it("drops a running tool once the session closes, as the server reads it", () => {
+    const settled = settleRunningTools(items, session("closed"));
+    expect(settled.map((item: { event: { tool_call_state: string } }) => item.event.tool_call_state)).toEqual([
+      "dropped",
+      "completed",
+    ]);
+  });
+
+  it("completes a running Cursor tool once its run ends", () => {
+    const settled = settleRunningTools(items, session("open", "cursor", "ended"));
+    expect((settled[0] as { event: { tool_call_state: string } }).event.tool_call_state).toBe("completed");
+  });
+
+  it("leaves an open session's rows untouched", () => {
+    expect(settleRunningTools(items, session("open"))).toBe(items);
+  });
 });

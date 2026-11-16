@@ -728,6 +728,11 @@ async def put_storage_v2_media(
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
+        # An image that arrives after the rows naming it changes those rows:
+        # wake their pages (their transcript revision moved in the commit).
+        if result.get("changed"):
+            for affected_session_id in result.get("affected_session_ids") or ():
+                _publish_storage_ingest_wake(session_id=str(affected_session_id), provider="", events_inserted=0)
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)
     except CatalogUnavailable as exc:
@@ -1202,7 +1207,10 @@ async def _commit_admitted_envelope(
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
-                if int((replay_facts_result or {}).get("delegation_reconciled") or 0) > 0:
+                if (
+                    int((replay_facts_result or {}).get("delegation_reconciled") or 0) > 0
+                    or int((replay_facts_result or {}).get("inserted") or 0) > 0
+                ):
                     _publish_storage_ingest_wake(
                         session_id=str(spec.session_id),
                         provider=spec.provider,

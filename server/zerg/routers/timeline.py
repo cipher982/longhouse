@@ -94,6 +94,7 @@ from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_turn_index import read_session_turn_index
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.storage_v2_workspace import read_storage_v2_event_bodies
+from zerg.services.storage_v2_workspace import transcript_revision as transcript_revision_of
 from zerg.services.timeline_session_listing import TimelineHistoryImportResponse
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
@@ -1662,6 +1663,7 @@ async def _live_catalog_workspace_stream(
     heartbeat_interval_seconds: float | None = None,
     accepted_preview_kinds: frozenset[str] = frozenset(),
     projection_delta: bool = False,
+    transcript_revision: int | None = None,
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1695,6 +1697,7 @@ async def _live_catalog_workspace_stream(
                 "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                 "runtime_epoch": runtime.runtime_epoch,
                 "admission": runtime.admission,
+                "transcript_revision": transcript_revision,
             }
         ),
     }
@@ -1705,11 +1708,13 @@ async def _live_catalog_workspace_stream(
         bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription,
         bus.subscribe(TOPIC_HOST_LIFECYCLE, since_seq=lifecycle_sequence) as lifecycle_subscription,
     ):
-        if skip_initial and last_event_id is None:
+        if skip_initial and (last_event_id is None or replay_gap):
             # Keep the snapshot-to-stream handoff safe until both surfaces use
             # one comparable live workspace coordinate. The fingerprint is
             # intentionally accepted by this path for contract symmetry, but
-            # it is not comparable to the live catalog commit yet.
+            # it is not comparable to the live catalog commit yet. A replay
+            # that cannot be served (a restart, a wrapped ring) is a fresh
+            # attachment too: send the frame that says where things are.
             skip_initial = False
         if replay_gap:
             yield {
@@ -1736,6 +1741,7 @@ async def _live_catalog_workspace_stream(
                         "latest_event_id": 0,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "pubsub_seq": 0,
+                        "transcript_revision": transcript_revision,
                     }
                 ),
             }
@@ -1793,6 +1799,7 @@ async def _live_catalog_workspace_stream(
                 preview_event_id = _workspace_preview_event_id(preview)
                 latest_event_id = -abs(preview_event_id) if preview_event_id is not None else 0
                 catalog_commit_seq = _workspace_catalog_commit_seq(message.payload)
+                frame_transcript_revision: int | None = None
                 # A live preview wake is provisional text that arrives before its durable write; it has no commit of its
                 # own. Looking up the current commit would only attach an unrelated one, and the lookup is a catalog read
                 # in a worker thread behind every other read on the host: on a busy host each preview frame waited for it
@@ -1807,6 +1814,8 @@ async def _live_catalog_workspace_stream(
                         )
                         if str(raw_commit_seq).isdecimal():
                             catalog_commit_seq = int(raw_commit_seq)
+                        if _session is not None:
+                            frame_transcript_revision = transcript_revision_of(_session)
                     except (CatalogReadError, TypeError, ValueError):
                         logger.debug(
                             "Could not attach a live catalog commit to workspace wake session=%s",
@@ -1840,6 +1849,7 @@ async def _live_catalog_workspace_stream(
                             "pubsub_seq": message.seq,
                             **(_canary_workspace_marker_fields(message.payload) if include_canary_markers else {}),
                             "transcript_preview": preview,
+                            **({"transcript_revision": frame_transcript_revision} if frame_transcript_revision is not None else {}),
                         }
                     ),
                 }
@@ -1923,5 +1933,6 @@ async def stream_session_workspace(
             stream_epoch=stream_epoch,
             accepted_preview_kinds=frozenset(k.strip() for k in (preview_kinds or "").split(",") if k.strip()),
             projection_delta=projection_delta,
+            transcript_revision=transcript_revision_of(owned_session),
         )
     )

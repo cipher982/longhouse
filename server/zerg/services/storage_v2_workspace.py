@@ -359,6 +359,21 @@ def _event_projection(
     }
 
 
+def transcript_revision(session: object) -> int:
+    """The commit that last changed anything this session's transcript rows show.
+
+    It is the one coordinate a client compares to decide whether the rows it
+    holds are older than the server's (control-plane spec
+    transcript-revision-sync.md). Reading it from the session read that comes
+    before a page read makes it a lower bound on that page's rows. 0 means no
+    transcript write yet (a control-only session), which is still an answer.
+    """
+    state = getattr(session, "session_state", None)
+    transcript = getattr(state, "transcript", None)
+    value = getattr(transcript, "transcript_revision", None)
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def _workspace_envelope(
     *,
     owner_id: int,
@@ -564,6 +579,7 @@ def _workspace_envelope(
             "generation_id": page.get("generation_id") if page is not None else None,
             "next_cursor": page.get("next_cursor") if page is not None else None,
             "has_more": page.get("has_more") is True if page is not None else False,
+            "transcript_revision": transcript_revision(session),
         },
         "workspace_revision": {
             "latest_event_id": latest_event_id,

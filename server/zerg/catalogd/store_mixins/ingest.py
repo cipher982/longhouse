@@ -34,6 +34,7 @@ from zerg.catalogd.models import StorageSession
 
 # store.py imports this module after defining these, at its end.
 from zerg.catalogd.store import KNOWN_PROJECTORS
+from zerg.catalogd.store import _advance_transcript_revision
 from zerg.catalogd.store import _apply_delegation_lineage
 from zerg.catalogd.store import _as_aware_utc
 from zerg.catalogd.store import _bind_orphan_subagents_to_parent
@@ -452,14 +453,18 @@ class IngestMixin:
                 # shipped; keep them without moving the raw receipt, while
                 # retiring any open delegation matched by a terminal notification.
                 replay_now = datetime.now(UTC)
-                _insert_provider_facts(
+                if _insert_provider_facts(
                     connection,
                     session_id=session_key,
                     source_epoch=str(source_epoch),
                     provider_facts=provider_facts,
                     commit_seq=int(_current_commit_seq(connection)),
                     now=replay_now,
-                )
+                ):
+                    # New facts decorate rows the client may already hold.
+                    _advance_transcript_revision(
+                        connection, session_ids=(session_key,), commit_seq=_advance_commit_seq(connection, replay_now)
+                    )
                 _reconcile_delegation_from_task_notifications(
                     connection,
                     session_id=session_key,
@@ -2085,9 +2090,21 @@ class IngestMixin:
             )
             persisted_by_key = {(str(row["session_id"]), row["envelope_id"], str(row["ref_key"])): row for row in persisted_refs}
             ref_rows = [persisted_by_key[(str(ref["session_id"]), ref["envelope_id"], str(ref["ref_key"]))] for ref in session_refs]
+            # Every row that shows this image now shows it differently (it
+            # arrived, or gained a preview or a size).
+            affected_session_ids = sorted(
+                {
+                    str(session_id)
+                    for session_id in connection.execute(
+                        select(refs.c.session_id).where(refs.c.media_hash == media_hash, refs.c.retired_at.is_(None)).distinct()
+                    ).scalars()
+                }
+            )
+            _advance_transcript_revision(connection, session_ids=affected_session_ids, commit_seq=commit_seq)
             return {
                 "created": existing is None,
                 "changed": True,
+                "affected_session_ids": affected_session_ids,
                 "exact_replay": False,
                 "media": _media_object_dto(media_row),
                 "refs": [_media_ref_dto(row) for row in ref_rows],

@@ -372,6 +372,12 @@ export interface AgentSessionProjectionResponse {
   generation_id?: string | null;
   next_cursor?: string | null;
   has_more?: boolean;
+  /**
+   * The served render revision this page's rows are at least as new as (the
+   * commit that last changed the rendered rows). The client reads again only
+   * when the server reports a newer one: transcript-revision-sync.md.
+   */
+  transcript_revision?: number | null;
 }
 
 export interface AgentSessionWorkspaceRevision {
@@ -941,6 +947,8 @@ export function connectTimelineSessionsStream(
 export interface SessionWorkspaceStreamConnected {
   session_id: string;
   stream_epoch?: string;
+  /** Where the transcript is as this stream opens. */
+  transcript_revision?: number | null;
   server_now_ms?: number;
   runtime_epoch?: string;
   admission?: RuntimeAdmission;
@@ -969,6 +977,8 @@ export interface SessionWorkspaceStreamChange {
   transcript_preview?: SessionTranscriptPreview | null;
   /** "follows": a `projection_delta` frame with the newest rows is on its way. */
   projection_delta?: "follows" | null;
+  /** Where the transcript is after this wake; absent on preview frames. */
+  transcript_revision?: number | null;
 }
 
 /** The newest head rows, pushed after an ingest wake (opt-in). */
@@ -1209,6 +1219,20 @@ export async function fetchSessionSubagents(
   );
 }
 
+/**
+ * A session read that has not answered by now never will. Hosted 200-row
+ * tail reads took 0.8-3.6 s on 2026-11-15 and a live read is bounded by a few
+ * 4.25 s catalog calls, so 20 s is only reached by a dead request. Without it
+ * one hung read kept the transcript lane busy for good while the header lane
+ * kept updating (transcript-revision-sync.md).
+ */
+export const PROJECTION_READ_DEADLINE_MS = 20_000;
+
+function withReadDeadline(signal: AbortSignal | undefined): AbortSignal {
+  const deadline = AbortSignal.timeout(PROJECTION_READ_DEADLINE_MS);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
 export async function fetchAgentSessionProjection(
   sessionId: string,
   options: {
@@ -1218,6 +1242,7 @@ export async function fetchAgentSessionProjection(
     branch_mode?: "head" | "all";
     /** With anchor "tail": older than this event. With anchor "start": newer (a delta). */
     cursor?: string | null;
+    signal?: AbortSignal;
   } = {},
 ): Promise<AgentSessionProjectionResponse> {
   const params = new URLSearchParams();
@@ -1237,6 +1262,7 @@ export async function fetchAgentSessionProjection(
     await request<AgentSessionProjectionResponse>(path, {
       method: "GET",
       cache: "no-store",
+      signal: withReadDeadline(options.signal),
     }),
   );
 }
@@ -1246,6 +1272,7 @@ export async function fetchAgentSessionWorkspace(
   options: {
     limit?: number;
     branch_mode?: "head" | "all";
+    signal?: AbortSignal;
   } = {},
 ): Promise<AgentSessionWorkspaceResponse> {
   const params = new URLSearchParams();
@@ -1257,10 +1284,13 @@ export async function fetchAgentSessionWorkspace(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
 
+  // The header lane has the same one-round-at-a-time shape as the
+  // transcript's, so a hung read would freeze it the same way.
   return hydrateLiteWorkspace(
     await request<AgentSessionWorkspaceResponse>(path, {
       method: "GET",
       cache: "no-store",
+      signal: withReadDeadline(options.signal),
     }),
   );
 }

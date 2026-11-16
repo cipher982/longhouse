@@ -3089,6 +3089,7 @@ def _assemble_session_facts(
                             else None
                         ),
                         "durable_revision": int(storage_rows[session_id]["commit_seq"]),
+                        "transcript_revision": int(storage_rows[session_id]["transcript_revision"] or 0),
                         "render_revision": render_revision_by_generation.get(str(storage_rows[session_id]["current_render_generation"])),
                         "last_append_at": _encode_datetime(raw_transcript_by_session[session_id]["last_append_at"])
                         if session_id in raw_transcript_by_session
@@ -3811,6 +3812,28 @@ def _promote_generation_if_covering(
     return True
 
 
+def _advance_transcript_revision(connection, *, session_ids: Iterable[str], commit_seq: int) -> None:
+    """Record that what these sessions' transcript rows show changed at `commit_seq`.
+
+    `storage_sessions.transcript_revision` is the one coordinate a client
+    compares to decide whether the rows it holds are older than the server's
+    (control-plane spec transcript-revision-sync.md). Every write that changes
+    a served row or its decoration (render objects, provider facts, input
+    links, media) calls this in the same transaction, so a read only ever sees
+    it rise. Runtime, title and read-state writes never do: they would make
+    every open page re-read its transcript.
+    """
+    ids = sorted({str(session_id) for session_id in session_ids})
+    if not ids:
+        return
+    sessions = StorageSession.__table__
+    connection.execute(
+        update(sessions)
+        .where(sessions.c.session_id.in_(ids), sessions.c.transcript_revision < commit_seq)
+        .values(transcript_revision=commit_seq)
+    )
+
+
 def _recompute_render_generation_projection(
     connection,
     *,
@@ -3877,6 +3900,7 @@ def _recompute_render_generation_projection(
         "updated_at": commit_time,
     }
     connection.execute(update(generation).where(generation.c.generation_id == generation_id).values(**generation_values))
+    _advance_transcript_revision(connection, session_ids=(session_id,), commit_seq=commit_seq)
     session_row = connection.execute(select(sessions).where(sessions.c.session_id == session_id)).mappings().first()
     projection_values: dict[str, Any] = {
         "current_render_generation": generation_id,

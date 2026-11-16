@@ -295,6 +295,10 @@ class SessionTranscriptFacts(_FrozenModel):
     source_revision: int | None = None
     durable_revision: int | None = None
     render_revision: int | None = None
+    # The commit that last changed anything the transcript rows show: the one
+    # coordinate clients compare to know their rows are behind
+    # (transcript-revision-sync.md). 0 before the first transcript write.
+    transcript_revision: int = 0
     last_append_at: datetime | None = None
     searchable: bool = False
     live_observation: bool = False
@@ -768,6 +772,7 @@ def _transcript(
     source_revision: int | None = None,
     durable_revision: int | None = None,
     render_revision: int | None = None,
+    transcript_revision: int | None = None,
     last_append_at: datetime | None = None,
 ) -> SessionTranscriptFacts:
     legacy_revision = int(getattr(session, "transcript_revision", 0) or 0)
@@ -813,6 +818,7 @@ def _transcript(
         source_revision=source_revision,
         durable_revision=durable_revision,
         render_revision=render_revision,
+        transcript_revision=int(transcript_revision or 0),
         last_append_at=normalize_utc(last_append_at),
         searchable=bool(legacy_revision > 0 or user_messages > 0 or assistant_messages > 0),
         live_observation=live_observation,
@@ -840,6 +846,7 @@ def project_transcript_facts(
     source_revision: int | None = None,
     durable_revision: int | None = None,
     render_revision: int | None = None,
+    transcript_revision: int | None = None,
     transcript_last_append_at: datetime | None = None,
 ) -> SessionTranscriptFacts:
     """Project the current bounded transcript axis from catalog coordinates."""
@@ -856,6 +863,7 @@ def project_transcript_facts(
         source_revision=source_revision,
         durable_revision=durable_revision,
         render_revision=render_revision,
+        transcript_revision=transcript_revision,
         last_append_at=transcript_last_append_at,
     )
 

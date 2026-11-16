@@ -9565,6 +9565,11 @@ export interface components {
             durable_revision?: number | null;
             /** Render Revision */
             render_revision?: number | null;
+            /**
+             * Transcript Revision
+             * @default 0
+             */
+            transcript_revision: number;
             /** Last Append At */
             last_append_at?: string | null;
             /**

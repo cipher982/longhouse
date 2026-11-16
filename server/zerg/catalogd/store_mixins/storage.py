@@ -45,6 +45,7 @@ from zerg.catalogd.store import TITLE_DEPENDENCY_LEGACY_REPAIR_VERSION
 from zerg.catalogd.store import TITLE_DEPENDENCY_PROBE_DELAY
 from zerg.catalogd.store import TITLE_DEPENDENCY_USE_CASE
 from zerg.catalogd.store import TITLE_ROW_TRANSIENT_RETRY_DELAY
+from zerg.catalogd.store import _advance_transcript_revision
 from zerg.catalogd.store import _as_aware_utc
 from zerg.catalogd.store import _delegation_fact_rows
 from zerg.catalogd.store import _delete_bounded_live_session_state
@@ -2663,6 +2664,9 @@ class StorageMixin:
                     .where(sessions.c.session_id == session_key)
                     .values(semantic_projection_version=0, commit_seq=commit_seq, updated_at=commit_time)
                 )
+            if updates and not needs_recompute:
+                # Rewritten objects change rows even when the heads stay put.
+                _advance_transcript_revision(connection, session_ids=(session_key,), commit_seq=int(commit_seq))
             reopened_projectors = 0
             if complete_after and has_semantic_corrections:
                 reopened_projectors = int(

@@ -33,8 +33,6 @@ from zerg.catalogd.models import FactReceipt
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
-
-# store.py imports this module after defining these, at its end.
 from zerg.catalogd.store import _SESSION_READ_DELEGATION_FACT_LIMIT
 from zerg.catalogd.store import _SHADOW_PARITY_ENV
 from zerg.catalogd.store import _STATE_HEAD_FAMILIES
@@ -44,6 +42,9 @@ from zerg.catalogd.store import SHADOW_STATE_FACT_HEAD_LIMIT
 from zerg.catalogd.store import SHADOW_STATE_HEALTH_SAMPLE_LIMIT
 from zerg.catalogd.store import SHADOW_STATE_HEALTH_WINDOW
 from zerg.catalogd.store import _active_session_ids
+
+# store.py imports this module after defining these, at its end.
+from zerg.catalogd.store import _advance_transcript_revision
 from zerg.catalogd.store import _as_aware_utc
 from zerg.catalogd.store import _assemble_session_facts
 from zerg.catalogd.store import _attach_delegation_children
@@ -191,6 +192,9 @@ class SessionsMixin:
                 commit_seq=None,
                 now=now,
             )
+            if inserted:
+                # Facts decorate rows (turn ends, tool intents, API errors).
+                _advance_transcript_revision(connection, session_ids=(session_id,), commit_seq=_advance_commit_seq(connection, now))
             return {
                 "inserted": inserted,
                 "delegation_reconciled": reconciled,

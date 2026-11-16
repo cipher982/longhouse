@@ -65,7 +65,7 @@ describe("live session fetches", () => {
 
     expect(baseMocks.request).toHaveBeenCalledWith(
       "/timeline/sessions/session-1/workspace?detail=lite&limit=200&branch_mode=head",
-      { method: "GET", cache: "no-store" },
+      { method: "GET", cache: "no-store", signal: expect.any(AbortSignal) },
     );
   });
 
@@ -78,8 +78,18 @@ describe("live session fetches", () => {
 
     expect(baseMocks.request).toHaveBeenCalledWith(
       "/timeline/sessions/session-1/projection?detail=lite&limit=200&offset=20&branch_mode=head",
-      { method: "GET", cache: "no-store" },
+      { method: "GET", cache: "no-store", signal: expect.any(AbortSignal) },
     );
+  });
+
+  it("gives every transcript read a deadline, joined with the caller's signal", async () => {
+    baseMocks.request.mockResolvedValue({ items: [] });
+    const caller = new AbortController();
+    await fetchAgentSessionProjection("session-1", { signal: caller.signal });
+    const signal = baseMocks.request.mock.calls.at(-1)?.[1]?.signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    caller.abort();
+    expect(signal.aborted).toBe(true);
   });
 
   it("requests a fresh Resume terminal handoff", async () => {

@@ -163,6 +163,7 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       : null,
     transcript: {
       convergence: "current",
+      transcript_revision: 0,
       searchable: true,
       live_observation: access === "observe_only",
     },

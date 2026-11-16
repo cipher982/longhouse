@@ -118,6 +118,7 @@ describe("useAgentSessionProjectionInfinite", () => {
         anchor: "tail",
         offset: undefined,
         branch_mode: "head",
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -173,6 +174,7 @@ describe("useAgentSessionProjectionInfinite", () => {
         anchor: "start",
         offset: 1,
         branch_mode: "head",
+        signal: expect.any(AbortSignal),
       });
     });
 
@@ -186,6 +188,7 @@ describe("useAgentSessionProjectionInfinite", () => {
         anchor: "start",
         offset: 0,
         branch_mode: "head",
+        signal: expect.any(AbortSignal),
       });
     });
   });
@@ -237,6 +240,7 @@ describe("refreshAgentSessionProjectionTail", () => {
     await act(async () => {
       await result.current.fetchPreviousPage();
     });
+    await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
     await act(async () => {
       await result.current.fetchPreviousPage();
     });
@@ -273,7 +277,7 @@ describe("refreshAgentSessionProjectionTail", () => {
     const { queryClient, result } = await scrolledUpTranscript();
     apiMocks.fetchAgentSessionProjection.mockRejectedValueOnce(new Error("offline"));
 
-    await expect(refreshAgentSessionProjectionTail(queryClient, "session-1")).resolves.toBeUndefined();
+    await expect(refreshAgentSessionProjectionTail(queryClient, "session-1")).resolves.toBe(false);
 
     expect(eventIds(result.current.data?.pages)).toEqual([1, 2, 3, 4, 5, 6]);
   });

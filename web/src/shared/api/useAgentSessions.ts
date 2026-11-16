@@ -80,8 +80,8 @@ export function agentSessionWorkspaceQueryOptions(
   const params = { limit, branch_mode };
   return {
     queryKey: ["agent-session-workspace", sessionId, params] as const,
-    queryFn: async () => {
-      const workspace = await fetchAgentSessionWorkspace(sessionId!, params);
+    queryFn: async ({ signal }: { signal?: AbortSignal }) => {
+      const workspace = await fetchAgentSessionWorkspace(sessionId!, { ...params, signal });
       // Its projection seeds the transcript pages: a full tail read.
       if (workspace.projection) tailReadFromNetworkAt.set(workspace.projection, Date.now());
       return workspace;
@@ -111,10 +111,9 @@ export function useAgentSessionProjectionInfinite(
     enabled?: boolean;
     branch_mode?: "head" | "all";
     initialPage?: AgentSessionProjectionResponse | null;
-    refetchInterval?: number | false;
   } = {}
 ) {
-  const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null, refetchInterval } = options;
+  const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null } = options;
   type ProjectionPageParam =
     | { anchor: "tail"; cursor?: string }
     | { anchor: "start"; offset: number; limit: number };
@@ -127,13 +126,14 @@ export function useAgentSessionProjectionInfinite(
     ProjectionPageParam
   >({
     queryKey: ["agent-session-projection-infinite", sessionId, { limit, branch_mode }],
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       const page = await fetchAgentSessionProjection(sessionId!, {
         limit: pageParam.anchor === "tail" ? limit : pageParam.limit,
         anchor: pageParam.anchor,
         cursor: pageParam.anchor === "tail" ? pageParam.cursor : undefined,
         offset: pageParam.anchor === "start" ? pageParam.offset : undefined,
         branch_mode,
+        signal,
       });
       // Reading the newest page is a full tail read: deltas may build on it.
       if (pageParam.anchor === "tail" && !pageParam.cursor) lastFullTailRefreshAt.set(sessionId!, Date.now());
@@ -165,13 +165,14 @@ export function useAgentSessionProjectionInfinite(
     initialData: initialPage
       ? { pages: [initialPage], pageParams: [{ anchor: "tail" }] }
       : undefined,
-    // A built-in refetch restarts from the oldest loaded page and drops the
-    // rest (see refreshAgentSessionProjectionTail), so once the reader has
-    // scrolled up, only refreshAgentSessionProjectionTail may refresh it.
-    refetchInterval: (query) => (holdsOlderPages(query.state.data) ? false : (refetchInterval ?? false)),
-    refetchOnMount: (query) => !holdsOlderPages(query.state.data),
-    refetchOnWindowFocus: (query) => !holdsOlderPages(query.state.data),
-    refetchOnReconnect: (query) => !holdsOlderPages(query.state.data),
+    // The held tail's transcript_revision decides when to read again
+    // (transcript-revision-sync.md): useSessionWorkspace compares it with
+    // every revision the server reports and calls
+    // refreshAgentSessionProjectionTail. A built-in refetch would race that
+    // (and restart from the oldest loaded page), so there is none.
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
@@ -239,9 +240,52 @@ function projectionInfiniteQueries(queryClient: QueryClient, sessionId: string) 
     .findAll({ queryKey: ["agent-session-projection-infinite", sessionId] });
 }
 
-export function sessionHoldsOlderProjectionPages(queryClient: QueryClient, sessionId: string): boolean {
-  return projectionInfiniteQueries(queryClient, sessionId).some((query) =>
-    holdsOlderPages(query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined),
+function tailPage(
+  data: InfiniteData<AgentSessionProjectionResponse> | undefined,
+): AgentSessionProjectionResponse | undefined {
+  return data?.pages[data.pages.length - 1];
+}
+
+function revisionOf(page: AgentSessionProjectionResponse | undefined): number | null {
+  const value = page?.transcript_revision;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The revision of the transcript this page holds: the lowest held tail
+ * revision across the session's projection views, or null when any view has
+ * no tail or no revision (then it must read).
+ */
+export function heldTranscriptRevision(queryClient: QueryClient, sessionId: string): number | null {
+  const queries = projectionInfiniteQueries(queryClient, sessionId);
+  if (queries.length === 0) return null;
+  let held: number | null = Number.POSITIVE_INFINITY;
+  for (const query of queries) {
+    const revision = revisionOf(tailPage(query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined));
+    if (revision === null) return null;
+    held = Math.min(held, revision);
+  }
+  return held;
+}
+
+/**
+ * A read that saw an older transcript than the tail already held: writing it
+ * would move the page backwards, and since a read only happens when the
+ * server reports something newer, nothing would move it forward again. A new
+ * generation is a different transcript, never older.
+ */
+function isOlderThanHeld(
+  held: AgentSessionProjectionResponse | undefined,
+  fresh: AgentSessionProjectionResponse,
+): boolean {
+  const heldRevision = revisionOf(held);
+  const freshRevision = revisionOf(fresh);
+  return (
+    held !== undefined &&
+    held.generation_id === fresh.generation_id &&
+    heldRevision !== null &&
+    freshRevision !== null &&
+    freshRevision < heldRevision
   );
 }
 
@@ -307,6 +351,10 @@ export function applyProjectionDelta(
   ) {
     return null;
   }
+  const tailRevision = revisionOf(tail);
+  const deltaRevision = revisionOf(delta);
+  // Nothing newer than what is held: already applied, or overtaken.
+  if (tailRevision !== null && deltaRevision !== null && deltaRevision <= tailRevision) return data;
   const anchorAt = tail.items.findIndex((item) => item.event?.cursor === anchorCursor);
   if (anchorAt < 0) return null;
   const kept = tail.items.slice(0, anchorAt + 1);
@@ -319,6 +367,7 @@ export function applyProjectionDelta(
     items: [...kept, ...delta.items],
     total: delta.total,
     abandoned_events: delta.abandoned_events,
+    transcript_revision: deltaRevision ?? tailRevision,
   };
   return { pages: [...data.pages.slice(0, -1), freshTail], pageParams: data.pageParams };
 }
@@ -327,24 +376,21 @@ async function refreshTailInFull(
   queryClient: QueryClient,
   sessionId: string,
   queryKey: ProjectionInfiniteKey,
-  data: InfiniteData<AgentSessionProjectionResponse> | undefined,
-): Promise<void> {
+): Promise<boolean> {
   lastFullTailRefreshAt.set(sessionId, Date.now());
-  if (!holdsOlderPages(data)) {
-    await queryClient.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
-    return;
-  }
   const { limit, branch_mode } = queryKey[2];
   let freshTail: AgentSessionProjectionResponse;
   try {
     freshTail = await fetchAgentSessionProjection(sessionId, { limit, anchor: "tail", branch_mode });
   } catch {
-    // Like a failed invalidation: keep what is on screen; the next wake
-    // or fallback poll asks again.
-    return;
+    // Keep what is on screen; the caller decides whether to ask again.
+    return false;
   }
+  tailReadFromNetworkAt.set(freshTail, Date.now());
   queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
-    if (!current) return current;
+    if (!current) return { pages: [freshTail], pageParams: [{ anchor: "tail" }] };
+    if (isOlderThanHeld(tailPage(current), freshTail)) return current;
+    if (!holdsOlderPages(current)) return { pages: [freshTail], pageParams: [{ anchor: "tail" }] };
     return (
       stitchProjectionTail(current, freshTail) ?? {
         pages: [freshTail],
@@ -352,6 +398,11 @@ async function refreshTailInFull(
       }
     );
   });
+  return true;
+}
+
+function isDeadlineAbort(error: unknown): boolean {
+  return error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
 /**
@@ -367,17 +418,16 @@ async function refreshTailInFull(
 export async function refreshAgentSessionProjectionTail(
   queryClient: QueryClient,
   sessionId: string,
-): Promise<void> {
-  await Promise.all(
-    projectionInfiniteQueries(queryClient, sessionId).map(async (query) => {
+): Promise<boolean> {
+  const results = await Promise.all(
+    projectionInfiniteQueries(queryClient, sessionId).map(async (query): Promise<boolean> => {
       const queryKey = query.queryKey as ProjectionInfiniteKey;
       const data = query.state.data as InfiniteData<AgentSessionProjectionResponse> | undefined;
-      const tail = data?.pages[data.pages.length - 1];
+      const tail = tailPage(data);
       const anchor = tail?.generation_id ? projectionDeltaAnchor(tail) : null;
       const fullDue = fullTailReadDue(sessionId, tail);
       if (!data || !anchor || fullDue) {
-        await refreshTailInFull(queryClient, sessionId, queryKey, data);
-        return;
+        return refreshTailInFull(queryClient, sessionId, queryKey);
       }
       const { limit, branch_mode } = queryKey[2];
       let delta: AgentSessionProjectionResponse;
@@ -388,10 +438,12 @@ export async function refreshAgentSessionProjectionTail(
           cursor: anchor.cursor,
           branch_mode,
         });
-      } catch {
+      } catch (error) {
+        // A read that ran out its deadline would only run out another one:
+        // give up this round and let the next revision start a fresh one.
+        if (isDeadlineAbort(error)) return false;
         // A stale generation (409) or an outage: read the whole tail instead.
-        await refreshTailInFull(queryClient, sessionId, queryKey, data);
-        return;
+        return refreshTailInFull(queryClient, sessionId, queryKey);
       }
       let applied = false;
       queryClient.setQueryData<InfiniteData<AgentSessionProjectionResponse>>(queryKey, (current) => {
@@ -400,9 +452,10 @@ export async function refreshAgentSessionProjectionTail(
         applied = next !== null;
         return next ?? current;
       });
-      if (!applied) await refreshTailInFull(queryClient, sessionId, queryKey, data);
+      return applied || refreshTailInFull(queryClient, sessionId, queryKey);
     }),
   );
+  return results.every(Boolean);
 }
 
 /**

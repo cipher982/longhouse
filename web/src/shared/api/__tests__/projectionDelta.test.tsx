@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyProjectionDelta,
   applyPushedProjectionDelta,
+  heldTranscriptRevision,
   projectionDeltaAnchor,
   refreshAgentSessionProjectionTail,
   useAgentSessionProjectionInfinite,
@@ -31,7 +32,14 @@ function page(
     hasMore = false,
     nextCursor = null,
     running = [] as number[],
-  }: { generationId?: string; hasMore?: boolean; nextCursor?: string | null; running?: number[] } = {},
+    revision,
+  }: {
+    generationId?: string;
+    hasMore?: boolean;
+    nextCursor?: string | null;
+    running?: number[];
+    revision?: number;
+  } = {},
 ): AgentSessionProjectionResponse {
   return {
     root_session_id: "s",
@@ -58,6 +66,7 @@ function page(
     generation_id: generationId,
     has_more: hasMore,
     next_cursor: nextCursor,
+    ...(revision !== undefined ? { transcript_revision: revision } : {}),
   };
 }
 
@@ -230,5 +239,68 @@ describe("applyPushedProjectionDelta", () => {
     const { queryClient, sessionId } = seeded(page(range(1, 30)), "all");
     await afterFullRead(queryClient, sessionId);
     expect(applyPushedProjectionDelta(queryClient, sessionId, pushed(range(11, 31), 10))).toBe(false);
+  });
+});
+
+describe("transcript revision on held pages", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const held = (tail: AgentSessionProjectionResponse) => ({ pages: [tail], pageParams: [{ anchor: "tail" }] });
+
+  it("carries the delta's revision onto the tail page", () => {
+    const next = applyProjectionDelta(held(page(range(1, 25), { revision: 10 })), page(range(10, 27), { revision: 12 }), "c-9");
+    expect(next?.pages.at(-1)?.transcript_revision).toBe(12);
+  });
+
+  it("treats a delta no newer than the held tail as already applied", () => {
+    const current = held(page(range(1, 27), { revision: 12 }));
+    expect(applyProjectionDelta(current, page(range(10, 26), { revision: 11 }), "c-9")).toBe(current);
+    expect(applyProjectionDelta(current, page(range(10, 27), { revision: 12 }), "c-9")).toBe(current);
+  });
+
+  it("reports the lowest held tail revision, and null when one is unknown", () => {
+    const queryClient = new QueryClient();
+    expect(heldTranscriptRevision(queryClient, "rev")).toBeNull();
+    queryClient.setQueryData(["agent-session-projection-infinite", "rev", { limit: 200, branch_mode: "head" }], held(page([1], { revision: 9 })));
+    queryClient.setQueryData(["agent-session-projection-infinite", "rev", { limit: 200, branch_mode: "all" }], held(page([1], { revision: 7 })));
+    expect(heldTranscriptRevision(queryClient, "rev")).toBe(7);
+    queryClient.setQueryData(["agent-session-projection-infinite", "rev", { limit: 50, branch_mode: "head" }], held(page([1])));
+    expect(heldTranscriptRevision(queryClient, "rev")).toBeNull();
+  });
+
+  it("never moves the held tail back to an older read", async () => {
+    const queryClient = new QueryClient();
+    const key = ["agent-session-projection-infinite", "monotonic", { limit: 200, branch_mode: "head" }];
+    queryClient.setQueryData(key, held(page(range(1, 30), { revision: 20 })));
+    // A full read that started before the newer rows landed.
+    apiMocks.fetchAgentSessionProjection.mockResolvedValue(page(range(1, 28), { revision: 18 }));
+    await refreshAgentSessionProjectionTail(queryClient, "monotonic");
+    const data = queryClient.getQueryData<{ pages: AgentSessionProjectionResponse[] }>(key);
+    expect(data?.pages.at(-1)?.transcript_revision).toBe(20);
+    expect(data?.pages.at(-1)?.items).toHaveLength(30);
+  });
+
+  it("takes a read from a new generation even at a lower revision", async () => {
+    const queryClient = new QueryClient();
+    const key = ["agent-session-projection-infinite", "regen", { limit: 200, branch_mode: "head" }];
+    queryClient.setQueryData(key, held(page(range(1, 30), { revision: 20 })));
+    apiMocks.fetchAgentSessionProjection.mockResolvedValue(page(range(1, 5), { revision: 18, generationId: "gen-2" }));
+    await refreshAgentSessionProjectionTail(queryClient, "regen");
+    const data = queryClient.getQueryData<{ pages: AgentSessionProjectionResponse[] }>(key);
+    expect(data?.pages.at(-1)?.generation_id).toBe("gen-2");
+  });
+
+  it("ends a round whose delta read ran out its deadline without a second read", async () => {
+    const queryClient = new QueryClient();
+    const sessionId = "deadline";
+    const key = ["agent-session-projection-infinite", sessionId, { limit: 200, branch_mode: "head" }];
+    queryClient.setQueryData(key, held(page(range(1, 30), { revision: 20 })));
+    // Start the once-a-minute correction clock with a full read.
+    apiMocks.fetchAgentSessionProjection.mockResolvedValueOnce(page(range(1, 30), { revision: 20 }));
+    await refreshAgentSessionProjectionTail(queryClient, sessionId);
+    apiMocks.fetchAgentSessionProjection.mockClear();
+    apiMocks.fetchAgentSessionProjection.mockRejectedValue(new DOMException("signal timed out", "TimeoutError"));
+
+    await expect(refreshAgentSessionProjectionTail(queryClient, sessionId)).resolves.toBe(false);
+    expect(apiMocks.fetchAgentSessionProjection).toHaveBeenCalledTimes(1);
   });
 });

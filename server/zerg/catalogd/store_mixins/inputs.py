@@ -20,6 +20,7 @@ from zerg.catalogd.fact_reducer import _advance_commit_seq
 from zerg.catalogd.fact_reducer import _current_commit_seq
 
 # store.py imports this module after defining these, at its end.
+from zerg.catalogd.store import _advance_transcript_revision
 from zerg.catalogd.store import _console_turns_with_reporting_run
 from zerg.catalogd.store import _directed_input_dto
 from zerg.catalogd.store import _input_attachment_dto
@@ -614,6 +615,9 @@ class InputsMixin:
                 # A candidate is removed implicitly by remaining_receipts; the
                 # next iteration recomputes competing pairs.
             commit_seq = _advance_commit_seq(connection, observed_at) if linked else _current_commit_seq(connection)
+            if linked:
+                # A link names who sent a user row (its input_origin).
+                _advance_transcript_revision(connection, session_ids=(session_id,), commit_seq=int(commit_seq))
             return {"linked": linked, "commit_seq": str(commit_seq)}
 
     def list_recent_input_receipts(self, *, session_id: str) -> dict[str, Any]:

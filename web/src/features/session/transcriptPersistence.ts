@@ -146,9 +146,14 @@ export function startTranscriptPersistence(
     if (queryClient.getQueryData(workspaceKey(sessionId)) !== undefined) return;
     const record = await readCachedTranscript<WorkspaceRecord>(sessionId, "workspace");
     if (!record?.workspace || queryClient.getQueryData(workspaceKey(sessionId)) !== undefined) return;
-    // `updatedAt` from disk keeps the entry stale: the mounted page refetches.
-    seed(workspaceKey(sessionId), record.workspace, record.savedAt);
-    const tail = record.workspace.projection;
+    // A disk copy vouches for no revision: without one the page treats its
+    // transcript as unknown and reads it as soon as the server reports where
+    // the transcript is (transcript-revision-sync.md). `updatedAt` from disk
+    // keeps the workspace stale, so the mounted page refetches it too.
+    const tail = record.workspace.projection
+      ? { ...record.workspace.projection, transcript_revision: undefined }
+      : record.workspace.projection;
+    seed(workspaceKey(sessionId), { ...record.workspace, projection: tail }, record.savedAt);
     if (tail && queryClient.getQueryData(pagesKey(sessionId)) === undefined) {
       seed(pagesKey(sessionId), { pages: [tail], pageParams: [{ anchor: "tail" }] } satisfies ProjectionPages, record.savedAt);
     }

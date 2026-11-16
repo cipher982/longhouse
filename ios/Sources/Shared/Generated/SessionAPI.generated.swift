@@ -420,6 +420,7 @@ struct APISessionTranscriptFacts: Codable, Hashable, Sendable {
     let sourceRevision: Int?
     let durableRevision: Int?
     let renderRevision: Int?
+    let transcriptRevision: Int?
     let lastAppendAt: String?
     let searchable: Bool?
     let liveObservation: Bool?

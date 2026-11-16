@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  holdsOlderPages,
   applyPushedProjectionDelta,
+  heldTranscriptRevision,
   pushedProjectionDeltaMayApply,
   refreshAgentSessionProjectionTail,
-  sessionHoldsOlderProjectionPages,
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
 } from "@/shared/api/useAgentSessions";
@@ -54,27 +53,35 @@ const WORKSPACE_FALLBACK_REFRESH_MS =
   (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) ||
   5_000;
 
-/** Slow reconciliation interval used even when SSE is connected.
- *  Server flips unpaired tool calls older than DROPPED_TOOL_AGE (1h) to
- *  "dropped" lazily on read; if SSE stays quiet (no other event in the session)
- *  the client otherwise never re-asks. ~60s keeps tool_call_state honest with
- *  small overhead. */
-const WORKSPACE_RECONCILE_REFRESH_MS = 60_000;
+/** Backoff for a transcript round that failed while the page is behind:
+ *  1 s, 2 s, 4 s ... capped, until a round lands or a newer report starts one. */
+const TRANSCRIPT_RETRY_BASE_MS = 1_000;
+const TRANSCRIPT_RETRY_MAX_MS = 15_000;
 
-function workspaceHasRunningTool(
-  workspace:
-    | { projection?: { items?: AgentSessionProjectionItem[] | null } | null }
-    | null
-    | undefined,
-): boolean {
-  const items = workspace?.projection?.items;
-  if (!items) return false;
-  for (const item of items) {
-    if (item.kind === "event" && item.event?.tool_call_state === "running") {
-      return true;
-    }
-  }
-  return false;
+/**
+ * A running tool call's state follows the session, not a transcript write:
+ * the server reads it as "dropped" once the session closes and "completed"
+ * once a Cursor run ends (storage_v2_workspace._event_projection). The page
+ * applies the same rule to the rows it holds, so closing a session settles
+ * its spinners with no read.
+ */
+export function settleRunningTools(
+  items: AgentSessionProjectionItem[],
+  session: Pick<AgentSession, "provider" | "runtime_display" | "session_state"> | null,
+): AgentSessionProjectionItem[] {
+  if (!session) return items;
+  const closed = session.runtime_display?.lifecycle === "closed";
+  const cursorRunEnded =
+    session.provider === "cursor" && session.session_state?.run?.lifecycle === "ended";
+  if (!closed && !cursorRunEnded) return items;
+  const settled: "completed" | "dropped" = cursorRunEnded ? "completed" : "dropped";
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.event?.tool_call_state !== "running") return item;
+    changed = true;
+    return { ...item, event: { ...item.event, tool_call_state: settled } };
+  });
+  return changed ? next : items;
 }
 
 interface UseSessionWorkspaceOptions {
@@ -233,8 +240,6 @@ export function useSessionWorkspace(
         return WORKSPACE_FALLBACK_REFRESH_MS;
       }
 
-      // Slow reconciliation: server flips unpaired tool calls to "dropped"
-      // after 1h on demand, so we re-ask occasionally even when SSE is quiet.
       if (streamConnected) {
         // Machine-control connect/disconnect is process-local state, not a
         // durable workspace mutation, so it does not wake the session SSE
@@ -244,9 +249,7 @@ export function useSessionWorkspace(
         if (currentSession.session_state.mode === "console") {
           return WORKSPACE_FALLBACK_REFRESH_MS;
         }
-        return workspaceHasRunningTool(query.state.data)
-          ? WORKSPACE_RECONCILE_REFRESH_MS
-          : false;
+        return false;
       }
 
       // Stream is down: poll at the shorter fallback cadence.
@@ -259,7 +262,16 @@ export function useSessionWorkspace(
   knownWorkspaceFingerprintRef.current = knownWorkspaceFingerprint;
   const workspaceReady = workspaceData !== undefined;
 
-  // SSE stream subscription — invalidates queries on server-side change detection
+  // Transcript sync (control-plane spec transcript-revision-sync.md): the page
+  // holds the transcript at a revision, and every source that reports the
+  // server's revision (the stream's frames, a workspace snapshot) goes through
+  // one comparison. The transcript is read when, and only when, the server's
+  // revision is newer than the one held.
+  const observeTranscriptRevisionRef = useRef<
+    ((revision: number | null | undefined, options?: { follows?: boolean }) => void) | null
+  >(null);
+
+  // SSE stream subscription — refreshes queries on server-side change detection
   useEffect(() => {
     // Always reset connection state at effect entry; the replacement stream
     // hasn't confirmed yet, so the fallback poll should stay armed until the
@@ -276,32 +288,30 @@ export function useSessionWorkspace(
       ["agent-session-thread", sessionId],
       ["agent-sessions"],
     ] as const;
-    // The paged transcript is refreshed by refreshAgentSessionProjectionTail,
-    // not invalidated: an invalidation would drop the pages above the tail.
-    const transcriptRefreshQueryKeys = [
-      ["agent-session-events", sessionId],
-      ["agent-session-events-infinite", sessionId],
-      ["session-subagents", sessionId],
-    ] as const;
+    // Read beside the transcript whenever it is read. The paged transcript
+    // itself is refreshed by refreshAgentSessionProjectionTail, never
+    // invalidated: an invalidation would drop the pages above the tail.
+    const transcriptRefreshQueryKeys = [["session-subagents", sessionId]] as const;
     // Two independent coalescing lanes. Every wake refreshes the workspace
-    // snapshot; only transcript mutations also refresh the transcript. Each
-    // lane waits only for its own in-flight round (an invalidation joins an
-    // in-flight fetch, which may predate the change, so a wake that lands
-    // mid-round must run one more). Sharing one round made an ingest wake wait
-    // for whatever workspace refetch a runtime wake had just started: during a
-    // live turn runtime wakes arrive several per second, so on a slow Runtime
-    // Host the durable echo of a send and its reply reached the page a full
-    // workspace round late (stranger run F6).
-    const lanes = {
-      base: { keys: baseRefreshQueryKeys, inFlight: false, queued: false },
-      transcript: {
-        keys: transcriptRefreshQueryKeys,
-        refreshProjectionTail: true,
-        inFlight: false,
-        queued: false,
-        retirePreview: false,
-      },
+    // snapshot; the transcript lane runs only when the server reports a newer
+    // transcript. Each lane runs one round at a time and queues at most one
+    // more, so a burst of wakes costs two reads, and neither lane waits for the
+    // other (stranger run F6).
+    const base = { inFlight: false, queued: false };
+    const transcript = {
+      inFlight: false,
+      queued: false,
+      // The newest revision a round now running (or queued) is sure to cover:
+      // it started after that revision was reported, and reads only rise.
+      covers: 0,
+      retirePreview: false,
+      // Consecutive failed rounds, for the retry backoff.
+      failures: 0,
     };
+    let disposed = false;
+    let latestReported = 0;
+    let retryTimer: number | null = null;
+
     const applyStreamTranscriptPreview = (
       transcriptPreview: SessionTranscriptPreview | null,
       { keepThinking = false }: { keepThinking?: boolean } = {},
@@ -330,7 +340,12 @@ export function useSessionWorkspace(
         },
       );
     };
-    let disposed = false;
+    const retireReplyPreview = () => {
+      transcript.retirePreview = false;
+      // Retiring the reply preview after an ingest must not take a live
+      // thinking row with it: the prompt's own ingest lands while thinking.
+      applyStreamTranscriptPreview(null, { keepThinking: true });
+    };
     let freshnessTimer: number | null = null;
     const armFreshnessDeadline = () => {
       setStreamConnected(true);
@@ -340,107 +355,149 @@ export function useSessionWorkspace(
         if (!disposed) setStreamConnected(false);
       }, STREAM_FRAME_FRESHNESS_MS);
     };
-    const runLane = (lane: {
-      keys: readonly (readonly unknown[])[];
-      refreshProjectionTail?: boolean;
-      inFlight: boolean;
-      queued: boolean;
-      retirePreview?: boolean;
-    }) => {
-      if (lane.inFlight) {
-        lane.queued = true;
+
+    const runBase = () => {
+      if (base.inFlight) {
+        base.queued = true;
         return;
       }
-      lane.inFlight = true;
-      void Promise.all([
-        ...lane.keys.map((queryKey) =>
+      base.inFlight = true;
+      void Promise.all(
+        baseRefreshQueryKeys.map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
         ),
-        ...(lane.refreshProjectionTail
-          ? [refreshAgentSessionProjectionTail(queryClient, sessionId)]
-          : []),
-      ]).finally(() => {
-        lane.inFlight = false;
-        if (disposed) return;
-        if (lane.queued) {
-          lane.queued = false;
-          runLane(lane);
-        } else if (lane.retirePreview && !(lane === lanes.transcript && deltaWait !== null)) {
-          // (While pushed rows are awaited, their arrival retires it.)
-          lane.retirePreview = false;
-          // Retiring the reply preview after an ingest must not take a live
-          // thinking row with it: the prompt's own ingest lands while thinking.
-          applyStreamTranscriptPreview(null, { keepThinking: true });
-        }
+      ).finally(() => {
+        base.inFlight = false;
+        if (disposed || !base.queued) return;
+        base.queued = false;
+        runBase();
       });
     };
-    const refreshWorkspaceQueries = (includeTranscript: boolean) => {
-      runLane(lanes.base);
-      if (includeTranscript) runLane(lanes.transcript);
-    };
-    // An ingest wake marked "follows" is trailed by a projection_delta frame
-    // carrying the newest rows. The transcript read waits for one that covers
-    // the latest such wake, then falls back to HTTP if it does not come in
-    // time or cannot be applied. The wait runs from the first wake it covers,
-    // so a steady run of wakes cannot postpone the fallback forever.
+
+    // A frame marked "follows" is trailed by a projection_delta frame with the
+    // newest rows. The transcript waits for a pushed delta that reaches the
+    // reported revision, then reads over HTTP if none came in time. The wait
+    // runs from the first frame it covers, so a steady run of frames cannot
+    // postpone the read forever.
     let deltaWait: number | null = null;
-    let awaitedDeltaSeq = 0;
+    let awaitedRevision = 0;
     const stopWaitingForDelta = () => {
-      awaitedDeltaSeq = 0;
-      if (deltaWait === null) return false;
+      awaitedRevision = 0;
+      if (deltaWait === null) return;
       window.clearTimeout(deltaWait);
       deltaWait = null;
-      return true;
     };
-    // A projection refetch React Query runs by itself (focus, mount,
-    // reconnect) can also land after pushed rows with an older tail.
-    let projectionFetchWatch: (() => void) | null = null;
-    const projectionKey = ["agent-session-projection-infinite", sessionId];
-    const rereadAfterProjectionFetch = () => {
-      if (projectionFetchWatch || queryClient.isFetching({ queryKey: projectionKey }) === 0) return;
-      projectionFetchWatch = queryClient.getQueryCache().subscribe(() => {
-        if (queryClient.isFetching({ queryKey: projectionKey }) > 0) return;
-        projectionFetchWatch?.();
-        projectionFetchWatch = null;
-        if (!disposed) runLane(lanes.transcript);
-      });
+    const behind = (revision: number) => {
+      const held = heldTranscriptRevision(queryClient, sessionId);
+      return held === null || revision > held;
     };
-    const waitForPushedDelta = (pubsubSeq: number | null | undefined) => {
-      runLane(lanes.base);
-      awaitedDeltaSeq = Math.max(awaitedDeltaSeq, pubsubSeq ?? 0);
-      if (deltaWait !== null) return;
-      deltaWait = window.setTimeout(() => {
-        deltaWait = null;
-        awaitedDeltaSeq = 0;
-        if (!disposed) runLane(lanes.transcript);
-      }, PUSHED_DELTA_WAIT_MS);
+
+    const runTranscript = () => {
+      if (transcript.inFlight) {
+        transcript.queued = true;
+        return;
+      }
+      stopWaitingForDelta();
+      transcript.inFlight = true;
+      transcript.covers = latestReported;
+      void Promise.all([
+        refreshAgentSessionProjectionTail(queryClient, sessionId),
+        ...transcriptRefreshQueryKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
+        ),
+      ])
+        .then(([tailRead]) => tailRead, () => false)
+        .then((tailRead) => {
+          transcript.inFlight = false;
+          if (disposed) return;
+          if (transcript.queued) {
+            transcript.queued = false;
+            runTranscript();
+            return;
+          }
+          if (transcript.retirePreview) retireReplyPreview();
+          // Still behind what the server reported (the read failed, ran out
+          // its deadline, or saw an older snapshot): try again with backoff.
+          // A turn's last reply may be the last report for a long while, so
+          // waiting for the next one is not enough.
+          if (!behind(latestReported) || latestReported === 0) {
+            transcript.failures = 0;
+            return;
+          }
+          transcript.failures = tailRead ? 0 : transcript.failures + 1;
+          if (retryTimer !== null) return;
+          const delay = Math.min(
+            TRANSCRIPT_RETRY_BASE_MS * 2 ** Math.max(0, transcript.failures - 1),
+            TRANSCRIPT_RETRY_MAX_MS,
+          );
+          retryTimer = window.setTimeout(() => {
+            retryTimer = null;
+            if (!disposed && behind(latestReported)) runTranscript();
+          }, delay);
+        });
     };
-    // A transcript paged above its tail opts out of mount and focus refetches
-    // (they would drop those pages), so reopening or refocusing the session
-    // refreshes its tail here instead. Session open stays a durable refresh.
-    if (sessionHoldsOlderProjectionPages(queryClient, sessionId)) {
-      runLane(lanes.transcript);
-    }
+
+    /**
+     * The one rule. `revision` is the server's transcript revision from any
+     * source; null means a source that should carry one did not (an older
+     * server, or a catalog read that failed), which reads to be safe.
+     */
+    const observeTranscriptRevision = (
+      revision: number | null | undefined,
+      { follows = false }: { follows?: boolean } = {},
+    ) => {
+      if (typeof revision === "number") {
+        latestReported = Math.max(latestReported, revision);
+        if (!behind(revision)) {
+          if (transcript.retirePreview && !transcript.inFlight && deltaWait === null) {
+            retireReplyPreview();
+          }
+          return;
+        }
+        // A round already running started after this revision was reported.
+        if (transcript.inFlight && revision <= transcript.covers) return;
+      }
+      if (
+        follows &&
+        typeof revision === "number" &&
+        !transcript.inFlight &&
+        pushedProjectionDeltaMayApply(queryClient, sessionId)
+      ) {
+        awaitedRevision = Math.max(awaitedRevision, revision);
+        if (deltaWait === null) {
+          deltaWait = window.setTimeout(() => {
+            deltaWait = null;
+            const awaited = awaitedRevision;
+            awaitedRevision = 0;
+            if (!disposed && behind(awaited)) runTranscript();
+            else if (!disposed && transcript.retirePreview) retireReplyPreview();
+          }, PUSHED_DELTA_WAIT_MS);
+        }
+        return;
+      }
+      runTranscript();
+    };
+    observeTranscriptRevisionRef.current = observeTranscriptRevision;
 
     const cleanup = connectSessionWorkspaceStream(
       sessionId,
       {
         onConnected: (data) => {
-          const previousEpoch = streamEpochRef.current;
-          const nextEpoch = data?.stream_epoch ?? null;
-          streamEpochRef.current = nextEpoch;
+          streamEpochRef.current = data?.stream_epoch ?? null;
           recordServerClockSkew(data?.server_now_ms);
           armFreshnessDeadline();
-          if (previousEpoch && nextEpoch && previousEpoch !== nextEpoch) {
-            refreshWorkspaceQueries(true);
-          }
+          // A fresh attachment (a reconnect, a tab shown again, a new server
+          // process) learns where the transcript is here, whatever it missed.
+          observeTranscriptRevision(data?.transcript_revision);
         },
         onHeartbeat: () => {
           activityFeed.markHeartbeat();
           armFreshnessDeadline();
         },
         onReplayGap: () => {
-          refreshWorkspaceQueries(true);
+          // Frames were lost: the snapshot is re-read, and the transcript
+          // follows the revision the next frame reports.
+          runBase();
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
@@ -486,23 +543,20 @@ export function useSessionWorkspace(
           const isFreshTranscriptPreview =
             transcriptPreview !== null &&
             shouldRenderTranscriptPreview(transcriptPreview);
-          const isTranscriptMutation =
+          // Frames that speak for the reply preview: an ingest, a preview, and
+          // the attach frame. A runtime wake's copy is not authoritative.
+          const speaksForPreview =
+            !data.change_kind ||
             data.change_kind === "ingest" ||
-            (data.change_kind === "transcript_preview" &&
-              !isFreshTranscriptPreview) ||
-            (!data.change_kind &&
-              (data.latest_event_id > 0 || hasTranscriptPreview));
-          if (
-            hasTranscriptPreview &&
-            (isTranscriptMutation || isFreshTranscriptPreview)
-          ) {
+            data.change_kind === "transcript_preview";
+          if (hasTranscriptPreview && (speaksForPreview || isFreshTranscriptPreview)) {
             if (transcriptPreview === null && data.change_kind === "ingest") {
               // The durable rows that replace the preview are not on the page
               // until the transcript round lands; clearing it now blanked the
               // live reply for a whole fetch.
-              lanes.transcript.retirePreview = true;
+              transcript.retirePreview = true;
             } else {
-              lanes.transcript.retirePreview = false;
+              transcript.retirePreview = false;
               applyStreamTranscriptPreview(transcriptPreview);
             }
           }
@@ -517,50 +571,44 @@ export function useSessionWorkspace(
           };
           setPendingRenderBeaconVersion((version) => version + 1);
 
-          if (isFreshTranscriptPreview) {
-            // The preview is already applied to the workspace cache and local
-            // projection. Wait for the durable ingest wake before refetching
-            // transcript queries; runtime wakes must not evict it.
-            return;
+          // A live preview is provisional text ahead of its durable write: it
+          // says nothing about the transcript, so it neither reads it nor
+          // re-reads the snapshot.
+          if (isFreshTranscriptPreview) return;
+          runBase();
+          // The attach frame and every wake after a catalog read carry the
+          // revision. An ingest frame without one could not read the catalog,
+          // so it reads to be safe; other frames without one are not about
+          // the transcript.
+          const carriesRevision = Object.prototype.hasOwnProperty.call(
+            data,
+            "transcript_revision",
+          );
+          if (carriesRevision || data.change_kind === "ingest") {
+            observeTranscriptRevision(data.transcript_revision, {
+              follows: data.projection_delta === "follows",
+            });
           }
-          // Wait for the pushed rows only when they can be applied and no
-          // transcript read is under way: a read in flight may have started
-          // before this ingest and would replace the pushed rows with older
-          // ones, so it gets the usual follow-up round instead.
-          if (
-            isTranscriptMutation &&
-            data.projection_delta === "follows" &&
-            !lanes.transcript.inFlight &&
-            pushedProjectionDeltaMayApply(queryClient, sessionId)
-          ) {
-            waitForPushedDelta(data.pubsub_seq);
-            return;
-          }
-          refreshWorkspaceQueries(isTranscriptMutation);
         },
         onProjectionDelta: (data) => {
           armFreshnessDeadline();
+          // Rows no newer than the held tail: already here, or overtaken.
+          // They must not cancel a wait for newer ones.
+          const deltaRevision = data.delta.transcript_revision;
+          if (typeof deltaRevision === "number" && !behind(deltaRevision)) return;
           if (!applyPushedProjectionDelta(queryClient, sessionId, data.delta)) {
-            // Not applicable here: read over HTTP as an unmarked wake would.
-            if (stopWaitingForDelta()) runLane(lanes.transcript);
+            // Not applicable here: read over HTTP instead.
+            if (deltaWait !== null) runTranscript();
             return;
           }
-          // Read before a later wake: keep waiting for the push that covers it.
-          const coversLatest = (data.pubsub_seq ?? Number.POSITIVE_INFINITY) >= awaitedDeltaSeq;
-          if (coversLatest) stopWaitingForDelta();
-          // A transcript read already under way may have begun before these
-          // rows existed and would put the older tail back: read once more
-          // after it (a delta read on top of whatever it wrote).
-          if (lanes.transcript.inFlight) lanes.transcript.queued = true;
-          else rereadAfterProjectionFetch();
-          // The rows are on the page. The other transcript queries refresh as
-          // on any ingest, and a reply preview the rows replace retires now.
-          for (const queryKey of transcriptRefreshQueryKeys) {
-            void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
-          }
-          if (coversLatest && lanes.transcript.retirePreview && !lanes.transcript.inFlight) {
-            lanes.transcript.retirePreview = false;
-            applyStreamTranscriptPreview(null, { keepThinking: true });
+          // The rows are on the page (or were already). Stop waiting once
+          // the held transcript reaches what the frames reported.
+          if (deltaWait !== null && !behind(awaitedRevision)) {
+            stopWaitingForDelta();
+            for (const queryKey of transcriptRefreshQueryKeys) {
+              void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+            }
+            if (transcript.retirePreview && !transcript.inFlight) retireReplyPreview();
           }
         },
         onError: () => {
@@ -584,9 +632,10 @@ export function useSessionWorkspace(
 
     return () => {
       disposed = true;
+      observeTranscriptRevisionRef.current = null;
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       stopWaitingForDelta();
-      projectionFetchWatch?.();
       cleanup();
     };
   }, [
@@ -597,6 +646,15 @@ export function useSessionWorkspace(
     onlineEpoch,
     activityFeed,
   ]);
+  // A workspace snapshot reports the server's revision too: while the stream
+  // is down it is the polled source, and it costs nothing when it is up.
+  const workspaceTranscriptRevision =
+    workspaceData?.projection?.transcript_revision ?? null;
+  useEffect(() => {
+    if (workspaceTranscriptRevision !== null) {
+      observeTranscriptRevisionRef.current?.(workspaceTranscriptRevision);
+    }
+  }, [workspaceTranscriptRevision]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>
@@ -619,12 +677,6 @@ export function useSessionWorkspace(
       ),
     };
   }, [workspaceData?.thread, sessionId, streamTranscriptPreview]);
-  const projectionFallbackPollMs =
-    streamConnected ||
-    !documentVisible ||
-    !shouldRefreshWorkspaceSession(workspaceData?.session)
-      ? false
-      : WORKSPACE_FALLBACK_REFRESH_MS;
   const {
     data: projectionPagesData,
     isLoading: projectionLoading,
@@ -637,20 +689,7 @@ export function useSessionWorkspace(
     branch_mode: branchMode,
     enabled: Boolean(workspaceData),
     initialPage: workspaceData?.projection ?? null,
-    refetchInterval: projectionFallbackPollMs,
   });
-  // The query's own poll stands down once older pages are loaded; keep the
-  // same cadence for the tail alone.
-  const holdsOlderProjectionPages = holdsOlderPages(projectionPagesData);
-  useEffect(() => {
-    if (!sessionId || !projectionFallbackPollMs || !holdsOlderProjectionPages) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void refreshAgentSessionProjectionTail(queryClient, sessionId);
-    }, projectionFallbackPollMs);
-    return () => window.clearInterval(timer);
-  }, [sessionId, projectionFallbackPollMs, holdsOlderProjectionPages, queryClient]);
 
   const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(
     null,
@@ -749,7 +788,12 @@ export function useSessionWorkspace(
   );
 
   const visibleProjectionItems = useMemo(
-    () => projectionItemsWithTranscriptPreview(projectionItems, session, streamThinking),
+    () =>
+      projectionItemsWithTranscriptPreview(
+        settleRunningTools(projectionItems, session),
+        session,
+        streamThinking,
+      ),
     [projectionItems, session, streamThinking],
   );
   // Workers this session spawned. Hidden from the timeline by design, so the

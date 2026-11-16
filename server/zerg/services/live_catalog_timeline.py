@@ -404,6 +404,7 @@ def _project_session_state(
         source_revision=(catalog_facts.get("transcript_coordinates") or {}).get("source_revision"),
         durable_revision=(catalog_facts.get("transcript_coordinates") or {}).get("durable_revision"),
         render_revision=(catalog_facts.get("transcript_coordinates") or {}).get("render_revision"),
+        transcript_revision=(catalog_facts.get("transcript_coordinates") or {}).get("transcript_revision"),
         transcript_last_append_at=decode_catalog_datetime((catalog_facts.get("transcript_coordinates") or {}).get("last_append_at")),
     )
     return project_served_session_state_facts(

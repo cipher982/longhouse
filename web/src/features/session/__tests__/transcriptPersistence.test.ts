@@ -103,11 +103,16 @@ describe("transcript persistence", () => {
     cleanups.push(observer.subscribe(() => undefined));
 
     // The disk copy is on screen while the network request is still open.
-    await vi.waitFor(() => expect(client.getQueryData(workspaceKey)).toBe(disk));
+    await vi.waitFor(() =>
+      expect(client.getQueryData<AgentSessionWorkspaceResponse>(workspaceKey)?.session).toEqual(disk.session),
+    );
     expect(queryFn).toHaveBeenCalledTimes(1);
-    // Seeded stale, so the transcript query the page mounts next refetches too.
     expect(client.getQueryState(pagesKey)?.dataUpdatedAt).toBe(1);
-    expect(client.getQueryCache().find({ queryKey: pagesKey })?.isStaleByTime(10_000)).toBe(true);
+    // The disk tail vouches for no revision, so the page reads the transcript
+    // as soon as the server says where it is (transcript-revision-sync.md).
+    const seeded = client.getQueryData<InfiniteData<Page>>(pagesKey);
+    expect(seeded?.pages.at(-1)?.items).toEqual(disk.projection?.items);
+    expect(seeded?.pages.at(-1)?.transcript_revision).toBeUndefined();
 
     const network = workspace(page(82, 101), "from network");
     answer(network);
