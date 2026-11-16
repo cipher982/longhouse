@@ -350,3 +350,20 @@ async def test_handoff_supervisor_never_adopts_the_predecessor_and_opens_only_af
         if predecessor.poll() is None:
             await _terminate_and_wait(predecessor)
         handoff_module.reset_catalog_handoff_for_tests(None)
+
+
+def test_external_catalogd_socket_env_gives_a_fresh_client_per_call(monkeypatch, tmp_path):
+    from zerg.services import catalogd_supervisor
+
+    monkeypatch.setattr(catalogd_supervisor, "_supervisor", None)
+    monkeypatch.delenv(catalogd_supervisor.CATALOGD_EXTERNAL_SOCKET_ENV, raising=False)
+    assert catalogd_supervisor.get_catalogd_client() is None
+    assert catalogd_supervisor.get_catalogd_projector_client() is None
+
+    socket_path = tmp_path / "external.sock"
+    monkeypatch.setenv(catalogd_supervisor.CATALOGD_EXTERNAL_SOCKET_ENV, str(socket_path))
+    first = catalogd_supervisor.get_catalogd_client()
+    second = catalogd_supervisor.get_catalogd_client()
+    assert first is not None and second is not None and first is not second
+    assert first.socket_path == socket_path
+    assert catalogd_supervisor.get_catalogd_projector_client() is not None

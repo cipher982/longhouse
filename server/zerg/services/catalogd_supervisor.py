@@ -317,9 +317,28 @@ async def stop_catalogd_supervisor() -> None:
     _supervisor = None
 
 
+# A process with no supervisor of its own can be pointed at a catalogd that something else runs (the provider
+# factory's harness runs one as a child process and drives served routes in-process against it). The socket path
+# comes from this variable; each call gets a fresh client, because a CatalogClient binds its admission semaphore
+# to the first event loop that uses it and such callers run several loops.
+CATALOGD_EXTERNAL_SOCKET_ENV = "LONGHOUSE_CATALOGD_EXTERNAL_SOCKET"
+EXTERNAL_CATALOGD_RPC_TIMEOUT_SECONDS = 15.0
+
+
+def _external_catalogd_client() -> CatalogClient | None:
+    raw = os.environ.get(CATALOGD_EXTERNAL_SOCKET_ENV, "").strip()
+    if not raw:
+        return None
+    return CatalogClient(Path(raw), default_timeout_seconds=EXTERNAL_CATALOGD_RPC_TIMEOUT_SECONDS)
+
+
 def get_catalogd_client() -> CatalogClient | None:
-    return _supervisor.client if _supervisor is not None else None
+    if _supervisor is not None:
+        return _supervisor.client
+    return _external_catalogd_client()
 
 
 def get_catalogd_projector_client() -> CatalogClient | None:
-    return _supervisor.projector_client if _supervisor is not None else None
+    if _supervisor is not None:
+        return _supervisor.projector_client
+    return _external_catalogd_client()
