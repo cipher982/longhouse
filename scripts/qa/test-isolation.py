@@ -679,6 +679,11 @@ MEMORY_TMP_TARGETS = frozenset(
 
 
 def memory_backed_tmp(target: str) -> list[str]:
+    if target.startswith("test-e2e"):
+        # Core E2E keeps its logs and traces in /tmp/longhouse-test/artifacts, which are collected after the container
+        # stops, so /tmp itself must stay on disk. The databases are scratch: on the shared CI disk a create_device
+        # write held the catalogd writer 1.3 s and failed a device-token request (run 43810898738).
+        return ["--tmpfs", "/tmp/longhouse-test/e2e-db:rw,exec,nosuid,size=2g,mode=1777"]
     if target not in MEMORY_TMP_TARGETS:
         return []
     return ["--tmpfs", "/tmp:rw,exec,nosuid,size=2g,mode=1777"]
