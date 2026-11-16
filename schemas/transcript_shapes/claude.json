@@ -2183,7 +2183,7 @@
         "uuid",
         "version"
       ],
-      "evidence": "claude_native_meta_record: a system row; the receiving side of delegation.peer_message, which is not_implemented"
+      "evidence": "claude_native_meta_record: a system row; the receiving side of delegation.peer_message, which is not_implemented; origin.handback and origin.handbackReportText (2.1.3xx subagent hand-backs) are not read: the report is the message content's own body inside the hand-back envelope (both real rows checked 2026-11-16 contain it, whitespace-normalized)"
     },
     "user/meta+origin_task_notification+string": {
       "classification": "provider_notification:task_notification",

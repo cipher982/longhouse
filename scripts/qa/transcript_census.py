@@ -822,11 +822,21 @@ def load_catalog(provider: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _catalog_indent(path: Path) -> int:
+    """The indent the committed catalog already uses, so a seed rewrites only the rows it changes."""
+    try:
+        second = path.read_text(encoding="utf-8").split("\n", 2)[1]
+    except (OSError, IndexError):
+        return 1
+    return (len(second) - len(second.lstrip(" "))) or 1
+
+
 def save_catalog(provider: str, catalog: dict[str, Any]) -> None:
     catalog["shapes"] = dict(sorted(catalog["shapes"].items()))
-    catalog_path(provider).parent.mkdir(parents=True, exist_ok=True)
-    catalog_path(provider).write_text(
-        json.dumps(catalog, indent=1, sort_keys=False) + "\n", encoding="utf-8"
+    path = catalog_path(provider)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(catalog, indent=_catalog_indent(path), sort_keys=False) + "\n", encoding="utf-8"
     )
 
 
