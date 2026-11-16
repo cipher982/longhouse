@@ -661,14 +661,20 @@ mod tests {
             }
         });
         assert_eq!(receipt.commit_seq, "1");
-        assert_eq!(server.join().unwrap(), vec!["503 Service Unavailable", "200 OK"]);
+        assert_eq!(
+            server.join().unwrap(),
+            vec!["503 Service Unavailable", "200 OK"]
+        );
     }
 
     #[test]
     fn backpressure_pause_is_bounded_and_ignores_other_errors() {
         let bare = anyhow::anyhow!("storage-v2 envelope POST returned 503 Service Unavailable: x");
         assert_eq!(backpressure_pause(&bare, 3), Some(Duration::from_secs(3)));
-        assert_eq!(backpressure_pause(&bare, ONE_SHOT_BACKPRESSURE_ATTEMPTS + 1), None);
+        assert_eq!(
+            backpressure_pause(&bare, ONE_SHOT_BACKPRESSURE_ATTEMPTS + 1),
+            None
+        );
         assert_eq!(
             backpressure_pause(&anyhow::anyhow!("storage-v2 envelope POST returned 422"), 1),
             None
