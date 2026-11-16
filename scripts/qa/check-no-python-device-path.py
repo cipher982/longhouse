@@ -24,7 +24,8 @@ def check(project_root: Path) -> list[str]:
     for command in DEVICE_COMMANDS:
         if f'name="{command}"' in main or f'name="{command}",' in main:
             errors.append(f"Runtime Host publishes device command {command}")
-    release_workflow = (project_root / ".github/workflows/local-runtime-release.yml").read_text(encoding="utf-8")
+    # Release install verification lives in its own reusable workflow.
+    release_workflow = (project_root / ".github/workflows/verify-release-install.yml").read_text(encoding="utf-8")
     if 'version_line="$(longhouse --version' in release_workflow:
         errors.append("release verification still invokes the retired Python device CLI")
     if "--longhouse-bin longhouse-server" not in release_workflow:
