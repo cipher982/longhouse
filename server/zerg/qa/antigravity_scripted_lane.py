@@ -46,6 +46,15 @@ EXPECTED_TURNS = frozenset(
     }
 )
 
+# The Helm lifecycle's turns (antigravity_helm_lifecycle.py): the markers it types and sends, and the tool outputs it
+# judges. The Console fixture is script(); this one is helm_script().
+HELM_PREFIX = "LH_ANTIGRAVITY_HELM"
+# The command prints it through shell arithmetic, so the literal output never appears in the model's own tool call.
+HELM_INTERRUPT_TOOL_OUTPUT = "AGY_HELM_INTERRUPT_DONE_8"
+HELM_STEER_SLEEP_SECONDS = 15
+HELM_INTERRUPT_SLEEP_SECONDS = 8
+HELM_EXPECTED_TURNS = frozenset({"launch", "send-first", "sent", "steer-first", "steered", "interrupt", "recover"})
+
 _steer_tag: str | None = None
 
 
@@ -95,6 +104,57 @@ def script(tag: str, search_markers: tuple[dict[str, str], ...] = ()) -> dict[st
     return {"turns": turns}
 
 
+def helm_steer_tool_output(tag: str) -> str:
+    """What the steer step's slow tool prints; a request that carries it ran after that tool."""
+
+    return f"{HELM_PREFIX}_STEER_TOOL_42_{tag}"
+
+
+def helm_send_tool_output(tag: str) -> str:
+    """What the send step's slow tool prints."""
+
+    return f"{HELM_PREFIX}_SENDTOOL_42_{tag}"
+
+
+def helm_script(tag: str) -> dict[str, Any]:
+    """The fixture for the Helm lifecycle, newest turn first (see the module docstring for why)."""
+
+    def shell(command: str) -> dict[str, Any]:
+        return {"type": "shell", "name": "run_command", "command": command}
+
+    echo = "{{input_marker}}"
+    turns: list[dict[str, Any]] = [
+        {"id": "recover", "match": f"{HELM_PREFIX}_RECOVER_", "match_scope": "any_user", "reply": echo},
+        # An interrupted tool's output must never reach the model; if it does the interrupt did not hold, and the
+        # oracle reads this turn as served.
+        {"id": "interrupt-tool-result", "match": HELM_INTERRUPT_TOOL_OUTPUT, "match_scope": "any_input", "reply": echo},
+        {
+            "id": "interrupt",
+            "match": f"{HELM_PREFIX}_INTERRUPT_",
+            "match_scope": "any_user",
+            "tool_call": shell(f"sleep {HELM_INTERRUPT_SLEEP_SECONDS} && echo AGY_HELM_INTERRUPT_DONE_$((4+4))"),
+        },
+        {"id": "steered", "match": f"{HELM_PREFIX}_STEERED_", "match_scope": "any_user", "reply": echo},
+        {"id": "steer-tool-result", "match": helm_steer_tool_output(tag), "match_scope": "any_input", "reply": echo},
+        {
+            "id": "steer-first",
+            "match": f"{HELM_PREFIX}_STEER_FIRST_",
+            "match_scope": "any_user",
+            "tool_call": shell(f"sleep {HELM_STEER_SLEEP_SECONDS} && echo {HELM_PREFIX}_STEER_TOOL_$((40+2))_{tag}"),
+        },
+        {"id": "sent", "match": f"{HELM_PREFIX}_SENT_", "match_scope": "any_user", "reply": echo},
+        {"id": "send-tool-result", "match": helm_send_tool_output(tag), "match_scope": "any_input", "reply": echo},
+        {
+            "id": "send-first",
+            "match": f"{HELM_PREFIX}_SENDTASK_",
+            "match_scope": "any_user",
+            "tool_call": shell(f"sleep {HELM_STEER_SLEEP_SECONDS} && echo {HELM_PREFIX}_SENDTOOL_$((40+2))_{tag}"),
+        },
+        {"id": "launch", "match": f"{HELM_PREFIX}_LAUNCH_", "match_scope": "any_user", "reply": echo},
+    ]
+    return {"turns": turns}
+
+
 @dataclass
 class ScriptedLane:
     root: Path
@@ -102,6 +162,9 @@ class ScriptedLane:
     thread: threading.Thread
     script_path: Path
     environment: dict[str, str]
+    expected_turns: frozenset[str] = EXPECTED_TURNS
+    steer_tag: str = ""
+    dump_dir: Path | None = None
 
     def close(self) -> None:
         global _steer_tag
@@ -122,7 +185,7 @@ class ScriptedLane:
             endpoint, script_sha256, total, requests = scripted_model_profiles.scripted_model_receipt_snapshot(self.environment)
             matched = sorted({str(row["matched_turn_id"]) for row in requests if row.get("matched_turn_id") and row["status"] == "served"})
             failed = [row["request_id"] for row in requests if row["status"] == "failed"]
-            missing = sorted(EXPECTED_TURNS - set(matched))
+            missing = sorted(self.expected_turns - set(matched))
             status = "pass" if not missing and not failed else "fail"
             return {
                 "status": status,
@@ -137,13 +200,28 @@ class ScriptedLane:
             return {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
 
 
-def start(root: Path, home: Path, environment: dict[str, str], search_markers: tuple[dict[str, str], ...] = ()) -> ScriptedLane:
-    """Serve the fixture on loopback and point a scratch agy profile (``home``) at it."""
+def start(
+    root: Path,
+    home: Path,
+    environment: dict[str, str],
+    search_markers: tuple[dict[str, str], ...] = (),
+    *,
+    helm: bool = False,
+) -> ScriptedLane:
+    """Serve the fixture on loopback and point a scratch agy profile (``home``) at it.
+
+    ``helm`` serves the Helm lifecycle's fixture and keeps every request body under ``root/model-requests``, which its
+    oracle reads to see what the model was sent and when.
+    """
 
     global _steer_tag
     tag = uuid4().hex
     path = root / "scripted-model-fixture.json"
-    path.write_text(json.dumps(script(tag, search_markers), sort_keys=True) + "\n", encoding="utf-8")
+    fixture = helm_script(tag) if helm else script(tag, search_markers)
+    path.write_text(json.dumps(fixture, sort_keys=True) + "\n", encoding="utf-8")
+    dump_dir = root / "model-requests" if helm else None
+    if dump_dir is not None:
+        dump_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.chmod(0o600)
     turns, digest = scripted_model_server.load_script(path)
     server = scripted_model_server.ThreadedServer(
@@ -152,10 +230,20 @@ def start(root: Path, home: Path, environment: dict[str, str], search_markers: t
         script_turns=turns,
         script_sha256=digest,
         receipt_file=root / "scripted-model-server-receipt.json",
+        dump_dir=dump_dir,
     )
     thread = threading.Thread(target=server.serve_forever, name="antigravity-scripted-model", daemon=True)
     thread.start()
-    lane = ScriptedLane(root, server, thread, path, environment)
+    lane = ScriptedLane(
+        root,
+        server,
+        thread,
+        path,
+        environment,
+        expected_turns=HELM_EXPECTED_TURNS if helm else EXPECTED_TURNS,
+        steer_tag=tag,
+        dump_dir=dump_dir,
+    )
     try:
         deadline = time.monotonic() + 5.0
         while True:
