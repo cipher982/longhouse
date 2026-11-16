@@ -89,9 +89,19 @@ def script(tag: str, search_markers: tuple[dict[str, str], ...] = ()) -> dict[st
             "match_scope": "any_user",
             "tool_call": shell("sleep 8 && echo AGY_INTERRUPT_TOOL_DONE"),
         },
-        # A steer that landed: every request after it carries the steer text, tool result or not.
-        {"id": "steered", "match": f"{_PREFIX}_STEERED_", "match_scope": "any_user", "reply": echo},
+        # The slow tool's output reached the model: end the turn. It answers the steer's marker when one landed (the
+        # latest user marker) and the first marker when not. agy's ACP mode runs a tool as a background task and feeds
+        # its output to the model when it finishes (observed on agy 1.5.9, wisp, 2026-11-16), so this request arrives
+        # on its own once the command is done.
         {"id": "steer-tool-result", "match": f"{_PREFIX}_STEER_TOOL_42_{tag}", "match_scope": "any_input", "reply": echo},
+        # A steer that landed while the command is still running: wait for it, as a model told "when the command
+        # finishes" would. Replying here ended the turn, and the process exited with the command unfinished.
+        {
+            "id": "steered",
+            "match": f"{_PREFIX}_STEERED_",
+            "match_scope": "any_user",
+            "tool_call": shell("sleep 5 && echo AGY_STEER_WAIT"),
+        },
         {
             "id": "steer-first",
             "match": f"{_PREFIX}_STEER_FIRST_",

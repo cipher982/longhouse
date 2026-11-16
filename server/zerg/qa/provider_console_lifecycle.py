@@ -2706,6 +2706,9 @@ def _post_steer(
 # there first. For these providers the stream the Machine Agent captured is the
 # second place to find it, when the served events read for the receipt do not hold it.
 _STEER_TOOL_RESULT_IN_PROVIDER_STREAM = frozenset({"omp"})
+# Antigravity's ACP stream reports the command's result as a completed `tool_call_update`, and its transcript puts the
+# background task's output in a SYSTEM record, which the served timeline does not carry as a tool result.
+_STEER_TOOL_RESULT_IN_ACP_STREAM = frozenset({"antigravity"})
 
 # How a prompt asks for the shell command a step then interrupts or steers. OMP runs
 # a command its `bash` tool is given a name for as a supervised service: the output
@@ -2823,6 +2826,12 @@ def _run_steer_step(
         receipt["tool_ran_to_completion"] = True
         receipt["tool_result_source"] = "provider_stream"
         receipt["tool_result_stream_path"] = str(terminal.get("stdout_path"))
+    elif provider in _STEER_TOOL_RESULT_IN_ACP_STREAM and _acp_stream_reports_tool_result(
+        terminal, tool_marker=tool_marker, first_marker=first_marker
+    ):
+        receipt["tool_ran_to_completion"] = True
+        receipt["tool_result_source"] = "acp_stream"
+        receipt["tool_result_stream_path"] = str(terminal.get("stdout_path"))
     if not receipt["tool_ran_to_completion"]:
         # Say what was served, so a failure is explained by the receipt alone.
         receipt["tool_marker_events"] = _tool_marker_rows(events, tool_marker)
@@ -2928,6 +2937,37 @@ def _provider_stream_reports_tool_result(claim: Mapping[str, object], *, tool_ma
                 continue
             content = json.dumps(message.get("content"))
             if tool_marker in content and first_marker not in content:
+                return True
+    return False
+
+
+def _acp_stream_reports_tool_result(claim: Mapping[str, object], *, tool_marker: str, first_marker: str) -> bool:
+    """Did agy's ACP stream report the steered command as completed, with its computed marker in the output?
+
+    Only a `tool_call_update` with status `completed` counts, and only its `rawOutput`: the prompt, the model's own
+    tool call (which carries `$((40+2))`, not the computed marker) and a reply that quotes the marker never do.
+    """
+
+    path = Path(str(claim.get("stdout_path") or ""))
+    if not path.is_file():
+        return False
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            if tool_marker not in line:
+                continue
+            try:
+                frame = json.loads(line)
+            except ValueError:
+                continue
+            params = frame.get("params") if isinstance(frame, dict) else None
+            update = params.get("update") if isinstance(params, dict) else None
+            if not isinstance(update, dict) or update.get("sessionUpdate") != "tool_call_update":
+                continue
+            if update.get("status") != "completed":
+                continue
+            raw = update.get("rawOutput")
+            output = str(raw.get("output") or "") if isinstance(raw, dict) else ""
+            if tool_marker in output and first_marker not in output:
                 return True
     return False
 

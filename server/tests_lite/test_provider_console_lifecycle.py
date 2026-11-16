@@ -2264,3 +2264,32 @@ def test_antigravity_console_lifecycle_tables_agree() -> None:
     claim = {"result": {"model": "gemini-4-hydrogen-low"}}
     assert lifecycle._claim_uses_selected_model(claim, provider="antigravity", model="gemini-4-hydrogen-low")
     assert not lifecycle._claim_uses_selected_model({"result": {}}, provider="antigravity", model="gemini-4-hydrogen-low")
+
+
+def test_antigravity_tool_result_is_read_from_a_completed_acp_tool_call_update(tmp_path):
+    # Shapes from agy 1.5.9 on wisp (2026-11-16): the command's own output is `rawOutput.output` of a completed update.
+    tag = "ab" * 16
+    first = f"LH_ANTIGRAVITY_STEER_FIRST_{tag}"
+    marker = f"LH_ANTIGRAVITY_STEER_TOOL_42_{tag}"
+    call = f"sleep 15 && echo LH_ANTIGRAVITY_STEER_TOOL_$((40+2))_{tag}"
+
+    def stream(*updates):
+        path = tmp_path / "stdout.log"
+        path.write_text(
+            "\n".join(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {"update": u}}) for u in updates) + "\n"
+        )
+        return {"stdout_path": str(path)}
+
+    done = {
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "args": {"CommandLine": call},
+        "rawOutput": {"output": f"Command exited with code 0.\n\nCommand output:\n{marker}\r\n", "exit_code": 0},
+    }
+    check = lambda claim: lifecycle._acp_stream_reports_tool_result(claim, tool_marker=marker, first_marker=first)  # noqa: E731
+    assert check(stream(done))
+    # Not finished, or only the model's own call or a quoting reply: no.
+    assert not check(stream({**done, "status": "in_progress"}))
+    assert not check(stream({"sessionUpdate": "tool_call", "args": {"CommandLine": call}}))
+    assert not check(stream({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": marker}}))
+    assert not check({"stdout_path": str(tmp_path / "missing.log")})

@@ -99,11 +99,14 @@ def test_the_whole_lifecycle_is_answered_turn_by_turn(turns):
     plan = _plan(fixture, unsteered)
     assert (plan.turn_id, plan.text) == ("steer-tool-result", first)
 
-    # Steered mid-tool: the steer text is in the request, and wins whether or not the result has arrived.
+    # Steered mid-tool, result not back yet: wait for the command, never answer ahead of it.
     steered_history = [*history, _user(steer_text)]
-    for contents in (steered_history, [*steered_history, _result(f"LH_ANTIGRAVITY_STEER_TOOL_42_{tag}\n"), SYSTEM]):
-        plan = _plan(fixture, contents)
-        assert (plan.turn_id, plan.text) == ("steered", steered)
+    plan = _plan(fixture, steered_history)
+    assert plan.turn_id == "steered" and plan.text is None and plan.tool_call is not None
+    assert plan.tool_call[1]["CommandLine"] == "sleep 5 && echo AGY_STEER_WAIT"
+    # The result arrived: the turn ends on the steer's marker.
+    plan = _plan(fixture, [*steered_history, _result(f"LH_ANTIGRAVITY_STEER_TOOL_42_{tag}\n"), SYSTEM])
+    assert (plan.turn_id, plan.text) == ("steer-tool-result", steered)
     history = [*steered_history, _model(steered)]
 
     history.append(_user(f"Use the shell tool to run `sleep 8` in the foreground, then reply with exactly {interrupt} and nothing else."))
