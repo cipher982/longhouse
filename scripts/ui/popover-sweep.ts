@@ -300,12 +300,13 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       }
     }
     // A trigger that declares a popup may open it after a fetch (Show resume
-    // command): wait up to 2 s for something to appear before judging.
+    // command): wait up to 8 s for something to appear before judging. A CI
+    // runner running two Chromiums took over 2 s for a mocked fetch once.
     const expectsPopup = (await page.evaluate(
       `!!document.querySelector(${JSON.stringify(selector)})?.matches('[aria-haspopup]:not([aria-haspopup="false"])')`,
     )) as boolean;
     let result: CheckResult = { checked: 0, shown: 0, overlays: [], failures: [], children: [] };
-    for (let attempt = 0; attempt < (expectsPopup ? 14 : 2); attempt += 1) {
+    for (let attempt = 0; attempt < (expectsPopup ? 53 : 2); attempt += 1) {
       await page.waitForTimeout(150);
       if (page.url() !== url) {
         report.skipped.push(`${name}: navigated away`);
@@ -320,7 +321,7 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
         trigger: name,
         overlay: name,
         rule: "never-opened",
-        detail: "declares aria-haspopup but nothing appeared within 2 s",
+        detail: "declares aria-haspopup but nothing appeared within 8 s",
       });
     }
     record(name, result);
