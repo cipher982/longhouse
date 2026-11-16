@@ -4766,6 +4766,12 @@ def _child_evidence_from_engine_facts(facts: object) -> list[dict[str, Any]]:
     return result
 
 
+def _catalog_timestamp(value: datetime) -> str:
+    """The text form the catalog's SQLite DateTime columns store (naive UTC)."""
+
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
 def delegation_projection(
     package: EvidencePackage,
     provider: str,
@@ -4785,16 +4791,7 @@ def delegation_projection(
     the real runtime writer, the real reducer and the real served projector.
     """
 
-    import tempfile
-
-    from zerg.catalogd.fact_reducer import read_session_fact_heads
-    from zerg.catalogd.schema import create_catalog_engine
-    from zerg.catalogd.schema import initialize_catalog_schema
-    from zerg.catalogd.store import CatalogStore
-    from zerg.models.live_store import LiveSessionCatalog
-    from zerg.models.live_store import LiveSessionRun
-    from zerg.models.live_store import LiveSessionThread
-    from zerg.services.session_runtime import RuntimeEventIngest
+    from zerg.provider_contract.catalogd_process import run_catalogd
     from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
     now = datetime.now(UTC)
@@ -4802,60 +4799,44 @@ def delegation_projection(
     thread_id = uuid4()
     run_id = uuid4()
 
-    with tempfile.TemporaryDirectory() as raw_root:
-        database = Path(raw_root) / "catalog.db"
-        engine = create_catalog_engine(database)
-        initialize_catalog_schema(engine)
-        with engine.begin() as connection:
-            connection.execute(
-                LiveSessionCatalog.__table__.insert().values(
-                    session_id=str(session_id),
-                    provider=provider,
-                    environment="harness",
-                    started_at=now,
-                    user_state="active",
-                )
-            )
-            connection.execute(
-                LiveSessionThread.__table__.insert().values(
-                    id=str(thread_id),
-                    session_id=str(session_id),
-                    provider=provider,
-                    is_primary=1,
-                    branch_kind="root",
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            connection.execute(
-                LiveSessionRun.__table__.insert().values(
-                    id=str(run_id),
-                    thread_id=str(thread_id),
-                    provider=provider,
-                    host_id="harness",
-                    launch_origin="longhouse_spawned",
-                    started_at=now,
-                )
-            )
-        store = CatalogStore(engine)
+    with run_catalogd(server_root=default_repo_root() / "server") as catalog:
+        stamp = _catalog_timestamp(now)
+        catalog.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (1, "delegation-projection@longhouse.invalid"))
+        catalog.execute(
+            "INSERT INTO live_session_catalog (session_id, provider, environment, started_at, user_state) VALUES (?, ?, ?, ?, ?)",
+            (str(session_id), provider, "harness", stamp, "active"),
+        )
+        # The owner binding the shadow-state read requires.
+        catalog.execute("INSERT INTO live_sessions (session_id, owner_id, provider) VALUES (?, ?, ?)", (str(session_id), "1", provider))
+        catalog.execute(
+            "INSERT INTO live_session_threads (id, session_id, provider, is_primary, branch_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(thread_id), str(session_id), provider, 1, "root", stamp, stamp),
+        )
+        catalog.execute(
+            "INSERT INTO live_session_runs (id, thread_id, provider, host_id, launch_origin, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (str(run_id), str(thread_id), provider, "harness", "longhouse_spawned", stamp),
+        )
 
         def apply(*, occurred_at: datetime, payload: dict[str, Any], key: str) -> dict[str, Any]:
-            return store.apply_session_runtime(
-                events=[
-                    RuntimeEventIngest(
-                        runtime_key=f"{provider}:delegation-projection",
-                        session_id=session_id,
-                        run_id=run_id,
-                        provider=provider,
-                        source="provider_hook",
-                        kind="delegation_signal" if "delegation_update" in payload else "phase_signal",
-                        phase=None if "delegation_update" in payload else "idle",
-                        occurred_at=occurred_at,
-                        freshness_ms=600_000,
-                        dedupe_key=key,
-                        payload=payload,
-                    )
-                ]
+            return catalog.rpc(
+                "session.runtime.apply.v2",
+                {
+                    "events": [
+                        {
+                            "runtime_key": f"{provider}:delegation-projection",
+                            "session_id": str(session_id),
+                            "run_id": str(run_id),
+                            "provider": provider,
+                            "source": "provider_hook",
+                            "kind": "delegation_signal" if "delegation_update" in payload else "phase_signal",
+                            "phase": None if "delegation_update" in payload else "idle",
+                            "occurred_at": occurred_at.isoformat(),
+                            "freshness_ms": 600_000,
+                            "dedupe_key": key,
+                            "payload": payload,
+                        }
+                    ]
+                },
             )
 
         native_registry = _delegation_snapshot_from_engine_facts(native_facts)
@@ -4888,19 +4869,18 @@ def delegation_projection(
                 parsed_rows.append(
                     {
                         "kind": str(fact["kind"]),
-                        "at": occurred_at,
+                        "at": occurred_at.isoformat(),
                         "source_position": int(fact.get("source_offset") or index),
                         "payload": dict(payload),
                     }
                 )
             child_rows = tuple(parsed_rows)
             if child_rows:
-                store.insert_session_provider_facts(
-                    session_id=str(session_id),
-                    source_epoch=str(run_id),
-                    provider_facts=child_rows,
+                catalog.rpc(
+                    "session.provider_facts.insert.v2",
+                    {"session_id": str(session_id), "source_epoch": str(run_id), "provider_facts": list(child_rows)},
                 )
-                served_child_facts = store.list_session_provider_facts(session_id=str(session_id)).get("facts", [])
+                served_child_facts = catalog.rpc("session.provider_facts.list.v2", {"session_id": str(session_id)}).get("facts", [])
         expected_items = list(registry.get("items") or []) if registry is not None else []
         native_updates = [
             dict(fact["payload"])
@@ -4926,9 +4906,7 @@ def delegation_projection(
         elif registry is not None:
             expected_kinds = dict(registry.get("kinds", {}))
 
-        with engine.connect() as connection:
-            _commit_seq, heads = read_session_fact_heads(connection, session_id=str(session_id))
-        engine.dispose()
+        heads = catalog.rpc("session.shadow_state.read.v2", {"session_id": str(session_id), "owner_id": 1}).get("heads", [])
 
         delegation_heads = [head for head in heads if str(head.get("family")) == "delegation"]
 
