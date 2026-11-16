@@ -2,25 +2,19 @@
 
 Held interactions -- the permission gate, the pause-answer route -- live in the
 live catalog, so a scenario whose claim is "the real endpoint ran" needs a
-daemon behind that endpoint rather than a stand-in. Everything below is the
-production object: a real ``CatalogDaemon`` over a real Unix socket, reached
-through the real ``CatalogClient`` by the same ``get_catalogd_client()`` the
+daemon behind that endpoint rather than a stand-in. It is the production
+daemon on a real Unix socket, reached by the same ``get_catalogd_client()`` the
 routes call.
 
-The daemon runs on its own event loop thread. Harness scenarios call
-``asyncio.run`` from several threads -- the stub HTTP handler, the background
-answerer -- and each of those builds a fresh loop; a daemon sharing one of them
-would have to answer a call that is blocking the loop it runs on. One client
-per call keeps the same honesty for ``CatalogClient``, which binds its
-admission semaphore to the first loop that uses it.
+The daemon is a child process of the harness, reached over its Unix socket. The
+routes find it through ``LONGHOUSE_CATALOGD_EXTERNAL_SOCKET``, which gives them a
+fresh client per call (the harness calls from several threads, each with its
+own event loop). Nothing from the product is imported here.
 """
 
 from __future__ import annotations
 
-import asyncio
-import shutil
-import tempfile
-import threading
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
@@ -29,53 +23,22 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Iterator
+from unittest.mock import patch
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
-
-from zerg.catalogd.client import CatalogClient
-from zerg.catalogd.schema import create_catalog_engine
-from zerg.catalogd.schema import initialize_catalog_schema
-from zerg.catalogd.server import CatalogDaemon
-from zerg.models.live_store import LiveUser
-from zerg.services import catalogd_supervisor
+from zerg.provider_contract.catalogd_process import DEFAULT_RPC_TIMEOUT_SECONDS
+from zerg.provider_contract.catalogd_process import CatalogdHandle
+from zerg.provider_contract.catalogd_process import run_catalogd
+from zerg.qa.repo_root import default_repo_root
 
 # Factory correctness is not the catalog latency gate; a loaded CI host needs
 # room to finish a real transaction and its concurrent expiry writer. Production
 # clients keep the 1 s default.
-RPC_TIMEOUT_SECONDS = 15.0
+RPC_TIMEOUT_SECONDS = DEFAULT_RPC_TIMEOUT_SECONDS
 HARNESS_OWNER_ID = 7
 HARNESS_OWNER_EMAIL = "harness-catalog@longhouse.invalid"
-
-
-class _DaemonLoop:
-    def __init__(self) -> None:
-        self.loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self.loop.run_forever, name="harness-catalogd", daemon=True)
-        self._thread.start()
-
-    def run(self, coro, *, timeout: float = 60.0):
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=timeout)
-
-    def close(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self._thread.join(timeout=10.0)
-        self.loop.close()
-
-
-class _PerCallSupervisor:
-    """Supervisor stand-in handing out a fresh client per call."""
-
-    def __init__(self, socket_path: Path) -> None:
-        self._socket_path = socket_path
-
-    @property
-    def client(self) -> CatalogClient:
-        return CatalogClient(self._socket_path, default_timeout_seconds=RPC_TIMEOUT_SECONDS)
-
-    @property
-    def projector_client(self) -> CatalogClient:
-        return self.client
+# Names the catalogd the served routes should use (zerg.services.catalogd_supervisor).
+_EXTERNAL_SOCKET_ENV = "LONGHOUSE_CATALOGD_EXTERNAL_SOCKET"
 
 
 @dataclass
@@ -84,11 +47,10 @@ class HarnessCatalog:
 
     database_path: Path
     socket_path: Path
-    _loop: _DaemonLoop
+    _catalog: CatalogdHandle
 
     def rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        client = CatalogClient(self.socket_path, default_timeout_seconds=RPC_TIMEOUT_SECONDS)
-        return self._loop.run(client.call(method, params))
+        return self._catalog.rpc(method, params, timeout_seconds=RPC_TIMEOUT_SECONDS)
 
     def create_managed_session(
         self,
@@ -179,28 +141,10 @@ def provision_harness_catalog() -> Iterator[HarnessCatalog]:
     through.
     """
 
-    root = Path(tempfile.mkdtemp(prefix="lh-harness-catalog-", dir="/tmp"))
-    database_path = root / "live.db"
-    socket_path = root / "catalogd.sock"
-    loop = _DaemonLoop()
-    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
-    loop.run(daemon.start())
-
-    setup_engine = create_catalog_engine(database_path)
-    try:
-        initialize_catalog_schema(setup_engine)
-        with Session(setup_engine) as db:
-            db.add(LiveUser(id=HARNESS_OWNER_ID, email=HARNESS_OWNER_EMAIL, is_active=True))
-            db.commit()
-    finally:
-        setup_engine.dispose()
-
-    previous_supervisor = catalogd_supervisor._supervisor
-    catalogd_supervisor._supervisor = _PerCallSupervisor(socket_path)
-    try:
-        yield HarnessCatalog(database_path=database_path, socket_path=socket_path, _loop=loop)
-    finally:
-        catalogd_supervisor._supervisor = previous_supervisor
-        loop.run(daemon.close())
-        loop.close()
-        shutil.rmtree(root, ignore_errors=True)
+    with run_catalogd(server_root=default_repo_root() / "server") as catalog:
+        catalog.execute(
+            "INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)",
+            (HARNESS_OWNER_ID, HARNESS_OWNER_EMAIL),
+        )
+        with patch.dict(os.environ, {_EXTERNAL_SOCKET_ENV: str(catalog.socket_path)}):
+            yield HarnessCatalog(database_path=catalog.database_path, socket_path=catalog.socket_path, _catalog=catalog)
