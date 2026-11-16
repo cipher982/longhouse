@@ -30,10 +30,6 @@ server/zerg/qa/provider_adapters/codex.py -> server/zerg/database.py  # drives s
 server/zerg/qa/provider_adapters/codex.py -> server/zerg/models/agents.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/provider_adapters/codex.py -> server/zerg/services/managed_local_control.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/provider_adapters/codex.py -> server/zerg/services/managed_local_transport.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/client.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/provider_resume_factory.py -> server/zerg/catalogd/server.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/provider_resume_factory.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/title_dependency_oracles.py -> server/zerg/services/factory_assurance_title_binding.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/catalogd/fact_reducer.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/catalogd/schema.py  # drives subject runtime internals in-process; replace with the served API or CLI

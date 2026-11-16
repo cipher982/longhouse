@@ -10,32 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
-
-from zerg.catalogd.client import CatalogClient
-from zerg.catalogd.client import CatalogRemoteError
-from zerg.catalogd.schema import create_catalog_engine
-from zerg.catalogd.schema import initialize_catalog_schema
-from zerg.catalogd.server import CatalogDaemon
-from zerg.models.live_store import LiveConsoleTurn
-from zerg.models.live_store import LiveSessionConnection
-from zerg.models.live_store import LiveSessionInputReceipt
-from zerg.models.live_store import LiveSessionLaunchAttempt
-from zerg.models.live_store import LiveSessionRun
-from zerg.models.live_store import LiveSessionThread
-from zerg.models.live_store import LiveSessionThreadAlias
-from zerg.models.live_store import LiveUser
+from zerg.provider_contract.catalogd_process import CatalogdHandle
+from zerg.provider_contract.catalogd_process import CatalogdRpcError
+from zerg.provider_contract.catalogd_process import run_catalogd
 from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.provider_resume_oracles import assertions_for
+from zerg.qa.repo_root import default_repo_root
 
 SCENARIOS = tuple(ASSERTIONS_BY_SCENARIO)
 
@@ -69,24 +56,12 @@ def run_provider_resume_scenario(provider: str, scenario: str) -> dict[str, Any]
 async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
     contract = contract_for_provider(provider)
     assert contract is not None
-    with tempfile.TemporaryDirectory(prefix="lh-resume-", dir="/tmp") as root_value:
-        root = Path(root_value)
-        database_path = root / "live.db"
-        socket_path = root / "catalogd.sock"
-        daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
-        await daemon.start()
-        setup_engine = create_catalog_engine(database_path)
-        initialize_catalog_schema(setup_engine)
-        try:
-            with Session(setup_engine) as db:
-                db.add(LiveUser(id=7, email="resume-factory@longhouse.invalid", is_active=True))
-                db.commit()
-        finally:
-            setup_engine.dispose()
+    with run_catalogd(server_root=default_repo_root() / "server") as catalog:
         # Factory correctness is not the catalog latency gate. Give a loaded CI
         # host enough room to complete the real transaction; catalog performance
         # has its own bounded tests and production clients retain the 1 s default.
-        client = CatalogClient(socket_path, default_timeout_seconds=5.0, max_concurrency=4)
+        catalog.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (7, "resume-factory@longhouse.invalid"))
+        client = _AsyncRpc(catalog)
         session_id = str(uuid4())
         provider_thread_id = str(uuid4())
         machine_id = "factory-machine"
@@ -95,7 +70,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
         if scenario == "console_thread_continue":
             initial_run_id = await _create_console_resume_fixture(
                 client,
-                database_path,
+                catalog,
                 provider=provider,
                 session_id=session_id,
                 provider_thread_id=provider_thread_id,
@@ -123,10 +98,10 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
         resume_clock = now + timedelta(seconds=3)
         try:
             if scenario == "helm_live_reattach":
-                _mark_open_run_attached(database_path, session_id, resume_clock)
+                _mark_open_run_attached(catalog, session_id, resume_clock)
                 observation = await _live_reattach_observation(
                     client,
-                    database_path,
+                    catalog,
                     provider,
                     session_id,
                     provider_thread_id,
@@ -147,7 +122,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 if scenario == "helm_cold_resume":
                     observation = await _cold_resume_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -159,7 +134,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "resume_identity_continuity":
                     observation = await _identity_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -170,7 +145,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "resume_attempt_idempotency":
                     observation = await _idempotency_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -181,7 +156,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "resume_single_owner":
                     observation = await _single_owner_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -192,7 +167,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "resume_input_safety":
                     observation = await _input_safety_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -203,7 +178,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "resume_failure_cleanup":
                     observation = await _failure_cleanup_observation(
                         client,
-                        database_path,
+                        catalog,
                         provider,
                         session_id,
                         provider_thread_id,
@@ -214,7 +189,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "console_thread_continue":
                     observation = await _console_thread_continue_observation(
                         client,
-                        database_path,
+                        catalog,
                         session_id,
                         provider_thread_id,
                         initial_run_id,
@@ -223,7 +198,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                 elif scenario == "console_thread_fork":
                     observation = await _console_thread_fork_observation(
                         client,
-                        database_path,
+                        catalog,
                         session_id,
                         provider_thread_id,
                         machine_id,
@@ -235,7 +210,25 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
             return _result(provider, scenario, observation)
         finally:
             await client.close()
-            await daemon.close()
+
+
+def _ts(value: datetime) -> str:
+    """The text form the catalog's SQLite DateTime columns store (naive UTC)."""
+
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+class _AsyncRpc:
+    """Async face over the synchronous catalogd socket client; concurrent calls run on worker threads."""
+
+    def __init__(self, catalog: CatalogdHandle) -> None:
+        self._catalog = catalog
+
+    async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        return await asyncio.to_thread(self._catalog.rpc, method, params, timeout_seconds=15.0)
+
+    async def close(self) -> None:
+        return None
 
 
 def _launch_payload(
@@ -306,7 +299,7 @@ def _resume_payload(
 
 
 async def _end_run(
-    client: CatalogClient,
+    client: _AsyncRpc,
     provider: str,
     session_id: str,
     run_id: str,
@@ -341,7 +334,7 @@ async def _end_run(
     )
 
 
-async def _confirm(client: CatalogClient, session_id: str, run_id: str, machine_id: str, now: datetime) -> dict[str, Any]:
+async def _confirm(client: _AsyncRpc, session_id: str, run_id: str, machine_id: str, now: datetime) -> dict[str, Any]:
     return await client.call(
         "session.launch.local.finish.v2",
         {
@@ -360,8 +353,8 @@ async def _confirm(client: CatalogClient, session_id: str, run_id: str, machine_
 
 
 async def _create_console_resume_fixture(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     *,
     provider: str,
     session_id: str,
@@ -394,42 +387,30 @@ async def _create_console_resume_fixture(
         },
     )
     initial_run_id = str(uuid4())
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            db.add(
-                LiveSessionThreadAlias(
-                    thread_id=thread_id,
-                    provider=provider,
-                    alias_kind="provider_session_id",
-                    alias_value=provider_thread_id,
-                    first_seen_at=now - timedelta(seconds=1),
-                    last_seen_at=now,
-                )
-            )
-            db.add(
-                LiveSessionRun(
-                    id=initial_run_id,
-                    thread_id=thread_id,
-                    provider=provider,
-                    host_id=machine_id,
-                    cwd=cwd,
-                    launch_origin="longhouse_spawned",
-                    started_at=now - timedelta(seconds=1),
-                    ended_at=now,
-                    exit_status="fixture_completed",
-                )
-            )
-            db.commit()
-    finally:
-        engine.dispose()
+    catalog.execute(
+        "INSERT INTO live_session_thread_aliases (thread_id, provider, alias_kind, alias_value, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (thread_id, provider, "provider_session_id", provider_thread_id, _ts(now - timedelta(seconds=1)), _ts(now)),
+    )
+    catalog.execute(
+        "INSERT INTO live_session_runs (id, thread_id, provider, host_id, cwd, launch_origin, started_at, ended_at, exit_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            initial_run_id,
+            thread_id,
+            provider,
+            machine_id,
+            cwd,
+            "longhouse_spawned",
+            _ts(now - timedelta(seconds=1)),
+            _ts(now),
+            "fixture_completed",
+        ),
+    )
     return initial_run_id
 
 
 async def _cold_resume_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -443,35 +424,25 @@ async def _cold_resume_observation(
         {"resume": _resume_payload(provider, session_id, provider_thread_id, machine_id, cwd, now)},
     )
     confirmed = await _confirm(client, session_id, resumed["run_id"], machine_id, now)
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            run = db.get(LiveSessionRun, resumed["run_id"])
-            alias = (
-                db.query(LiveSessionThreadAlias)
-                .filter(
-                    LiveSessionThreadAlias.thread_id == run.thread_id,
-                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    LiveSessionThreadAlias.alias_value == provider_thread_id,
-                )
-                .one_or_none()
-            )
-            connection = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == resumed["run_id"]).one_or_none()
-            return {
-                "same_longhouse_session": resumed["launch"]["session_id"] == session_id,
-                "same_provider_thread": alias is not None,
-                "new_run": resumed["run_id"] != initial_run_id,
-                "new_connection": connection is not None,
-                "resume_registration_confirmed": confirmed["launch"]["launch_state"] == "live",
-            }
-    finally:
-        engine.dispose()
+    run_rows = catalog.query("SELECT thread_id FROM live_session_runs WHERE id = ?", (resumed["run_id"],))
+    thread_id = run_rows[0][0]
+    alias = catalog.query(
+        "SELECT 1 FROM live_session_thread_aliases WHERE thread_id = ? AND alias_kind = 'provider_session_id' AND alias_value = ?",
+        (thread_id, provider_thread_id),
+    )
+    connection = catalog.query("SELECT 1 FROM live_session_connections WHERE run_id = ?", (resumed["run_id"],))
+    return {
+        "same_longhouse_session": resumed["launch"]["session_id"] == session_id,
+        "same_provider_thread": bool(alias),
+        "new_run": resumed["run_id"] != initial_run_id,
+        "new_connection": bool(connection),
+        "resume_registration_confirmed": confirmed["launch"]["launch_state"] == "live",
+    }
 
 
 async def _live_reattach_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -485,9 +456,9 @@ async def _live_reattach_observation(
             "session.launch.local.resume.v2",
             {"resume": _resume_payload(provider, session_id, provider_thread_id, machine_id, cwd, now)},
         )
-    except CatalogRemoteError as error:
+    except CatalogdRpcError as error:
         refused = error.code == "conflict"
-    open_run_count = _open_run_count(database_path, session_id)
+    open_run_count = _open_run_count(catalog, session_id)
     return {
         "resume_refused_as_conflict": refused,
         "open_run_count": open_run_count,
@@ -497,8 +468,8 @@ async def _live_reattach_observation(
 
 
 async def _console_thread_continue_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     session_id: str,
     provider_thread_id: str,
     initial_run_id: str,
@@ -516,36 +487,36 @@ async def _console_thread_continue_observation(
             }
         },
     )
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            turn = db.query(LiveConsoleTurn).filter(LiveConsoleTurn.session_id == session_id).one_or_none()
-            if turn is None:
-                return {
-                    "mode": "console",
-                    "turn_created": False,
-                    "used_helm_resume_transaction": False,
-                    "same_provider_thread": False,
-                    "console_run_created": False,
-                    "catalog_result": result,
-                }
-            launch_attempt = db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.run_id == turn.run_id).one_or_none()
-            return {
-                "mode": "console",
-                "turn_created": result.get("created") is True,
-                "used_helm_resume_transaction": launch_attempt is not None,
-                "same_provider_thread": turn.resume_provider_thread_id == provider_thread_id,
-                "distinct_run": turn.run_id is not None and turn.run_id != initial_run_id,
-                "console_run_created": turn.run_id is not None and turn.run_id != initial_run_id,
-            }
-    finally:
-        engine.dispose()
+    turns = catalog.query(
+        "SELECT run_id, resume_provider_thread_id FROM live_console_turns WHERE session_id = ?",
+        (session_id,),
+    )
+    if len(turns) > 1:
+        raise AssertionError("expected at most one Console turn for the session")
+    if not turns:
+        return {
+            "mode": "console",
+            "turn_created": False,
+            "used_helm_resume_transaction": False,
+            "same_provider_thread": False,
+            "console_run_created": False,
+            "catalog_result": result,
+        }
+    turn_run_id, resume_provider_thread_id = turns[0]
+    launch_attempt = catalog.query("SELECT 1 FROM live_session_launch_attempts WHERE run_id = ?", (turn_run_id,))
+    return {
+        "mode": "console",
+        "turn_created": result.get("created") is True,
+        "used_helm_resume_transaction": bool(launch_attempt),
+        "same_provider_thread": resume_provider_thread_id == provider_thread_id,
+        "distinct_run": turn_run_id is not None and turn_run_id != initial_run_id,
+        "console_run_created": turn_run_id is not None and turn_run_id != initial_run_id,
+    }
 
 
 async def _console_thread_fork_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     session_id: str,
     provider_thread_id: str,
     machine_id: str,
@@ -568,26 +539,15 @@ async def _console_thread_fork_observation(
     dispatch payload.
     """
 
-    setup_engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(setup_engine)
-    try:
-        with Session(setup_engine) as db:
-            alias = (
-                db.query(LiveSessionThreadAlias)
-                .filter(
-                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    LiveSessionThreadAlias.alias_value == provider_thread_id,
-                )
-                .one()
-            )
-            thread = db.get(LiveSessionThread, alias.thread_id)
-            assert thread is not None
-            thread.device_id = machine_id
-            thread.cwd = cwd
-            thread.provider_config_json = json.dumps({"permission_mode": "bypass"})
-            db.commit()
-    finally:
-        setup_engine.dispose()
+    alias_rows = catalog.query(
+        "SELECT thread_id FROM live_session_thread_aliases WHERE alias_kind = 'provider_session_id' AND alias_value = ?",
+        (provider_thread_id,),
+    )
+    assert len(alias_rows) == 1
+    catalog.execute(
+        "UPDATE live_session_threads SET device_id = ?, cwd = ?, provider_config_json = ? WHERE id = ?",
+        (machine_id, cwd, json.dumps({"permission_mode": "bypass"}), alias_rows[0][0]),
+    )
 
     branch = await client.call(
         "session.branch.create.v2",
@@ -620,26 +580,14 @@ async def _console_thread_fork_observation(
     # what makes its later turns resume the child. Standing in for the engine's
     # binding signal here keeps this half hermetic.
     child_provider_thread_id = f"{provider_thread_id}-fork"
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            db.add(
-                LiveSessionThreadAlias(
-                    thread_id=child_thread_id,
-                    provider="codex",
-                    alias_kind="provider_session_id",
-                    alias_value=child_provider_thread_id,
-                    first_seen_at=now,
-                    last_seen_at=now,
-                )
-            )
-            turn = db.query(LiveConsoleTurn).filter(LiveConsoleTurn.id == first_turn.get("turn_id")).one()
-            turn.state = "completed"
-            turn.terminal_at = now
-            db.commit()
-    finally:
-        engine.dispose()
+    catalog.execute(
+        "INSERT INTO live_session_thread_aliases (thread_id, provider, alias_kind, alias_value, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (child_thread_id, "codex", "provider_session_id", child_provider_thread_id, _ts(now), _ts(now)),
+    )
+    catalog.execute(
+        "UPDATE live_console_turns SET state = 'completed', terminal_at = ? WHERE id = ?",
+        (_ts(now), first_turn.get("turn_id")),
+    )
 
     second = await client.call(
         "session.console.turn.enqueue.v2",
@@ -670,8 +618,8 @@ async def _console_thread_fork_observation(
 
 
 async def _identity_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -683,36 +631,29 @@ async def _identity_observation(
         "session.launch.local.resume.v2",
         {"resume": _resume_payload(provider, session_id, provider_thread_id, machine_id, cwd, now)},
     )
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            run = db.get(LiveSessionRun, resumed["run_id"])
-            attempt = db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.run_id == resumed["run_id"]).one()
-            alias = (
-                db.query(LiveSessionThreadAlias)
-                .filter(
-                    LiveSessionThreadAlias.thread_id == run.thread_id,
-                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    LiveSessionThreadAlias.alias_value == provider_thread_id,
-                )
-                .one_or_none()
-            )
-            return {
-                "same_owner": attempt.owner_id == 7,
-                "same_machine": run.host_id == machine_id,
-                "same_cwd": run.cwd == cwd,
-                "same_provider": run.provider == provider,
-                "same_longhouse_session": attempt.session_id == session_id,
-                "same_provider_thread": alias is not None,
-            }
-    finally:
-        engine.dispose()
+    run_id, thread_id, host_id, run_cwd, run_provider = catalog.query(
+        "SELECT id, thread_id, host_id, cwd, provider FROM live_session_runs WHERE id = ?", (resumed["run_id"],)
+    )[0]
+    attempt_owner_id, attempt_session_id = catalog.query(
+        "SELECT owner_id, session_id FROM live_session_launch_attempts WHERE run_id = ?", (resumed["run_id"],)
+    )[0]
+    alias = catalog.query(
+        "SELECT 1 FROM live_session_thread_aliases WHERE thread_id = ? AND alias_kind = 'provider_session_id' AND alias_value = ?",
+        (thread_id, provider_thread_id),
+    )
+    return {
+        "same_owner": attempt_owner_id == 7,
+        "same_machine": host_id == machine_id,
+        "same_cwd": run_cwd == cwd,
+        "same_provider": run_provider == provider,
+        "same_longhouse_session": attempt_session_id == session_id,
+        "same_provider_thread": bool(alias),
+    }
 
 
 async def _idempotency_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -730,18 +671,18 @@ async def _idempotency_observation(
             "session.launch.local.resume.v2",
             {"resume": _resume_payload(provider, session_id, provider_thread_id, machine_id, cwd, now)},
         )
-    except CatalogRemoteError as error:
+    except CatalogdRpcError as error:
         refused = error.code == "conflict"
     return {
         "same_attempt_same_run": replay.get("exact_replay") is True and replay["run_id"] == first["run_id"],
-        "created_run_count": max(0, _run_count_for_session(database_path, session_id) - 1),
+        "created_run_count": max(0, _run_count_for_session(catalog, session_id) - 1),
         "concurrent_attempt_refused": refused,
     }
 
 
 async def _single_owner_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -758,17 +699,17 @@ async def _single_owner_observation(
     ]
     results = await asyncio.gather(*calls, return_exceptions=True)
     winners = [value for value in results if isinstance(value, dict) and value.get("created") is True]
-    losers = [value for value in results if isinstance(value, CatalogRemoteError)]
+    losers = [value for value in results if isinstance(value, CatalogdRpcError)]
     return {
         "winner_count": len(winners),
         "loser_count": len(losers),
-        "live_provider_owner_count": _open_run_count(database_path, session_id),
+        "live_provider_owner_count": _open_run_count(catalog, session_id),
     }
 
 
 async def _input_safety_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -803,23 +744,20 @@ async def _input_safety_observation(
         "session.launch.local.resume.v2",
         {"resume": _resume_payload(provider, session_id, provider_thread_id, machine_id, cwd, now)},
     )
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            receipt = db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.client_request_id == receipt_id).one()
-            error = json.loads(receipt.error_json or "{}")
-            return {
-                "old_input_delivery_unknown": receipt.status == "failed" and error.get("code") == "delivery_unknown",
-                "stale_generation_dispatched": receipt.control_command_id is not None,
-            }
-    finally:
-        engine.dispose()
+    receipt_status, receipt_error_json, control_command_id = catalog.query(
+        "SELECT status, error_json, control_command_id FROM live_session_input_receipts WHERE client_request_id = ?",
+        (receipt_id,),
+    )[0]
+    error = json.loads(receipt_error_json or "{}")
+    return {
+        "old_input_delivery_unknown": receipt_status == "failed" and error.get("code") == "delivery_unknown",
+        "stale_generation_dispatched": control_command_id is not None,
+    }
 
 
 async def _failure_cleanup_observation(
-    client: CatalogClient,
-    database_path: Path,
+    client: _AsyncRpc,
+    catalog: CatalogdHandle,
     provider: str,
     session_id: str,
     provider_thread_id: str,
@@ -846,29 +784,19 @@ async def _failure_cleanup_observation(
         },
     )
     await _fail_attempt(client, session_id, retry["run_id"], machine_id, now + timedelta(seconds=3))
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            attempts = db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.session_id == session_id).all()
-            alias = (
-                db.query(LiveSessionThreadAlias)
-                .filter(
-                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    LiveSessionThreadAlias.alias_value == provider_thread_id,
-                )
-                .one_or_none()
-            )
-            return {
-                "attempt_closed": all(attempt.state != "pending" for attempt in attempts),
-                "contract_restored": retry.get("created") is True and alias is not None,
-                "orphan_count": _open_run_count(database_path, session_id),
-            }
-    finally:
-        engine.dispose()
+    attempt_states = [row[0] for row in catalog.query("SELECT state FROM live_session_launch_attempts WHERE session_id = ?", (session_id,))]
+    alias = catalog.query(
+        "SELECT 1 FROM live_session_thread_aliases WHERE alias_kind = 'provider_session_id' AND alias_value = ?",
+        (provider_thread_id,),
+    )
+    return {
+        "attempt_closed": all(state != "pending" for state in attempt_states),
+        "contract_restored": retry.get("created") is True and bool(alias),
+        "orphan_count": _open_run_count(catalog, session_id),
+    }
 
 
-async def _fail_attempt(client: CatalogClient, session_id: str, run_id: str, machine_id: str, now: datetime) -> None:
+async def _fail_attempt(client: _AsyncRpc, session_id: str, run_id: str, machine_id: str, now: datetime) -> None:
     await client.call(
         "session.launch.local.finish.v2",
         {
@@ -886,7 +814,7 @@ async def _fail_attempt(client: CatalogClient, session_id: str, run_id: str, mac
     )
 
 
-def _mark_open_run_attached(database_path: Path, session_id: str, now: datetime) -> None:
+def _mark_open_run_attached(catalog: CatalogdHandle, session_id: str, now: datetime) -> None:
     """Give the fixture's open run the live control attachment the product reads.
 
     ``helm_live_reattach`` asserts that a resume beside a live provider owner is
@@ -899,62 +827,28 @@ def _mark_open_run_attached(database_path: Path, session_id: str, now: datetime)
     an orphan and correctly stopped being refused.
     """
 
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            run = (
-                db.query(LiveSessionRun)
-                .join(LiveSessionLaunchAttempt, LiveSessionLaunchAttempt.run_id == LiveSessionRun.id)
-                .filter(
-                    LiveSessionLaunchAttempt.session_id == session_id,
-                    LiveSessionRun.ended_at.is_(None),
-                )
-                .first()
-            )
-            if run is None:
-                return
-            fresh_health_at = now - timedelta(minutes=1)
-            for connection in db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == str(run.id)).all():
-                connection.state = "attached"
-                connection.released_at = None
-                connection.last_health_at = fresh_health_at
-            db.commit()
-    finally:
-        engine.dispose()
+    fresh_health_at = now - timedelta(minutes=1)
+    catalog.execute(
+        "UPDATE live_session_connections SET state = 'attached', released_at = NULL, last_health_at = ? WHERE run_id IN ("
+        "SELECT r.id FROM live_session_runs r JOIN live_session_launch_attempts a ON a.run_id = r.id "
+        "WHERE a.session_id = ? AND r.ended_at IS NULL)",
+        (_ts(fresh_health_at), session_id),
+    )
 
 
-def _open_run_count(database_path: Path, session_id: str) -> int:
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            return (
-                db.query(LiveSessionRun)
-                .join(LiveSessionLaunchAttempt, LiveSessionLaunchAttempt.run_id == LiveSessionRun.id)
-                .filter(
-                    LiveSessionLaunchAttempt.session_id == session_id,
-                    LiveSessionRun.ended_at.is_(None),
-                )
-                .count()
-            )
-    finally:
-        engine.dispose()
+def _open_run_count(catalog: CatalogdHandle, session_id: str) -> int:
+    return catalog.query(
+        "SELECT COUNT(*) FROM live_session_runs r JOIN live_session_launch_attempts a ON a.run_id = r.id "
+        "WHERE a.session_id = ? AND r.ended_at IS NULL",
+        (session_id,),
+    )[0][0]
 
 
-def _run_count_for_session(database_path: Path, session_id: str) -> int:
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
-    try:
-        with Session(engine) as db:
-            return (
-                db.query(LiveSessionRun)
-                .join(LiveSessionLaunchAttempt, LiveSessionLaunchAttempt.run_id == LiveSessionRun.id)
-                .filter(LiveSessionLaunchAttempt.session_id == session_id)
-                .count()
-            )
-    finally:
-        engine.dispose()
+def _run_count_for_session(catalog: CatalogdHandle, session_id: str) -> int:
+    return catalog.query(
+        "SELECT COUNT(*) FROM live_session_runs r JOIN live_session_launch_attempts a ON a.run_id = r.id WHERE a.session_id = ?",
+        (session_id,),
+    )[0][0]
 
 
 def _result(provider: str, scenario: str, observation: dict[str, Any]) -> dict[str, Any]:
