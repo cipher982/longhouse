@@ -321,4 +321,59 @@ describe("agentSessionWorkspaceQueryOptions", () => {
     expect(result.current.data).toBe(workspace);
     expect(apiMocks.fetchAgentSessionWorkspace).toHaveBeenCalledTimes(1);
   });
+
+  it("reads the full workspace while no transcript pages are held", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const params = { limit: 200, branch_mode: "head" as const };
+    const tail = makeProjectionPage({ total: 2, pageOffset: 0, startEventId: 1, count: 2 });
+    apiMocks.fetchAgentSessionWorkspace.mockResolvedValue({ session: { id: "session-1" }, projection: tail });
+
+    await queryClient.fetchQuery(agentSessionWorkspaceQueryOptions("session-1", params, queryClient));
+    // Cached workspace, but the page has not seeded its transcript pages yet.
+    await queryClient.fetchQuery({
+      ...agentSessionWorkspaceQueryOptions("session-1", params, queryClient),
+      staleTime: 0,
+    });
+
+    expect(apiMocks.fetchAgentSessionWorkspace).toHaveBeenCalledTimes(2);
+    for (const [, options] of apiMocks.fetchAgentSessionWorkspace.mock.calls) {
+      expect(options.include_projection).toBeUndefined();
+    }
+  });
+
+  it("refreshes only the header once the transcript pages are held, and keeps the held tail", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const params = { limit: 200, branch_mode: "head" as const };
+    const first = makeProjectionPage({ total: 2, pageOffset: 0, startEventId: 1, count: 2 });
+    const heldTail = { ...makeProjectionPage({ total: 3, pageOffset: 0, startEventId: 1, count: 3 }), transcript_revision: 7 };
+    apiMocks.fetchAgentSessionWorkspace.mockResolvedValueOnce({
+      session: { id: "session-1", title: "before" },
+      transcript_revision: 5,
+      projection: { ...first, transcript_revision: 5 },
+    });
+    await queryClient.fetchQuery(agentSessionWorkspaceQueryOptions("session-1", params, queryClient));
+    queryClient.setQueryData(["agent-session-projection-infinite", "session-1", params], {
+      pages: [heldTail],
+      pageParams: [{ anchor: "tail" }],
+    });
+    apiMocks.fetchAgentSessionWorkspace.mockResolvedValueOnce({
+      session: { id: "session-1", title: "after" },
+      transcript_revision: 9,
+      projection: { items: [], total: 0 },
+    });
+
+    const refreshed = await queryClient.fetchQuery({
+      ...agentSessionWorkspaceQueryOptions("session-1", params, queryClient),
+      staleTime: 0,
+    });
+
+    expect(apiMocks.fetchAgentSessionWorkspace).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ include_projection: false }),
+    );
+    expect(refreshed.session).toEqual({ id: "session-1", title: "after" });
+    // The server's revision rides on top; the projection is the tail the page holds.
+    expect(refreshed.transcript_revision).toBe(9);
+    expect(refreshed.projection).toBe(heldTail);
+  });
 });

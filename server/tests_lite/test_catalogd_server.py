@@ -155,7 +155,9 @@ async def test_interactive_reads_do_not_queue_behind_projector_read_lane(daemon_
 
 
 @pytest.mark.asyncio
-async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_paths):
+async def test_interactive_read_lane_queues_and_refuses_only_a_full_line(daemon_paths):
+    from zerg.catalogd.server import CATALOG_INTERACTIVE_READ_WORKERS
+
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -169,13 +171,17 @@ async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_pat
         nonlocal entered_count
         with lock:
             entered_count += 1
-            if entered_count == daemon._read_max_depth:
+            if entered_count == CATALOG_INTERACTIVE_READ_WORKERS:
                 entered.set()
         release.wait(timeout=5)
 
     blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(daemon._read_max_depth)]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
+        await asyncio.sleep(0.05)
+        # Every worker is busy and the rest wait their turn instead of failing.
+        assert entered_count == CATALOG_INTERACTIVE_READ_WORKERS
+        assert not any(task.done() for task in blocked)
         with pytest.raises(CatalogReaderBusy):
             await daemon._run_read_store(lambda: None)
         ping = await client.call("ping.v2", timeout_seconds=1.5)
@@ -185,6 +191,7 @@ async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_pat
         await asyncio.gather(*blocked)
         await client.close()
         await daemon.close()
+    assert entered_count == daemon._read_max_depth
 
 
 @pytest.mark.asyncio
@@ -198,15 +205,17 @@ async def test_background_reads_do_not_consume_interactive_lane(daemon_paths):
     lock = threading.Lock()
     entered_count = 0
 
+    from zerg.catalogd.server import CATALOG_INTERACTIVE_READ_WORKERS
+
     def block_interactive_read_lane() -> None:
         nonlocal entered_count
         with lock:
             entered_count += 1
-            if entered_count == daemon._read_max_depth:
+            if entered_count == CATALOG_INTERACTIVE_READ_WORKERS:
                 entered.set()
         release.wait(timeout=2)
 
-    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(daemon._read_max_depth)]
+    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(CATALOG_INTERACTIVE_READ_WORKERS)]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
         assert (await client.call("session.input.queued.list.v2", {"limit": 10}))["session_ids"] == []
@@ -1316,9 +1325,11 @@ async def test_backfill_hatch_run_lineage_binds_parent_session(daemon_paths, tmp
 
 @pytest.mark.asyncio
 async def test_a_subagent_list_read_waits_out_a_full_read_lane(daemon_paths):
-    """The detail page reads its subagents beside transcript reads; a full
-    two-slot lane must delay that read, not turn it into a 503."""
+    """The detail page reads its subagents beside transcript reads; busy read
+    workers must delay that read, not turn it into a 503."""
     import threading
+
+    from zerg.catalogd.server import CATALOG_INTERACTIVE_READ_WORKERS
 
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -1334,14 +1345,17 @@ async def test_a_subagent_list_read_waits_out_a_full_read_lane(daemon_paths):
         return real_list(**kwargs)
 
     client = CatalogClient(socket_path)
-    params = {"session_id": str(uuid4()), "owner_id": "7"}
     try:
         daemon._store.list_session_subagents = slow_read
-        holders = [asyncio.create_task(client.call("session.subagents.list.v2", params)) for _ in range(daemon._read_max_depth)]
-        while calls["slow"] < daemon._read_max_depth:
+        # Distinct sessions: identical reads would share one worker.
+        holders = [
+            asyncio.create_task(client.call("session.subagents.list.v2", {"session_id": str(uuid4()), "owner_id": "7"}))
+            for _ in range(CATALOG_INTERACTIVE_READ_WORKERS)
+        ]
+        while calls["slow"] < CATALOG_INTERACTIVE_READ_WORKERS:
             await asyncio.sleep(0.01)
         daemon._store.list_session_subagents = real_list
-        waiting = asyncio.create_task(client.call("session.subagents.list.v2", params))
+        waiting = asyncio.create_task(client.call("session.subagents.list.v2", {"session_id": str(uuid4()), "owner_id": "7"}))
         await asyncio.sleep(0.2)
         assert not waiting.done()
         release.set()

@@ -14469,6 +14469,8 @@ export interface operations {
                 cursor?: string | null;
                 /** @description full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies) */
                 detail?: string;
+                /** @description false skips the transcript page: the projection comes back empty and the top-level transcript_revision says whether the caller's held transcript is current. For a page that already holds its transcript. */
+                include_projection?: boolean;
             };
             header?: never;
             path: {

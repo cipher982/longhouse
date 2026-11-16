@@ -396,6 +396,8 @@ export interface AgentSessionWorkspaceRevision {
 
 export interface AgentSessionWorkspaceResponse {
   session: AgentSession;
+  /** The server's transcript revision, sent also when the projection is skipped. */
+  transcript_revision?: number | null;
   thread: AgentSessionThreadResponse;
   projection: AgentSessionProjectionResponse;
   workspace_revision: AgentSessionWorkspaceRevision;
@@ -1272,11 +1274,14 @@ export async function fetchAgentSessionWorkspace(
   options: {
     limit?: number;
     branch_mode?: "head" | "all";
+    /** false: header, HUD and transcript_revision only; the projection comes back empty. */
+    include_projection?: boolean;
     signal?: AbortSignal;
   } = {},
 ): Promise<AgentSessionWorkspaceResponse> {
   const params = new URLSearchParams();
   params.set("detail", "lite");
+  if (options.include_projection === false) params.set("include_projection", "false");
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);

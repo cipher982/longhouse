@@ -321,7 +321,8 @@ class RawObject(CatalogBase):
     commit_seq = Column(BigInteger, nullable=False)
     sealed_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
-    retired_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Not indexed on purpose: see RETIRED_AT_TRAP_INDEXES in schema.py.
+    retired_at = Column(DateTime(timezone=True), nullable=True)
     retirement_revision = Column(BigInteger, nullable=True)
 
     __table_args__ = (
@@ -430,7 +431,8 @@ class RenderObject(CatalogBase):
     last_event_subordinal = Column(BigInteger, nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
-    retired_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Not indexed on purpose: see RETIRED_AT_TRAP_INDEXES in schema.py.
+    retired_at = Column(DateTime(timezone=True), nullable=True)
     retirement_revision = Column(BigInteger, nullable=True, index=True)
 
     __table_args__ = (

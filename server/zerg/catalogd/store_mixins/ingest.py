@@ -846,8 +846,7 @@ class IngestMixin:
                         .values(retired_at=commit_time, retirement_revision=commit_seq)
                     ).rowcount
                     # Materialize envelope IDs in chunks so SQLite uses
-                    # ix_render_objects_source_envelope_id instead of scanning
-                    # ix_render_objects_retired_at (retired_at IS NULL).
+                    # ix_render_objects_source_envelope_id.
                     retired_render = 0
                     retired_media = 0
                     for offset in range(0, len(predecessor_envelope_ids), 500):

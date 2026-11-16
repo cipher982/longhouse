@@ -38,9 +38,13 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import CreateColumn
 
 from zerg.catalogd.models import CatalogBase
+from zerg.catalogd.read_deadline import PROGRESS_HANDLER_INSTRUCTIONS
+from zerg.catalogd.read_deadline import interrupt_expired_read
 from zerg.models.live_store import LiveBase
 
 CATALOG_SCHEMA_VERSION = 5
+CATALOG_ENGINE_POOL_SIZE = 16
+CATALOG_ENGINE_POOL_OVERFLOW = 16
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
 SESSION_RENDER_STATE_GENERATION = "session-render-state-v1"
@@ -474,6 +478,16 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
     kwargs: dict[str, object] = {"connect_args": connect_args}
     if parsed.database in (None, "", ":memory:"):
         kwargs["poolclass"] = StaticPool
+    else:
+        # One connection per catalogd thread that touches SQLite: the writer,
+        # maintenance, two projector readers, the control reader and the
+        # interactive readers, plus default-executor calls. SQLAlchemy's
+        # default (5, overflow 10) is smaller than that, so overflow
+        # connections were opened and closed (re-running every PRAGMA below)
+        # under ordinary load, and a wider read lane would have queued on the
+        # pool itself.
+        kwargs["pool_size"] = CATALOG_ENGINE_POOL_SIZE
+        kwargs["max_overflow"] = CATALOG_ENGINE_POOL_OVERFLOW
 
     engine = create_engine(database_url, **kwargs)
 
@@ -517,6 +531,9 @@ def create_catalog_engine(database: str | Path, *, busy_timeout_ms: int = DEFAUL
             cursor.execute("PRAGMA temp_store=MEMORY")
         finally:
             cursor.close()
+        # Interrupts a statement only on a thread running a read whose callers
+        # have all given up (read_deadline.py); a no-op everywhere else.
+        dbapi_connection.set_progress_handler(interrupt_expired_read, PROGRESS_HANDLER_INSTRUCTIONS)
 
     return engine
 
@@ -596,6 +613,27 @@ def _create_declared_indexes(engine: Engine, metadata: MetaData) -> None:
             for index in table.indexes:
                 if (table.name, index.name) not in existing:
                     index.create(bind=connection)
+
+
+# Indexes that only ever misled the planner, dropped wherever they exist.
+#
+# Most raw and render objects are retired (840k of 1.05M raw rows on david010,
+# 2026-11-16), and the statistics put 32 rows behind each retired_at value, so
+# SQLite answered `session_id = ? AND retired_at IS NULL` by walking every live
+# row in the catalog through this index instead of the session's rows: 125 ms
+# on raw objects and 250 ms on render objects for a 600-row session, against
+# 3 ms through the session index. Nothing selects retired rows by time, so the
+# indexes had no reader to serve. Dropping them is not a schema version: the
+# reader contract is unchanged, and an older binary simply recreates them.
+RETIRED_AT_TRAP_INDEXES = ("ix_raw_objects_retired_at", "ix_render_objects_retired_at")
+
+
+def _drop_retired_at_trap_indexes(engine: Engine) -> None:
+    with engine.begin() as connection:
+        existing = {name for (name,) in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'index'").all()}
+        for name in RETIRED_AT_TRAP_INDEXES:
+            if name in existing:
+                connection.exec_driver_sql(f"DROP INDEX IF EXISTS {name}")
 
 
 def _user_version(connection) -> int:
@@ -1079,6 +1117,7 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
         _create_declared_indexes(engine, LiveBase.metadata)
         _create_declared_indexes(engine, CatalogBase.metadata)
         _create_declared_indexes(engine, _catalog_metadata)
+        _drop_retired_at_trap_indexes(engine)
     _validate_fact_reducer_schema(engine)
 
     if not has_meta_table:

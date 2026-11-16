@@ -561,6 +561,9 @@ def _workspace_envelope(
     storage_session = storage.get("session") if storage is not None else None
     return {
         "session": session_json,
+        # The server's transcript revision, also when the projection is
+        # skipped: the one number a page compares with what it holds.
+        "transcript_revision": transcript_revision(session),
         "thread": {
             "root_session_id": str(session_id),
             "head_session_id": str(session_id),
@@ -608,8 +611,15 @@ async def build_storage_v2_workspace(
     anchor: str = "tail",
     timing: ServerTimingRecorder | None = None,
     detail: str = DETAIL_FULL,
+    include_projection: bool = True,
 ) -> dict[str, object] | None:
     """Return a storage-v2 workspace, including live control-only sessions.
+
+    ``include_projection=False`` skips the transcript page (its manifest and
+    render object reads): the header, HUD and the top-level
+    ``transcript_revision`` are the same, the projection is empty. A page that
+    already holds its transcript refreshes this way and reads transcript pages
+    only when that revision moves (catalog-read-path.md).
 
     ``detail="lite"`` returns tool bodies as their collapsed previews (see
     ``transcript_lite``); ``read_storage_v2_event_bodies`` returns them in full.
@@ -633,6 +643,7 @@ async def build_storage_v2_workspace(
         cursor=cursor,
         anchor=anchor,
         timing=timing,
+        include_projection=include_projection,
     )
     if workspace is None or detail == DETAIL_FULL:
         return workspace
@@ -648,6 +659,7 @@ async def _build_storage_v2_workspace(
     cursor: str | None,
     anchor: str,
     timing: ServerTimingRecorder | None,
+    include_projection: bool = True,
 ) -> dict[str, object] | None:
     catalogd = get_catalogd_client()
     if catalogd is None:
@@ -713,14 +725,18 @@ async def _build_storage_v2_workspace(
         # the catalog read lane); separate list calls were rejected as "read
         # lane is full" on a busy hosted catalog and the page silently lost
         # its facts. Older catalogs without the keys fall back to the RPCs.
-        page = await read_storage_v2_session_events_page(
-            session_id=session_id,
-            owner_id=str(owner_id),
-            cursor=cursor,
-            anchor=anchor,
-            limit=limit,
-            branch_mode=branch_mode,
-            timing=timing,
+        page = (
+            await read_storage_v2_session_events_page(
+                session_id=session_id,
+                owner_id=str(owner_id),
+                cursor=cursor,
+                anchor=anchor,
+                limit=limit,
+                branch_mode=branch_mode,
+                timing=timing,
+            )
+            if include_projection
+            else None
         )
         if "provider_facts" in storage_result and "input_receipts" in storage_result:
             facts = provider_facts_from_rows(storage_result.get("provider_facts"))

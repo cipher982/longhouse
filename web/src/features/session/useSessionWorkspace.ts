@@ -209,6 +209,7 @@ export function useSessionWorkspace(
   } = useAgentSessionWorkspace(sessionId, {
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
+    headerRefresh: true,
     refetchInterval: (query) => {
       if (!documentVisible) {
         return false;
@@ -282,12 +283,11 @@ export function useSessionWorkspace(
       return;
     }
 
-    const baseRefreshQueryKeys = [
-      ["agent-session-workspace", sessionId],
-      ["agent-session", sessionId],
-      ["agent-session-thread", sessionId],
-      ["agent-sessions"],
-    ] as const;
+    // Only the header: once the transcript pages are held this is a
+    // header-only read (useAgentSessionWorkspace headerRefresh). The rail's
+    // session list keeps its own refresh; reading it on every wake was an
+    // 800 ms catalog scan per update (catalog-read-path.md).
+    const baseRefreshQueryKeys = [["agent-session-workspace", sessionId]] as const;
     // Read beside the transcript whenever it is read. The paged transcript
     // itself is refreshed by refreshAgentSessionProjectionTail, never
     // invalidated: an invalidation would drop the pages above the tail.
@@ -649,7 +649,9 @@ export function useSessionWorkspace(
   // A workspace snapshot reports the server's revision too: while the stream
   // is down it is the polled source, and it costs nothing when it is up.
   const workspaceTranscriptRevision =
-    workspaceData?.projection?.transcript_revision ?? null;
+    workspaceData?.transcript_revision ??
+    workspaceData?.projection?.transcript_revision ??
+    null;
   useEffect(() => {
     if (workspaceTranscriptRevision !== null) {
       observeTranscriptRevisionRef.current?.(workspaceTranscriptRevision);

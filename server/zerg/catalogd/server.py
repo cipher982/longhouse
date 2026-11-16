@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import exc as sqlalchemy_exc
+
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
@@ -29,6 +31,8 @@ from zerg.catalogd.protocol import FrameTooLarge
 from zerg.catalogd.protocol import ProtocolError
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
+from zerg.catalogd.read_deadline import ReadDeadline
+from zerg.catalogd.read_deadline import bound_read_deadline
 from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
 from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 from zerg.catalogd.schema import CatalogMeta
@@ -49,10 +53,15 @@ from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 
 logger = logging.getLogger(__name__)
 
-# A timed-out caller cannot cancel synchronous SQLite work already running in a
-# thread. Keep the lane small and queue-free so abandoned session-detail reads
-# cannot accumulate into a self-sustaining retry storm on the hosted catalog.
-CATALOG_INTERACTIVE_READ_WORKERS = 2
+# Reads are cut off once every caller has given up (read_deadline.py), so an
+# abandoned read no longer holds a slot and the lane is sized for throughput.
+# Rows are materialized in Python, which holds the GIL, so more threads in this
+# one process stop helping well before the host's cores run out; six overlap
+# SQLite's page reads without starving the writer and the socket loop.
+# Requests wait in FIFO order behind the workers, and one that expires while
+# waiting never runs. Only a full line is refused (catalog-read-path.md).
+CATALOG_INTERACTIVE_READ_WORKERS = 6
+CATALOG_INTERACTIVE_READ_QUEUE = 24
 CATALOG_CONTROL_READ_WORKERS = 1
 CATALOG_CONTROL_READ_MAX_DEPTH = 8
 
@@ -262,6 +271,10 @@ class CatalogReaderBusy(CatalogDaemonError):
     pass
 
 
+class CatalogReadExpired(CatalogDaemonError):
+    """Every caller of a read gave up before it finished (or before it started)."""
+
+
 class CatalogWriterExpired(CatalogDaemonError):
     pass
 
@@ -312,10 +325,12 @@ class CatalogDaemon:
         self._wal_trim_task: asyncio.Task | None = None
         self._projector_repair_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
-        self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
-        self._session_detail_reads: dict[tuple[str, tuple[object, ...], tuple[tuple[str, object], ...]], asyncio.Task[dict]] = {}
+        self._timeline_reads: dict[tuple[tuple[str, object], ...], tuple[asyncio.Task[dict], ReadDeadline]] = {}
+        self._session_detail_reads: dict[
+            tuple[str, tuple[object, ...], tuple[tuple[str, object], ...]], tuple[asyncio.Task[dict], ReadDeadline]
+        ] = {}
         self._read_depth = 0
-        self._read_max_depth = CATALOG_INTERACTIVE_READ_WORKERS
+        self._read_max_depth = CATALOG_INTERACTIVE_READ_WORKERS + CATALOG_INTERACTIVE_READ_QUEUE
         self._control_read_depth = 0
         self._writer_stats = CatalogWriterStats()
         self._writer_derived_max_depth = max(
@@ -584,6 +599,13 @@ class CatalogDaemon:
                         message,
                         "deadline_exceeded",
                         "request expired before reaching the catalog writer",
+                        retryable=True,
+                    )
+                except CatalogReadExpired:
+                    response = self._error(
+                        message,
+                        "deadline_exceeded",
+                        "catalog read stopped after its deadline",
                         retryable=True,
                     )
                 except Exception:
@@ -3098,7 +3120,10 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 500:
             return self._error(request, "invalid_request", "limit must be between 1 and 500")
         assert self._store is not None
-        result = await self._run_read_store(
+        # The page reads this beside every transcript read, and two tabs (or a
+        # tab and its own retry) ask for the same list at once.
+        result = await self._coalesced_session_detail_read(
+            "session.subagents.list.v2",
             self._store.list_session_subagents,
             session_id=session_id,
             owner_id=owner_id,
@@ -4453,7 +4478,7 @@ class CatalogDaemon:
             },
         )
 
-    async def _run_read_store(self, operation, *args, **kwargs):
+    async def _run_read_store(self, operation, *args, _read_deadline: ReadDeadline | None = None, **kwargs):
         if self._read_executor is None:
             raise CatalogDaemonError("catalog read executor is not ready")
         return await self._run_bounded_read_store(
@@ -4462,6 +4487,7 @@ class CatalogDaemon:
             self._read_max_depth,
             operation,
             *args,
+            _read_deadline=_read_deadline,
             **kwargs,
         )
 
@@ -4477,13 +4503,37 @@ class CatalogDaemon:
             **kwargs,
         )
 
-    async def _run_bounded_read_store(self, executor, depth_attribute, max_depth, operation, *args, **kwargs):
+    async def _run_bounded_read_store(
+        self,
+        executor,
+        depth_attribute,
+        max_depth,
+        operation,
+        *args,
+        _read_deadline: ReadDeadline | None = None,
+        **kwargs,
+    ):
         if getattr(self, depth_attribute) >= max_depth:
             raise CatalogReaderBusy("catalog read lane is full")
+        deadline = _read_deadline if _read_deadline is not None else ReadDeadline(_REQUEST_DEADLINE_NS.get())
+
+        def run():
+            # The executor's queue is FIFO; a read that waited past every
+            # caller's deadline is dropped here instead of run for nobody.
+            if deadline.expired():
+                raise CatalogReadExpired("catalog read expired while queued")
+            with bound_read_deadline(deadline):
+                try:
+                    return operation(*args, **kwargs)
+                except sqlalchemy_exc.OperationalError as exc:
+                    if deadline.expired() and "interrupted" in str(exc.orig):
+                        raise CatalogReadExpired("catalog read interrupted at its deadline") from exc
+                    raise
+
         loop = asyncio.get_running_loop()
         setattr(self, depth_attribute, getattr(self, depth_attribute) + 1)
         try:
-            future = loop.run_in_executor(executor, lambda: operation(*args, **kwargs))
+            future = loop.run_in_executor(executor, run)
         except BaseException:
             setattr(self, depth_attribute, getattr(self, depth_attribute) - 1)
             raise
@@ -4509,19 +4559,25 @@ class CatalogDaemon:
 
         assert self._store is not None
         key = tuple(sorted(params.items()))
-        task = self._timeline_reads.get(key)
-        if task is None:
+        entry = self._timeline_reads.get(key)
+        if entry is None:
+            deadline = ReadDeadline(_REQUEST_DEADLINE_NS.get())
             task = asyncio.create_task(
-                self._run_read_store(self._store.list_session_timeline, **params),
+                self._run_read_store(self._store.list_session_timeline, _read_deadline=deadline, **params),
                 name="catalogd-timeline-read",
             )
-            self._timeline_reads[key] = task
+            self._timeline_reads[key] = (task, deadline)
 
             def forget(completed: asyncio.Task[dict]) -> None:
-                if self._timeline_reads.get(key) is completed:
+                current = self._timeline_reads.get(key)
+                if current is not None and current[0] is completed:
                     self._timeline_reads.pop(key, None)
 
             task.add_done_callback(forget)
+        else:
+            task, deadline = entry
+            # A later caller keeps the shared read alive until it gives up too.
+            deadline.extend(_REQUEST_DEADLINE_NS.get())
         return await asyncio.shield(task)
 
     async def _coalesced_session_detail_read(self, label: str, operation, *args, **kwargs) -> dict:
@@ -4535,19 +4591,25 @@ class CatalogDaemon:
         """
 
         key = (label, args, tuple(sorted(kwargs.items())))
-        task = self._session_detail_reads.get(key)
-        if task is None:
+        entry = self._session_detail_reads.get(key)
+        if entry is None:
+            deadline = ReadDeadline(_REQUEST_DEADLINE_NS.get())
             task = asyncio.create_task(
-                self._run_read_store(operation, *args, **kwargs),
+                self._run_read_store(operation, *args, _read_deadline=deadline, **kwargs),
                 name=f"catalogd-{label}-read",
             )
-            self._session_detail_reads[key] = task
+            self._session_detail_reads[key] = (task, deadline)
 
             def forget(completed: asyncio.Task[dict]) -> None:
-                if self._session_detail_reads.get(key) is completed:
+                current = self._session_detail_reads.get(key)
+                if current is not None and current[0] is completed:
                     self._session_detail_reads.pop(key, None)
 
             task.add_done_callback(forget)
+        else:
+            task, deadline = entry
+            # A later caller keeps the shared read alive until it gives up too.
+            deadline.extend(_REQUEST_DEADLINE_NS.get())
         return await asyncio.shield(task)
 
     async def _run_projector_read_store(self, operation, *args, **kwargs):

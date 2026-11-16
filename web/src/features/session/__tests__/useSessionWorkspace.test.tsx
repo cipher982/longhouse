@@ -578,7 +578,17 @@ describe("useSessionWorkspace", () => {
       });
     });
 
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+    // One header read per wake: not the transcript, and not the rail's
+    // session list (an 800 ms catalog scan per update; catalog-read-path.md).
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["agent-session-workspace", baseSession.id] },
+      { cancelRefetch: false },
+    );
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
+      { queryKey: ["agent-sessions"] },
+      { cancelRefetch: false },
+    );
     expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
       { queryKey: ["agent-session-projection-infinite", baseSession.id] },
       { cancelRefetch: false },
@@ -858,7 +868,7 @@ describe("useSessionWorkspace", () => {
       });
     });
 
-    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       finishRefresh?.();
@@ -866,7 +876,7 @@ describe("useSessionWorkspace", () => {
     });
 
     await waitFor(() => {
-      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(8);
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(2);
     });
   });
 

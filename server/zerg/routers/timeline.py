@@ -1045,6 +1045,13 @@ async def get_timeline_session_workspace(
         "full",
         description="full sends every tool body; lite sends each as its collapsed preview (fetch full bodies from /event-bodies)",
     ),
+    include_projection: bool = Query(
+        True,
+        description=(
+            "false skips the transcript page: the projection comes back empty and the top-level transcript_revision says "
+            "whether the caller's held transcript is current. For a page that already holds its transcript."
+        ),
+    ),
     current_user=Depends(get_current_browser_caller),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
@@ -1057,6 +1064,7 @@ async def get_timeline_session_workspace(
         cursor=cursor,
         timing=timing,
         detail=detail,
+        include_projection=include_projection,
     )
     if storage_workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")

@@ -7,6 +7,7 @@
 import {
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
   keepPreviousData,
   type InfiniteData,
   type QueryClient,
@@ -72,15 +73,41 @@ type AgentSessionWorkspaceParams = {
  * The one query key and fetch for a session workspace. Prefetchers and the
  * session page both build from this, so a prefetch lands in the cache entry
  * the page reads.
+ *
+ * With `headerRefreshFrom`, a refresh of a workspace whose transcript pages
+ * are already held reads only the header (`include_projection=false`) and
+ * keeps the held tail page as its projection: the transcript itself moves
+ * only through the revision-driven page reads (catalog-read-path.md). The
+ * first read, and any read with no pages held, is a full one.
  */
 export function agentSessionWorkspaceQueryOptions(
   sessionId: string | null,
   { limit = 200, branch_mode = "head" }: AgentSessionWorkspaceParams = {},
+  headerRefreshFrom?: QueryClient,
 ) {
   const params = { limit, branch_mode };
+  const queryKey = ["agent-session-workspace", sessionId, params] as const;
   return {
-    queryKey: ["agent-session-workspace", sessionId, params] as const,
+    queryKey,
     queryFn: async ({ signal }: { signal?: AbortSignal }) => {
+      const heldTail =
+        headerRefreshFrom && headerRefreshFrom.getQueryData(queryKey) !== undefined
+          ? tailPage(
+              headerRefreshFrom.getQueryData<InfiniteData<AgentSessionProjectionResponse>>([
+                "agent-session-projection-infinite",
+                sessionId,
+                params,
+              ]),
+            )
+          : undefined;
+      if (heldTail) {
+        const header = await fetchAgentSessionWorkspace(sessionId!, {
+          ...params,
+          include_projection: false,
+          signal,
+        });
+        return { ...header, projection: heldTail };
+      }
       const workspace = await fetchAgentSessionWorkspace(sessionId!, { ...params, signal });
       // Its projection seeds the transcript pages: a full tail read.
       if (workspace.projection) tailReadFromNetworkAt.set(workspace.projection, Date.now());
@@ -93,12 +120,17 @@ export function agentSessionWorkspaceQueryOptions(
 
 export function useAgentSessionWorkspace(
   sessionId: string | null,
-  options: AgentSessionWorkspaceQueryOptions & AgentSessionWorkspaceParams = {},
+  options: AgentSessionWorkspaceQueryOptions &
+    AgentSessionWorkspaceParams & {
+      /** Refresh only the header once the session's transcript pages are held. */
+      headerRefresh?: boolean;
+    } = {},
 ) {
-  const { enabled, refetchInterval, ...params } = options;
+  const { enabled, refetchInterval, headerRefresh = false, ...params } = options;
+  const queryClient = useQueryClient();
 
   return useQuery<AgentSessionWorkspaceResponse>({
-    ...agentSessionWorkspaceQueryOptions(sessionId, params),
+    ...agentSessionWorkspaceQueryOptions(sessionId, params, headerRefresh ? queryClient : undefined),
     enabled: enabled ?? !!sessionId,
     refetchInterval,
   });
