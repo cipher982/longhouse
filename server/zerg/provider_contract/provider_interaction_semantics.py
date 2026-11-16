@@ -1,0 +1,1309 @@
+"""Provider-native interaction semantics used by ingest and qualification.
+
+Providers are allowed to persist local controls as ``role=user`` records. The
+raw record remains durable evidence, but Longhouse must not treat every such
+record as a conversational prompt. This module is deliberately mechanical:
+provider-specific markers establish facts, while an unknown slash command stays
+an ordinary user message until a provider contract proves otherwise.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import MutableMapping
+from typing import Any
+
+# Decodes a raw provider record given as text. This module takes on no new import from the rest of the server: the
+# provider factory pins this file and every file it imports into its verifier bundle, and that set may only shrink. On
+# 2026-11-11 it imported zerg.utils.fast_json for the ingest path, and from then on the factory refused every new
+# epoch (control-plane provider_factory/bundle_lock.py). The server installs its faster decoder with
+# ``use_json_decoder`` instead; a verifier decodes with the standard library.
+_loads: Callable[[str], Any] = json.loads
+
+
+def use_json_decoder(loads: Callable[[str], Any]) -> None:
+    """Decode raw records with ``loads``, which returns and raises exactly what ``json.loads`` does."""
+
+    global _loads
+    _loads = loads
+
+
+INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
+INTERACTION_LOCAL_CONTROL = "local_control"
+INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
+INTERACTION_PROVIDER_SYSTEM = "provider_system"
+INTERACTION_PROVIDER_REASONING = "provider_reasoning"
+INTERACTION_PROVIDER_NOTIFICATION = "provider_notification"
+INTERACTION_COMPACTION_BOUNDARY = "compaction_boundary"
+INTERACTION_CONVERSATION_BOUNDARY = "conversation_boundary"
+INTERACTION_UNKNOWN_USER_INPUT = "unknown_user_input"
+
+_TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION_UNKNOWN_USER_INPUT})
+
+# Providers that publish model reasoning as an assistant content part which
+# Longhouse normalizes to a system-role row. The engine projects that row's
+# content behind this marker; the marker is selection evidence only, and the raw
+# thinking part remains the authority. Engine parser revision v5 stopped writing
+# it (rows carry `item.kind = reasoning`), so it survives only to select rows of
+# older stored renders for the write-time backfill. Never read it at request time.
+REASONING_PROJECTION_PREFIX = "Thinking:\n"
+REASONING_PART_PROVIDERS = frozenset({"claude", "omp", "pi"})
+
+# Pi and OMP share a native ``custom_message`` record: the runtime or an
+# extension injects a message into the conversation, and its ``display`` flag
+# says whether the provider shows it in its own transcript. A background job's
+# completion (``async-result``) is the case that matters: the tool row only says
+# "Backgrounded early", and the command's real output arrives later as this
+# record. Longhouse serves the display-flagged ones as provider notifications;
+# the ``display: false`` ones are model-facing scaffolding and stay hidden.
+DISPLAY_MESSAGE_PROVIDERS = frozenset({"omp", "pi"})
+_NOTIFICATION_DISPLAY_MAX_CHARS = 2_000
+
+
+def omp_agent_end_is_terminal(event: Mapping[str, Any]) -> bool:
+    """Return OMP's terminal contract for a native ``agent_end`` record.
+
+    OMP may omit both lifecycle flags on ordinary completion. An explicit
+    ``isTerminal`` value is authoritative; otherwise ``willContinue`` controls
+    continuation, with an unmarked event treated as terminal.
+    """
+
+    for field in ("isTerminal", "willContinue"):
+        if field in event and not isinstance(event[field], bool):
+            return False
+
+    is_terminal = event.get("isTerminal")
+    if isinstance(is_terminal, bool):
+        return is_terminal
+    will_continue = event.get("willContinue")
+    if isinstance(will_continue, bool):
+        return not will_continue
+    return True
+
+
+_INTERACTION_CONTEXT_KEY_MAX_BYTES = 255
+_INTERACTION_CONTEXT_KEYS_PREFIX = "keys:"
+VALID_INTERACTION_KINDS = frozenset(
+    {
+        INTERACTION_DURABLE_USER_MESSAGE,
+        INTERACTION_LOCAL_CONTROL,
+        INTERACTION_LOCAL_CONTROL_OUTPUT,
+        INTERACTION_PROVIDER_SYSTEM,
+        INTERACTION_PROVIDER_REASONING,
+        INTERACTION_PROVIDER_NOTIFICATION,
+        INTERACTION_COMPACTION_BOUNDARY,
+        INTERACTION_CONVERSATION_BOUNDARY,
+        INTERACTION_UNKNOWN_USER_INPUT,
+    }
+)
+
+
+def _raw_mapping(raw_json: Any) -> Mapping[str, Any] | None:
+    if isinstance(raw_json, Mapping):
+        return raw_json
+    if not isinstance(raw_json, str) or not raw_json.strip():
+        return None
+    try:
+        value = _loads(raw_json)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, Mapping) else None
+
+
+def _raw_content(raw: Mapping[str, Any] | None) -> str:
+    if raw is None:
+        return ""
+    message = raw.get("message")
+    if isinstance(message, Mapping):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [str(item.get("text") or "") for item in content if isinstance(item, Mapping)]
+            return "\n".join(part for part in parts if part)
+    for key in ("content", "text", "prompt"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+_CODEX_INTERNAL_CONTEXT_OPEN = "<codex_internal_context"
+_CODEX_PROVIDER_SYSTEM_ENVELOPES = (
+    ("<environment_context>", "</environment_context>"),
+    ("<permissions instructions>", "</permissions instructions>"),
+    ("<collaboration_mode>", "</collaboration_mode>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+)
+
+
+def _full_xml_envelope(text: str, opening: str, closing: str) -> bool:
+    trimmed = text.strip()
+    if not trimmed.startswith(opening) or not trimmed.endswith(closing):
+        return False
+    body = trimmed[len(opening) : -len(closing)]
+    return bool(body.strip())
+
+
+def _codex_internal_context_text(content_text: str | None) -> bool:
+    """Recognize a complete Codex internal-context envelope.
+
+    A prefix is not enough: users can quote provider XML in an ordinary
+    prompt. The raw Codex record is the authority; this text-only predicate is
+    only a conservative candidate used to decide which archived rows deserve
+    raw replay.
+    """
+
+    text = str(content_text or "")
+    trimmed = text.strip()
+    if not trimmed.startswith(_CODEX_INTERNAL_CONTEXT_OPEN):
+        return False
+    suffix = trimmed[len(_CODEX_INTERNAL_CONTEXT_OPEN) :]
+    if not suffix or suffix[0] not in " \t\r\n>":
+        return False
+    opening_end = trimmed.find(">")
+    if opening_end < len(_CODEX_INTERNAL_CONTEXT_OPEN):
+        return False
+    opening = trimmed[: opening_end + 1]
+    return _full_xml_envelope(trimmed, opening, "</codex_internal_context>")
+
+
+def _codex_agents_instructions_text(content_text: str | None) -> bool:
+    trimmed = str(content_text or "").strip()
+    return trimmed.startswith("# AGENTS.md instructions") and "<INSTRUCTIONS>" in trimmed and trimmed.endswith("</INSTRUCTIONS>")
+
+
+def _codex_provider_system_text(content_text: str | None) -> bool:
+    text = str(content_text or "")
+    if _codex_internal_context_text(text) or _codex_agents_instructions_text(text):
+        return True
+    return any(_full_xml_envelope(text, opening, closing) for opening, closing in _CODEX_PROVIDER_SYSTEM_ENVELOPES)
+
+
+def codex_internal_context_record(raw_json: Any) -> bool:
+    """Recognize Codex's goal continuation context stored as a user row."""
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    payload = raw.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("type") != "message" or payload.get("role") != "user":
+        return False
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return False
+    first_text = next(
+        (
+            item.get("text")
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "input_text" and isinstance(item.get("text"), str)
+        ),
+        None,
+    )
+    return _codex_internal_context_text(first_text)
+
+
+def codex_internal_context_candidate(content_text: str | None) -> bool:
+    """Recognize the normalized Codex context prefix for legacy rows."""
+
+    return _codex_internal_context_text(content_text)
+
+
+def codex_provider_system_record(raw_json: Any) -> bool:
+    """Recognize a complete Codex provider-authored user envelope.
+
+    Codex writes several pieces of startup context as ``response_item`` user
+    messages. Every ``input_text`` block is checked so a provider can add an
+    image or a second context block without changing the boundary rule.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    payload = raw.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("type") != "message" or payload.get("role") != "user":
+        return False
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and item.get("type") == "input_text"
+        and isinstance(item.get("text"), str)
+        and _codex_provider_system_text(item["text"])
+        for item in content
+    )
+
+
+def codex_provider_system_candidate(content_text: str | None) -> bool:
+    """Return whether a render value merits Codex raw-envelope recovery."""
+
+    return _codex_provider_system_text(content_text)
+
+
+def provider_reasoning_content_candidate(content_text: str | None) -> bool:
+    """Return whether a render value may be a provider reasoning projection.
+
+    Selection runs before the raw companion is read, so it can only use the
+    projected text. The marker is the engine's own projection prefix.
+    """
+
+    return isinstance(content_text, str) and content_text.startswith(REASONING_PROJECTION_PREFIX)
+
+
+def provider_reasoning_record(provider: str | None, *, role: str | None, raw_json: Any) -> bool:
+    """Recognize a provider's model-reasoning row from its raw record.
+
+    OMP and Pi publish reasoning as an assistant ``thinking`` content part.
+    Longhouse normalizes that to a system-role row, which by role alone is
+    indistinguishable from provider scaffolding; the thinking part in the raw
+    record is the structural evidence, and projected text alone is
+    intentionally insufficient.
+    """
+
+    if str(provider or "").strip().lower() not in REASONING_PART_PROVIDERS:
+        return False
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    message = raw.get("message")
+    if not isinstance(message, Mapping):
+        return False
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(part, Mapping) and part.get("type") in {"thinking", "redacted_thinking"} for part in content)
+
+
+def provider_display_message_content_candidate(provider: str | None, *, role: str | None, content_text: str | None) -> bool:
+    """Return whether a render row may be a provider-displayed custom message.
+
+    Selection runs before the raw companion is read, so it can only use the
+    projected row. Such a message is a system-role row with text; the raw
+    ``display`` flag remains the authority.
+    """
+
+    return (
+        str(provider or "").strip().lower() in DISPLAY_MESSAGE_PROVIDERS
+        and str(role or "").strip().lower() == "system"
+        and isinstance(content_text, str)
+        and bool(content_text.strip())
+    )
+
+
+def provider_display_message_record(provider: str | None, *, role: str | None, raw_json: Any) -> bool:
+    """Recognize a native custom message the provider itself displays.
+
+    The structural evidence is the raw record: ``type=custom_message`` with an
+    explicit ``display: true``. Projected text alone is intentionally
+    insufficient, and a message without the flag is scaffolding.
+    """
+
+    if str(provider or "").strip().lower() not in DISPLAY_MESSAGE_PROVIDERS:
+        return False
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    return raw is not None and raw.get("type") == "custom_message" and raw.get("display") is True
+
+
+_DISPLAY_MESSAGE_ENVELOPE_RE = re.compile(r"^\s*<(?P<tag>system-notice|irc)>\s*(?P<body>.*?)\s*</(?P=tag)>\s*$", re.DOTALL)
+_DISPLAY_MESSAGE_RESUME_RE = re.compile(r"[ \t]*Resume your work using the results? below\.")
+
+
+def provider_display_message_text(content_text: str | None) -> str | None:
+    """Return the display text of a provider-displayed custom message.
+
+    The runtime wraps its notices in an envelope and ends the first line with an
+    instruction to the model ("Resume your work using the result below."); both
+    are addressed to the model, not part of the event. What remains is the
+    header and the job's own output, bounded so one long command output cannot
+    turn a transcript row into a page. An over-long body keeps its header and
+    its tail, since a command's verdict is at the end.
+    """
+
+    text = str(content_text or "").strip()
+    envelope = _DISPLAY_MESSAGE_ENVELOPE_RE.fullmatch(text)
+    if envelope is not None:
+        text = envelope.group("body")
+    text = _DISPLAY_MESSAGE_RESUME_RE.sub("", text, count=1).strip()
+    if not text:
+        return None
+    limit = _NOTIFICATION_DISPLAY_MAX_CHARS
+    if len(text) <= limit:
+        return text
+    header, _, body = text.partition("\n")
+    room = max(limit - len(header) - len("\n…\n"), 0)
+    return f"{header}\n…\n{body[-room:]}" if room else f"{header[: limit - 1]}…"
+
+
+def provider_notification_display_text(provider: str | None, content_text: str | None) -> str | None:
+    """Return the served text of a provider notification row."""
+
+    summary = claude_task_notification_summary(content_text)
+    if summary is not None:
+        return summary
+    if str(provider or "").strip().lower() in DISPLAY_MESSAGE_PROVIDERS:
+        return provider_display_message_text(content_text)
+    return content_text
+
+
+def _raw_identifier(raw: Mapping[str, Any] | None, field: str) -> str | None:
+    if raw is None:
+        return None
+    value = raw.get(field)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _bounded_native_context_key(
+    value: str,
+    *,
+    prefix: str = "",
+    max_bytes: int = _INTERACTION_CONTEXT_KEY_MAX_BYTES,
+) -> str:
+    candidate = f"{prefix}{value}"
+    if len(candidate.encode("utf-8")) <= max_bytes:
+        return candidate
+    return "sha256:" + hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+
+
+def _claude_prompt_context_candidates(prompt_id: str) -> tuple[str, ...]:
+    """Return canonical and legacy bounded forms for a Claude prompt id.
+
+    Composite prompt/UUID keys reserve space for the UUID component and
+    therefore hash long prompt ids at 96 bytes. Older rows persisted the
+    prompt-only form with the full 255-byte bound. Matching both forms keeps
+    already-persisted evidence usable while making split-batch classification
+    use the same representation as the newly persisted key.
+    """
+
+    return tuple(
+        dict.fromkeys(
+            (
+                _bounded_native_context_key(prompt_id, max_bytes=96),
+                _bounded_native_context_key(prompt_id, max_bytes=_INTERACTION_CONTEXT_KEY_MAX_BYTES),
+            )
+        )
+    )
+
+
+def _interaction_context_keys(provider: str, raw: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Return the provider-native sequence key when one is present.
+
+    Claude's local-command caveat and its sibling command/output rows normally
+    share a ``promptId``. Older and some current Claude transcripts omit that
+    field, but retain the native ``uuid``/``parentUuid`` chain. Persisting the
+    event UUID as a fallback lets a later ingest batch continue the same
+    classification even when the raw bytes are already archive-primary.
+    """
+
+    if str(provider or "").strip().lower() != "claude" or raw is None:
+        return ()
+    keys: list[str] = []
+    event_uuid = _raw_identifier(raw, "uuid")
+    parent_uuid = _raw_identifier(raw, "parentUuid")
+    prompt_id = _raw_identifier(raw, "promptId")
+    if prompt_id is not None:
+        # Preserve the readable legacy key for ordinary-sized prompt IDs.
+        # Composite keys reserve room for the UUID fallback as well.
+        keys.append(
+            _bounded_native_context_key(
+                prompt_id,
+                max_bytes=96 if event_uuid is not None or parent_uuid is not None else _INTERACTION_CONTEXT_KEY_MAX_BYTES,
+            )
+        )
+    if event_uuid is not None:
+        keys.append(_bounded_native_context_key(event_uuid, prefix="uuid:"))
+    elif parent_uuid is not None:
+        keys.append(_bounded_native_context_key(parent_uuid, prefix="uuid:"))
+    return tuple(dict.fromkeys(keys))
+
+
+def _interaction_context_key(provider: str, raw: Mapping[str, Any] | None) -> str | None:
+    keys = _interaction_context_keys(provider, raw)
+    if not keys:
+        return None
+    if len(keys) == 1:
+        return keys[0]
+    encoded = json.dumps(keys, ensure_ascii=False, separators=(",", ":"))
+    composite = f"{_INTERACTION_CONTEXT_KEYS_PREFIX}{encoded}"
+    if len(composite.encode("utf-8")) > _INTERACTION_CONTEXT_KEY_MAX_BYTES:
+        # Each component is bounded before it reaches this branch. Keep the
+        # database contract explicit so a future component cannot silently
+        # create an overlong key or truncate native evidence.
+        raise ValueError("provider interaction context composite exceeds 255 UTF-8 bytes")
+    return composite
+
+
+def interaction_context_key_parts(value: str | None) -> tuple[str, ...]:
+    """Decode one persisted sequence key into all native keys it carries."""
+
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ()
+    if not cleaned.startswith(_INTERACTION_CONTEXT_KEYS_PREFIX):
+        return (cleaned,)
+    try:
+        decoded = json.loads(cleaned.removeprefix(_INTERACTION_CONTEXT_KEYS_PREFIX))
+    except (TypeError, json.JSONDecodeError):
+        return (cleaned,)
+    if not isinstance(decoded, list):
+        return (cleaned,)
+    parts = tuple(dict.fromkeys(part for part in decoded if isinstance(part, str) and part))
+    return parts or (cleaned,)
+
+
+_INTERACTION_KINDS = VALID_INTERACTION_KINDS
+
+
+def _claude_native_meta_record(raw: Mapping[str, Any] | None) -> bool:
+    """Whether a Claude row has the provider's local-command record shape.
+
+    The markup is user-visible text and can be quoted in a real prompt. Claude
+    marks its own local-command records with ``isMeta``; that structural fact,
+    or a parser-owned semantic field, is the boundary evidence. Text alone is
+    intentionally insufficient.
+    """
+
+    if raw is None or raw.get("isMeta") is not True:
+        return False
+    if raw.get("type") not in {None, "user"}:
+        return False
+    message = raw.get("message")
+    return not isinstance(message, Mapping) or message.get("role") in {None, "user"}
+
+
+_CLAUDE_IMAGE_PLACEHOLDER_RE = re.compile(
+    r"^\[Image: original \d+x\d+, displayed at \d+x\d+\. "
+    r"Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$",
+)
+
+
+def _claude_native_image_placeholder(raw: Mapping[str, Any] | None, content: str) -> bool:
+    return _claude_native_meta_record(raw) and bool(_CLAUDE_IMAGE_PLACEHOLDER_RE.fullmatch(content.strip()))
+
+
+_CLAUDE_COMMAND_RECORD_RE = re.compile(
+    r"^\s*<command-name>.*?</command-name>"
+    r"(?:\s*<command-message>.*?</command-message>)?"
+    r"(?:\s*<command-args>.*?</command-args>)?\s*$",
+    re.DOTALL,
+)
+_CLAUDE_COMMAND_OUTPUT_RE = re.compile(r"^\s*<local-command-stdout>.*?</local-command-stdout>\s*$", re.DOTALL)
+_CLAUDE_LOCAL_COMMAND_CAVEAT_RE = re.compile(r"<local-command-caveat>.*?</local-command-caveat>", re.DOTALL)
+_CLAUDE_TASK_NOTIFICATION_RE = re.compile(
+    r"^\s*<task-notification>\s*(?P<body>.*?)\s*</task-notification>"
+    r"(?:\s*<system-reminder>.*?</system-reminder>\s*)*\s*$",
+    re.DOTALL,
+)
+
+
+def _claude_native_local_command_meta_record(raw: Mapping[str, Any] | None) -> bool:
+    """Whether an ``isMeta`` row is one of Claude's local-command records."""
+
+    if not _claude_native_meta_record(raw):
+        return False
+    content = _raw_content(raw).strip()
+    if not content:
+        return False
+    if _CLAUDE_COMMAND_RECORD_RE.fullmatch(content) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(content):
+        return True
+    caveat = _CLAUDE_LOCAL_COMMAND_CAVEAT_RE.search(content)
+    if caveat is None:
+        return False
+    # A native caveat may be accompanied by the command envelope in the same
+    # row. Remove only the exact known envelopes; prose surrounding a quoted
+    # tag is deliberately not accepted as provider evidence.
+    remainder = _CLAUDE_LOCAL_COMMAND_CAVEAT_RE.sub("", content)
+    return not remainder.strip() or bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(remainder))
+
+
+def claude_provider_system_record(raw_json: Any) -> bool:
+    """Recognize Claude metadata that is not a conversational user turn.
+
+    ``isMeta`` is broader than local commands: it also carries compaction
+    summaries, image placeholders, continuation text, and injected control
+    messages. A Longhouse channel row is an intentional exception because it
+    is a real user message routed through Claude's transcript.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    if claude_task_notification_display(raw) is not None:
+        return False
+    origin = raw.get("origin")
+    if isinstance(origin, Mapping) and origin.get("kind") == "channel":
+        return False
+    if raw.get("isCompactSummary") is True:
+        return True
+    return raw.get("isMeta") is True and not _claude_native_local_command_meta_record(raw)
+
+
+def _claude_task_tag_value(body: str, tag: str) -> str | None:
+    match = re.search(rf"<{tag}>\s*(.*?)\s*</{tag}>", body, re.DOTALL)
+    if match is None:
+        return None
+    value = " ".join(match.group(1).split())
+    return value[:2_000] or None
+
+
+def _claude_task_notification_summary_from_body(body: str) -> str:
+    summary = _claude_task_tag_value(body, "summary")
+    if summary is not None:
+        return summary
+    status = _claude_task_tag_value(body, "status")
+    if status is not None:
+        return f"Background task {status}"[:2_000]
+    return "Background task update"
+
+
+def _claude_verified_task_notification_summary(content_text: str | None) -> str | None:
+    text = str(content_text or "").lstrip()
+    if not text.startswith("<task-notification>"):
+        return None
+    after_open = text[len("<task-notification>") :]
+    end = after_open.find("</task-notification>")
+    if end < 0:
+        return None
+    return _claude_task_notification_summary_from_body(after_open[:end].strip())
+
+
+def claude_task_notification_summary(content_text: str | None) -> str | None:
+    """Return the compact display text from Claude's task notification XML.
+
+    The outer envelope is intentionally exact, with only Claude's known
+    trailing ``system-reminder`` blocks allowed. This helper may be used on a
+    normalized render record that no longer has the raw ``origin`` sidecar, so
+    it establishes shape only; callers that classify a provider record must
+    also require :func:`claude_task_notification_display`'s structural origin.
+    """
+
+    match = _CLAUDE_TASK_NOTIFICATION_RE.fullmatch(str(content_text or ""))
+    if match is None:
+        return None
+    return _claude_task_notification_summary_from_body(match.group("body"))
+
+
+def claude_task_notification_display(raw_json: Any) -> str | None:
+    """Recognize a genuine Claude task notification and return its display text.
+
+    Claude marks these records with ``origin.kind=task-notification`` on user
+    rows, or emits them mid-turn as ``type=queue-operation`` (``enqueue`` /
+    ``popAll``) with XML content. That structural envelope is the authorship
+    boundary: pasted or quoted XML in ordinary user prompts stays untouched.
+    Trailing ``<note>`` or reminders after ``</task-notification>`` are
+    accepted only once the structural origin is verified.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return None
+    if raw.get("type") == "queue-operation":
+        if raw.get("operation") not in {"enqueue", "popAll"}:
+            return None
+        content = raw.get("content")
+        if not isinstance(content, str):
+            return None
+        return _claude_verified_task_notification_summary(content)
+    origin = raw.get("origin")
+    if not isinstance(origin, Mapping) or origin.get("kind") != "task-notification":
+        return None
+    if raw.get("type") not in {None, "user", "message"}:
+        return None
+    message = raw.get("message")
+    if not isinstance(message, Mapping) or message.get("role") not in {None, "user"}:
+        return None
+    return _claude_verified_task_notification_summary(_raw_content(raw))
+
+
+def claude_system_notification_record(raw_json: Any, *, role: str | None) -> bool:
+    """Recognize Claude system notification records surfaced to the timeline.
+
+    Covers waiting-for-background-agents markers on ``system/turn_duration``,
+    ``system/scheduled_task_fire`` records, and ``system/api_error`` notices.
+    """
+
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    if raw is None or raw.get("type") != "system":
+        return False
+    subtype = raw.get("subtype")
+    if subtype in {"scheduled_task_fire", "api_error"}:
+        return True
+    if subtype == "turn_duration":
+        pending = raw.get("pendingBackgroundAgentCount")
+        return type(pending) is int and pending > 0
+    return False
+
+
+def _claude_native_command_record(
+    raw: Mapping[str, Any] | None,
+    combined: str,
+    sequence_context: MutableMapping[str, Any] | None,
+) -> bool:
+    """Recognize Claude's exact command envelope across its JSONL rows.
+
+    Claude 2.1.219 marks the caveat row with ``isMeta`` but leaves the sibling
+    command and stdout rows as ordinary-looking ``type=user`` records. The
+    exact tag envelope is the remaining provider-native evidence. A sentence
+    that merely quotes one of the tags does not match these full-record shapes.
+    """
+
+    if _claude_native_local_command_meta_record(raw):
+        return True
+    if raw is None or raw.get("type") not in {None, "user"}:
+        return False
+    message = raw.get("message")
+    if isinstance(message, Mapping) and message.get("role") not in {None, "user"}:
+        return False
+    prompt_id = _raw_identifier(raw, "promptId")
+    prompt_ids = sequence_context.get("claude_local_command_prompt_ids", set()) if sequence_context is not None else set()
+    prompt_match = prompt_id is not None and any(key in prompt_ids for key in _claude_prompt_context_candidates(prompt_id))
+    parent_uuid = _raw_identifier(raw, "parentUuid")
+    local_uuids = sequence_context.get("claude_local_command_uuids", set()) if sequence_context is not None else set()
+    uuid_match = parent_uuid is not None and parent_uuid in local_uuids
+    sequence_match = prompt_match or uuid_match
+    if not sequence_match:
+        return False
+    return bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(combined) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(combined))
+
+
+def claude_sequence_dependent_control_candidate(
+    *,
+    content_text: str | None,
+    raw_json: Any = None,
+) -> bool:
+    """Whether a Claude row needs adjacent sequence evidence to classify.
+
+    Claude 2.1.219 emits command and stdout rows with exact local-command
+    markup and a ``promptId``, but without the ``isMeta`` marker carried by the
+    preceding caveat.  The row is safe to defer until the preceding raw
+    sequence is available; without the caveat it remains an ordinary prompt.
+    """
+
+    content_candidate = claude_sequence_dependent_control_content_candidate(content_text)
+    if isinstance(raw_json, (bytes, bytearray, memoryview)):
+        raw_json = bytes(raw_json)
+        # Raw record bytes as stored. Both markers are ASCII and UTF-8 never
+        # puts an ASCII byte inside a multi-byte character, so the byte test
+        # matches the decoded-text test without decoding every record.
+        if not content_candidate and b"command-" not in raw_json and b"\\u" not in raw_json:
+            return False
+        raw_json = raw_json.decode("utf-8", errors="replace")
+    if not content_candidate and isinstance(raw_json, str) and "command-" not in raw_json and "\\u" not in raw_json:
+        # Both markup patterns below contain "command-"; skip parsing the
+        # full record JSON (every Claude row on the ingest event loop) when
+        # neither the rendered text nor the raw text can match. A \u escape
+        # could spell "command-" without the literal, so it still parses.
+        return False
+    raw = _raw_mapping(raw_json)
+    if raw is None or _claude_native_meta_record(raw):
+        return False
+    if raw.get("type") not in {None, "user"}:
+        return False
+    message = raw.get("message")
+    if isinstance(message, Mapping) and message.get("role") not in {None, "user"}:
+        return False
+    prompt_id = _raw_identifier(raw, "promptId")
+    if prompt_id is None and _raw_identifier(raw, "uuid") is None and _raw_identifier(raw, "parentUuid") is None:
+        return False
+    raw_text = _raw_content(raw)
+    return content_candidate or (
+        bool(raw_text) and bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(raw_text) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(raw_text))
+    )
+
+
+def claude_sequence_dependent_control_content_candidate(content_text: str | None) -> bool:
+    """Whether rendered Claude text could change meaning after a later caveat.
+
+    This is deliberately a superset of
+    :func:`claude_sequence_dependent_control_candidate`: render objects do not
+    retain Claude's prompt/UUID envelope fields, so the immutable raw companion
+    still decides the fact.  The exact full-record markup is enough to decide
+    whether that raw read could possibly matter, keeping ordinary prompts and
+    assistant output on the render-only user path.
+    """
+
+    value = str(content_text or "")
+    return bool(value) and bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(value) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(value))
+
+
+def _advance_claude_sequence_context(
+    raw: Mapping[str, Any] | None,
+    raw_text: str,
+    sequence_context: MutableMapping[str, Any] | None,
+) -> None:
+    if sequence_context is None or not _claude_native_local_command_meta_record(raw) or "<local-command-caveat>" not in raw_text:
+        return
+    prompt_id = _raw_identifier(raw, "promptId")
+    if prompt_id is not None:
+        prompt_ids = sequence_context.setdefault("claude_local_command_prompt_ids", set())
+        if isinstance(prompt_ids, set):
+            prompt_ids.update(_claude_prompt_context_candidates(prompt_id))
+    event_uuid = _raw_identifier(raw, "uuid")
+    if event_uuid is not None:
+        local_uuids = sequence_context.setdefault("claude_local_command_uuids", set())
+        if isinstance(local_uuids, set):
+            local_uuids.add(event_uuid)
+
+
+def _remember_claude_local_context(
+    raw: Mapping[str, Any] | None,
+    interaction_kind: str,
+    sequence_context: MutableMapping[str, Any] | None,
+) -> None:
+    if (
+        sequence_context is None
+        or raw is None
+        or interaction_kind
+        not in {
+            INTERACTION_LOCAL_CONTROL,
+            INTERACTION_LOCAL_CONTROL_OUTPUT,
+            INTERACTION_CONVERSATION_BOUNDARY,
+        }
+    ):
+        return
+    event_uuid = _raw_identifier(raw, "uuid")
+    if event_uuid is None:
+        return
+    local_uuids = sequence_context.setdefault("claude_local_command_uuids", set())
+    if isinstance(local_uuids, set):
+        local_uuids.add(event_uuid)
+
+
+def seed_provider_interaction_sequence_context(
+    provider: str | None,
+    raw_events: list[Any] | tuple[Any, ...],
+    sequence_context: MutableMapping[str, Any],
+) -> None:
+    """Seed complete-window native caveat evidence before replay.
+
+    Normal ingest observes rows in provider order and must not use future
+    evidence. Storage-v2 receives an immutable raw window, so it can safely
+    discover a caveat anywhere in that complete window before recovering a
+    parser-owned render projection. This also handles a split envelope whose
+    command row sorts before its caveat row.
+    """
+
+    if str(provider or "").strip().lower() != "claude":
+        return
+    for raw_event in raw_events:
+        raw = _raw_mapping(raw_event)
+        if raw is None or not _claude_native_meta_record(raw):
+            continue
+        content = _raw_content(raw)
+        if "<local-command-caveat>" not in content:
+            continue
+        message = raw.get("message")
+        role = message.get("role") if isinstance(message, Mapping) else raw.get("type")
+        classify_provider_interaction(
+            provider,
+            role=str(role or ""),
+            content_text=content,
+            raw_json=raw,
+            sequence_context=sequence_context,
+        )
+
+    # A complete immutable raw window may be physically out of order. Close
+    # the UUID lineage before the normal ordered replay so stdout can still be
+    # connected when it precedes its command, and the command precedes its
+    # caveat. Normal ingest does not call this helper and therefore remains
+    # causal rather than using future evidence.
+    classified_indexes: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        for index, raw_event in enumerate(raw_events):
+            if index in classified_indexes:
+                continue
+            raw = _raw_mapping(raw_event)
+            if raw is None:
+                continue
+            content = _raw_content(raw)
+            if not (_CLAUDE_COMMAND_RECORD_RE.fullmatch(content) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(content)):
+                continue
+            if not _claude_native_command_record(raw, content, sequence_context):
+                continue
+            message = raw.get("message")
+            role = message.get("role") if isinstance(message, Mapping) else raw.get("type")
+            classify_provider_interaction(
+                provider,
+                role=str(role or ""),
+                content_text=content,
+                raw_json=raw,
+                sequence_context=sequence_context,
+            )
+            classified_indexes.add(index)
+            changed = True
+
+
+def seed_persisted_provider_interaction_context(
+    provider: str | None,
+    events: list[Any] | tuple[Any, ...],
+    sequence_context: MutableMapping[str, Any],
+) -> None:
+    """Seed parser-owned context for rows whose raw companion is absent.
+
+    This is compatibility evidence, not a replacement for native raw replay.
+    It lets a complete legacy window use persisted sequence keys after raw
+    bytes have moved to archive-primary. Only keys from rows already persisted
+    as controls establish sequence evidence; an ordinary command-shaped row
+    must not be able to establish its own control context.
+    """
+
+    if str(provider or "").strip().lower() != "claude":
+        return
+    control_kinds = {
+        INTERACTION_LOCAL_CONTROL,
+        INTERACTION_LOCAL_CONTROL_OUTPUT,
+        INTERACTION_CONVERSATION_BOUNDARY,
+    }
+
+    def field(event: Any, name: str, default: Any = None) -> Any:
+        if isinstance(event, Mapping):
+            return event.get(name, default)
+        return getattr(event, name, default)
+
+    def raw_value(event: Any) -> Any:
+        if isinstance(event, Mapping):
+            raw_json = event.get("raw_json")
+            if raw_json is None and event.get("raw_json_codec") == 1:
+                blob = event.get("raw_json_z")
+                if blob is not None:
+                    from zerg.provider_contract.raw_json_compression import decompress_raw_json
+
+                    return decompress_raw_json(blob)
+            return raw_json
+        from zerg.provider_contract.raw_json_compression import decode_raw_json
+
+        return decode_raw_json(event)
+
+    def set_field(event: Any, name: str, value: Any) -> None:
+        if isinstance(event, MutableMapping):
+            event[name] = value
+        else:
+            setattr(event, name, value)
+
+    # First pass: only an already-classified control may establish the
+    # prompt/UUID context used by a later semantic repair.
+    for event in events:
+        if _raw_mapping(raw_value(event)) is not None:
+            continue
+        if field(event, "interaction_kind") not in control_kinds:
+            continue
+        for context_key in interaction_context_key_parts(str(field(event, "interaction_context_key") or "").strip()):
+            if context_key.startswith("uuid:"):
+                sequence_context.setdefault("claude_local_command_uuids", set()).add(context_key.removeprefix("uuid:"))
+            else:
+                sequence_context.setdefault("claude_local_command_prompt_ids", set()).add(context_key)
+
+    # Second pass: raw bytes may have moved to archive-primary, but the
+    # normalized row still carries its exact content, interaction key, and
+    # Claude UUID lineage. Reclassify only when that persisted lineage matches
+    # a control context. Mutating these sidecars is intentional; raw history is
+    # never rewritten.
+    for event in events:
+        raw_json = raw_value(event)
+        if _raw_mapping(raw_json) is not None:
+            continue
+        if str(field(event, "role") or "user").strip().lower() != "user":
+            continue
+        content_text = field(event, "content_text")
+        if not isinstance(content_text, str) or not content_text:
+            continue
+        surrogate: dict[str, Any] = {
+            "type": "user",
+            "message": {"role": "user", "content": content_text},
+        }
+        context_parts = interaction_context_key_parts(str(field(event, "interaction_context_key") or "").strip())
+        prompt_id = next((part for part in context_parts if not part.startswith("uuid:")), None)
+        if prompt_id is not None:
+            surrogate["promptId"] = prompt_id
+        event_uuid = field(event, "event_uuid")
+        parent_event_uuid = field(event, "parent_event_uuid")
+        if isinstance(event_uuid, str) and event_uuid:
+            surrogate["uuid"] = event_uuid
+        if isinstance(parent_event_uuid, str) and parent_event_uuid:
+            surrogate["parentUuid"] = parent_event_uuid
+        classification = classify_provider_interaction(
+            provider,
+            role="user",
+            content_text=content_text,
+            raw_json=surrogate,
+            sequence_context=sequence_context,
+        )
+        if classification["interaction_kind"] not in control_kinds:
+            continue
+        set_field(event, "interaction_kind", classification["interaction_kind"])
+        set_field(event, "title_eligible", 0)
+
+
+def _compaction_boundary_record(
+    provider: str,
+    *,
+    role: str,
+    raw: Mapping[str, Any] | None,
+) -> bool:
+    """Return True for full compaction boundaries rendered as timeline dividers."""
+
+    if role != "system" or raw is None:
+        return False
+    row_type = raw.get("type")
+    if row_type == "summary" and provider in {"claude", ""}:
+        return True
+    if row_type == "system" and raw.get("subtype") in {"compact_boundary", "microcompact_boundary"} and provider in {"claude", ""}:
+        return True
+    if row_type == "compacted" and provider in {"codex", ""}:
+        return True
+    if row_type == "compaction" and provider in {"pi", "omp", ""}:
+        return True
+    return False
+
+
+def classify_provider_interaction(
+    provider: str | None,
+    *,
+    role: str | None,
+    content_text: str | None,
+    raw_json: Any = None,
+    source_surface: str | None = None,
+    interaction_kind: str | None = None,
+    changes_provider_state: bool | None = None,
+    sequence_context: MutableMapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return mechanical semantic facts for one normalized provider event.
+
+    The classifier only makes a positive control classification from exact
+    provider evidence. In particular, a text value beginning with ``/`` is not
+    enough: custom slash commands may be sent to the model as ordinary prompts.
+    """
+
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_role = str(role or "").strip().lower()
+    parser_changes_provider_state = changes_provider_state
+    raw = _raw_mapping(raw_json)
+    raw_text = _raw_content(raw)
+    text = str(content_text or "")
+    combined_values = [value for value in (text, raw_text) if value]
+    combined = combined_values[0] if len(set(combined_values)) == 1 else "\n".join(combined_values)
+    _advance_claude_sequence_context(raw, raw_text, sequence_context)
+
+    kind = INTERACTION_DURABLE_USER_MESSAGE if normalized_role == "user" else INTERACTION_PROVIDER_SYSTEM
+    changes_provider_state: bool | None = None
+    starts_model_turn: bool | None = None
+
+    claude_native_command = any(
+        _claude_native_command_record(raw, value, sequence_context) for value in (text, raw_text, combined) if value
+    )
+    claude_task_notification = normalized_provider == "claude" and claude_task_notification_display(raw) is not None
+    claude_native_image_placeholder = (
+        normalized_provider == "claude"
+        and normalized_role == "user"
+        and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
+    )
+    codex_provider_system = normalized_provider == "codex" and codex_provider_system_record(raw)
+    claude_system_notification = normalized_provider == "claude" and claude_system_notification_record(
+        raw,
+        role=normalized_role,
+    )
+    claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
+    provider_reasoning = provider_reasoning_record(normalized_provider, role=normalized_role, raw_json=raw)
+    provider_display_message = provider_display_message_record(normalized_provider, role=normalized_role, raw_json=raw)
+    compaction_boundary = _compaction_boundary_record(normalized_provider, role=normalized_role, raw=raw)
+    if claude_system_notification:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
+        changes_provider_state = False
+        starts_model_turn = False
+    elif codex_provider_system or claude_provider_system:
+        kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif compaction_boundary:
+        kind = INTERACTION_COMPACTION_BOUNDARY
+        changes_provider_state = False
+        starts_model_turn = False
+    elif provider_reasoning:
+        kind = INTERACTION_PROVIDER_REASONING
+        changes_provider_state = False
+        starts_model_turn = False
+    elif provider_display_message:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
+        changes_provider_state = False
+        starts_model_turn = False
+    elif claude_task_notification:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
+        changes_provider_state = False
+        starts_model_turn = False
+    elif claude_native_image_placeholder:
+        kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif normalized_provider == "claude" and normalized_role == "user" and claude_native_command:
+        if "<local-command-stdout>" in combined:
+            kind = INTERACTION_LOCAL_CONTROL_OUTPUT
+            changes_provider_state = False
+            starts_model_turn = False
+        elif "<command-name>/clear</command-name>" in combined:
+            kind = INTERACTION_CONVERSATION_BOUNDARY
+            changes_provider_state = True
+            starts_model_turn = False
+        elif any(marker in combined for marker in ("<local-command-caveat>", "<command-name>", "<command-message>", "<command-args>")):
+            kind = INTERACTION_LOCAL_CONTROL
+            changes_provider_state = True
+            starts_model_turn = False
+
+    # A provider parser may attach an exact semantic marker to its normalized
+    # event. Accept only the small vocabulary owned by this module; arbitrary
+    # raw provider fields must not silently become Longhouse semantics.
+    # ``interaction_kind`` is parser-owned normalized data. Never accept a
+    # Longhouse semantic override from provider raw JSON: raw provider text is
+    # evidence to classify, not an authority that can demote itself.
+    explicit_kind = (
+        None
+        if codex_provider_system
+        or claude_system_notification
+        or claude_provider_system
+        or compaction_boundary
+        or provider_reasoning
+        or provider_display_message
+        else interaction_kind
+    )
+    if explicit_kind in _INTERACTION_KINDS:
+        kind = str(explicit_kind)
+        if kind in {INTERACTION_LOCAL_CONTROL, INTERACTION_CONVERSATION_BOUNDARY}:
+            changes_provider_state = True
+            starts_model_turn = False
+        elif kind == INTERACTION_LOCAL_CONTROL_OUTPUT:
+            changes_provider_state = False
+            starts_model_turn = False
+        elif kind == INTERACTION_PROVIDER_SYSTEM:
+            changes_provider_state = False
+            starts_model_turn = False
+        elif kind in {INTERACTION_PROVIDER_NOTIFICATION, INTERACTION_COMPACTION_BOUNDARY}:
+            changes_provider_state = False
+            starts_model_turn = False
+
+    if parser_changes_provider_state is not None:
+        changes_provider_state = bool(parser_changes_provider_state)
+
+    _remember_claude_local_context(raw if normalized_provider == "claude" else None, kind, sequence_context)
+
+    title_eligible = normalized_role == "user" and kind in _TITLE_ELIGIBLE_KINDS
+    counts_as_user_message = title_eligible
+    return {
+        "interaction_kind": kind,
+        "interaction_context_key": _interaction_context_key(normalized_provider, raw),
+        "counts_as_user_message": counts_as_user_message,
+        "title_eligible": title_eligible,
+        "starts_model_turn": starts_model_turn,
+        "changes_provider_state": changes_provider_state,
+        "source_surface": source_surface or "unknown",
+    }
+
+
+def semantic_projection_facts(
+    provider: str | None,
+    *,
+    role: str | None,
+    content_text: str | None,
+    raw_json: Any = None,
+    interaction_kind: str | None = None,
+    title_eligible: bool | int | None = None,
+    sequence_context: MutableMapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify one event while preserving parser-owned persisted facts.
+
+    Legacy rows may have neither semantic column populated. Every semantic
+    projection must still replay those rows in provider order so Claude's
+    caveat can establish context for a later command/output sibling.
+
+    Claude's native JSON envelope is authoritative whenever it is available.
+    Persisted semantic columns remain the compatibility authority for rows
+    whose raw envelope is absent, but they cannot override a later raw replay.
+    This lets a late caveat repair an already-ingested command consistently
+    across every semantic consumer.
+    """
+
+    normalized_provider = str(provider or "").strip().lower()
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_provider_system_record(raw_json)
+    raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
+
+    classification = classify_provider_interaction(
+        provider,
+        role=role,
+        content_text=content_text,
+        raw_json=raw_json,
+        interaction_kind=None if raw_is_authoritative else interaction_kind,
+        sequence_context=sequence_context,
+    )
+    normalized_role = str(role or "").strip().lower()
+    effective_kind = (
+        interaction_kind if not raw_is_authoritative and interaction_kind in VALID_INTERACTION_KINDS else classification["interaction_kind"]
+    )
+    effective_title_eligible = (
+        bool(title_eligible)
+        if not raw_is_authoritative and normalized_role == "user" and title_eligible is not None
+        else bool(classification["title_eligible"])
+    )
+    return {
+        **classification,
+        "interaction_kind": effective_kind,
+        "title_eligible": effective_title_eligible,
+        "counts_as_user_message": normalized_role == "user" and effective_title_eligible,
+    }
+
+
+def title_eligible_provider_event(
+    provider: str | None,
+    *,
+    role: str | None,
+    content_text: str | None,
+    raw_json: Any = None,
+    interaction_kind: str | None = None,
+    title_eligible: bool | int | None = None,
+    sequence_context: MutableMapping[str, Any] | None = None,
+) -> bool:
+    """Whether an event can be the first conversational title candidate."""
+
+    normalized_provider = str(provider or "").strip().lower()
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_provider_system_record(raw_json)
+    raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
+    if not raw_is_authoritative and str(role or "").strip().lower() == "user" and title_eligible is not None:
+        return bool(title_eligible)
+
+    return bool(
+        classify_provider_interaction(
+            provider,
+            role=role,
+            content_text=content_text,
+            raw_json=raw_json,
+            interaction_kind=None if raw_is_authoritative else interaction_kind,
+            sequence_context=sequence_context,
+        )["title_eligible"]
+    )
+
+
+def semantic_event_included(
+    provider: str | None,
+    *,
+    role: str | None,
+    content_text: str | None,
+    raw_json: Any = None,
+    interaction_kind: str | None = None,
+    title_eligible: bool | int | None = None,
+    sequence_context: MutableMapping[str, Any] | None = None,
+    include_reasoning: bool = False,
+) -> bool:
+    """Whether a normalized event belongs in semantic projections.
+
+    Non-user records remain part of semantic context except for explicit
+    provider notifications. Provider-local records that are normalized as
+    ``role=user`` are excluded only when the provider contract supplies
+    positive evidence that they are local control rather than a prompt.
+
+    Model reasoning is user-visible in the terminal but is not conversational
+    content: search, titles, card previews, turn assembly, and export keep it
+    excluded. Only the timeline projection opts in with ``include_reasoning``.
+    """
+
+    if interaction_kind in {INTERACTION_PROVIDER_NOTIFICATION, INTERACTION_COMPACTION_BOUNDARY}:
+        return False
+    if interaction_kind == INTERACTION_PROVIDER_REASONING:
+        return include_reasoning
+    if interaction_kind == INTERACTION_PROVIDER_SYSTEM and str(role or "").strip().lower() in {"user", "system"}:
+        return False
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "claude" and claude_task_notification_display(raw_json) is not None:
+        return False
+    if normalized_provider == "claude" and claude_provider_system_record(raw_json):
+        return False
+    if normalized_provider == "codex" and codex_provider_system_record(raw_json):
+        return False
+    if str(role or "").strip().lower() != "user":
+        return True
+    included = title_eligible_provider_event(
+        provider,
+        role=role,
+        content_text=content_text,
+        raw_json=raw_json,
+        interaction_kind=interaction_kind,
+        title_eligible=title_eligible,
+        sequence_context=sequence_context,
+    )
+    if included:
+        return True
+    return False
+
+
+def interaction_contract_snapshot(provider: str) -> tuple[dict[str, Any], ...]:
+    """Expose the provider's declared probe rows in JSON-safe form."""
+
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    if contract is None:
+        return ()
+    return tuple(
+        {
+            "probe_id": probe.probe_id,
+            "surface": probe.surface,
+            "input_sequence": list(probe.input_sequence),
+            "acknowledgement_oracle": probe.acknowledgement_oracle,
+            "native_sources": list(probe.native_sources),
+            "raw_markers": list(probe.raw_markers),
+            "raw_output_markers": list(probe.raw_output_markers),
+            "expected_interaction_kind": probe.expected_interaction_kind,
+            "expected_title_eligibility": probe.expected_title_eligibility,
+            "expected_model_turn": probe.expected_model_turn,
+            "changes_provider_state": probe.changes_provider_state,
+            "source_surface": probe.source_surface,
+            "state_mutation_scope": probe.state_mutation_scope,
+            "evidence_class": probe.evidence_class,
+            "disposition": probe.disposition,
+            "canary": probe.canary,
+        }
+        for probe in contract.interaction_probes
+    )
+
+
+__all__ = [
+    "INTERACTION_COMPACTION_BOUNDARY",
+    "INTERACTION_CONVERSATION_BOUNDARY",
+    "INTERACTION_DURABLE_USER_MESSAGE",
+    "INTERACTION_LOCAL_CONTROL",
+    "INTERACTION_LOCAL_CONTROL_OUTPUT",
+    "INTERACTION_PROVIDER_NOTIFICATION",
+    "INTERACTION_PROVIDER_SYSTEM",
+    "INTERACTION_UNKNOWN_USER_INPUT",
+    "classify_provider_interaction",
+    "codex_internal_context_candidate",
+    "codex_internal_context_record",
+    "codex_provider_system_candidate",
+    "codex_provider_system_record",
+    "claude_provider_system_record",
+    "claude_system_notification_record",
+    "claude_task_notification_display",
+    "claude_task_notification_summary",
+    "interaction_context_key_parts",
+    "interaction_contract_snapshot",
+    "provider_display_message_content_candidate",
+    "provider_display_message_record",
+    "provider_display_message_text",
+    "provider_notification_display_text",
+    "semantic_projection_facts",
+    "seed_persisted_provider_interaction_context",
+    "seed_provider_interaction_sequence_context",
+    "semantic_event_included",
+    "title_eligible_provider_event",
+]

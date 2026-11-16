@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 361,
+  "file_count": 365,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2494,6 +2494,38 @@
         "claude",
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_contract/managed_provider_contract_manifest.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_contract/managed_provider_contracts.py",
+      "providers": [
+        "antigravity",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_contract/provider_cli_contract.py",
+      "providers": [
+        "claude",
+        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/provider_contract/provider_interaction_semantics.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

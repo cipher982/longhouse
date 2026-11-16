@@ -1,0 +1,547 @@
+"""Executable managed-provider control contracts.
+
+This registry is intentionally small. It centralizes what each provider can
+truthfully support today without pretending the provider mechanics are generic.
+Provider-specific launch/control code still owns how an operation runs.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from collections.abc import Mapping
+from dataclasses import dataclass
+from dataclasses import field
+from typing import Any
+
+from zerg.provider_contract.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
+from zerg.provider_contract.managed_provider_contract_manifest import adapter_sources_digest
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_entry_digest
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_items
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_manifest
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
+
+COMMAND_INTERRUPT = "session.interrupt"
+COMMAND_SEND_TEXT = "session.send_text"
+COMMAND_STEER_TEXT = "session.steer_text"
+COMMAND_ANSWER_PAUSE = "session.answer_pause"
+COMMAND_TERMINATE = "session.terminate"
+COMMAND_RUN_ONCE = "session.run_once"
+COMMAND_TURN_START = "session.turn.start"
+COMMAND_TURN_INTERRUPT = "session.turn.interrupt"
+COMMAND_TURN_STEER = "session.turn.steer"
+
+_MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
+    COMMAND_SEND_TEXT: "send",
+    COMMAND_INTERRUPT: "interrupt",
+    COMMAND_STEER_TEXT: "steer",
+    COMMAND_ANSWER_PAUSE: "answer_pause",
+    COMMAND_TERMINATE: "terminate",
+    COMMAND_RUN_ONCE: "run_once",
+    COMMAND_TURN_START: "turn_start",
+    COMMAND_TURN_INTERRUPT: "turn_interrupt",
+    COMMAND_TURN_STEER: "turn_steer",
+}
+
+
+@dataclass(frozen=True)
+class ProviderReleaseChannel:
+    channel: str
+    coordinate: str
+    version_discovery: str
+    verification: str
+    platform_artifacts: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProviderInteractionProbe:
+    """One provider-native control interaction the factory can qualify.
+
+    These fields describe the probe and its expected semantic result. They do
+    not replace the raw provider transcript; the live canary must preserve that
+    transcript and the harness evaluates it against this contract.
+    """
+
+    probe_id: str
+    surface: str
+    input_sequence: tuple[str, ...]
+    acknowledgement_oracle: str
+    native_sources: tuple[str, ...]
+    raw_markers: tuple[str, ...]
+    raw_output_markers: tuple[str, ...]
+    expected_interaction_kind: str
+    expected_title_eligibility: bool
+    expected_model_turn: bool | None
+    changes_provider_state: bool | None
+    source_surface: str
+    state_mutation_scope: str
+    evidence_class: str
+    disposition: str
+    canary: str
+
+
+@dataclass(frozen=True)
+class ManagedProviderContract:
+    provider: str
+    display_name: str
+    marketing_name: str
+    managed_transport: ManagedSessionTransport | None
+    control_plane: str | None
+    release_channel: ProviderReleaseChannel
+    control_plane_aliases: tuple[str, ...] = ()
+    adapter_sources: tuple[str, ...] = ()
+    wire_families: tuple[str, ...] = ()
+    observation_sources: tuple[str, ...] = ()
+    normalization_ruleset: str = ""
+    presentation_ruleset: str = ""
+    proof_profiles: Mapping[str, str] = field(default_factory=dict)
+    # ``launch`` providers run every factory lane. ``maintenance`` providers keep
+    # ingest, archive, and transcript scenarios but are excluded from
+    # control-proof lanes. The factory derives its provider set from this field.
+    support_tier: str = "launch"
+    interaction_probes: tuple[ProviderInteractionProbe, ...] = ()
+    # Facts the universal harness used to hardcode as provider name checks.
+    permission_prompt_surface: bool = False
+    external_event_channel: str | None = None
+    pause_tool_name: str = "structured_question"
+    # Whether the universal harness can exercise the provider without spending
+    # model tokens, and whether it has a real managed-session E2E scenario.
+    harness_safe_no_token_prompt: bool = False
+    harness_safe_managed_session_scenarios: tuple[str, ...] = ()
+    harness_real_managed_session_e2e: bool = False
+    requires_longhouse_cli: bool = True
+    launch_local: bool = True
+    run_once: bool = False
+    reattach: bool = False
+    send_input: bool = False
+    interrupt: bool = False
+    steer_active_turn: bool = False
+    answer_pause: bool = False
+    terminate: bool = False
+    tail_output: bool = True
+    runtime_phase: bool = True
+    transcript_binding: bool = True
+    startup_coordination_context: bool = False
+    can_resume: bool = False
+    console_adapter: str | None = None
+    turn_start: bool = False
+    #: Whether this build can branch a conversation, which is a different
+    #: upstream surface from resuming one. Declared per provider rather than
+    #: inferred from can_resume: a release can gain or lose either alone.
+    fork_thread: bool = False
+    live_proof: bool = False
+    # Expected machine-control channel operation names. The engine still owns
+    # the live supports[] handshake; this field documents the provider ceiling.
+    machine_control_supports: tuple[str, ...] = ()
+    # Per-operation evidence is intentionally separate from the support flag.
+    # A provider can be first-class by design while still carrying a lower proof
+    # level until scheduled live canaries promote the evidence.
+    operation_evidence: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    capabilities: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    transcript_signals: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+
+    @property
+    def control_planes(self) -> tuple[str, ...]:
+        return tuple(plane for plane in (self.control_plane, *self.control_plane_aliases) if plane is not None)
+
+    @property
+    def connection_capabilities(self) -> dict[str, int]:
+        # SessionConnection.can_resume is the host reattach bit. The provider
+        # contract's can_resume flag records provider-native resume support.
+        #
+        # send/interrupt/terminate are remote-control capabilities: the value a
+        # client reads to decide whether to offer the control. They are only
+        # true when the machine control channel will actually carry the command,
+        # which is `machine_control_supports`, not the bare operation flag.
+        # Codex declares `terminate: true` and carries no `codex.terminate`
+        # support (Claude did too until it gained `claude.terminate`), so the
+        # flag alone would advertise a control the dispatcher refuses before
+        # the engine is ever contacted
+        # (managed_control_dispatcher.py `_session_uses_engine_control`).
+        # tail_output and resume have no machine-control operation; they stay on
+        # the flag.
+        #
+        # The support must be the EXACT live-control one. Several suffixes share
+        # one contract flag -- `turn_interrupt` and `interrupt` both gate on
+        # `interrupt` (MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX) -- so asking
+        # "does any support map to this operation?" let Pi's Console-only
+        # `pi.turn_interrupt` light up `can_interrupt`, i.e. a live Interrupt
+        # control on a session whose `session.interrupt` the dispatcher refuses.
+        return {
+            "can_send_input": int(self.dispatchable_live_control("send")),
+            "can_interrupt": int(self.dispatchable_live_control("interrupt")),
+            "can_terminate": int(self.dispatchable_live_control("terminate")),
+            "can_tail_output": int(self.tail_output),
+            "can_resume": int(self.reattach),
+        }
+
+    def dispatchable_live_control(self, operation: str) -> bool:
+        """Whether a live-control command for this exact operation can be
+        dispatched: the contract flag is set AND the matching
+        `<provider>.<operation>` machine-control support is advertised.
+
+        `operation` is a machine-control support suffix (send/interrupt/
+        terminate), not a contract flag name, precisely so a turn-scoped
+        support cannot stand in for its live-control sibling."""
+
+        return self.machine_control_capability_for_operation(operation) is not None
+
+    def operation_evidence_for(self, operation: str) -> Mapping[str, Any]:
+        return self.operation_evidence.get(operation, {})
+
+    @property
+    def adapter_digest(self) -> str:
+        """Digest of the adapter sources as they are now, never a stored copy."""
+
+        return adapter_sources_digest(self.provider, self.adapter_sources)
+
+    @property
+    def contract_entry_digest(self) -> str:
+        return managed_provider_contract_entry_digest(self.provider)
+
+    def supports_contract_operation(self, operation: str) -> bool:
+        return bool(getattr(self, operation, False))
+
+    def machine_control_operation_for_support(self, support: str) -> str | None:
+        provider, separator, operation = str(support or "").strip().partition(".")
+        if separator != "." or provider != self.provider:
+            return None
+        contract_operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(operation)
+        if contract_operation is None or not self.supports_contract_operation(contract_operation):
+            return None
+        return operation if support in self.machine_control_supports else None
+
+    def machine_control_capability_for_operation(self, operation: str) -> str | None:
+        operation = str(operation or "").strip()
+        contract_operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(operation)
+        if contract_operation is None or not self.supports_contract_operation(contract_operation):
+            return None
+        capability = f"{self.provider}.{operation}"
+        return capability if capability in self.machine_control_supports else None
+
+    @property
+    def machine_control_operations(self) -> tuple[str, ...]:
+        return tuple(
+            operation
+            for support in self.machine_control_supports
+            if (operation := self.machine_control_operation_for_support(support)) is not None
+        )
+
+
+def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProviderContract:
+    release_item = dict(item.get("release_channel") or {})
+    interaction_probes = tuple(
+        ProviderInteractionProbe(
+            probe_id=str(probe["probe_id"]),
+            surface=str(probe["surface"]),
+            input_sequence=tuple(str(value) for value in probe.get("input_sequence") or ()),
+            acknowledgement_oracle=str(probe["acknowledgement_oracle"]),
+            native_sources=tuple(str(value) for value in probe.get("native_sources") or ()),
+            raw_markers=tuple(str(value) for value in probe.get("raw_markers") or ()),
+            raw_output_markers=tuple(str(value) for value in probe.get("raw_output_markers") or ()),
+            expected_interaction_kind=str(probe["expected_interaction_kind"]),
+            expected_title_eligibility=bool(probe["expected_title_eligibility"]),
+            expected_model_turn=(bool(probe["expected_model_turn"]) if probe.get("expected_model_turn") is not None else None),
+            changes_provider_state=(bool(probe["changes_provider_state"]) if probe.get("changes_provider_state") is not None else None),
+            source_surface=str(probe["source_surface"]),
+            state_mutation_scope=str(probe["state_mutation_scope"]),
+            evidence_class=str(probe["evidence_class"]),
+            disposition=str(probe["disposition"]),
+            canary=str(probe["canary"]),
+        )
+        for probe in item.get("interaction_probes") or ()
+        if isinstance(probe, dict)
+    )
+    return ManagedProviderContract(
+        provider=str(item["provider"]),
+        display_name=str(item["display_name"]),
+        marketing_name=str(item["marketing_name"]),
+        managed_transport=(ManagedSessionTransport(str(item["managed_transport"])) if item.get("managed_transport") else None),
+        control_plane=(str(item["control_plane"]) if item.get("control_plane") else None),
+        control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
+        wire_families=tuple(str(value) for value in item.get("wire_families") or ()),
+        observation_sources=tuple(str(value) for value in item.get("observation_sources") or ()),
+        normalization_ruleset=str(item.get("normalization_ruleset") or ""),
+        presentation_ruleset=str(item.get("presentation_ruleset") or ""),
+        proof_profiles={str(name): str(profile) for name, profile in dict(item.get("proof_profiles") or {}).items()},
+        support_tier=str(item.get("support_tier") or "launch"),
+        interaction_probes=interaction_probes,
+        release_channel=ProviderReleaseChannel(
+            channel=str(release_item["channel"]),
+            coordinate=str(release_item["coordinate"]),
+            version_discovery=str(release_item["version_discovery"]),
+            verification=str(release_item["verification"]),
+            platform_artifacts={
+                str(platform_name): (tuple(str(value) for value in artifact) if isinstance(artifact, list) else str(artifact))
+                for platform_name, artifact in dict(release_item.get("platform_artifacts") or {}).items()
+            },
+        ),
+        permission_prompt_surface=bool(item.get("permission_prompt_surface", False)),
+        external_event_channel=(str(item["external_event_channel"]) if item.get("external_event_channel") else None),
+        pause_tool_name=str(item.get("pause_tool_name") or "structured_question"),
+        harness_safe_no_token_prompt=bool(item.get("harness_safe_no_token_prompt", False)),
+        harness_safe_managed_session_scenarios=tuple(str(value) for value in item.get("harness_safe_managed_session_scenarios") or ()),
+        harness_real_managed_session_e2e=bool(item.get("harness_real_managed_session_e2e", False)),
+        requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
+        launch_local=bool(item.get("launch_local", True)),
+        run_once=bool(item.get("run_once", False)),
+        reattach=bool(item.get("reattach", False)),
+        send_input=bool(item.get("send_input", False)),
+        interrupt=bool(item.get("interrupt", False)),
+        steer_active_turn=bool(item.get("steer_active_turn", False)),
+        answer_pause=bool(item.get("answer_pause", False)),
+        terminate=bool(item.get("terminate", False)),
+        tail_output=bool(item.get("tail_output", True)),
+        runtime_phase=bool(item.get("runtime_phase", True)),
+        transcript_binding=bool(item.get("transcript_binding", True)),
+        startup_coordination_context=bool(item.get("startup_coordination_context", False)),
+        can_resume=bool(item.get("can_resume", False)),
+        console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
+        turn_start=bool(item.get("turn_start", False)),
+        fork_thread=bool(item.get("fork_thread", False)),
+        live_proof=bool(item.get("live_proof", False)),
+        machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
+        operation_evidence={
+            str(operation): {str(key): (value if key == "required_assertions" else str(value)) for key, value in dict(evidence).items()}
+            for operation, evidence in dict(item.get("operation_evidence") or {}).items()
+            if isinstance(evidence, dict)
+        },
+        capabilities={
+            str(capability): dict(declaration)
+            for capability, declaration in dict(item.get("capabilities") or {}).items()
+            if isinstance(declaration, dict)
+        },
+        transcript_signals={
+            str(signal): dict(cell) for signal, cell in dict(item.get("transcript_signals") or {}).items() if isinstance(cell, dict)
+        },
+    )
+
+
+_CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(
+    managed_provider_contract_from_item(item) for item in managed_provider_contract_items()
+)
+
+_BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
+
+
+def _contracts_by_control_plane(contracts: tuple[ManagedProviderContract, ...]) -> dict[str, ManagedProviderContract]:
+    by_control_plane: dict[str, ManagedProviderContract] = {}
+    for contract in contracts:
+        for control_plane in contract.control_planes:
+            existing = by_control_plane.get(control_plane)
+            if existing is not None:
+                raise ValueError(
+                    f"managed provider control_plane {control_plane!r} is claimed by both {existing.provider} and {contract.provider}"
+                )
+            by_control_plane[control_plane] = contract
+    return by_control_plane
+
+
+_BY_CONTROL_PLANE = _contracts_by_control_plane(_CONTRACTS)
+_LEGACY_CONTROL_PLANE_PROVIDERS = {
+    "opencode_process": "opencode",
+    "antigravity_process": "antigravity",
+}
+_LEGACY_CONTROL_PLANE_TRANSPORTS = {
+    "opencode_process": ManagedSessionTransport.OPENCODE_PROCESS,
+    "antigravity_process": ManagedSessionTransport.ANTIGRAVITY_PROCESS,
+}
+
+
+def all_managed_provider_contracts() -> tuple[ManagedProviderContract, ...]:
+    return _CONTRACTS
+
+
+def transcript_signal_surfaces() -> dict[str, dict[str, str]]:
+    """Stage 3 (API + UI product surface) contract per transcript signal."""
+
+    surfaces = managed_provider_contract_manifest().get("transcript_signal_surfaces") or {}
+    return {str(signal): {str(k): str(v) for k, v in dict(cell).items()} for signal, cell in surfaces.items()}
+
+
+def managed_provider_names() -> frozenset[str]:
+    return frozenset(_BY_PROVIDER)
+
+
+def factory_provider_names(*, include_maintenance: bool = False) -> tuple[str, ...]:
+    """Providers the automation factory covers, derived from the contract.
+
+    Every factory lane resolves its provider set here. Hand-maintained tuples in
+    each lane are what let Cursor ship as a first-tier provider while remaining
+    invisible to the release factory, so there is exactly one authority.
+
+    Control-proof lanes take the default. Ingest, archive, and transcript lanes
+    pass ``include_maintenance=True`` because those keep working for a provider
+    nobody is actively investing in.
+    """
+
+    return tuple(sorted(contract.provider for contract in _CONTRACTS if include_maintenance or contract.support_tier == "launch"))
+
+
+def outstanding_factory_work() -> tuple[dict[str, str], ...]:
+    """Every operation Longhouse could implement and has not.
+
+    This is the whole reason disposition exists as a field. Before it, unfinished
+    work was 30 free-text hints with no schema, so "what is left?" could only be
+    answered by reading the contract end to end and guessing which prose meant
+    backlog and which meant a provider limitation.
+
+    Operations blocked upstream or deliberately routed elsewhere are excluded:
+    they are settled facts, not work.
+    """
+
+    from zerg.provider_contract.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+
+    work: list[dict[str, str]] = []
+    for contract in _CONTRACTS:
+        for operation in _OPERATION_EVIDENCE_FIELDS:
+            evidence = contract.operation_evidence_for(operation)
+            if evidence.get("disposition") != "not_implemented":
+                continue
+            work.append(
+                {
+                    "provider": contract.provider,
+                    "operation": operation,
+                    "support_tier": contract.support_tier,
+                    "owner_action": str(evidence.get("owner_action") or ""),
+                    "blocker": str(evidence.get("blocker") or "none"),
+                    "reason": str(evidence.get("reason") or ""),
+                }
+            )
+        # Transcript signals are the same kind of promise: a provider writes
+        # something its terminal shows and Longhouse has not projected it yet.
+        for signal, cell in sorted(contract.transcript_signals.items()):
+            if cell.get("disposition") != "not_implemented":
+                continue
+            work.append(
+                {
+                    "provider": contract.provider,
+                    "operation": f"transcript_signal:{signal}",
+                    "support_tier": contract.support_tier,
+                    "owner_action": str(cell.get("owner_action") or ""),
+                    "blocker": str(cell.get("canary") or "none"),
+                    "reason": str(cell.get("raw_source") or ""),
+                }
+            )
+    for signal, cell in sorted(transcript_signal_surfaces().items()):
+        if cell.get("disposition") != "not_implemented":
+            continue
+        work.append(
+            {
+                "provider": "all",
+                "operation": f"transcript_signal_surface:{signal}",
+                "support_tier": "launch",
+                "owner_action": str(cell.get("owner_action") or ""),
+                "blocker": "none",
+                "reason": str(cell.get("consumer") or cell.get("notes") or ""),
+            }
+        )
+    return tuple(work)
+
+
+def contract_for_provider(provider: str | None) -> ManagedProviderContract | None:
+    return _BY_PROVIDER.get(str(provider or "").strip().lower())
+
+
+def require_contract_for_provider(provider: str | None) -> ManagedProviderContract:
+    contract = contract_for_provider(provider)
+    if contract is None:
+        raise ValueError(f"Unsupported managed-local provider: {provider}")
+    return contract
+
+
+def contract_for_control_plane(control_plane: str | None) -> ManagedProviderContract | None:
+    return _BY_CONTROL_PLANE.get(str(control_plane or "").strip())
+
+
+def managed_transport_for_provider(provider: str | None) -> ManagedSessionTransport | None:
+    return require_contract_for_provider(provider).managed_transport
+
+
+def managed_transport_for_control_plane(control_plane: str | None) -> ManagedSessionTransport | None:
+    normalized = str(control_plane or "").strip()
+    if normalized in _LEGACY_CONTROL_PLANE_TRANSPORTS:
+        return _LEGACY_CONTROL_PLANE_TRANSPORTS[normalized]
+    contract = contract_for_control_plane(control_plane)
+    return contract.managed_transport if contract is not None else None
+
+
+def control_plane_for_provider(provider: str | None) -> str | None:
+    return require_contract_for_provider(provider).control_plane
+
+
+def provider_for_control_plane(control_plane: str | None) -> str | None:
+    normalized = str(control_plane or "").strip()
+    if normalized in _LEGACY_CONTROL_PLANE_PROVIDERS:
+        return _LEGACY_CONTROL_PLANE_PROVIDERS[normalized]
+    contract = contract_for_control_plane(control_plane)
+    return contract.provider if contract is not None else None
+
+
+def run_once_supported_providers() -> frozenset[str]:
+    return frozenset(contract.provider for contract in _CONTRACTS if contract.run_once)
+
+
+def machine_control_operations_by_provider(
+    supports: Iterable[str],
+    *,
+    connected: bool,
+) -> dict[str, tuple[str, ...]]:
+    """Project live machine-control supports into provider operation names.
+
+    The raw ``supports[]`` list remains the transport handshake. This helper is
+    the shared read model for UI/agent surfaces that need to know the actual
+    operations a connected machine can perform without hardcoding provider
+    allowlists.
+    """
+    if not connected:
+        return {}
+
+    support_set = {str(item).strip() for item in supports if str(item).strip()}
+    operations_by_provider: dict[str, tuple[str, ...]] = {}
+    for contract in _CONTRACTS:
+        operations = tuple(
+            operation
+            for capability in contract.machine_control_supports
+            if capability in support_set and (operation := contract.machine_control_operation_for_support(capability)) is not None
+        )
+        if operations:
+            operations_by_provider[contract.provider] = operations
+    return operations_by_provider
+
+
+def steer_control_planes() -> frozenset[str]:
+    control_planes: list[str] = []
+    for contract in _CONTRACTS:
+        if contract.steer_active_turn:
+            control_planes.extend(contract.control_planes)
+    return frozenset(control_planes)
+
+
+def trusted_non_runner_control_planes() -> frozenset[str]:
+    # Archive-only transports are provider metadata, not trusted managed-turn
+    # authority. OMP's native archive is separate from its managed Helm channel;
+    # the latter is included because OMP can launch a managed local owner.
+    return frozenset(control_plane for contract in _CONTRACTS if contract.launch_local for control_plane in contract.control_planes)
+
+
+def machine_control_capability_for_command(provider: str | None, command_type: str | None) -> str | None:
+    contract = contract_for_provider(provider)
+    operation = _MACHINE_CONTROL_SUFFIX_BY_COMMAND.get(str(command_type or "").strip())
+    if contract is None or operation is None:
+        return None
+    return contract.machine_control_capability_for_operation(operation)
+
+
+def live_proof_supported_providers() -> tuple[str, ...]:
+    """Providers `provider.live_proof` can actually run for.
+
+    Three hand-copies disagreed: `provider_live_proof.py` and the Pydantic
+    Literal on the public request body both said claude/opencode/antigravity,
+    while `control_channel/dispatch.rs` -- the side that executes it -- said
+    claude/opencode. `provider_live_canary.py` implements exactly those two, so
+    the Rust set was right and the request body accepted a provider that always
+    failed `provider_unsupported`.
+    """
+
+    return tuple(contract.provider for contract in _CONTRACTS if contract.live_proof)
