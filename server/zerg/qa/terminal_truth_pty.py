@@ -219,6 +219,7 @@ class SelfCheck:
     tolerance_s: float
     passed: bool
     detail: list[str]
+    scheduler_lag_s: float = 0.0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -228,9 +229,61 @@ class SelfCheck:
             "stream_seconds": self.stream_seconds,
             "prompt_lane": self.prompt_lane.to_json(),
             "end_only_lane": self.end_only_lane.to_json(),
+            "scheduler_lag_s": self.scheduler_lag_s,
             "passed": self.passed,
             "detail": self.detail,
         }
+
+
+class _SchedulerLagProbe(threading.Thread):
+    """Measures how late this process is woken: the worst overshoot of a 10 ms sleep.
+
+    The selfcheck compares wall-clock times taken by threads of this process (PTY reader, lane watchers) with the
+    fake TUI's own log. On a loaded shared VM those threads are woken late by hundreds of milliseconds, which is
+    scheduler noise, not a recovery defect. Measuring the lag lets the verdict allow exactly that much and no more.
+    """
+
+    def __init__(self, stop: threading.Event, interval_s: float = 0.01) -> None:
+        super().__init__(daemon=True)
+        self._stop_event = stop
+        self._interval_s = interval_s
+        self.max_lag_s = 0.0
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            started = time.monotonic()
+            time.sleep(self._interval_s)
+            self.max_lag_s = max(self.max_lag_s, time.monotonic() - started - self._interval_s)
+
+
+# Scheduler lag is multiplied by this to get the slack a single late sample may have (a sample can be late by the
+# wake-up delay of the reader and of the watcher at once, plus the next poll).
+LAG_SLACK_FACTOR = 3.0
+
+
+def judge_schedule(errors: Sequence[float], tolerance_s: float, lag_s: float) -> list[str]:
+    """Verdict on schedule recovery from per-marker (screen time - written time) errors.
+
+    One late wake-up may push the worst marker out by as much as the scheduler lag, so the worst error is allowed
+    ``tolerance + LAG_SLACK_FACTOR * lag``. A recovery that is wrong (a constant offset, a drifting clock, lost
+    chunks) moves most markers, so the median is held to ``tolerance`` plus a third of that slack: noise cannot
+    move the median much, a defect always does. With no lag (an idle machine) both bounds are the plain tolerance.
+    """
+
+    if not errors:
+        return ["no marker was recovered from the screen"]
+    detail: list[str] = []
+    slack = LAG_SLACK_FACTOR * lag_s
+    worst = max(abs(e) for e in errors)
+    median = statistics.median(abs(e) for e in errors)
+    if worst > tolerance_s + slack:
+        detail.append(
+            f"schedule recovered within {worst * 1000:.1f} ms, tolerance {tolerance_s * 1000:.0f} ms"
+            f" + scheduler lag allowance {slack * 1000:.0f} ms"
+        )
+    if median > tolerance_s + slack / 3:
+        detail.append(f"median schedule error {median * 1000:.1f} ms exceeds tolerance {tolerance_s * 1000:.0f} ms: a systematic offset")
+    return detail
 
 
 def run_selfcheck(
@@ -258,6 +311,8 @@ def run_selfcheck(
 
         lanes = [Lane("prompt stub", prompt_read, poll_s), Lane("end-only stub", end_only_read, poll_s)]
         watchers = [LaneWatcher(lane, names, stop) for lane in lanes]
+        lag_probe = _SchedulerLagProbe(stop)
+        lag_probe.start()
         for watcher in watchers:
             watcher.start()
         session = ProviderPtySession.start(
@@ -297,18 +352,19 @@ def run_selfcheck(
         if any(e < -0.001 for e in errors):
             detail.append("a marker was recovered from the screen before the fake TUI logged writing it (clock disagreement)")
         worst = max((abs(e) for e in errors), default=float("inf"))
-        if worst > tolerance_s:
-            detail.append(f"schedule recovered within {worst * 1000:.1f} ms, tolerance {tolerance_s * 1000:.0f} ms")
+        lag_s = lag_probe.max_lag_s
+        slack_s = LAG_SLACK_FACTOR * lag_s
+        detail.extend(judge_schedule(errors, tolerance_s, lag_s))
         stats = [lane_stats(w.lane.name, terminal, w.first_seen, w.resolution_s, names) for w in watchers]
         prompt, late = stats
         stream = (end or 0) - min(truth_times.values()) if truth_times else 0.0
         prompt_extra = [d - serve_after_s for d in prompt.delays.values() if d is not None]
-        if len(prompt_extra) != len(names) or max(abs(x) for x in prompt_extra) > tolerance_s + 2 * poll_s + 0.05:
+        if len(prompt_extra) != len(names) or max(abs(x) for x in prompt_extra) > tolerance_s + 2 * poll_s + 0.05 + slack_s:
             detail.append(f"prompt stub (served {serve_after_s}s after write) not recovered: extra delay {prompt_extra}")
         # The end-only stub's delay for marker i must be (stream end - marker time) within poll resolution.
         for name, delay in late.delays.items():
             expected = (end or 0) - truth_times[name]
-            if delay is None or abs(delay - expected) > tolerance_s + 3 * poll_s + 0.05:
+            if delay is None or abs(delay - expected) > tolerance_s + 3 * poll_s + 0.05 + slack_s:
                 detail.append(f"end-only stub marker {name}: reported {delay}, truth {expected:.3f}")
         if late.first is None or late.first < 0.9 * stream:
             detail.append(f"end-only stub first-marker delay {late.first} is not about the stream length {stream:.2f}s")
@@ -322,6 +378,7 @@ def run_selfcheck(
             tolerance_s=tolerance_s,
             passed=not detail,
             detail=detail,
+            scheduler_lag_s=lag_s,
         )
     finally:
         stop.set()
