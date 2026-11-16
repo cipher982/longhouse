@@ -27,6 +27,8 @@ from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import SessionExecutionHome
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
@@ -39,8 +41,6 @@ from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import mark_session_turn_active
 from zerg.services.session_turns import mark_session_turn_terminal
-from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)

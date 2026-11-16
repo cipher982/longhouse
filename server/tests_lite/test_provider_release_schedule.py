@@ -12,7 +12,7 @@ from zerg.qa.provider_release_schedule import DEFAULT_SCHEDULE_PATH
 from zerg.qa.provider_release_schedule import ProviderReleaseScheduleError
 from zerg.qa.provider_release_schedule import build_store_staleness
 from zerg.qa.provider_release_schedule import load_provider_release_schedule
-from zerg.services.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 
 
 def test_schedule_covers_the_contract_and_declares_private_live_token_ownership() -> None:

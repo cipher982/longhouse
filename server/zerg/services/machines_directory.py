@@ -19,9 +19,9 @@ from datetime import timezone
 from typing import Any
 from typing import Mapping
 
+from zerg.provider_contract.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 
 CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"

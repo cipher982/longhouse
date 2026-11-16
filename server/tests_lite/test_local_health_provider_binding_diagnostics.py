@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.services import local_health
-from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
 from zerg.services.session_observations import OBS_KIND_PROVIDER_BINDING_MISSING
 from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
 from zerg.services.session_observations import record_session_observation

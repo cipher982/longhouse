@@ -230,7 +230,7 @@ def _launch_managed_local_session(
     ``detached``, granting nothing.
     """
 
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     contract = contract_for_provider(provider)
     assert contract is not None

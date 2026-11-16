@@ -32,7 +32,7 @@ from openai import AsyncOpenAI  # noqa: E402
 from zerg.models_config import ModelProvider  # noqa: E402
 from zerg.models_config import build_openai_compatible_client_kwargs  # noqa: E402
 from zerg.services.session_processing.summarize import safe_parse_json  # noqa: E402
-from zerg.services.session_title import sanitize_title  # noqa: E402
+from zerg.provider_contract.session_title import sanitize_title  # noqa: E402
 from zerg.services.title_generator import INITIAL_SESSION_TITLE_SYSTEM_PROMPT  # noqa: E402
 from zerg.services.title_generator import _build_initial_session_title_prompt  # noqa: E402
 

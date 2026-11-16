@@ -1,6 +1,6 @@
 from zerg.qa.provider_release_identity import IdentityObservation
 from zerg.qa.provider_release_identity import identity_oracle
-from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 
 
 def _observation(**overrides) -> IdentityObservation:

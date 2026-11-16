@@ -23,10 +23,10 @@ from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.provider_action_coverage import ActionCoverageState
-from zerg.services.provider_action_coverage import derive_provider_action_coverage
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.provider_action_coverage import ActionCoverageState
+from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage
 
 
 def _engine(tmp_path):

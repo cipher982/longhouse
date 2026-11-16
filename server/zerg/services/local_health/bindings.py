@@ -8,7 +8,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
 
 from ._shared import _normalize_optional_string
 from ._shared import _parse_rfc3339

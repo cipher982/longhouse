@@ -34,11 +34,11 @@ TS_OUT = REPO / "web" / "src" / "generated" / "provider-capabilities.ts"
 # The chip -> proof edge definition is shared with the Runtime Host's
 # certification rollup, so the covered and certified layers read one graph.
 sys.path.insert(0, str(REPO / "server"))
-from zerg.services.provider_chip_edges import CHIP_CAPABILITIES  # noqa: E402,F401
-from zerg.services.provider_chip_edges import CHIP_OPERATIONS  # noqa: E402,F401
-from zerg.services.provider_chip_edges import capability_proven  # noqa: E402,F401
-from zerg.services.provider_chip_edges import chip_states  # noqa: E402
-from zerg.services.provider_chip_edges import operation_proven  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import CHIP_CAPABILITIES  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import CHIP_OPERATIONS  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import capability_proven  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import chip_states  # noqa: E402
+from zerg.provider_contract.provider_chip_edges import operation_proven  # noqa: E402,F401
 
 
 def _native_launch_commands() -> dict[str, str]:

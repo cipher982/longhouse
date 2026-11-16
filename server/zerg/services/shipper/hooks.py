@@ -52,7 +52,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 
 logger = logging.getLogger(__name__)
 
@@ -809,7 +809,7 @@ def install_hooks(
     antigravity_bin = shutil.which("agy")
     antigravity_cli_root = Path.home() / ".gemini" / "antigravity-cli"
     if antigravity_bin or antigravity_cli_root.exists():
-        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.provider_contract.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
 
         plugin_root = _ensure_antigravity_runtime_plugin(antigravity_bin=antigravity_bin)
         actions.append(f"Configured Antigravity hooks in {plugin_root}")

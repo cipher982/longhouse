@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC
 from datetime import datetime
 
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import EVIDENCE_RANK
 from zerg.services.provider_support_state import _effective_evidence_level

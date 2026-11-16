@@ -248,7 +248,7 @@ COPY --link --from=embedding-model /out/ /
 # 2. The venv (~100 MB): dependencies, pysqlite3 and the editable project install.
 COPY --link --chown=1000:1000 --from=dependencies /app/.venv /app/.venv
 # 3. Shared config, and schemas/managed_providers.yml: read live by
-#    zerg/services/provider_capability_schema.py, which serves
+#    zerg/provider_contract/provider_capability_schema.py, which serves
 #    GET /api/agents/provider-capabilities (zerg/qa/ re-exports it but is not in
 #    this image -- see .dockerignore). Found missing here the hard way -- the
 #    endpoint's first real deploy 500'd on FileNotFoundError because this file

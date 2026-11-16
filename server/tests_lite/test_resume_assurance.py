@@ -14,7 +14,7 @@ from zerg.qa.resume_assurance import capability_contract_shape
 from zerg.qa.resume_assurance import compile_resume_plan
 from zerg.qa.resume_assurance import content_digest
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions
 
 
 def test_cursor_model_choice_awareness_is_sampled_not_a_release_gate() -> None:

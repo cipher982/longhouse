@@ -31,7 +31,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_catalog_launch import attach_live_catalog_control
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
-from zerg.services.managed_provider_contracts import require_contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import require_contract_for_provider
 
 
 @pytest.fixture

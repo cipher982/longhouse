@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
 from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state

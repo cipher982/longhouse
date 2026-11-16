@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from zerg.services.provider_capability_local_proof import collect_local_capability_proofs
-from zerg.services.provider_capability_local_proof import executable_identity
+from zerg.provider_contract.provider_capability_local_proof import collect_local_capability_proofs
+from zerg.provider_contract.provider_capability_local_proof import executable_identity
 
 
 def test_executable_identity_hashes_resolved_payload(tmp_path: Path) -> None:

@@ -27,7 +27,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from zerg.config import get_settings_unchecked
-from zerg.session_execution_home import SessionExecutionHome
+from zerg.provider_contract.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
 

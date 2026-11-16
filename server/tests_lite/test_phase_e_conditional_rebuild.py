@@ -31,8 +31,8 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import compress_raw_json
+from zerg.provider_contract.raw_json_compression import CODEC_ZSTD
+from zerg.provider_contract.raw_json_compression import compress_raw_json
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "phase-e-build-slim.py"
 

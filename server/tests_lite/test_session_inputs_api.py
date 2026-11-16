@@ -248,7 +248,7 @@ def _seed_live_catalog_session(
     those rows, not seeded directly.
     """
 
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     contract = contract_for_provider(provider)
     assert contract is not None

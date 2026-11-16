@@ -21,9 +21,9 @@ from sqlalchemy.orm import aliased
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import load_session_source_line_bytes
-from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.shipper.parser import ParsedEvent

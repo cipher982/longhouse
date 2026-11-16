@@ -33,8 +33,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 
 VERDICT_BUNDLE_KIND = "provider_capability_cell_verdict_bundle"
 VERDICT_SCHEMA_VERSION = 2

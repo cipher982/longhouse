@@ -20,10 +20,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionObservation
-from zerg.services.raw_json_compression import CODEC_PLAIN
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import compress_raw_json
-from zerg.services.raw_json_compression import decompress_raw_json
+from zerg.provider_contract.raw_json_compression import CODEC_PLAIN
+from zerg.provider_contract.raw_json_compression import CODEC_ZSTD
+from zerg.provider_contract.raw_json_compression import compress_raw_json
+from zerg.provider_contract.raw_json_compression import decompress_raw_json
 from zerg.utils.time import normalize_utc
 
 SOURCE_DOMAIN_TRANSCRIPT = "transcript"

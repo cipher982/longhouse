@@ -10,8 +10,8 @@ import pytest
 from zerg.qa import antigravity_launch_hook_inbox
 from zerg.qa import producer_shell
 from zerg.qa.provider_semantic_qualification import SemanticAssertion
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 
 
 def _fake_binary(tmp_path: Path) -> Path:

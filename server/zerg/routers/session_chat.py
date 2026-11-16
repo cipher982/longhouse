@@ -2376,7 +2376,7 @@ async def _queued_input_response(
 
 
 def _provider_supports_steer(session) -> bool:
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     contract = contract_for_provider(getattr(session, "provider", None))
     return bool(contract is not None and contract.steer_active_turn)

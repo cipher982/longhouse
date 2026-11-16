@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.provider_contract.managed_provider_contracts import managed_provider_names
 from zerg.services.session_state_contract import PRESENTATION_POLICY_VERSION
 from zerg.services.session_state_contract import ACCESS_PRESENTATION_KEYS
 from zerg.services.session_state_contract import PRIMARY_PRESENTATION_KEYS

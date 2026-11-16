@@ -15,8 +15,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from zerg.services.longhouse_paths import get_machine_state_journal_path
-from zerg.services.longhouse_paths import get_machine_state_path
+from zerg.provider_contract.longhouse_paths import get_machine_state_journal_path
+from zerg.provider_contract.longhouse_paths import get_machine_state_path
 
 SCHEMA_VERSION = 1
 _MISSING = object()

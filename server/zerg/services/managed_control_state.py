@@ -34,11 +34,11 @@ from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import control_plane_for_provider
+from zerg.provider_contract.managed_provider_contracts import provider_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import control_plane_for_provider
-from zerg.services.managed_provider_contracts import provider_for_control_plane
-from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)

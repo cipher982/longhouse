@@ -9,11 +9,11 @@ from fastapi import Query
 
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.provider_contract.managed_provider_contracts import managed_provider_names
+from zerg.provider_contract.provider_action_coverage import ActionCoverageState
+from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage
+from zerg.provider_contract.provider_action_coverage import serialize_provider_action_coverage
 from zerg.schemas.provider_action_coverage import ProviderActionCoverageResponse
-from zerg.services.managed_provider_contracts import managed_provider_names
-from zerg.services.provider_action_coverage import ActionCoverageState
-from zerg.services.provider_action_coverage import derive_provider_action_coverage
-from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
 router = APIRouter(prefix="/agents/providers", tags=["agents"])
 
@@ -39,7 +39,7 @@ def list_provider_action_coverage(
 
     return ProviderActionCoverageResponse(
         schema_version=1,
-        source="zerg.services.provider_action_coverage",
+        source="zerg.provider_contract.provider_action_coverage",
         states=[state.value for state in ActionCoverageState],
         providers=rows,
     )

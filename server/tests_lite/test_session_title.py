@@ -1,12 +1,12 @@
 """Unit tests for the pure timeline-title helpers."""
 
-from zerg.services.session_title import freeze_anchor_title
-from zerg.services.session_title import is_path_like_title
-from zerg.services.session_title import resolve_timeline_title
-from zerg.services.session_title import resolve_title_provenance
-from zerg.services.session_title import sanitize_title
-from zerg.services.session_title import sanitize_timeline_title
-from zerg.services.session_title import structured_fallback_title
+from zerg.provider_contract.session_title import freeze_anchor_title
+from zerg.provider_contract.session_title import is_path_like_title
+from zerg.provider_contract.session_title import resolve_timeline_title
+from zerg.provider_contract.session_title import resolve_title_provenance
+from zerg.provider_contract.session_title import sanitize_title
+from zerg.provider_contract.session_title import sanitize_timeline_title
+from zerg.provider_contract.session_title import structured_fallback_title
 
 
 def test_path_only_prompt_uses_project_fallback_for_timeline_copy():

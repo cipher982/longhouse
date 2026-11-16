@@ -9,8 +9,8 @@ from pathlib import Path
 
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
-from zerg.services.longhouse_paths import get_agent_db_path
-from zerg.services.longhouse_paths import get_agent_outbox_dir
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_outbox_dir
 from zerg.services.session_runtime import phase_freshness_ms
 
 from ._shared import _max_rfc3339

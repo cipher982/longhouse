@@ -14,12 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
+from zerg.provider_contract.longhouse_paths import classify_longhouse_home
+from zerg.provider_contract.longhouse_paths import is_stable_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.local_health import collect_launch_readiness
-from zerg.services.longhouse_paths import classify_longhouse_home
-from zerg.services.longhouse_paths import is_stable_longhouse_home
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import MachineState
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state

@@ -26,8 +26,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Iterator
 
-from zerg.services.provider_interaction_semantics import claude_provider_system_record
-from zerg.services.provider_interaction_semantics import claude_task_notification_display
+from zerg.provider_contract.provider_interaction_semantics import claude_provider_system_record
+from zerg.provider_contract.provider_interaction_semantics import claude_task_notification_display
 
 try:
     import orjson as _json_mod

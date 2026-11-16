@@ -26,13 +26,13 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.main import app
 from zerg.routers import provider_capability_proofs as routes
-from zerg.services.provider_capability_blob_resolver import factory_blob_key
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof_store import ProofPublication
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_blob_resolver import factory_blob_key
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof_store import ProofPublication
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 def _blob_digest(label: str) -> str:

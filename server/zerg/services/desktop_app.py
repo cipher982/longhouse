@@ -10,8 +10,8 @@ import xml.sax.saxutils as saxutils
 from pathlib import Path
 from typing import Literal
 
-from zerg.services.longhouse_paths import get_agent_log_dir
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import get_agent_log_dir
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.runtime_artifacts import ensure_runtime_artifact

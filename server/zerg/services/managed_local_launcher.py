@@ -18,15 +18,15 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
+from zerg.provider_contract.internal_sessions import classify_provider_proof_environment
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import require_contract_for_provider
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
-from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.services.managed_provider_contracts import factory_provider_names
-from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_launch_provenance import sanitize_launch_provenance
 

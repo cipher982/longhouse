@@ -16,8 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.services.agents.compaction import classify_compaction_kind
-from zerg.services.raw_json_compression import decode_raw_json
 
 
 @dataclass(frozen=True)

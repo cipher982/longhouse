@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 
 import typer
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 from zerg.services.plaintext_http import OPT_IN_FLAG
 from zerg.services.plaintext_http import HostClass
 from zerg.services.plaintext_http import classify_host

@@ -6,14 +6,14 @@ from datetime import datetime
 
 import pytest
 
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProofRequirement
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof import evaluate_proof_applicability
-from zerg.services.provider_capability_proof import proof_record_from_mapping
-from zerg.services.provider_capability_proof import select_proof
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProofRequirement
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof import evaluate_proof_applicability
+from zerg.provider_contract.provider_capability_proof import proof_record_from_mapping
+from zerg.provider_contract.provider_capability_proof import select_proof
 
 NOW = datetime(2026, 7, 22, 16, 0, tzinfo=UTC)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
 
 from ._shared import _normalize_optional_string
 from ._shared import _with_action

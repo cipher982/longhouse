@@ -11,9 +11,9 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.config import get_settings
+from zerg.provider_contract.session_title import sanitize_timeline_title
+from zerg.provider_contract.session_title import sanitize_title
 from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
-from zerg.services.session_title import sanitize_timeline_title
-from zerg.services.session_title import sanitize_title
 
 logger = logging.getLogger(__name__)
 

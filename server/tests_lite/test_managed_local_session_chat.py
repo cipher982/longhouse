@@ -253,7 +253,7 @@ def _seed_live_catalog_session(
 ) -> str:
     """Launch one Helm session in the live catalog and bring its control online."""
 
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     contract = contract_for_provider(provider)
     assert contract is not None

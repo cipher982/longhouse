@@ -16,7 +16,7 @@ from zerg.qa import provider_qualification
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 TEST_SHA = "b" * 40
 PROFILE_INFO = {

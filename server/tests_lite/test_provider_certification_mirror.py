@@ -31,9 +31,9 @@ from tests_lite.test_provider_capability_proof_v4_routes import _publish
 from tests_lite.test_provider_capability_proof_v4_routes import _record
 from tests_lite.test_provider_capability_proof_v4_routes import _v4_bundle
 from zerg.routers import provider_capability_proofs as routes
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
-from zerg.services.provider_capability_schema import load_chip_edge_assertions
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_schema import load_chip_edge_assertions
 
 NOW = datetime(2026, 9, 17, 1, 0, tzinfo=UTC)
 

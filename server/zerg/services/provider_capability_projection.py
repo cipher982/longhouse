@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof import v3_provenance_gaps
+from zerg.provider_contract.provider_capability_schema import CapabilityAssertion
 from zerg.services.provider_capability_cell_verdicts import REVOKING_CONSECUTIVE_FAILURES
 from zerg.services.provider_capability_cell_verdicts import CellKey
 from zerg.services.provider_capability_cell_verdicts import CellVerdict
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof import v3_provenance_gaps
-from zerg.services.provider_capability_schema import CapabilityAssertion
 
 NEVER_PROVEN = "never_proven"
 STALE = "stale"

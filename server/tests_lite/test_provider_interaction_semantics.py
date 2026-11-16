@@ -11,29 +11,29 @@ from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_interaction_semantics import evaluate_observation
 from zerg.qa.provider_interaction_semantics import generated_fake_observation
 from zerg.qa.provider_interaction_semantics import raw_event_digest
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
-from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL
-from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
-from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
-from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_REASONING
-from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
-from zerg.services.provider_interaction_semantics import classify_provider_interaction
-from zerg.services.provider_interaction_semantics import claude_provider_system_record
-from zerg.services.provider_interaction_semantics import claude_task_notification_display
-from zerg.services.provider_interaction_semantics import claude_task_notification_summary
-from zerg.services.provider_interaction_semantics import codex_internal_context_candidate
-from zerg.services.provider_interaction_semantics import codex_internal_context_record
-from zerg.services.provider_interaction_semantics import codex_provider_system_record
-from zerg.services.provider_interaction_semantics import interaction_context_key_parts
-from zerg.services.provider_interaction_semantics import provider_display_message_content_candidate
-from zerg.services.provider_interaction_semantics import provider_display_message_text
-from zerg.services.provider_interaction_semantics import provider_notification_display_text
-from zerg.services.provider_interaction_semantics import provider_reasoning_content_candidate
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.provider_interaction_semantics import semantic_event_included
-from zerg.services.provider_interaction_semantics import semantic_projection_facts
-from zerg.services.provider_interaction_semantics import title_eligible_provider_event
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_REASONING
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
+from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
+from zerg.provider_contract.provider_interaction_semantics import claude_provider_system_record
+from zerg.provider_contract.provider_interaction_semantics import claude_task_notification_display
+from zerg.provider_contract.provider_interaction_semantics import claude_task_notification_summary
+from zerg.provider_contract.provider_interaction_semantics import codex_internal_context_candidate
+from zerg.provider_contract.provider_interaction_semantics import codex_internal_context_record
+from zerg.provider_contract.provider_interaction_semantics import codex_provider_system_record
+from zerg.provider_contract.provider_interaction_semantics import interaction_context_key_parts
+from zerg.provider_contract.provider_interaction_semantics import provider_display_message_content_candidate
+from zerg.provider_contract.provider_interaction_semantics import provider_display_message_text
+from zerg.provider_contract.provider_interaction_semantics import provider_notification_display_text
+from zerg.provider_contract.provider_interaction_semantics import provider_reasoning_content_candidate
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
+from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
+from zerg.provider_contract.provider_interaction_semantics import title_eligible_provider_event
 
 
 def test_every_factory_provider_declares_interaction_probes() -> None:
@@ -1333,10 +1333,10 @@ def test_notification_display_text_keeps_the_claude_summary_contract() -> None:
 
 
 def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of_semantic_context() -> None:
-    from zerg.services.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
-    from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
-    from zerg.services.provider_interaction_semantics import classify_provider_interaction
-    from zerg.services.provider_interaction_semantics import semantic_event_included
+    from zerg.provider_contract.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
+    from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
+    from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
+    from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
 
     cases = [
         ("claude", {"type": "system", "subtype": "compact_boundary", "content": "Conversation compacted"}),
@@ -1378,9 +1378,9 @@ def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of
 
 
 def test_claude_queue_operation_task_notifications_and_system_notifications_classify() -> None:
-    from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
-    from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
-    from zerg.services.provider_interaction_semantics import classify_provider_interaction
+    from zerg.provider_contract.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
+    from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+    from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
 
     queued_xml = (
         "<task-notification><task-id>b99</task-id><status>completed</status>"
@@ -1429,7 +1429,7 @@ def test_the_classifier_imports_no_new_server_code_and_the_ingest_path_hands_it_
     import json
     from pathlib import Path
 
-    from zerg.services import provider_interaction_semantics as semantics
+    from zerg.provider_contract import provider_interaction_semantics as semantics
 
     tree = ast.parse(Path(semantics.__file__).read_text())
     imported = [
@@ -1440,7 +1440,7 @@ def test_the_classifier_imports_no_new_server_code_and_the_ingest_path_hands_it_
     ]
     # These two are on the factory's pinned list already; anything else from the server is a new pin.
     server_imports = sorted({name for name in imported if name.split(".")[0] == "zerg" or name == ""})
-    assert server_imports == ["zerg.services.managed_provider_contracts", "zerg.services.raw_json_compression"]
+    assert server_imports == ["zerg.provider_contract.managed_provider_contracts", "zerg.provider_contract.raw_json_compression"]
 
     import zerg.services.storage_v2_semantics  # noqa: F401 - importing the ingest path installs the decoder
     from zerg.utils import fast_json

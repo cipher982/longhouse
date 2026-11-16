@@ -16,6 +16,7 @@ from pydantic import Field
 from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import shadow_session_state_health
@@ -23,7 +24,6 @@ from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_machine_session_delta
 from zerg.services.live_control_catalog import canonical_command_authorization_providers
-from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import session_state_contract_manifest
 from zerg.services.session_state_diagnostics import SessionStateComparison

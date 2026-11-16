@@ -13,8 +13,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.services.raw_json_compression import CODEC_PLAIN
-from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.provider_contract.raw_json_compression import CODEC_PLAIN
+from zerg.provider_contract.raw_json_compression import CODEC_ZSTD
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observation_reducers import reduce_source_line_observation
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL

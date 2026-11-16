@@ -8,12 +8,12 @@ from sqlalchemy import create_engine
 from sqlalchemy import insert
 from sqlalchemy import select
 
-from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_factory_title_assurance_session
-from zerg.services.internal_sessions import is_provider_evidence_cwd
-from zerg.services.internal_sessions import is_provider_factory_cwd
-from zerg.services.internal_sessions import is_provider_factory_machine_id
-from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.provider_contract.internal_sessions import classify_provider_proof_environment
+from zerg.provider_contract.internal_sessions import is_factory_title_assurance_session
+from zerg.provider_contract.internal_sessions import is_provider_evidence_cwd
+from zerg.provider_contract.internal_sessions import is_provider_factory_cwd
+from zerg.provider_contract.internal_sessions import is_provider_factory_machine_id
+from zerg.provider_contract.internal_sessions import provider_proof_session_clause
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 

@@ -7,9 +7,9 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_remote_proof import load_cached_provider_capability_proofs
 from zerg.services.provider_capability_remote_proof import refresh_cached_provider_capability_proofs
 

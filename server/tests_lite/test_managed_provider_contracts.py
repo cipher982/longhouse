@@ -8,40 +8,40 @@ from pathlib import Path
 import pytest
 import yaml
 
-from zerg.managed_provider_contract_manifest import _adapter_digest
-from zerg.managed_provider_contract_manifest import _validate_auth_probe
-from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
-from zerg.managed_provider_contract_manifest import _validate_operation_evidence
-from zerg.managed_provider_contract_manifest import _validate_required_assertions
-from zerg.managed_provider_contract_manifest import managed_provider_contract_items
-from zerg.managed_provider_contract_manifest import normalize_contract_manifest
-from zerg.managed_provider_contract_manifest import proof_backed_operation_evidence
-from zerg.managed_provider_contract_manifest import render_contract_manifest_json
-from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
-from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.services.managed_provider_contracts import _contracts_by_control_plane
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import contract_for_control_plane
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import control_plane_for_provider
-from zerg.services.managed_provider_contracts import factory_provider_names
-from zerg.services.managed_provider_contracts import machine_control_capability_for_command
-from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
-from zerg.services.managed_provider_contracts import managed_provider_names
-from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
-from zerg.services.managed_provider_contracts import provider_for_control_plane
-from zerg.services.managed_provider_contracts import run_once_supported_providers
-from zerg.services.managed_provider_contracts import steer_control_planes
-from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
+from zerg.provider_contract.managed_provider_contract_manifest import _adapter_digest
+from zerg.provider_contract.managed_provider_contract_manifest import _validate_auth_probe
+from zerg.provider_contract.managed_provider_contract_manifest import _validate_machine_control_supports
+from zerg.provider_contract.managed_provider_contract_manifest import _validate_operation_evidence
+from zerg.provider_contract.managed_provider_contract_manifest import _validate_required_assertions
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_items
+from zerg.provider_contract.managed_provider_contract_manifest import normalize_contract_manifest
+from zerg.provider_contract.managed_provider_contract_manifest import proof_backed_operation_evidence
+from zerg.provider_contract.managed_provider_contract_manifest import render_contract_manifest_json
+from zerg.provider_contract.managed_provider_contract_manifest import validate_generated_contract_manifest
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_contract.managed_provider_contracts import _contracts_by_control_plane
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import contract_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import control_plane_for_provider
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import machine_control_capability_for_command
+from zerg.provider_contract.managed_provider_contracts import machine_control_operations_by_provider
+from zerg.provider_contract.managed_provider_contracts import managed_provider_names
+from zerg.provider_contract.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import provider_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import run_once_supported_providers
+from zerg.provider_contract.managed_provider_contracts import steer_control_planes
+from zerg.provider_contract.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.session_kernel_projection import direct_machine_control_planes
-from zerg.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
 
 
 def _manifest_item(provider: str = "test") -> dict:
     return {
         "provider": provider,
-        "adapter_sources": ["server/zerg/managed_provider_contract_manifest.py"],
+        "adapter_sources": ["server/zerg/provider_contract/managed_provider_contract_manifest.py"],
         "launch_local": True,
         "reattach": True,
         "send_input": True,
@@ -144,11 +144,11 @@ def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypa
     manifest_path = Path(__file__).resolve().parents[1] / "zerg" / "config" / "managed_provider_contracts.json"
     payload = json.loads(manifest_path.read_text())
     monkeypatch.setattr(
-        "zerg.managed_provider_contract_manifest._adapter_digest",
+        "zerg.provider_contract.managed_provider_contract_manifest._adapter_digest",
         lambda _item: (_ for _ in ()).throw(AssertionError("runtime must not read adapter sources")),
     )
     monkeypatch.setattr(
-        "zerg.managed_provider_contract_manifest._source_digest",
+        "zerg.provider_contract.managed_provider_contract_manifest._source_digest",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("runtime must not read oracle sources")),
     )
 
@@ -816,8 +816,8 @@ def test_factory_provider_set_is_derived_from_the_contract_not_hand_maintained()
     a new provider cannot ship without entering every lane.
     """
 
-    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-    from zerg.services.managed_provider_contracts import factory_provider_names
+    from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+    from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 
     contracts = all_managed_provider_contracts()
     every_provider = tuple(sorted(contract.provider for contract in contracts))
@@ -838,8 +838,8 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     from zerg.qa.universal_agent_harness import ADAPTER_CLASS_BY_PROVIDER
     from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
     from zerg.qa.universal_agent_harness import provider_configs
-    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-    from zerg.services.managed_provider_contracts import factory_provider_names
+    from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+    from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 
     # Phase 3's extracted providers only register when their
     # module is imported -- normally forced by adapter_registry(), the real
@@ -878,7 +878,7 @@ def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
 
     import pytest
 
-    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+    from zerg.provider_contract.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     payload = copy.deepcopy(_manifest_copy())
     # answer_pause is false for Antigravity (upstream absent); claiming it is implemented must fail.
@@ -893,7 +893,7 @@ def test_upstream_absent_requires_a_reason_and_an_observed_version() -> None:
 
     import pytest
 
-    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+    from zerg.provider_contract.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     for missing in ("reason", "observed_provider_version"):
         payload = copy.deepcopy(_manifest_copy())
@@ -907,7 +907,7 @@ def test_policy_disabled_requires_the_path_that_does_work() -> None:
 
     import pytest
 
-    from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
+    from zerg.provider_contract.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     payload = copy.deepcopy(_manifest_copy())
     _cursor_entry(payload)["operation_evidence"]["answer_pause"].pop("routed_to")
@@ -980,8 +980,8 @@ def test_settled_dispositions_are_typed_facts_and_backlog_stays_a_gap() -> None:
 
 def test_every_provider_operation_cell_is_classified() -> None:
     """No cell may be silent about whether it is work or a fact."""
-    from zerg.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
-    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+    from zerg.provider_contract.managed_provider_contract_manifest import _OPERATION_EVIDENCE_FIELDS
+    from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
 
     unclassified = [
         f"{contract.provider}.{operation}"
@@ -994,7 +994,7 @@ def test_every_provider_operation_cell_is_classified() -> None:
 
 def test_outstanding_work_excludes_settled_facts_and_names_an_owner_action() -> None:
     """The backlog is a query, not a reading exercise over free-text hints."""
-    from zerg.services.managed_provider_contracts import outstanding_factory_work
+    from zerg.provider_contract.managed_provider_contracts import outstanding_factory_work
 
     work = outstanding_factory_work()
     assert work, "the query itself must return something or it is not exercised"
@@ -1023,8 +1023,8 @@ def test_outstanding_factory_work_reads_dispositions_not_reality() -> None:
     does not mistake it for evidence again.
     """
 
-    from zerg.services.managed_provider_contracts import outstanding_factory_work
-    from zerg.services.managed_provider_contracts import transcript_signal_surfaces
+    from zerg.provider_contract.managed_provider_contracts import outstanding_factory_work
+    from zerg.provider_contract.managed_provider_contracts import transcript_signal_surfaces
 
     surfaces = transcript_signal_surfaces()
     for row in outstanding_factory_work():
@@ -1060,7 +1060,7 @@ def test_support_decisions_carry_no_provider_name_checks() -> None:
     import inspect
 
     from zerg.qa import universal_agent_harness as harness
-    from zerg.services.managed_provider_contracts import managed_provider_names
+    from zerg.provider_contract.managed_provider_contracts import managed_provider_names
 
     for function in (harness._action_support, harness._provider_pause_tool_name, harness.provider_configs):
         source = inspect.getsource(function)
@@ -1070,7 +1070,7 @@ def test_support_decisions_carry_no_provider_name_checks() -> None:
 
 def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
     from zerg.qa.universal_agent_harness import SCENARIOS
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     claude = contract_for_provider("claude")
     codex = contract_for_provider("codex")
@@ -1170,7 +1170,7 @@ def test_fork_capability_reaches_the_runtime_contract():
 
 def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
     """Absence is a decision: every provider declares every shared signal id."""
-    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.provider_contract.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
 
     for contract in all_managed_provider_contracts():
         assert set(contract.transcript_signals) == TRANSCRIPT_SIGNAL_IDS, contract.provider
@@ -1202,8 +1202,8 @@ def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
 
 
 def test_transcript_signal_cells_are_validated_strictly():
-    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
-    from zerg.managed_provider_contract_manifest import _validate_transcript_signals
+    from zerg.provider_contract.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.provider_contract.managed_provider_contract_manifest import _validate_transcript_signals
 
     def cells(**overrides: dict) -> dict:
         base = {
@@ -1263,7 +1263,7 @@ def test_transcript_signal_cells_are_validated_strictly():
 
 
 def test_outstanding_factory_work_names_unprojected_transcript_signals():
-    from zerg.services.managed_provider_contracts import outstanding_factory_work
+    from zerg.provider_contract.managed_provider_contracts import outstanding_factory_work
 
     rows = [row for row in outstanding_factory_work() if row["operation"].startswith("transcript_signal:")]
     assert {(row["provider"], row["operation"]) for row in rows} >= {
@@ -1303,8 +1303,8 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
 
 
 def test_live_stream_signals_are_declared_and_strictly_validated():
-    from zerg.managed_provider_contract_manifest import _validate_live_stream_signals
-    from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest
+    from zerg.provider_contract.managed_provider_contract_manifest import _validate_live_stream_signals
+    from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_manifest
 
     for item in managed_provider_contract_manifest()["providers"]:
         _validate_live_stream_signals(item)
@@ -1330,13 +1330,13 @@ def test_live_stream_signals_are_declared_and_strictly_validated():
 
 
 def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
-    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
-    from zerg.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
-    from zerg.managed_provider_contract_manifest import _validate_transcript_signal_surfaces
-    from zerg.managed_provider_contract_manifest import _validate_transcript_signals
-    from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest
-    from zerg.services.managed_provider_contracts import outstanding_factory_work
-    from zerg.services.managed_provider_contracts import transcript_signal_surfaces
+    from zerg.provider_contract.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.provider_contract.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
+    from zerg.provider_contract.managed_provider_contract_manifest import _validate_transcript_signal_surfaces
+    from zerg.provider_contract.managed_provider_contract_manifest import _validate_transcript_signals
+    from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_manifest
+    from zerg.provider_contract.managed_provider_contracts import outstanding_factory_work
+    from zerg.provider_contract.managed_provider_contracts import transcript_signal_surfaces
 
     manifest = managed_provider_contract_manifest()
     surfaces = transcript_signal_surfaces()
@@ -1420,9 +1420,9 @@ def test_transcript_signal_surfaces_and_usage_fields_are_declared_and_strict():
 def test_validate_signal_golden_fixtures_rejects_missing_signal_in_expected_json(tmp_path):
     import json
 
-    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
-    from zerg.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
-    from zerg.managed_provider_contract_manifest import _validate_signal_golden_fixtures
+    from zerg.provider_contract.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.provider_contract.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES
+    from zerg.provider_contract.managed_provider_contract_manifest import _validate_signal_golden_fixtures
 
     fixture = tmp_path / "fixture.jsonl"
     fixture.write_text("{}\n", encoding="utf-8")

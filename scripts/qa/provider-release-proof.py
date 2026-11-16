@@ -28,9 +28,9 @@ _SERVER_PATH = str(_SCRIPT_REPO_ROOT / "server")
 if _SERVER_PATH not in sys.path:
     sys.path.insert(0, _SERVER_PATH)
 
-from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS  # noqa: E402
-from zerg.services.managed_provider_contracts import factory_provider_names  # noqa: E402
-from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact  # noqa: E402
+from zerg.provider_contract.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS  # noqa: E402
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names  # noqa: E402
+from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage_from_artifact  # noqa: E402
 
 SCHEMA_VERSION = 1
 # Derived from the managed-provider contract so a new provider cannot ship without

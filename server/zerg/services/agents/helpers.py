@@ -5,9 +5,9 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from zerg.models.agents import AgentSession
-from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_execution_home import infer_execution_home
-from zerg.session_execution_home import infer_origin_label
+from zerg.provider_contract.session_execution_home import SessionExecutionHome
+from zerg.provider_contract.session_execution_home import infer_execution_home
+from zerg.provider_contract.session_execution_home import infer_origin_label
 
 if TYPE_CHECKING:
     from .models import SessionIngest

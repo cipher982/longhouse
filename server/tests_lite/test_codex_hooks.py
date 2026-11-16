@@ -318,7 +318,7 @@ def test_install_hooks_installs_antigravity_plugin_when_binary_is_present(tmp_pa
         return tmp_path / ".gemini" / "antigravity-cli" / "plugins" / "longhouse-runtime"
 
     monkeypatch.setattr(
-        "zerg.services.antigravity_hook_inbox._ensure_antigravity_runtime_plugin",
+        "zerg.provider_contract.antigravity_hook_inbox._ensure_antigravity_runtime_plugin",
         fake_ensure,
     )
 

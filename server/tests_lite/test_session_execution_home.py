@@ -1,7 +1,7 @@
-from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_execution_home import infer_continuation_kind
-from zerg.session_execution_home import infer_execution_home
-from zerg.session_execution_home import infer_origin_label
+from zerg.provider_contract.session_execution_home import SessionExecutionHome
+from zerg.provider_contract.session_execution_home import infer_continuation_kind
+from zerg.provider_contract.session_execution_home import infer_execution_home
+from zerg.provider_contract.session_execution_home import infer_origin_label
 
 
 def test_infer_execution_home_prefers_explicit_non_unmanaged_value() -> None:

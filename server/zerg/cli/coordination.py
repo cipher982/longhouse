@@ -13,7 +13,7 @@ import typer
 from zerg.cli._common import git_output
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import parse_uuid_or_exit
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from zerg.services.longhouse_paths import get_agent_db_path
-from zerg.services.longhouse_paths import get_agent_log_dir
-from zerg.services.longhouse_paths import get_agent_outbox_dir
-from zerg.services.longhouse_paths import get_agent_status_path
-from zerg.services.longhouse_paths import get_provider_live_proof_dir
-from zerg.services.longhouse_paths import is_stable_longhouse_home
-from zerg.services.longhouse_paths import resolve_longhouse_home
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_log_dir
+from zerg.provider_contract.longhouse_paths import get_agent_outbox_dir
+from zerg.provider_contract.longhouse_paths import get_agent_status_path
+from zerg.provider_contract.longhouse_paths import get_provider_live_proof_dir
+from zerg.provider_contract.longhouse_paths import is_stable_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 
 
 def test_resolve_longhouse_home_maps_provider_dir_to_sibling_longhouse(tmp_path):

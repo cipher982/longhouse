@@ -16,7 +16,7 @@ from zerg.catalogd.store import _bind_control_evidence_identities
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 DEVICE_ID = "cinder"
 

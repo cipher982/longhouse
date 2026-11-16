@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from zerg import provider_live_proof as plp
-from zerg import provider_release_status as prs
+from zerg.provider_contract import provider_live_proof as plp
+from zerg.provider_contract import provider_release_status as prs
 
 
 @pytest.fixture(autouse=True)

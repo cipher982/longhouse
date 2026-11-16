@@ -19,8 +19,8 @@ from uuid import NAMESPACE_URL
 from uuid import UUID
 from uuid import uuid5
 
-from zerg.services.provider_interaction_semantics import classify_provider_interaction
-from zerg.services.raw_json_compression import decode_raw_json
+from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.storage_v2.render_objects import RenderRecord
 
 PARSER_REVISION = "legacy-normalized-v1"

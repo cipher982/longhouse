@@ -44,7 +44,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE
 from zerg.services.managed_control_dispatcher import _engine_command_id
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 
 def _session(**overrides):

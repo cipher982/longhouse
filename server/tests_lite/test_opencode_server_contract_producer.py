@@ -9,9 +9,9 @@ import pytest
 
 from zerg.qa import opencode_server_contract_producer as m
 from zerg.qa.resume_assurance import capability_contract_shape
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions
 
 
 def _schema_cells() -> dict[str, dict[str, Any]]:

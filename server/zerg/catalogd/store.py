@@ -97,14 +97,14 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
-from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
-from zerg.services.internal_sessions import factory_title_assurance_session_clause
-from zerg.services.session_title import RESUME_SEED_TOKEN
-from zerg.services.session_title import sanitize_timeline_title
-from zerg.services.session_title import sanitize_title
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import title_origin_eligible_clause
+from zerg.provider_contract.internal_sessions import SYNTHETIC_BENCH_PROJECTS
+from zerg.provider_contract.internal_sessions import factory_title_assurance_session_clause
+from zerg.provider_contract.session_title import RESUME_SEED_TOKEN
+from zerg.provider_contract.session_title import sanitize_timeline_title
+from zerg.provider_contract.session_title import sanitize_title
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import title_origin_eligible_clause
 from zerg.storage_v2.contracts import DurableReceipt
 
 # Log a stage breakdown when one write crosses this. Matched to the hosted hot
@@ -6708,7 +6708,7 @@ def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> d
     released coordinate or replace authority belonging to a newer run.
     """
 
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     connection_table = LiveSessionConnection.__table__
     run_table = LiveSessionRun.__table__

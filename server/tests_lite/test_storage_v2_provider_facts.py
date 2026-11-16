@@ -26,7 +26,7 @@ from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.session_provider_facts import usage_label
 from zerg.services.session_provider_facts import usage_latest
-from zerg.services.session_title import resolve_title_provenance
+from zerg.provider_contract.session_title import resolve_title_provenance
 from zerg.services.storage_v2_workspace import _workspace_envelope
 
 

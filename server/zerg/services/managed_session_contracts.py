@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from typing import Mapping
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 CONTRACT_SCHEMA_VERSION = 1
 DIAGNOSTIC_SCHEMA_VERSION = 1

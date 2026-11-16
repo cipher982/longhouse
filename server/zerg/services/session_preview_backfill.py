@@ -18,12 +18,12 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import TimelineCard
-from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.provider_interaction_semantics import semantic_projection_facts
+from zerg.provider_contract.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
-from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 SESSION_FIRST_USER_PREVIEW_CHARS = 300

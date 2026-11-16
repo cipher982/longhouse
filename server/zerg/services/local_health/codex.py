@@ -7,8 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
-from zerg.services.longhouse_paths import get_managed_local_dir
+from zerg.provider_contract.longhouse_paths import get_managed_local_dir
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
 
 from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_int

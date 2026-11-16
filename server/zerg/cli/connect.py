@@ -18,7 +18,7 @@ import httpx
 import typer
 
 from zerg.cli.plaintext_guard import enforce_plaintext_rule
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.plaintext_http import OPT_IN_ENV
 from zerg.services.plaintext_http import OPT_IN_FLAG
 from zerg.services.plaintext_http import Outcome

@@ -50,7 +50,7 @@ from zerg.qa.pi_family_helm import _wait_cleanup_receipt
 from zerg.qa.pi_family_helm import _wait_native_marker
 from zerg.qa.pi_family_helm import _wait_served_run_retirement
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 
 FAMILY = omp_helm_lifecycle.FAMILY
 _runtime_convergence = functools.partial(helm._runtime_convergence, family=FAMILY)

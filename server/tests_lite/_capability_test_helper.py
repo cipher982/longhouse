@@ -17,10 +17,10 @@ from __future__ import annotations
 from typing import Any
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_execution_home import infer_execution_home
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import SessionExecutionHome
+from zerg.provider_contract.session_execution_home import infer_execution_home
 
 _LIVE_CONTROL_TRANSPORTS = frozenset(
     {

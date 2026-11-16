@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from zerg import provider_release_status as prs
+from zerg.provider_contract import provider_release_status as prs
 
 
 def _fresh_generated_at() -> str:

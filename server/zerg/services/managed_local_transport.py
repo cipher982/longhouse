@@ -7,10 +7,10 @@ import shlex
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.provider_contract.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.managed_local_shell import build_managed_local_shell_prelude
-from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
-from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _build_engine_bridge_shell_command(

@@ -45,7 +45,7 @@ from zerg.services.live_control_catalog import wake_next_live_catalog_input
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
 

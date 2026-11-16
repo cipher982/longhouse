@@ -22,7 +22,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 from types import SimpleNamespace
 
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
 
 
 def _fake_claude_session(permission_mode: str):
@@ -84,8 +84,8 @@ def test_launch_response_mints_scoped_hook_token_for_every_permission_mode():
     import zerg.services.session_chat_impl as impl
     from zerg.auth.managed_session_tokens import validate_managed_session_token
     from zerg.services.session_kernel_projection import SessionKernelProjection
-    from zerg.session_execution_home import ManagedSessionTransport
-    from zerg.session_execution_home import SessionExecutionHome
+    from zerg.provider_contract.session_execution_home import ManagedSessionTransport
+    from zerg.provider_contract.session_execution_home import SessionExecutionHome
 
     class _Caps:
         live_control_available = True

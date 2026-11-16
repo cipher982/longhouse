@@ -20,7 +20,7 @@ from tests_lite.test_provider_capability_proof_routes import _write_trusted
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.routers import provider_capability_proofs as routes
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 URL = "/api/agents/provider-version-evidence"
 

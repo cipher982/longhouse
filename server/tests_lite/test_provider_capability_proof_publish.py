@@ -6,9 +6,9 @@ import pytest
 
 from zerg.qa.provider_capability_proof_publish import ScenarioProofIdentity
 from zerg.qa.provider_capability_proof_publish import publish_scenario_assertions
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 def _identity() -> ScenarioProofIdentity:

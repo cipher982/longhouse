@@ -12,10 +12,10 @@ import zerg.qa.title_dependency_oracles as oracles
 import zerg.qa.title_dependency_recovery_producer as recovery_producer
 from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
 from zerg.qa.title_dependency_recovery_producer import REGISTRATION as RECOVERY_REGISTRATION
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
-from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
-from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
+from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
+from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 
 def test_title_product_registrations_have_no_provider_axis():

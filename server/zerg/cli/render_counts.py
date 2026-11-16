@@ -53,7 +53,7 @@ async def repair_counts(
     *, database: Path, cache: Path, socket_path: Path | None, object_root: Path | None, apply: bool, limit: int | None
 ) -> dict[str, Any]:
     from zerg.catalogd.client import CatalogClient
-    from zerg.services.provider_interaction_semantics import semantic_event_included
+    from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
     from zerg.services.raw_object_workers import storage_v2_root
     from zerg.services.render_object_workers import RenderObjectWorkerPool
 

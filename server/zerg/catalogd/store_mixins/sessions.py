@@ -76,12 +76,12 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
-from zerg.services.session_title import sanitize_timeline_title
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import effective_system_hidden_clause
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import primary_worker_only_clause
-from zerg.services.session_visibility_policy import visible_in_test_scope
+from zerg.provider_contract.session_title import sanitize_timeline_title
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import effective_system_hidden_clause
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import primary_worker_only_clause
+from zerg.provider_contract.session_visibility_policy import visible_in_test_scope
 
 
 class SessionsMixin:
@@ -94,7 +94,7 @@ class SessionsMixin:
         """
 
         from zerg.catalogd.fact_reducer import read_session_fact_heads
-        from zerg.services.managed_provider_contracts import contract_for_provider
+        from zerg.provider_contract.managed_provider_contracts import contract_for_provider
         from zerg.services.session_state_contract import SessionHostFacts
         from zerg.services.session_state_contract import SessionTranscriptFacts
         from zerg.services.session_state_facts_projector import project_served_session_state_facts

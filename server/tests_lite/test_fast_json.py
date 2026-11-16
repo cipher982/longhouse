@@ -42,7 +42,7 @@ def test_invalid_input_raises_what_stdlib_raises(data):
 
 
 def test_command_prefilter_still_parses_escaped_markup():
-    from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_candidate
+    from zerg.provider_contract.provider_interaction_semantics import claude_sequence_dependent_control_candidate
 
     plain = '{"type": "user", "promptId": "p1", "message": {"role": "user", "content": "<command-name>/x</command-name>"}}'
     escaped = plain.replace("command-name", "command\\u002dname")
@@ -68,7 +68,7 @@ def test_command_prefilter_still_parses_escaped_markup():
     ],
 )
 def test_command_prefilter_on_bytes_matches_text(raw):
-    from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_candidate
+    from zerg.provider_contract.provider_interaction_semantics import claude_sequence_dependent_control_candidate
 
     data = raw.encode("utf-8")
     for content_text in (None, "<command-name>/effort</command-name>", "hello"):

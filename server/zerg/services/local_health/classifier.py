@@ -8,8 +8,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_log_dir
-from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.provider_contract.longhouse_paths import get_agent_log_dir
+from zerg.provider_contract.longhouse_paths import get_agent_status_path
 from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED

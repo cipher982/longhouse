@@ -17,7 +17,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.console_control_projection import project_console_control
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.provider_contract.managed_provider_contracts import managed_provider_names
 from zerg.services.session_liveness_facts import ActivityObservation
 from zerg.services.session_liveness_facts import ControlObservation
 from zerg.services.session_liveness_facts import HostObservation

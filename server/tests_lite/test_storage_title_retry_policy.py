@@ -23,7 +23,7 @@ from zerg.catalogd.store import TITLE_ROW_TRANSIENT_RETRY_DELAY
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import StorageSession
 from zerg.models.live_store import LiveSessionCatalog
-from zerg.services.session_title import is_resume_seed_marker
+from zerg.provider_contract.session_title import is_resume_seed_marker
 
 
 def _authorized_candidate(**values):

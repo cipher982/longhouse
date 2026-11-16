@@ -109,7 +109,7 @@ fn push_title_chars(output: &mut String, text: &str, char_count: &mut usize) {
     }
 }
 
-// Keep this ordered cleanup in sync with server/zerg/services/session_title.py.
+// Keep this ordered cleanup in sync with server/zerg/provider_contract/session_title.py.
 fn sanitize_title_text(text: &str) -> String {
     let mut cleaned = String::with_capacity(text.len().min(512));
     append_sanitized_title_text(text, &mut cleaned);

@@ -8,8 +8,8 @@ import pytest
 from zerg.qa.provider_coordination_scenarios import main
 from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
 from zerg.qa.provider_coordination_scenarios import publish_codex_bootstrap_noise_proof
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required")

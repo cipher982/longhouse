@@ -9,13 +9,13 @@ from sqlalchemy import create_engine
 from sqlalchemy import insert
 from sqlalchemy import select
 
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import effective_system_hidden_clause
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import known_hidden_evidence_clause
-from zerg.services.session_visibility_policy import primary_worker_only_clause
-from zerg.services.session_visibility_policy import title_origin_eligible_clause
-from zerg.services.session_visibility_policy import visible_in_test_scope
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import effective_system_hidden_clause
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import known_hidden_evidence_clause
+from zerg.provider_contract.session_visibility_policy import primary_worker_only_clause
+from zerg.provider_contract.session_visibility_policy import title_origin_eligible_clause
+from zerg.provider_contract.session_visibility_policy import visible_in_test_scope
 
 CASES = (
     SessionVisibilityFacts(provider="codex", project="longhouse", environment="local", machine_id="cinder"),

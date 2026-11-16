@@ -10,7 +10,7 @@
 //!
 //! The fix is to stop subprocessing entirely and write the hook-inbox
 //! message file directly from the engine, in the exact format, location, and
-//! atomic-write style that `server/zerg/services/antigravity_hook_inbox.py`'s
+//! atomic-write style that `server/zerg/provider_contract/antigravity_hook_inbox.py`'s
 //! `enqueue_antigravity_message` writes and the shipped Antigravity hook
 //! script's `claim_inbox_messages` reads and claims:
 //!

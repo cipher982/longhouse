@@ -9,7 +9,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
 
 from ._shared import _to_rfc3339
 from .constants import ACTIVITY_RECENCY_BANDS

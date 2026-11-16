@@ -8,8 +8,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
-from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 
 from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_int

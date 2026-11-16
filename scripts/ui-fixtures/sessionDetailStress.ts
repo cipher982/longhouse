@@ -1482,7 +1482,7 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
 
 /**
  * Served `provider_notification` text, as the server ships it (see
- * `provider_display_message_text` in server/zerg/services/provider_interaction_semantics.py):
+ * `provider_display_message_text` in server/zerg/provider_contract/provider_interaction_semantics.py):
  * the envelope and the instruction to the model are gone, a header line leads,
  * and an output over 2000 characters keeps its header, an "…" line, and its
  * tail. `OMP_LONG` is the session 352dfbc4 notice that filled the viewport:

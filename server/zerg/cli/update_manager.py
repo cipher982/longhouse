@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 import typer
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 PACKAGE_NAME = "longhouse"
 DEFAULT_CHANNEL = "stable"

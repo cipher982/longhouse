@@ -19,8 +19,8 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
 from zerg.searchd.hydration import RenderHydrator
-from zerg.services.provider_interaction_semantics import classify_provider_interaction
 
 logger = logging.getLogger(__name__)
 

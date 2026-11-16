@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof_store import ProofPublication
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof_store import ProofPublication
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
 
 
 def _record(**changes) -> ProviderCapabilityProofRecord:

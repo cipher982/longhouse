@@ -20,9 +20,9 @@ from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.provider_contract.managed_provider_contracts import provider_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.managed_control_state import _connection_priority as _managed_control_connection_priority
-from zerg.services.managed_provider_contracts import provider_for_control_plane
-from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.session_pause_requests import PENDING_STATUS
 from zerg.services.session_pause_requests import is_user_facing_pause_request
 from zerg.services.session_runtime import load_runtime_state_map

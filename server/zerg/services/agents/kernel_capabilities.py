@@ -28,14 +28,14 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.provider_contract.managed_provider_contracts import contract_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import provider_for_control_plane
+from zerg.provider_contract.managed_provider_contracts import steer_control_planes
 from zerg.services.console_control_projection import ConsoleControlProjection
 from zerg.services.console_control_projection import project_console_control
 from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
-from zerg.services.managed_provider_contracts import contract_for_control_plane
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
-from zerg.services.managed_provider_contracts import provider_for_control_plane
-from zerg.services.managed_provider_contracts import steer_control_planes
 from zerg.utils.time import normalize_utc
 
 _STATE_PRIORITY = {
@@ -147,7 +147,7 @@ class KernelSessionCapabilities:
 
     @property
     def execution_home(self):
-        from zerg.session_execution_home import SessionExecutionHome
+        from zerg.provider_contract.session_execution_home import SessionExecutionHome
 
         return (
             SessionExecutionHome.MANAGED_LOCAL

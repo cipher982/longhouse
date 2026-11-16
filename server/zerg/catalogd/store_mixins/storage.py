@@ -74,12 +74,12 @@ from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.internal_sessions import factory_title_assurance_session_clause
-from zerg.services.session_title import is_path_like_title
-from zerg.services.session_title import is_resume_seed_marker
-from zerg.services.session_visibility_policy import effective_system_hidden_clause
-from zerg.services.session_visibility_policy import primary_worker_only_clause
-from zerg.services.session_visibility_policy import title_origin_eligible_clause
+from zerg.provider_contract.internal_sessions import factory_title_assurance_session_clause
+from zerg.provider_contract.session_title import is_path_like_title
+from zerg.provider_contract.session_title import is_resume_seed_marker
+from zerg.provider_contract.session_visibility_policy import effective_system_hidden_clause
+from zerg.provider_contract.session_visibility_policy import primary_worker_only_clause
+from zerg.provider_contract.session_visibility_policy import title_origin_eligible_clause
 
 
 class StorageMixin:

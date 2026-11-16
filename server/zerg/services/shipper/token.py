@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from zerg.services.longhouse_paths import get_machine_token_path
+from zerg.provider_contract.longhouse_paths import get_machine_token_path
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import load_machine_state
 from zerg.services.machine_state import same_runtime_address

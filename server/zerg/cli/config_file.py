@@ -21,8 +21,8 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_runtime_config_path
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import get_runtime_config_path
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 
 # tomllib is built-in from Python 3.11+
 try:

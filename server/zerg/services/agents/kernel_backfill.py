@@ -43,13 +43,13 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.models.agents import TimelineCard
+from zerg.provider_contract.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
-from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.provider_interaction_semantics import semantic_projection_facts
-from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_kernel_projection import project_provider_session_id
 
 _CLAUDE_SUBAGENT_PARENT_RE = re.compile(

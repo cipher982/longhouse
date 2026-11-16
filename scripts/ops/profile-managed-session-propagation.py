@@ -2262,7 +2262,7 @@ except Exception as exc:
 
         from zerg.qa.cursor_helm_product_e2e import _PtyProcess
         from zerg.qa.cursor_helm_product_e2e import _state_ids
-        from zerg.services.longhouse_paths import get_managed_local_dir
+        from zerg.provider_contract.longhouse_paths import get_managed_local_dir
 
         case_id = "D1"
         ownership = "managed"
@@ -2778,7 +2778,7 @@ except Exception as exc:
 
         from zerg.qa.antigravity_helm_lifecycle import answer_terminal_queries
         from zerg.qa.pty_session import ProviderPtySession
-        from zerg.services.longhouse_paths import get_managed_local_dir
+        from zerg.provider_contract.longhouse_paths import get_managed_local_dir
 
         case_id = "E1"
         ownership = "managed"

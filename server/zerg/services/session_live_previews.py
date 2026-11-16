@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionLivePreview
 from zerg.models.live_store import LiveSessionLivePreview
-from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
+from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.provisional_events import build_provisional_cursor

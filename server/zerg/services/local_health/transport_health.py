@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
+from zerg.provider_contract.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.transport_health import TransportHealthAssessment
 from zerg.services.transport_health import TransportHealthSample
 from zerg.services.transport_health import assess_transport_health

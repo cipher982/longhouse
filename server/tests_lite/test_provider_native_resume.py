@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
 from zerg.qa import live_session_toolkit

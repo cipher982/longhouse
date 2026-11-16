@@ -26,11 +26,11 @@ from zerg.routers import provider_capability_proofs as routes
 from zerg.services.provider_capability_cell_verdicts import CellVerdict
 from zerg.services.provider_capability_cell_verdicts import CellVerdictStore
 from zerg.services.provider_capability_cell_verdicts import CellVerdictStoreError
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
-from zerg.services.provider_capability_schema import load_chip_edge_assertions
-from zerg.services.provider_chip_edges import rollup_state
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof_store import ProviderCapabilityProofStore
+from zerg.provider_contract.provider_capability_schema import load_chip_edge_assertions
+from zerg.provider_contract.provider_chip_edges import rollup_state
 
 NOW = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
 

@@ -31,7 +31,7 @@ from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
 from zerg.cli.serve import warn_plain_http_bind
 from zerg.native_device_entrypoints import available_native_managed_launch_commands
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.shipper import load_token

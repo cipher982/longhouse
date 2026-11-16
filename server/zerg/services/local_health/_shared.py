@@ -7,11 +7,11 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
-from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
-from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 
 
 def _utc_now() -> datetime:

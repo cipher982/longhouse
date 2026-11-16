@@ -36,7 +36,7 @@ from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.universal_agent_harness import AdapterConfig
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import run_scenario
-from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT
+from zerg.provider_contract.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT
 
 
 def _build(provider: str, root: Path, *, provenance: str = "generated_fake") -> ProviderBuildRef:

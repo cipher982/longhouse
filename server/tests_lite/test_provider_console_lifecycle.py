@@ -12,7 +12,7 @@ import pytest
 
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.console_served_state_core import MarkerAnswerCountError
-from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions
 
 
 def _receipts(provider: str = "claude") -> tuple[dict, dict, dict, dict]:

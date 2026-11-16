@@ -20,16 +20,16 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.client import CatalogClient
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
-from zerg.services.provider_interaction_semantics import interaction_context_key_parts
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.provider_interaction_semantics import semantic_event_included
-from zerg.services.provider_interaction_semantics import semantic_projection_facts
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import decompress_raw_json
+from zerg.provider_contract.provider_interaction_semantics import interaction_context_key_parts
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
+from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
+from zerg.provider_contract.raw_json_compression import CODEC_ZSTD
+from zerg.provider_contract.raw_json_compression import decompress_raw_json
+from zerg.provider_contract.session_visibility_policy import TEST_SCOPE_REASON_KEYS
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import facts_from_row
 from zerg.services.session_kernel_projection import project_session_lineage_fields
-from zerg.services.session_visibility_policy import TEST_SCOPE_REASON_KEYS
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import facts_from_row
 from zerg.utils.time import UTCBaseModel
 
 WORKLOG_DAY_SOURCE = "longhouse-worklog-api-v1"

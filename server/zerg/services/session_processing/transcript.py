@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 
+from zerg.provider_contract.provider_interaction_semantics import seed_persisted_provider_interaction_context
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
+from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.clean_events import extract_content as _extract_content
-from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.provider_interaction_semantics import semantic_event_included
-from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.transcript_content import redact_secrets as _redact_secrets
 from zerg.services.transcript_content import strip_noise as _strip_noise
 

@@ -22,10 +22,10 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
-from zerg.services.raw_json_compression import CODEC_PLAIN
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import compress_raw_json
-from zerg.services.raw_json_compression import decode_raw_json
+from zerg.provider_contract.raw_json_compression import CODEC_PLAIN
+from zerg.provider_contract.raw_json_compression import CODEC_ZSTD
+from zerg.provider_contract.raw_json_compression import compress_raw_json
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.services.tool_result_repair import repair_orphan_tool_results
 from zerg.services.tool_result_repair import scan_orphan_tool_results
 

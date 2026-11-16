@@ -8,11 +8,11 @@ from zerg.services.provider_capability_projection import NEVER_PROVEN
 from zerg.services.provider_capability_projection import STALE
 from zerg.services.provider_capability_projection import UNACCEPTABLE_EVIDENCE
 from zerg.services.provider_capability_projection import project_capabilities
-from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_schema import CapabilityAssertion
+from zerg.provider_contract.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_schema import CapabilityAssertion
 
 
 def _assertion(

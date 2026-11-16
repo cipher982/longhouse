@@ -38,7 +38,7 @@ if str(_BACKEND_DIR) not in sys.path:
 import zerg.bootstrap_sqlite  # noqa: F401
 import sqlite3
 
-from zerg.services.raw_json_compression import compress_raw_json
+from zerg.provider_contract.raw_json_compression import compress_raw_json
 
 
 @dataclass(frozen=True)

@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.services.provider_assurance_plan_projection import plan_content_digest
-from zerg.services.provider_assurance_plan_projection import validate_plan_projection
+from zerg.provider_contract.provider_assurance_plan_projection import plan_content_digest
+from zerg.provider_contract.provider_assurance_plan_projection import validate_plan_projection
 
 
 class ProductAssuranceProofArchive:

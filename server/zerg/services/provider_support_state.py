@@ -18,11 +18,11 @@ from datetime import UTC
 from datetime import datetime
 from typing import Any
 
-from zerg.managed_provider_contract_manifest import CONTRACT_OPERATIONS
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.provider_action_coverage import derive_provider_action_coverage
-from zerg.services.provider_action_coverage import serialize_provider_action_coverage
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.managed_provider_contract_manifest import CONTRACT_OPERATIONS
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage
+from zerg.provider_contract.provider_action_coverage import serialize_provider_action_coverage
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
 
 SCHEMA_VERSION = 1
 EVIDENCE_RANK = {

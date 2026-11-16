@@ -37,9 +37,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from zerg.services.longhouse_paths import get_agent_db_path
-from zerg.services.longhouse_paths import get_agent_log_dir
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import get_agent_db_path
+from zerg.provider_contract.longhouse_paths import get_agent_log_dir
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import default_archive_repair_mode_for_url
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact

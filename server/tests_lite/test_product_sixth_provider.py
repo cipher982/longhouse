@@ -16,9 +16,9 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-import zerg.services.managed_provider_contracts as contract_registry  # noqa: E402
+import zerg.provider_contract.managed_provider_contracts as contract_registry  # noqa: E402
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
-from zerg.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
 from zerg.qa import provider_adapters  # noqa: E402
 from zerg.qa import universal_agent_harness as harness  # noqa: E402
 from zerg.services.machine_control_channel import get_machine_control_channel_registry  # noqa: E402
@@ -27,7 +27,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEN
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL  # noqa: E402
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command  # noqa: E402
 from zerg.services.managed_control_dispatcher import select_managed_control_transport  # noqa: E402
-from zerg.services.managed_provider_contracts import managed_provider_contract_from_item  # noqa: E402
+from zerg.provider_contract.managed_provider_contracts import managed_provider_contract_from_item  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 PROVIDER = "toy_sixth"

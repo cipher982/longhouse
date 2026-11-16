@@ -69,12 +69,12 @@ from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_factory_title_assurance_session
-from zerg.services.session_title import sanitize_timeline_title
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import primary_worker_only_clause
+from zerg.provider_contract.internal_sessions import classify_provider_proof_environment
+from zerg.provider_contract.internal_sessions import is_factory_title_assurance_session
+from zerg.provider_contract.session_title import sanitize_timeline_title
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import primary_worker_only_clause
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
 

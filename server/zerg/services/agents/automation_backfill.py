@@ -15,9 +15,9 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import facts_from_row
-from zerg.services.session_visibility_policy import visible_in_test_scope
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import facts_from_row
+from zerg.provider_contract.session_visibility_policy import visible_in_test_scope
 
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"

@@ -42,7 +42,7 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.routers.heartbeat import ManagedSessionLeaseIn
-from zerg.services.managed_provider_contracts import require_contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import require_contract_for_provider
 
 
 @pytest.fixture

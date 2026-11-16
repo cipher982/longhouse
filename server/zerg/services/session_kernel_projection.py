@@ -13,9 +13,9 @@ from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.models import Runner
+from zerg.provider_contract.session_execution_home import infer_origin_label
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.session_execution_home import infer_origin_label
 
 _DIRECT_MACHINE_CONTROL_PLANES = frozenset(
     {

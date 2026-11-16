@@ -6,7 +6,7 @@ import re
 from datetime import timedelta
 
 from zerg.managed_phase_contract import local_health_retention_seconds
-from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30

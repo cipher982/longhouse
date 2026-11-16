@@ -345,7 +345,7 @@ class ConsoleSteerTarget:
 
 def console_provider_supports_steer(provider: str | None) -> bool:
     """Whether this provider's Console adapter can enter a running turn."""
-    from zerg.services.managed_provider_contracts import contract_for_provider
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
     contract = contract_for_provider(provider)
     return bool(contract is not None and contract.machine_control_capability_for_operation("turn_steer"))

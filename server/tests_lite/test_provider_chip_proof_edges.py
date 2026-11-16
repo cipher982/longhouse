@@ -14,7 +14,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from zerg.services.provider_chip_edges import requirement_key
+from zerg.provider_contract.provider_chip_edges import requirement_key
 
 REPO = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"

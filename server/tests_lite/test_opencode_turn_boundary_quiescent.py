@@ -10,7 +10,7 @@ import pytest
 
 from zerg.qa import opencode_turn_boundary_quiescent as m
 from zerg.qa.resume_assurance import capability_contract_shape
-from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions
 
 
 def _schema_cell() -> dict[str, Any]:

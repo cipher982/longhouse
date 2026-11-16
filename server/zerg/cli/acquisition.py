@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 DEFAULT_TELEMETRY_ENDPOINT = "https://control.longhouse.ai/api/acquisition/events"
 

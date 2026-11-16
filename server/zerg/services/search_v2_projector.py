@@ -13,15 +13,15 @@ from uuid import UUID
 from uuid import uuid4
 
 from zerg.catalogd.client import CatalogClient
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import facts_from_row
+from zerg.provider_contract.session_visibility_policy import visible_in_test_scope
 from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.searchd.hydration import format_tool_input_text
 from zerg.searchd.store import object_set_hash
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_projector_client
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import facts_from_row
-from zerg.services.session_visibility_policy import visible_in_test_scope
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 
 logger = logging.getLogger(__name__)

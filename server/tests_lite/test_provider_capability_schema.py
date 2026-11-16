@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from zerg.services import provider_capability_schema
+from zerg.provider_contract import provider_capability_schema
 
 
 def test_schema_path_resolution_falls_back_through_multiple_candidates(monkeypatch, tmp_path: Path) -> None:

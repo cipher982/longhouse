@@ -51,12 +51,12 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.codex_launch_visibility_repair import CodexLaunchVisibilityRepairFacts
 from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_fingerprint
 from zerg.services.codex_launch_visibility_repair import codex_launch_visibility_repair_refusals
 from zerg.services.codex_launch_visibility_repair import plan_codex_launch_visibility_repair
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
 
 class LaunchMixin:

@@ -103,7 +103,7 @@ for row in fts:
 import hashlib as _hashlib  # noqa: E402
 
 from zerg.services.archive_store import FilesystemArchiveStore  # noqa: E402
-from zerg.services.raw_json_compression import decompress_raw_json  # noqa: E402
+from zerg.provider_contract.raw_json_compression import decompress_raw_json  # noqa: E402
 
 archive_root = os.environ.get("LONGHOUSE_ARCHIVE_ROOT") or os.path.join(os.path.dirname(src_path), "archive")
 _store = FilesystemArchiveStore(archive_root)

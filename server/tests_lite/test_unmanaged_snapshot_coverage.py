@@ -27,7 +27,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.routers.heartbeat import MANAGED_SESSION_LEASE_PROVIDERS
 from zerg.routers.heartbeat import MISSING_UNBOUND_UNMANAGED_PROVIDERS
 from zerg.routers.heartbeat import UNMANAGED_PROCESS_SNAPSHOT_UNCOVERED_PROVIDERS
-from zerg.services.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 
 
 def test_every_provider_is_explicitly_classified_for_snapshot_coverage() -> None:

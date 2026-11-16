@@ -10,8 +10,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_state_dir
-from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.provider_contract.longhouse_paths import get_agent_state_dir
+from zerg.provider_contract.longhouse_paths import get_agent_status_path
 
 
 def _utc_now_iso() -> str:

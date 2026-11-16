@@ -10,7 +10,7 @@ import pytest
 
 from zerg.qa import codex_release_identity as bridge
 from zerg.qa import provider_release_identity
-from zerg.services.provider_capability_proof import proof_record_from_mapping
+from zerg.provider_contract.provider_capability_proof import proof_record_from_mapping
 
 
 @pytest.fixture(autouse=True)

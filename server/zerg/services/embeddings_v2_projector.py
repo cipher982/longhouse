@@ -16,10 +16,10 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.provider_contract.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
-from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
 from zerg.services.local_embedder import request_local_embedder_initialization

@@ -13,9 +13,9 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
-from zerg.services.internal_sessions import INTERNAL_CANARY_LABEL_PREFIXES
-from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_internal_canary_provider_filter
+from zerg.provider_contract.internal_sessions import INTERNAL_CANARY_LABEL_PREFIXES
+from zerg.provider_contract.internal_sessions import classify_provider_proof_environment
+from zerg.provider_contract.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.session_launch_provenance import HIDDEN_FROM_DEFAULT_ORIGIN_KINDS
 from zerg.services.session_launch_provenance import HUMAN_LAUNCH_ACTORS
 

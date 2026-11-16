@@ -38,12 +38,12 @@ from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
+from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+from zerg.provider_contract.provider_interaction_semantics import provider_notification_display_text
+from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
 from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.services.catalogd_supervisor import get_catalogd_client
-from zerg.services.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
-from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
-from zerg.services.provider_interaction_semantics import provider_notification_display_text
-from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
@@ -302,7 +302,7 @@ def _select_provider_title(facts: list[dict[str, Any]]) -> tuple[str, str] | Non
     take the newest rename. Otherwise take the oldest provider-generated title
     in the batch.
     """
-    from zerg.services.session_title import sanitize_timeline_title
+    from zerg.provider_contract.session_title import sanitize_timeline_title
 
     titled = [fact for fact in facts if fact["kind"] == "session.title" and isinstance(fact["payload"].get("title"), str)]
     user_facts = sorted(

@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import pytest
 
-from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import machine_control_capability_for_command
+from zerg.provider_contract.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import machine_control_capability_for_command
 
 # connection capability column -> (contract operation, dispatcher command_type)
 _REMOTE_CONTROL_COLUMNS = {

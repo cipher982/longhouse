@@ -14,7 +14,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
 
 
 def _wrapped_inner(command: str) -> str:

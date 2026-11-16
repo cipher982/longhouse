@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from zerg.cli.main import app
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
-from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.provider_contract.longhouse_paths import get_agent_status_path
 
 
 def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(tmp_path: Path):

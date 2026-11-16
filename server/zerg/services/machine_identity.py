@@ -7,7 +7,7 @@ import platform
 import unicodedata
 from pathlib import Path
 
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper.token import load_machine_name
 
 

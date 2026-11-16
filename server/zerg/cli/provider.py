@@ -10,7 +10,7 @@ from pathlib import Path
 
 import typer
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
 
 app = typer.Typer(help="Provider contracts and automation-factory diagnostics")
 factory_app = typer.Typer(help="Read-only provider automation-factory health")

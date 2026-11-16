@@ -24,9 +24,9 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.managed_provider_contracts import require_contract_for_provider
-from zerg.services.session_visibility_policy import SessionVisibilityFacts
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.managed_provider_contracts import require_contract_for_provider
+from zerg.provider_contract.session_visibility_policy import SessionVisibilityFacts
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
 
 LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
 

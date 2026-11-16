@@ -23,8 +23,8 @@ from zerg.qa import opencode_turn_boundary_quiescent
 from zerg.qa import provider_native_resume
 from zerg.qa import provider_semantic_qualification
 from zerg.qa.resume_assurance import execution_variant_key
-from zerg.services.provider_capability_proof import AssertionOutcome
-from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.provider_contract.provider_capability_proof import AssertionOutcome
+from zerg.provider_contract.provider_capability_proof import EvidenceClass
 
 
 def _executable(path: Path) -> Path:

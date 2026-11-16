@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import Callable
 
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import load_machine_state
 from zerg.services.shipper import load_token
 from zerg.services.shipper.service import get_engine_executable

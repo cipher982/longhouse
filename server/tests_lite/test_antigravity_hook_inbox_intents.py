@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT
+from zerg.provider_contract.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT
 
 SESSION_ID = "11111111-1111-4111-8111-111111111111"
 

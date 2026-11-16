@@ -30,10 +30,10 @@ ENGINE_OMITTED_KEYS = frozenset(
 
 sys.path.insert(0, str(ROOT / "server"))
 
-from zerg.managed_provider_contract_manifest import CONTRACT_OPERATIONS  # noqa: E402
-from zerg.managed_provider_contract_manifest import OPERATION_EVIDENCE_LEVELS  # noqa: E402
-from zerg.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
-from zerg.managed_provider_contract_manifest import render_contract_manifest_json  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import CONTRACT_OPERATIONS  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import OPERATION_EVIDENCE_LEVELS  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import render_contract_manifest_json  # noqa: E402
 
 
 def _load_schema() -> dict:

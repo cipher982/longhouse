@@ -15,11 +15,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.longhouse_paths import resolve_longhouse_home
+from zerg.provider_contract.provider_capability_proof import ProviderCapabilityProofRecord
+from zerg.provider_contract.provider_capability_proof import proof_record_from_mapping
 from zerg.services.plaintext_http import check_runtime_url
 from zerg.services.plaintext_http import refusal_message
-from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
-from zerg.services.provider_capability_proof import proof_record_from_mapping
 from zerg.services.shipper.token import get_allow_insecure_http
 
 _REMOTE_BUNDLE_KIND = "trusted_provider_capability_proof_bundle"

@@ -18,6 +18,10 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.session_title import resolve_timeline_title
+from zerg.provider_contract.session_title import resolve_title_provenance
+from zerg.provider_contract.session_title import sanitize_timeline_title
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
@@ -32,7 +36,6 @@ from zerg.services.console_control_projection import project_console_control
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_provider_facts import last_turn as project_last_turn
 from zerg.services.session_provider_facts import project_session_hud
 from zerg.services.session_provider_facts import provider_facts_from_rows
@@ -44,9 +47,6 @@ from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import project_pending_interaction_facts
 from zerg.services.session_state_contract import project_transcript_facts
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
-from zerg.services.session_title import resolve_timeline_title
-from zerg.services.session_title import resolve_title_provenance
-from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_compat_runtime_display_response

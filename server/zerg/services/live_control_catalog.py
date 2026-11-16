@@ -24,8 +24,8 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
-from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.utils.time import normalize_utc
 

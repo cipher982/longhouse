@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import TimelineCard
-from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.provider_contract.internal_sessions import classify_provider_proof_environment
+from zerg.provider_contract.internal_sessions import provider_proof_session_clause
 
 
 @dataclass(frozen=True)

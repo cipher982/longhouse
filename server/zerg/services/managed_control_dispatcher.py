@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.models.agents import AgentSession
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_provider_contracts import contract_for_provider
-from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 
 logger = logging.getLogger(__name__)
 

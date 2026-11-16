@@ -23,7 +23,7 @@ _SERVER_PATH = str(Path(__file__).resolve().parents[2] / "server")
 if _SERVER_PATH not in sys.path:
     sys.path.insert(0, _SERVER_PATH)
 
-from zerg.services.managed_provider_contracts import factory_provider_names  # noqa: E402
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names  # noqa: E402
 
 SCHEMA_VERSION = 1
 # Derived from the managed-provider contract; see provider-release-proof.py.

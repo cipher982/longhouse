@@ -9,8 +9,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import get_agent_outbox_dir
-from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.provider_contract.longhouse_paths import get_agent_outbox_dir
+from zerg.provider_contract.longhouse_paths import get_agent_status_path
 
 from ._shared import _max_rfc3339
 from ._shared import _normalize_optional_int

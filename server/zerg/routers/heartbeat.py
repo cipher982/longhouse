@@ -61,13 +61,13 @@ from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import agents_machine_evidence_dropped_total
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.provider_contract.managed_provider_contracts import factory_provider_names
 from zerg.routers.backpressure import catalog_backpressure_headers
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.machine_identity import resolve_machine_id
-from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import load_runtime_state_map

@@ -41,14 +41,14 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveUser
+from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.provider_contract.raw_json_compression import decode_raw_json
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 from zerg.services.agents import SessionIngest
 from zerg.services.demo_seed import DEMO_PRESENTATION
 from zerg.services.demo_sessions import build_demo_agent_sessions
-from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-from zerg.services.raw_json_compression import decode_raw_json
 from zerg.storage_v2.normalized_events import ORDERING_REVISION
 from zerg.storage_v2.normalized_events import PARSER_REVISION
 from zerg.storage_v2.normalized_events import aware

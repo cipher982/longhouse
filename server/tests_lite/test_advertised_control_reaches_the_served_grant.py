@@ -39,8 +39,8 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_control_catalog import canonical_command_authorization_providers
 from zerg.services.live_control_catalog import canonical_live_control_capabilities
 from zerg.services.live_control_catalog import get_canonical_live_control_grant
-from zerg.services.managed_provider_contracts import all_managed_provider_contracts
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 DEVICE_ID = "cinder"
 

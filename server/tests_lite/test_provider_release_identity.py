@@ -16,7 +16,7 @@ from zerg.qa import pi_console_tool_producer
 from zerg.qa import pi_helm_lifecycle
 from zerg.qa import provider_qualification
 from zerg.qa import provider_release_identity as identity
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 TEST_SHA = "a" * 40
 PROFILES = {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
 
 def test_cursor_contract_advertises_helm_and_native_console_turns():

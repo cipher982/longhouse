@@ -496,7 +496,7 @@ def _needs_provider_interaction_semantics_backfill(conn: Connection) -> tuple[bo
     )
     compressed_context_rows = 0
     if "raw_json_z" in columns:
-        from zerg.services.raw_json_compression import decompress_raw_json
+        from zerg.provider_contract.raw_json_compression import decompress_raw_json
 
         compressed_rows = conn.execute(
             text(
@@ -531,9 +531,9 @@ def _needs_provider_interaction_semantics_backfill(conn: Connection) -> tuple[bo
 
 
 def _apply_provider_interaction_semantics_backfill(conn: Connection) -> str:
-    from zerg.services.provider_interaction_semantics import classify_provider_interaction
-    from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
-    from zerg.services.raw_json_compression import decompress_raw_json
+    from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
+    from zerg.provider_contract.provider_interaction_semantics import seed_provider_interaction_sequence_context
+    from zerg.provider_contract.raw_json_compression import decompress_raw_json
 
     def seed_session_context(session_id: str, provider: str | None) -> dict[str, object]:
         if str(provider or "").strip().lower() != "claude":

@@ -25,12 +25,12 @@ from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistra
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
+from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
+from zerg.provider_contract.session_visibility_policy import facts_from_row
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import facts_from_row
 
 logger = logging.getLogger(__name__)
 

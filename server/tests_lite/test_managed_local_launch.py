@@ -189,8 +189,8 @@ def test_managed_local_launch_plan_preserves_client_minted_provider_identity():
 def test_managed_local_launch_response_contract_rejects_missing_claude_provider_id():
     from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
     from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
-    from zerg.session_execution_home import ManagedSessionTransport
-    from zerg.session_execution_home import SessionExecutionHome
+    from zerg.provider_contract.session_execution_home import ManagedSessionTransport
+    from zerg.provider_contract.session_execution_home import SessionExecutionHome
 
     response = ManagedLocalSessionLaunchResponse(
         session_id="session-123",

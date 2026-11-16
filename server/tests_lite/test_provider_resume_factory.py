@@ -6,7 +6,7 @@ from zerg.qa.provider_generic_resume import REGISTRATION
 from zerg.qa.provider_generic_resume import run_generic_resume
 from zerg.qa.provider_resume_factory import SCENARIOS
 from zerg.qa.provider_resume_factory import run_provider_resume_scenario
-from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.provider_contract.provider_capability_schema import load_capability_assertions
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "cursor", "opencode"])
@@ -18,7 +18,7 @@ def test_launch_provider_resume_factory_matrix(provider: str, scenario: str) -> 
     # schema says not_implemented would be asserting a capability the product
     # deliberately does not claim.
     if scenario == "console_thread_fork":
-        from zerg.services.managed_provider_contracts import contract_for_provider
+        from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 
         contract = contract_for_provider(provider)
         if contract is None or not contract.fork_thread:

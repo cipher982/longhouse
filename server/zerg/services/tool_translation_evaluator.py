@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.services.tool_presentation import project_tool_presentation
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

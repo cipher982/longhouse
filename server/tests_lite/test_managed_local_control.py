@@ -51,7 +51,7 @@ from zerg.services.managed_local_control import validate_managed_local_chat_done
 from zerg.services.session_observations import record_runtime_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.session_execution_home import ManagedSessionTransport
+from zerg.provider_contract.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
@@ -498,7 +498,7 @@ def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
     import dataclasses
 
     import zerg.services.managed_local_control as control
-    from zerg.services.managed_provider_contracts import contract_for_provider as real_contract
+    from zerg.provider_contract.managed_provider_contracts import contract_for_provider as real_contract
 
     monkeypatch.setattr(
         control,

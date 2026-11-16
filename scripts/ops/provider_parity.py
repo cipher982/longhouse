@@ -13,10 +13,10 @@ SERVER_DIR = ROOT / "server"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
 
-from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS  # noqa: E402
-from zerg.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES  # noqa: E402
-from zerg.managed_provider_contract_manifest import managed_provider_contract_manifest  # noqa: E402
-from zerg.services.managed_provider_contracts import outstanding_factory_work  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import TURN_USAGE_FIELD_NAMES  # noqa: E402
+from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_manifest  # noqa: E402
+from zerg.provider_contract.managed_provider_contracts import outstanding_factory_work  # noqa: E402
 
 _DISPOSITION_LABEL = {
     "implemented": "impl",
