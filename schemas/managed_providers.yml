@@ -1947,6 +1947,51 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
+      - id: antigravity_helm_launch_registration
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
+      - id: antigravity_helm_send_active
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
+      - id: antigravity_helm_steer_active
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
+      - id: antigravity_helm_interrupt
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
+      - id: antigravity_helm_terminate_owned
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
     session.input.send:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1982,6 +2027,15 @@ providers:
         acceptable_evidence:
         - live_no_token
         max_age_seconds: 604800
+      - id: antigravity_helm_launch_registration
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
     run_once:
       level: none
       source: "Console routes through session.turn.start, not the legacy run_once command"
@@ -2016,8 +2070,6 @@ providers:
         terminationReason)."
       observed_provider_version: "1.5.9"
     interrupt:
-      level: scripted_model
-      source: real agy 1.5.9 on the bench against the scripted Gemini endpoint (scripts/qa/agy-acp-live-receipt.sh for Console, scripts/qa/agy-helm-live-receipt.sh for Helm), plus hermetic fake-agy and fake-hook tests
       disposition: "implemented"
       reason: "Console (antigravity.turn_interrupt): the engine marks the claim
         cancel-requested, writes the ACP `session/cancel` notification, and kills
@@ -2035,15 +2087,33 @@ providers:
         interrupt never ends a later turn. Kill-and-resume is not used for
         Helm because the TUI is the user's own terminal. Print mode's SIGINT and
         stream-json stdin (user events only) are not used."
+      required_assertions:
+      - id: antigravity_helm_interrupt
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
       observed_provider_version: "1.5.9"
 
     steer_active_turn:
-      level: scripted_model
-      source: "real agy 1.5.9 on the bench with the real Longhouse hook (scripts/qa/agy-helm-live-receipt.sh): the steer message was claimed mid tool call and reached the model with the staged image path. Console steer is a second ACP session/prompt (live on 1.5.9, step 2)."
       disposition: "implemented"
       reason: "Helm: the engine writes the message into the hook inbox and agy's PreInvocation hook returns it as `injectSteps` after the running tool call (proven live on 1.5.9). Steering lands at an invocation boundary, so one long tool call delays it; it is bounded, not immediate, and product copy must say so. Images ride as staged file paths in the message text (the model opens them with read_file). Availability follows observed hook readiness per session."
+      required_assertions:
+      - id: antigravity_helm_steer_active
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
       observed_provider_version: "1.5.9"
-      owner_action: "drive the real Helm TUI under a PTY (the receipt used print mode with the same hook)"
+      owner_action: "the factory's Helm lifecycle producer (antigravity.helm_lifecycle.v1) drives the real TUI under a PTY"
     answer_pause:
       level: none
       source: no headless pause exists upstream
@@ -2057,10 +2127,18 @@ providers:
         prompts is a non-goal of antigravity-parity.md."
       observed_provider_version: "1.5.9"
     terminate:
-      level: scripted_model
-      source: real agy 1.5.9 on the bench (scripts/qa/agy-helm-live-receipt.sh); hermetic tests with a tool child
       disposition: "implemented"
       reason: "Helm: the launcher records agy's pid, process group and start time in the session state file; terminate verifies that identity (a recycled pid is never signalled) and stops the whole group with SIGTERM then SIGKILL, because a tool's child outlived a plain kill of agy on 1.5.9. Live on 1.5.9: the group was gone in 28 ms. Console turns are stopped through turn interrupt and close their own group."
+      required_assertions:
+      - id: antigravity_helm_terminate_owned
+        scenario_id: antigravity_helm_lifecycle
+        oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [scripted_model]
+        required_evidence_classes: [scripted_model]
+        max_age_seconds: 1800
+        max_age_seconds_by_evidence_class: {scripted_model: 1800}
+        assurance_priority: sampled
       observed_provider_version: "1.5.9"
     tail_output:
       level: hermetic
