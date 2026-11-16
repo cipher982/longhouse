@@ -125,6 +125,10 @@ def main() -> int:
         "XDG_DATA_HOME": str(home / ".local/share"),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_STATE_HOME": str(home / ".local/state"),
+        # Playwright's configs resolve their browser store from the passwd home
+        # unless this is set; the install below and the tests must share one
+        # store, and it must live in this run's scratch.
+        "PLAYWRIGHT_BROWSERS_PATH": str(scratch / "ms-playwright"),
         "E2E_DB_DIR": str(scratch / "e2e-db"),
         "E2E_ARTIFACT_DIR": str(scratch / "artifacts/e2e"),
         "IOS_DERIVED_DATA_PATH": str(scratch / "derived-data"),
