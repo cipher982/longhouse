@@ -7,10 +7,11 @@ starts the same catalog owner and storage lanes as a Runtime Host without its
 unrelated production background loops.
 """
 
-from zerg import config as _config
+import os
 
-_settings = _config.get_settings_unchecked()
-if not _settings.testing:
+# Same truthy set as zerg.config.Settings.testing (TESTING env), read directly so the
+# verifier entrypoint does not import the config module it judges.
+if os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}:
     raise RuntimeError("zerg.qa.e2e_app is test-only")
 from zerg.main import app  # noqa: E402
 

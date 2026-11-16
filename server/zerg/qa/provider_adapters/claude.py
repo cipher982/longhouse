@@ -403,7 +403,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
 
         # Materialize the canonical installed hook (the exact bytes install_hooks
         # writes) and drive that, so the proof matches production.
-        from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
+        from zerg.provider_contract.hook_scripts import PERMISSION_GATE_SCRIPT
 
         hook_script = package.path("hooks", "longhouse-permission-gate.py")
         hook_script.parent.mkdir(parents=True, exist_ok=True)
