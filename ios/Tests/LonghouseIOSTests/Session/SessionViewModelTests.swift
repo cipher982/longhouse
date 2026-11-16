@@ -976,6 +976,12 @@ struct SessionViewModelTests {
             secondModel.items.map(\.id) == cachedItemIds
         }
         recordCurrentTranscriptFrame(secondModel)
+        // The cached frame paints without waiting on the network, so the tail
+        // request may not have reached its pause yet; resuming earlier would
+        // release nothing and leave it paused.
+        await waitForCount("tail paused behind the cached frame", atLeast: 1) {
+            await secondAPI.pausedTailResponseCount()
+        }
         await secondAPI.resumePausedTailResponses()
         let refreshedItemIds = conversationItems(1...101).map(\.id)
         await waitForCondition("preserved cached history reconcile", sourceLocation: #_sourceLocation) {
@@ -3476,6 +3482,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func pauseNextTailResponse(offset: Int) {
         pausedTailResponseCounts[offset, default: 0] += 1
+    }
+
+    func pausedTailResponseCount() -> Int {
+        pausedTailContinuations.count
     }
 
     func resumePausedTailResponses() {
