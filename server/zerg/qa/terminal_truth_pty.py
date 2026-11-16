@@ -261,25 +261,37 @@ class _SchedulerLagProbe(threading.Thread):
 LAG_SLACK_FACTOR = 3.0
 
 
+# One marker of the twelve may be late by this much without failing the check. The lag probe is its own thread and
+# does not see a stall that hits only the PTY reader or a lane watcher, and on the shared CI VM such a stall delayed
+# exactly one marker by 120-730 ms in about one push in three (2026-11). A real recovery defect moves many markers.
+SINGLE_OUTLIER_MAX_S = 1.0
+
+
 def judge_schedule(errors: Sequence[float], tolerance_s: float, lag_s: float) -> list[str]:
     """Verdict on schedule recovery from per-marker (screen time - written time) errors.
 
-    One late wake-up may push the worst marker out by as much as the scheduler lag, so the worst error is allowed
-    ``tolerance + LAG_SLACK_FACTOR * lag``. A recovery that is wrong (a constant offset, a drifting clock, lost
-    chunks) moves most markers, so the median is held to ``tolerance`` plus a third of that slack: noise cannot
-    move the median much, a defect always does. With no lag (an idle machine) both bounds are the plain tolerance.
+    Scheduler noise delays one marker at a time; a recovery that is wrong (a constant offset, a drifting clock, lost
+    chunks) moves most of them. So:
+
+    - the single worst marker may be late by up to ``SINGLE_OUTLIER_MAX_S``;
+    - every other marker is held to ``tolerance + LAG_SLACK_FACTOR * lag`` (the plain tolerance on an idle machine);
+    - the median is held to ``tolerance`` plus a third of that slack, so no amount of noise excuses an offset.
     """
 
     if not errors:
         return ["no marker was recovered from the screen"]
     detail: list[str] = []
     slack = LAG_SLACK_FACTOR * lag_s
-    worst = max(abs(e) for e in errors)
-    median = statistics.median(abs(e) for e in errors)
-    if worst > tolerance_s + slack:
+    ranked = sorted((abs(e) for e in errors), reverse=True)
+    worst = ranked[0]
+    rest_worst = ranked[1] if len(ranked) > 1 else 0.0
+    median = statistics.median(ranked)
+    if worst > SINGLE_OUTLIER_MAX_S:
+        detail.append(f"a marker was recovered {worst * 1000:.1f} ms off, beyond the {SINGLE_OUTLIER_MAX_S * 1000:.0f} ms one-outlier cap")
+    if rest_worst > tolerance_s + slack:
         detail.append(
-            f"schedule recovered within {worst * 1000:.1f} ms, tolerance {tolerance_s * 1000:.0f} ms"
-            f" + scheduler lag allowance {slack * 1000:.0f} ms"
+            f"schedule recovered within {rest_worst * 1000:.1f} ms after the one allowed outlier, tolerance"
+            f" {tolerance_s * 1000:.0f} ms + scheduler lag allowance {slack * 1000:.0f} ms"
         )
     if median > tolerance_s + slack / 3:
         detail.append(f"median schedule error {median * 1000:.1f} ms exceeds tolerance {tolerance_s * 1000:.0f} ms: a systematic offset")
