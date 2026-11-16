@@ -22,9 +22,10 @@ A, B = "a" * 40, "b" * 40
 def run_hook(stdin: str, env: dict[str, str] | None = None, result: int = 0) -> tuple[int, list[tuple]]:
     calls: list[tuple] = []
     pg.gate = lambda base, head, **kw: calls.append((base, head)) or result
+    pg.separation_ok = lambda base, head: not (env or {}).get("SEPARATION_FAIL")
     old_stdin, old_env = sys.stdin, dict(os.environ)
     os.environ.pop("LONGHOUSE_PREPUSH_GATE", None)
-    os.environ.update(env or {})
+    os.environ.update({k: v for k, v in (env or {}).items() if k != "SEPARATION_FAIL"})
     sys.stdin = io.StringIO(stdin)
     try:
         return pg.hook([]), calls
@@ -54,6 +55,13 @@ def test_skip_and_done_bypass_but_only_for_the_named_commit() -> None:
     assert run_hook(line, {"LONGHOUSE_PREPUSH_GATE": f"done:{A}"}, result=1) == (0, [])
     status, calls = run_hook(line, {"LONGHOUSE_PREPUSH_GATE": f"done:{B}"}, result=1)
     assert status == 1 and len(calls) == 1
+
+
+def test_a_separation_violation_blocks_even_with_skip() -> None:
+    line = f"refs/heads/x {A} refs/heads/main {pg.ZERO}\n"
+    assert run_hook(line, {"SEPARATION_FAIL": "1"}) == (1, [])
+    assert run_hook(line, {"SEPARATION_FAIL": "1", "LONGHOUSE_PREPUSH_GATE": "skip"}) == (1, [])
+    assert run_hook(line, {"SEPARATION_FAIL": "1", "LONGHOUSE_PREPUSH_GATE": f"done:{A}"}) == (1, [])
 
 
 if __name__ == "__main__":

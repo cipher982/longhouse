@@ -202,6 +202,28 @@ jobs:
           echo "::error::could not fetch base commit $base; the only-shrinks comparison cannot run"
           exit 1
 
+      - name: Separation of duties (no commit changes verifier and subject)
+        # A commit that edits the verifier (server/zerg/qa/**) and the code it judges can weaken a check to turn
+        # it green. Every non-merge commit of the push must stay in one class (scripts/ci/separation_of_duties.py;
+        # control-plane spec multi-agent-dev-loop-speed.md, change 6). The pre-push hook runs the same check.
+        timeout-minutes: 5
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          head="${{ github.event.pull_request.head.sha || github.sha }}"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            echo "::notice::no base commit; the separation check was skipped"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if git fetch --quiet --no-tags --depth=400 origin "$head" && git fetch --quiet --no-tags --depth=1 origin "$base"; then
+              python3 scripts/ci/separation_of_duties.py check --base "$base" --head "$head"
+              exit $?
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not fetch the push range; the separation check cannot run"
+          exit 1
+
       - name: Isolation wrapper fails when the guest fails
         # Every CI test lane trusts scripts/qa/test-isolation.py to return the
         # guest's exit status. When it returned None instead, failing backend

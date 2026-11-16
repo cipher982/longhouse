@@ -26,6 +26,11 @@ if git rev-parse --verify --quiet "$remote/main^{commit}" >/dev/null; then
 fi
 python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/verifier_boundary.py" check --rev HEAD ${boundary_base[@]+"${boundary_base[@]}"} || exit 1
 
+# No commit may change both the verifier and the code it judges (scripts/ci/separation_of_duties.py).
+if [ ${#boundary_base[@]} -gt 0 ]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/../ci/separation_of_duties.py" check --base "$remote/main" --head HEAD || exit 1
+fi
+
 branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 
 # Only main is shared+contended. Topic branches are owned by one worktree.

@@ -237,6 +237,11 @@ def gate(base: str, head: str, *, dry_run: bool, only: set[str] | None, as_json:
     return 0
 
 
+def separation_ok(base: str, head: str) -> bool:
+    return subprocess.run([sys.executable, str(ROOT / "scripts/ci/separation_of_duties.py"), "check", "--base", base,
+                           "--head", head], cwd=ROOT).returncode == 0
+
+
 def hook(argv: list[str]) -> int:
     mode = os.environ.get("LONGHOUSE_PREPUSH_GATE", "")
     status = 0
@@ -247,13 +252,18 @@ def hook(argv: list[str]) -> int:
         _local_ref, local_sha, remote_ref, remote_sha = parts
         if remote_ref != "refs/heads/main" or local_sha == ZERO:
             continue
+        base = remote_sha if remote_sha != ZERO and subprocess.run(
+            ["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], cwd=ROOT, capture_output=True).returncode == 0 else "origin/main"
+        # Separation of duties is not skippable and needs no ci VM: no commit may change both the verifier and the code
+        # it judges (scripts/ci/separation_of_duties.py, spec multi-agent-dev-loop-speed.md change 6).
+        if not separation_ok(base, local_sha):
+            status = 1
+            continue
         if mode == "skip":
             print(f"prepush-gate: SKIPPED for {local_sha[:10]} (LONGHOUSE_PREPUSH_GATE=skip); nothing was checked", file=sys.stderr)
             continue
         if mode == f"done:{local_sha}":
             continue
-        base = remote_sha if remote_sha != ZERO and subprocess.run(
-            ["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], cwd=ROOT, capture_output=True).returncode == 0 else "origin/main"
         status |= gate(base, local_sha, dry_run=False, only=None, as_json=False)
     return status
 

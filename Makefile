@@ -889,6 +889,7 @@ validate-precommit-autofix: ## @internal Self-staging pre-commit shim tests
 # Design: control-plane specs/provider-factory-findings-loop.md 3.3a.
 validate-verifier-boundary: ## @internal Verifier/subject import boundary and its shrink-only allowlist
 	@python3 scripts/tests/verifier-boundary.test.py
+	@python3 scripts/tests/separation-of-duties.test.py
 	@python3 scripts/ci/verifier_boundary.py check
 
 validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
