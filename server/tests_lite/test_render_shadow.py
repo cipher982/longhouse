@@ -740,6 +740,14 @@ async def test_a_missing_only_rebuild_replaces_laptop_renders_in_the_host_genera
         assert [event["content_text"] for event in page.json()["events"]] == ["hello", "WORLD"]
 
 
+def test_dropping_the_legacy_thinking_prefix_is_not_a_loss():
+    from zerg.services.render_shadow import lossy_difference
+
+    laptop = [{"event_id": "r1", "content_text": "Thinking:\nweigh the options"}]
+    assert not lossy_difference(laptop, [{"event_id": "r1", "content_text": "weigh the options"}])
+    assert lossy_difference(laptop, [{"event_id": "r1", "content_text": "something else"}])
+
+
 def test_a_rebuild_may_add_rows_and_item_facts_but_not_lose_or_change_one():
     from zerg.services.render_shadow import RENDER_FIELDS
     from zerg.services.render_shadow import lossy_difference

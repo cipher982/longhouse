@@ -256,9 +256,21 @@ def lossy_difference(laptop: list[dict[str, Any]], host: list[dict[str, Any]]) -
         right = by_id.get(left["event_id"])
         if right is None:
             return True
-        if any(left.get(field) != right.get(field) for field in RENDER_FIELDS if field != "item"):
+        if any(_comparable(left, field) != _comparable(right, field) for field in RENDER_FIELDS if field != "item"):
             return True
     return False
+
+
+# Parser revisions before engine-parser-v5 wrote reasoning text behind this
+# literal; v5 carries the kind in `item` instead. Dropping it changes no thought.
+_LEGACY_REASONING_PREFIX = "Thinking:\n"
+
+
+def _comparable(row: dict[str, Any], field: str) -> Any:
+    value = row.get(field)
+    if field == "content_text" and isinstance(value, str) and value.startswith(_LEGACY_REASONING_PREFIX):
+        return value[len(_LEGACY_REASONING_PREFIX) :]
+    return value
 
 
 async def _ingested_rows(
