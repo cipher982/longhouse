@@ -1480,6 +1480,24 @@ export const TimelinePane = memo(function TimelinePane({
 
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  const hasDock = Boolean(dock);
+
+  // The Jump to live pill sits just above the dock, which grows with the
+  // composer's rows (status ledger, notices, outbox). Publish its measured
+  // height so the pill clears it instead of assuming a fixed 132px.
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    const dockEl = dockRef.current;
+    if (!pane || !dockEl) return;
+    const publish = () => pane.style.setProperty("--session-dock-height", `${dockEl.offsetHeight}px`);
+    publish();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(publish);
+    observer.observe(dockEl);
+    return () => observer.disconnect();
+  }, [hasDock]);
   const attachScrollContainer = useCallback(
     (node: HTMLDivElement | null) => {
       scrollContainerRef.current = node;
@@ -2204,6 +2222,7 @@ export const TimelinePane = memo(function TimelinePane({
 
   const paneContent = (
     <div
+      ref={paneRef}
       className={`timeline-pane${dock ? " timeline-pane--with-dock" : ""}`}
       data-testid="session-timeline-pane"
     >
@@ -2398,7 +2417,7 @@ export const TimelinePane = memo(function TimelinePane({
         </button>
       ) : null}
 
-      {dock ? <div className="timeline-pane__dock">{dock}</div> : null}
+      {dock ? <div ref={dockRef} className="timeline-pane__dock">{dock}</div> : null}
     </div>
   );
 
