@@ -1564,4 +1564,36 @@ mod steer_input_tests {
             vec![PathBuf::from("/tmp/lh-attach/console/x/a.png")]
         );
     }
+
+    /// The factory's Console steer-drop control runs against Antigravity too: the fault fires ahead of the
+    /// provider match, so an agy steer is acknowledged and no `session/prompt` reaches the ACP process. The
+    /// run id names no live turn, so without the fault the same command is refused.
+    #[cfg(feature = "qa-fault-injection")]
+    #[tokio::test]
+    async fn console_steer_noop_drops_an_antigravity_acp_steer() {
+        let receipt = tempfile::NamedTempFile::new().unwrap();
+        let frame = json!({
+            "command_type": COMMAND_TURN_STEER,
+            "session_id": "agy-session",
+            "payload": {"provider": "antigravity", "run_id": "no-such-run", "text": "steer"},
+        });
+        let config = ShipperConfig::default();
+        std::env::remove_var("LONGHOUSE_QA_FAULT");
+        let refused = execute_command(&frame, &config).await;
+        assert!(refused.is_err(), "no live turn: {refused:?}");
+
+        std::env::set_var("LONGHOUSE_QA_FAULT", "console_steer_noop");
+        std::env::set_var("LONGHOUSE_QA_FAULT_RECEIPT", receipt.path());
+        let dropped = execute_command(&frame, &config).await;
+        std::env::remove_var("LONGHOUSE_QA_FAULT");
+        std::env::remove_var("LONGHOUSE_QA_FAULT_RECEIPT");
+        let dropped = dropped.expect("the fault acknowledges the steer");
+        assert_eq!(dropped["transport"], "qa_fault_noop");
+        assert_eq!(dropped["steered"], true);
+        let fired = std::fs::read_to_string(receipt.path()).unwrap();
+        assert!(
+            fired.contains("console_steer_noop") && fired.contains("antigravity"),
+            "{fired}"
+        );
+    }
 }
