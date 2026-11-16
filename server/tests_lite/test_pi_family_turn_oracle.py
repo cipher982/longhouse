@@ -540,3 +540,19 @@ def test_an_honest_steer_held_as_a_follow_up_reports_the_cell_false(provider, tm
 
     assert result["assertions"][f"{provider}_helm_steer_active"] is False
     assert result["observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_an_honest_abort_that_stops_nothing_reports_the_cell_false(provider, tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv(fake.FAULT_ENV, raising=False)
+    monkeypatch.setenv("LONGHOUSE_QA_FAULT", f"{provider}_abort_noop")
+    monkeypatch.setattr(helm, "_wait_native_abort", lambda *a, _w=helm._wait_native_abort, **k: _w(*a, **{**k, "timeout": 4}))
+    _code, root, _left = fake.run_lifecycle(provider, tmp_path, monkeypatch.setenv)
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    assert result["status"] == "fail" and "negative_control" not in result
+    assert result["assertions"][f"{provider}_helm_abort_native"] is False
+    assert result["observation"]["abort_turn_verdict"]["code"] == "abort_did_not_stop_active_turn"
+    assert result["observation"]["target_failures"]["abort"]["code"] == "abort_accepted_without_stopping_the_turn"

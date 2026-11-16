@@ -2939,6 +2939,20 @@ class Lifecycle:
             "aborted_row_source_offset": aborted.get("_source_offset") if aborted else None,
             "stop_reason": (aborted.get("message") or {}).get("stopReason") if aborted else None,
         }
+        if aborted is None:
+            # An abort the Runtime Host took, whose turn the provider never recorded as aborted within the wait, did not stop
+            # the turn: the product's verdict. It ends the run here, not after the waits for a next turn that a turn still
+            # running cannot take.
+            record["after_command"] = None
+            self.controls[name] = record
+            self.observation[f"{name}_turn_verdict"] = {
+                **abort_then_send_verdict(
+                    read_session_entries(self.session_file), task_marker=task, task_done_marker=done, after_marker=after
+                ),
+                "after_send_accepted": False,
+            }
+            self.target_failure(name, "abort_accepted_without_stopping_the_turn")
+            raise RuntimeError(f"{f.name} Helm {name} was accepted and the provider never recorded the turn as aborted")
         # An abort proves nothing if the session cannot take the next turn.
         self.settle()
         try:

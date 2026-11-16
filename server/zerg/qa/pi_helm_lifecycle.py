@@ -148,6 +148,7 @@ REACHED_MARKERS: dict[str, tuple[str, ...]] = {
 DECIDED_FALSE: dict[str, tuple[str, ...]] = {
     "pi_helm_send_idle": ("target_failures.send",),
     "pi_helm_steer_active": ("target_failures.steer",),
+    "pi_helm_abort_native": ("target_failures.abort",),
     "pi_helm_terminate_owned": ("target_failures.terminate",),
 }
 _HOST, _LOCAL = "runtime_host_agents_api", "local_engine_command"

@@ -604,7 +604,7 @@ class _Launcher:
             # What an engine built with `qa-fault-injection` does here instead (same functions, and engine/src/qa_fault.rs:
             # helm_extension_fault): it acknowledges the command, forwards nothing, and leaves a receipt that it did.
             fault = os.environ.get("LONGHOUSE_QA_FAULT", "").removeprefix(f"{self.provider}_")
-            if (kind, fault) in {("send", "send_noop"), ("terminate", "terminate_noop")}:
+            if (kind, fault) in {("send", "send_noop"), ("terminate", "terminate_noop"), ("abort", "abort_noop")}:
                 self._fault_fired(fault, {"forwarded": False})
                 return {"kind": "command_result", "ok": True, "status": "ended" if kind == "terminate" else "active"}
             if kind == "send":

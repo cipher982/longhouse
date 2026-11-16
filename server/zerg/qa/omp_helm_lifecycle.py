@@ -147,6 +147,7 @@ REACHED_MARKERS: dict[str, tuple[str, ...]] = {
 DECIDED_FALSE: dict[str, tuple[str, ...]] = {
     "omp_helm_send_idle": ("target_failures.send",),
     "omp_helm_steer_active": ("target_failures.steer",),
+    "omp_helm_abort_native": ("target_failures.abort",),
     "omp_helm_terminate_owned": ("target_failures.terminate",),
 }
 _HOST_CONTROLS = ("send", "follow_up", "steer", "abort", "replacement", "terminate", "final_terminate")
