@@ -672,7 +672,7 @@ export async function installSceneMocks(
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ subagents: fixture.subagents ?? [] }),
+          body: JSON.stringify({ session_id: fixture.session.id, children: fixture.subagents ?? [] }),
         });
         return;
       }
@@ -1727,11 +1727,6 @@ async function captureBundle(
   }
 
   if (scene === "session-claude-fidelity" && frameName.endsWith("-expanded")) {
-    const rosterToggle = page.locator("[data-testid='session-background-roster-toggle']");
-    if ((await rosterToggle.count()) > 0) {
-      await rosterToggle.first().click();
-      await page.waitForSelector("[data-testid='session-background-roster-list']", { timeout: 5000 });
-    }
     const subagentSummary = page.locator("[data-testid='tool-subagents'] summary");
     if ((await subagentSummary.count()) > 0) {
       await subagentSummary.first().click();
@@ -1739,6 +1734,11 @@ async function captureBundle(
     const taskToggle = page.locator("[data-testid='session-task-notification'] button");
     if ((await taskToggle.count()) > 0) {
       await taskToggle.first().click();
+    }
+    const rosterToggle = page.locator("[data-testid='session-background-roster-toggle']");
+    if ((await rosterToggle.count()) > 0) {
+      await rosterToggle.first().click();
+      await page.waitForSelector("[data-testid='session-background-roster-list']", { timeout: 5000 });
     }
   }
 

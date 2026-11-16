@@ -2842,6 +2842,24 @@ export function buildSessionClaudeFidelityFixture(): SessionDetailFixture {
       first_user_message_preview: null,
       last_visible_text_preview: null,
     },
+    {
+      session_id: "child-session-a100",
+      provider_session_id: "agent-a100",
+      provider: "claude",
+      environment: "cinder",
+      project: "longhouse",
+      device_id: "cinder",
+      cwd: "/Users/example/git/zerg/longhouse",
+      git_branch: "claude-fidelity",
+      started_at: "2026-04-15T16:05:10Z",
+      ended_at: "2026-04-15T16:08:12Z",
+      user_messages: 1,
+      assistant_messages: 3,
+      tool_calls: 9,
+      title: "Audit parser fidelity",
+      first_user_message_preview: null,
+      last_visible_text_preview: null,
+    },
   ];
 
   let nextId = 9000;
