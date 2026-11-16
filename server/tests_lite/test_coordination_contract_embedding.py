@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PINNED_READERS = (ROOT / "server" / "zerg" / "services" / "shipper" / "hooks.py",)
+PINNED_READERS = (ROOT / "server" / "zerg" / "provider_contract" / "hook_scripts.py",)
 
 
 def test_pinned_contract_readers_read_no_file_at_import() -> None:
