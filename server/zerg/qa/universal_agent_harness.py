@@ -38,6 +38,8 @@ from zerg.provider_contract.provider_action_coverage import serialize_provider_a
 from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_contract.session_state_vocabulary import SessionHostFacts
+from zerg.provider_contract.session_state_vocabulary import project_transcript_facts
 from zerg.qa import qualification_request as qualification_request_contract
 from zerg.qa.background_fidelity import combine_real_replay_results
 from zerg.qa.background_fidelity import run_claude_lifecycle_hook_replay
@@ -4793,8 +4795,6 @@ def delegation_projection(
     from zerg.models.live_store import LiveSessionRun
     from zerg.models.live_store import LiveSessionThread
     from zerg.services.session_runtime import RuntimeEventIngest
-    from zerg.services.session_state_contract import SessionHostFacts
-    from zerg.services.session_state_contract import project_transcript_facts
     from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
     now = datetime.now(UTC)

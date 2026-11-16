@@ -53,7 +53,6 @@ server/zerg/qa/universal_agent_harness.py -> server/zerg/services/agents/kernel_
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/managed_local_control.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_pause_requests.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_runtime.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_state_contract.py  # proof and contract vocabulary; moves to zerg/provider_contract (3.3b)
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/session_state_facts_projector.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_presentation.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_translation_evaluator.py  # drives subject runtime internals in-process; replace with the served API or CLI
