@@ -667,6 +667,10 @@ MEMORY_TMP_TARGETS = frozenset(
         "test-engine-projection-failure",
         "test-shipper-e2e",
         "test-shipper-premerge",
+        # A real Runtime Host and catalogd under /tmp: the same fsync tails
+        # (catalogd 2 s deadline, 20 s run-end waits) failed this lane about
+        # half the time on the shared CI disk.
+        "test-managed-launch-lifecycle",
     }
 )
 

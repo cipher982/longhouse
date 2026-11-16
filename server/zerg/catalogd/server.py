@@ -309,6 +309,7 @@ class CatalogDaemon:
         self._projector_read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
+        self._wal_trim_task: asyncio.Task | None = None
         self._projector_repair_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
         self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
@@ -436,6 +437,10 @@ class CatalogDaemon:
                     self._checkpoint_loop(),
                     name="catalogd-checkpoint",
                 )
+                self._wal_trim_task = asyncio.create_task(
+                    self._wal_trim_loop(),
+                    name="catalogd-wal-trim",
+                )
             _log_startup_stage("publish_socket", stage_started)
             self._projector_repair_task = asyncio.create_task(
                 self._repair_projector_states(),
@@ -463,6 +468,11 @@ class CatalogDaemon:
             with suppress(asyncio.CancelledError):
                 await self._projector_repair_task
             self._projector_repair_task = None
+        if self._wal_trim_task is not None:
+            self._wal_trim_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._wal_trim_task
+            self._wal_trim_task = None
         if self._checkpoint_task is not None:
             self._checkpoint_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -4640,6 +4650,28 @@ class CatalogDaemon:
             return await self._run_store(operation, *args, **kwargs)
         except (CatalogWriterBusy, CatalogWriterClosed):
             return None
+
+    async def _wal_trim_loop(self) -> None:
+        """Checkpoint the WAL in small steps between the slow maintenance ticks.
+
+        autocheckpoint is off, so the 30 s maintenance tick used to flush the
+        whole WAL at once: 5,000 frames (20 MB) of page writes plus an fsync.
+        On a contended disk (the CI guest, cube's shared btrfs) that single
+        checkpoint ran 1.7 to 7 s and the hot runtime write that overlapped it
+        blew its 2 s catalog deadline. A PASSIVE checkpoint every few seconds
+        moves a fifth of that each time, so no one fsync has much to flush.
+        """
+
+        assert self._store is not None
+        interval = min(5.0, self._checkpoint_interval_seconds)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._run_maintenance(self._store.checkpoint_passive)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("catalogd WAL trim skipped", exc_info=True)
 
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None

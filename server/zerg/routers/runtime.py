@@ -311,6 +311,7 @@ async def apply_runtime_observation_batch(
                     "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
                     "message": ("Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog runtime mutation failed."),
                 },
+                headers=catalog_backpressure_headers() if exc.retryable else None,
             ) from exc
         # catalogd settled each Console turn whose adapter reported a run
         # terminal inside the runtime batch's own transaction; all that is

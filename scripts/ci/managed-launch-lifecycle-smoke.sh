@@ -388,7 +388,7 @@ wait_for_value() {
 
 send_live() {
   local session_id="$1" message="$2"
-  local deadline=$((SECONDS + 30)) response code body
+  local deadline=$((SECONDS + 60)) response code body
   while ((SECONDS < deadline)); do
     response="$(curl -sS --max-time 40 -w $'\n%{http_code}' -X POST \
       "$BASE_URL/api/agents/sessions/$session_id/send-live" \
@@ -400,6 +400,12 @@ send_live() {
     if [[ "$code" == "200" ]]; then
       printf '%s' "$body"
       return 0
+    fi
+    if [[ "$code" == "503" ]]; then
+      # catalogd outlasted its deadline on a stalled disk: documented
+      # backpressure (Retry-After), not a refusal. Wait it out.
+      sleep 1
+      continue
     fi
     if [[ "$body" == *"Managed control channel is not connected or does not advertise this capability"* ]]; then
       sleep 0.25
@@ -417,7 +423,7 @@ send_live() {
 
 post_live_action() {
   local session_id="$1" action="$2"
-  local deadline=$((SECONDS + 30)) response code body
+  local deadline=$((SECONDS + 60)) response code body
   while ((SECONDS < deadline)); do
     response="$(curl -sS --max-time 40 -w $'\n%{http_code}' -X POST \
       "$BASE_URL/api/agents/sessions/$session_id/$action-live" \
@@ -427,6 +433,12 @@ post_live_action() {
     if [[ "$code" == "200" ]]; then
       printf '%s' "$body"
       return 0
+    fi
+    if [[ "$code" == "503" ]]; then
+      # catalogd outlasted its deadline on a stalled disk: documented
+      # backpressure (Retry-After), not a refusal. Wait it out.
+      sleep 1
+      continue
     fi
     if [[ "$body" == *"Managed control channel is not connected or does not advertise this capability"* ]]; then
       sleep 0.25
@@ -807,6 +819,32 @@ observation = {
     "phase": "thinking",
     "payload": {},
 }
+
+
+def post_with_backpressure(client, path, body, budget_s=60.0):
+    """POST, treating 503 + Retry-After as the server's backpressure signal.
+
+    The Runtime Host answers a catalog write that outlasts its 2 s deadline with
+    503 catalog_unavailable and a Retry-After; the Machine Agent's shipper keeps
+    the event and retries after that pause (engine/src/shipping/client.rs,
+    engine/src/outbox.rs). A disk stall on the CI guest produces exactly that
+    answer, so a client that treats it as fatal is flaky by construction. Only
+    503 with Retry-After is retried, and only within a budget; every other
+    status, and a 503 that outlasts the budget, is returned to the caller.
+    """
+    deadline = time.monotonic() + budget_s
+    while True:
+        response = client.post(path, json=body)
+        retry_after = response.headers.get("retry-after")
+        if response.status_code != 503 or retry_after is None or time.monotonic() >= deadline:
+            return response
+        try:
+            pause = min(max(float(retry_after), 0.1), 5.0)
+        except ValueError:
+            return response
+        time.sleep(pause)
+
+
 limit = int(os.environ.get("AGENTS_RATE_LIMIT_MAX_REQUESTS", "600"))
 if limit <= 0:
     raise SystemExit("lifecycle smoke requires observation rate limiting")
@@ -818,16 +856,17 @@ with httpx.Client(
     for index in range(limit + 1):
         observation["occurred_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         observation["dedupe_key"] = f"lifecycle-admission-{index}"
-        response = client.post("/api/agents/runtime/events/batch", json={"events": [observation]})
+        response = post_with_backpressure(client, "/api/agents/runtime/events/batch", {"events": [observation]})
         if response.status_code == 429:
             break
         if response.status_code != 200:
             raise SystemExit(f"observation flood returned HTTP {response.status_code}: {response.text}")
     else:
         raise SystemExit("authenticated observation flood was not limited")
-    heartbeat = client.post(
+    heartbeat = post_with_backpressure(
+        client,
         "/api/agents/heartbeat",
-        json={"version": "lifecycle-admission", "daemon_pid": os.getpid(), "disk_free_bytes": 50_000_000_000},
+        {"version": "lifecycle-admission", "daemon_pid": os.getpid(), "disk_free_bytes": 50_000_000_000},
     )
     if heartbeat.status_code != 204:
         raise SystemExit(f"heartbeat starved by observations: HTTP {heartbeat.status_code}: {heartbeat.text}")

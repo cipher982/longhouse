@@ -269,28 +269,36 @@ def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: 
     token = _server_token(server)
     if isinstance(server, dict):
         engine_db = Path(server["db_path"]).parent / f"engine-{provider}-{Path(fixture).stem}.db"
-    result = subprocess.run(
-        [
-            str(ENGINE_BIN),
-            "ship",
-            "--file",
-            str(FIXTURES_DIR / fixture),
-            "--url",
-            url,
-            "--token",
-            token,
-            "--provider",
-            provider,
-            "--db",
-            str(engine_db),
-            "--machine-name",
-            "shipper-e2e",
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    # `ship --file` is one-shot: it does not retry. The server answers a stalled
+    # storage worker or catalog write with 503 (Retry-After, "retry the same
+    # envelope"), which the long-running shipper retries. Do the same here so a
+    # loaded CI guest does not fail the test for what is documented backpressure.
+    for attempt in range(5):
+        result = subprocess.run(
+            [
+                str(ENGINE_BIN),
+                "ship",
+                "--file",
+                str(FIXTURES_DIR / fixture),
+                "--url",
+                url,
+                "--token",
+                token,
+                "--provider",
+                provider,
+                "--db",
+                str(engine_db),
+                "--machine-name",
+                "shipper-e2e",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 or "503 Service Unavailable" not in result.stderr:
+            break
+        time.sleep(2.0 * (attempt + 1))
     assert result.returncode == 0, f"longhouse-engine exited {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
     summary = json.loads(result.stdout[result.stdout.find("{") :])
     assert summary["status"] == "ok", summary

@@ -1414,6 +1414,7 @@ async def ingest_heartbeat(
                     "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
                     "message": ("Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."),
                 },
+                headers=catalog_backpressure_headers() if exc.retryable else None,
             ) from exc
         _publish_state_changes(result, commit_seq=commit_seq, exact_replay=exact_replay)
         write_ms = round((time.monotonic() - write_started) * 1000, 1)
