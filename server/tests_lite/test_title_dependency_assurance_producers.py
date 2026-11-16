@@ -7,15 +7,16 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
+import zerg.qa.runtime_host as runtime_host
 import zerg.qa.title_dependency_live_producer as live_producer
 import zerg.qa.title_dependency_oracles as oracles
 import zerg.qa.title_dependency_recovery_producer as recovery_producer
-from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
-from zerg.qa.title_dependency_recovery_producer import REGISTRATION as RECOVERY_REGISTRATION
 from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
 from zerg.provider_contract.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
 from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
+from zerg.qa.title_dependency_live_producer import REGISTRATION as LIVE_REGISTRATION
+from zerg.qa.title_dependency_recovery_producer import REGISTRATION as RECOVERY_REGISTRATION
 
 
 def test_title_product_registrations_have_no_provider_axis():
@@ -188,7 +189,7 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path, mo
     ambient_secret = "poisoned-ambient-secret"
     ephemeral_secret = Fernet.generate_key().decode("ascii")
     monkeypatch.setenv("FERNET_SECRET", ambient_secret)
-    monkeypatch.setattr(oracles, "_ephemeral_fernet_secret", lambda: ephemeral_secret)
+    monkeypatch.setattr(runtime_host, "ephemeral_fernet_secret", lambda: ephemeral_secret)
     evidence_root = tmp_path / "evidence"
     result = oracles.run_hermetic_title_dependency_oracle(
         evidence_root=evidence_root,

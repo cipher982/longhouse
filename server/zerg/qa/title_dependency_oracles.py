@@ -13,7 +13,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import sqlite3
 import subprocess
 import sys
@@ -39,6 +38,7 @@ from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_artifacts import artifact_manifest
 from zerg.qa.provider_artifacts import now
 from zerg.qa.repo_root import default_repo_root
+from zerg.qa.runtime_host import RuntimeHost
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
@@ -48,18 +48,6 @@ _TITLE_CHECK = "session_titles"
 
 class TitleDependencyTemporarilyUnavailable(RuntimeError):
     """The live product contract was blocked only by a typed availability incident."""
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])
-
-
-def _ephemeral_fernet_secret() -> str:
-    """Return one process-local encryption key for the hermetic Runtime Host."""
-
-    return base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
 
 
 class _StubState:
@@ -197,109 +185,30 @@ class _TitleStub:
         self.thread.join(timeout=5)
 
 
-class _RuntimeHost:
-    def __init__(self, *, repo_root: Path, root: Path, base_url: str, token_file: Path) -> None:
-        self.repo_root = repo_root
-        self.root = root
-        self.port = _free_port()
-        self.api_url = f"http://127.0.0.1:{self.port}"
-        self.database_path = root / "runtime-live.db"
-        self.log_path = root / "runtime.log"
-        self.base_url = base_url
-        self.token_file = token_file
-        self.process: subprocess.Popen[bytes] | None = None
-        self._log_stream = None
+class _RuntimeHost(RuntimeHost):
+    """Runtime Host child configured for the title-dependency assurance lane."""
 
-    def _child_environment(self, server_root: Path) -> dict[str, str]:
-        environment = dict(os.environ)
-        # The oracle owns every Runtime Host dependency. Never borrow a host or
-        # factory credential: inherited values make the check non-hermetic and
-        # can leak a durable secret into a child that needs only an ephemeral
-        # encryption key.
-        environment.pop("FERNET_SECRET", None)
-        environment.update(
-            {
-                "DATABASE_URL": f"sqlite:///{self.root / 'runtime.db'}",
-                "FERNET_SECRET": _ephemeral_fernet_secret(),
-                "TESTING": "1",
-                "AUTH_DISABLED": "1",
-                "SINGLE_TENANT": "1",
+    def __init__(self, *, repo_root: Path, root: Path, base_url: str, token_file: Path) -> None:
+        super().__init__(
+            repo_root=repo_root,
+            root=root,
+            instance_id="factory-title-assurance",
+            extra_env={
                 "ENVIRONMENT": FACTORY_ASSURANCE_ENVIRONMENT,
-                "INSTANCE_ID": "factory-title-assurance",
-                "LONGHOUSE_DATA_DIR": str(self.root / "data"),
-                "LONGHOUSE_HOME": str(self.root / "home"),
-                "LONGHOUSE_STORAGE_V2_ROOT": str(self.root / "storage-v2"),
                 "LONGHOUSE_FACTORY_ASSURANCE": "1",
-                "LONGHOUSE_FACTORY_ASSURANCE_TITLE_BASE_URL": self.base_url,
-                "LONGHOUSE_FACTORY_ASSURANCE_TITLE_TOKEN_FILE": str(self.token_file),
+                "LONGHOUSE_FACTORY_ASSURANCE_TITLE_BASE_URL": base_url,
+                "LONGHOUSE_FACTORY_ASSURANCE_TITLE_TOKEN_FILE": str(token_file),
                 "LLM_DISABLED": "0",
                 # Title generation sends transcript text to a model provider
                 # and is off unless the operator opts in. This oracle's whole
                 # subject is the title dependency, and its "provider" is the
-                # loopback stub below, so the child Runtime Host opts in.
+                # loopback stub, so the child Runtime Host opts in.
                 "AI_TITLES_AND_SUMMARIES_ENABLED": "1",
-                "E2E_LOG_SUPPRESS": "0",
-                "LOG_LEVEL": "INFO",
-            }
+            },
+            drop_env=("OPENROUTER_API_KEY",),
         )
-        environment.pop("OPENROUTER_API_KEY", None)
-        environment["PYTHONPATH"] = os.pathsep.join(item for item in (str(server_root), environment.get("PYTHONPATH", "")) if item)
-        return environment
-
-    def start(self) -> None:
-        if self.process is not None:
-            raise RuntimeError("Runtime Host is already running")
-        server_root = self.repo_root / "server"
-        environment = self._child_environment(server_root)
-        self._log_stream = self.log_path.open("ab")
-        self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "zerg.main:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(self.port),
-                "--no-access-log",
-            ],
-            cwd=server_root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=self._log_stream,
-            stderr=subprocess.STDOUT,
-        )
-        deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"Runtime Host exited during startup with {self.process.returncode}")
-            try:
-                response = httpx.get(f"{self.api_url}/health", timeout=1)
-                if response.status_code < 500:
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(0.1)
-        raise TimeoutError("Runtime Host did not become reachable")
-
-    def stop(self) -> int | None:
-        process = self.process
-        if process is None:
-            return None
-        if process.poll() is None:
-            process.send_signal(signal.SIGTERM)
-            try:
-                process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        returncode = process.returncode
-        self.process = None
-        if self._log_stream is not None:
-            self._log_stream.close()
-            self._log_stream = None
-        return returncode
+        self.base_url = base_url
+        self.token_file = token_file
 
 
 def _headers(token: str | None = None, *, machine_id: str | None = None) -> dict[str, str]:
