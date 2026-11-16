@@ -1107,7 +1107,7 @@ async def test_writer_busy_rejection_carries_retry_after_to_the_caller(daemon_pa
     daemon._writer_max_depth = 1
     await daemon.start()
     await daemon._projector_repair_task
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=1.0)  # the test needs the production deadline
     entered = threading.Event()
     release = threading.Event()
 

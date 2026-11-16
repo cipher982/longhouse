@@ -30,10 +30,20 @@ def socket_path():
     path.unlink(missing_ok=True)
 
 
-def test_default_deadline_uses_hard_failure_budget(socket_path):
+def test_default_deadline_uses_hard_failure_budget(socket_path, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS", raising=False)
     client = CatalogClient(socket_path)
     assert DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS == 1.0
     assert client.default_timeout_seconds == 1.0
+
+
+def test_test_container_widens_only_the_default_deadline(socket_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("LONGHOUSE_TEST_ISOLATED", "0")
+    assert CatalogClient(socket_path).default_timeout_seconds == 1.0
+    monkeypatch.setenv("LONGHOUSE_TEST_ISOLATED", "1")
+    assert CatalogClient(socket_path).default_timeout_seconds == 10.0
+    assert CatalogClient(socket_path, default_timeout_seconds=0.05).default_timeout_seconds == 0.05
 
 
 @pytest.mark.asyncio

@@ -584,6 +584,9 @@ def test_environment(run_id: str, options: dict[str, str]) -> dict[str, str]:
         "TMPDIR": "/tmp/longhouse-test/tmp",
         "LONGHOUSE_TEST_ROOT": "/tmp/longhouse-test",
         "LONGHOUSE_TEST_ISOLATED": "1",
+        # Widens only the catalogd client's default RPC deadline (1 s in
+        # production); see zerg/catalogd/client.py.
+        "LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS": "10",
         "LONGHOUSE_HOME": home + "/.longhouse",
         "CODEX_HOME": home + "/.codex",
         "CLAUDE_CONFIG_DIR": home + "/.claude",

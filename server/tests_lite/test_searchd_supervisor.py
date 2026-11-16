@@ -115,7 +115,8 @@ def test_searchd_paths_fall_back_to_short_private_runtime_dir(tmp_path, monkeypa
     assert socket_path.parent.stat().st_mode & 0o077 == 0
 
 
-def test_search_projector_has_background_write_budget(supervisor_paths):
+def test_search_projector_has_background_write_budget(supervisor_paths, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS", raising=False)  # asserts the production default
     database_path, socket_path = supervisor_paths
     supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
 
@@ -126,6 +127,7 @@ def test_search_projector_has_background_write_budget(supervisor_paths):
 
 @pytest.mark.asyncio
 async def test_interactive_search_budget_survives_one_second_read_contention(supervisor_paths, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS", raising=False)  # asserts the production default
     database_path, socket_path = supervisor_paths
     supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
 

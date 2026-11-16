@@ -127,7 +127,8 @@ async def test_runtime_wrapper_grants_catalogd_the_container_cold_start_budget(m
     assert CATALOGD_COLD_START_READINESS_TIMEOUT_SECONDS == 90.0
 
 
-def test_supervisor_keeps_interactive_and_projector_deadlines_separate(supervisor_paths):
+def test_supervisor_keeps_interactive_and_projector_deadlines_separate(supervisor_paths, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS", raising=False)  # asserts the production default
     database_path, socket_path = supervisor_paths
     supervisor = CatalogdSupervisor(database_path=database_path, socket_path=socket_path)
 

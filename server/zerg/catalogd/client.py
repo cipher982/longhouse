@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import socket
 import struct
@@ -163,6 +164,30 @@ _SAFE_RETRY_METHODS = {
 # the 1 s hard-failure budget. The default client deadline is the hard bound;
 # health probes and other callers that need a tighter bound pass one explicitly.
 DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS = 1.0
+_TEST_RPC_TIMEOUT_ENV = "LONGHOUSE_TEST_CATALOG_RPC_TIMEOUT_SECONDS"
+
+
+def default_catalog_rpc_timeout_seconds() -> float:
+    """The deadline a client without its own budget uses.
+
+    Production is always DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS. Inside the
+    isolated test container (LONGHOUSE_TEST_ISOLATED=1, set by
+    scripts/qa/test-isolation.py) the deadline is widened, because the
+    tests assert what catalogd stores, not how fast a loaded shared runner
+    schedules it: a 1 s miss failed unrelated tests on CI. Tests of the
+    deadline itself pass an explicit budget.
+    """
+
+    if os.environ.get("LONGHOUSE_TEST_ISOLATED") == "1":
+        try:
+            widened = float(os.environ.get(_TEST_RPC_TIMEOUT_ENV, ""))
+        except ValueError:
+            return DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS
+        if widened > 0:
+            return widened
+    return DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS
+
+
 # The gate bounds connections, not catalog work: catalogd queues writes on its
 # one writer and reads on their own executors. At 8 it was the first queue a
 # bulk import hit (about six calls per envelope), and interactive reads waited
@@ -239,13 +264,13 @@ class CatalogClient:
         self,
         socket_path: Path,
         *,
-        default_timeout_seconds: float = DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS,
+        default_timeout_seconds: float | None = None,
         max_concurrency: int = DEFAULT_CATALOG_RPC_MAX_CONCURRENCY,
     ) -> None:
         if max_concurrency <= 0:
             raise ValueError("max_concurrency must be positive")
         self.socket_path = socket_path
-        self.default_timeout_seconds = default_timeout_seconds
+        self.default_timeout_seconds = default_catalog_rpc_timeout_seconds() if default_timeout_seconds is None else default_timeout_seconds
         self.max_concurrency = max_concurrency
         self._admission = asyncio.Semaphore(max_concurrency)
 
@@ -339,10 +364,12 @@ def call_catalogd_sync(
     method: str,
     *,
     params: dict[str, Any] | None = None,
-    timeout_seconds: float = DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """One-shot RPC for synchronous health/readiness handlers."""
 
+    if timeout_seconds is None:
+        timeout_seconds = default_catalog_rpc_timeout_seconds()
     request = CatalogRpcRequest(
         id=secrets.token_hex(16),
         method=method,

@@ -54,12 +54,7 @@ async def test_catalogd_owns_runner_registration_and_job_history(daemon_paths):
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    # This test checks what catalogd stores, not how fast it answers. The
-    # default 1 s RPC deadline failed it on a loaded shared CI runner
-    # ("catalogd deadline exceeded for runner.operation.v2", run 43796139732)
-    # while 400 runs under 24 CPU burners plus fsync loops all passed, so the
-    # stall is scheduling on the runner, not catalogd.
-    client = CatalogClient(socket_path, default_timeout_seconds=10.0)
+    client = CatalogClient(socket_path)
     try:
         enrolled = await client.call(
             "runner.operation.v2",
