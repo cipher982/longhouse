@@ -11,11 +11,14 @@ first-run Terms of Service and data-collection screen (David approved that for t
 The oracles judge what the provider itself saw and did, not the controls Longhouse sent: the hook inbox's claim
 receipts (which hook event took the message, with which intent) and the requests the scripted model received.
 
-Send and steer are both active-turn deliveries. The hook inbox is claimed only when agy makes a model invocation, and an
-idle TUI makes none, so a remote send to an idle Helm session is not delivered: the engine waits its 15 s claim window
-and the Runtime Host answers HTTP 503 "Request timed out" (observed on agy 1.5.9, 2026-11-15, bench receipt in
-antigravity-parity.md). There is no keystroke path either, because the launcher does not own the user's terminal. That
-is an upstream limit of the hook surface, so ``send_active`` is the send cell and an idle send is not asserted.
+A remote send reaches agy two ways. During a running turn the hook claims it at the next model invocation (an active-turn
+send). While agy is idle the hook never fires, so the launcher, which owns agy's terminal, claims the message itself and
+types it as the user's own words, which starts a turn (an idle send). Both are cells: ``send_active`` and ``send_idle``.
+An idle send that is not claimed leaves the engine waiting its 15 s claim window and the Runtime Host answering HTTP 503
+"Request timed out" (the behaviour on agy 1.5.9 before the launcher owned the terminal).
+
+Terminate is asserted on the served run: the launcher sees agy's exit and reports the run's end, so after a remote terminate
+the served run must read ended, not just the owned process group gone.
 
 Helm resume is not a cell: ``session.resume.helm`` is ``policy_disabled`` for Antigravity (the launcher refuses
 ``--conversation`` and ``-c``), and ``antigravity.resume_policy.v1`` proves the refusal.
@@ -72,6 +75,7 @@ PREFIX = lane_module.HELM_PREFIX
 
 ASSERTIONS = (
     "antigravity_helm_launch_registration",
+    "antigravity_helm_send_idle",
     "antigravity_helm_send_active",
     "antigravity_helm_steer_active",
     "antigravity_helm_interrupt",
@@ -80,9 +84,9 @@ ASSERTIONS = (
 
 REGISTRATION = ProducerRegistration(
     producer_id="antigravity.helm_lifecycle.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=(PROVIDER,),
     platforms=("linux",),
@@ -92,10 +96,12 @@ REGISTRATION = ProducerRegistration(
     observed_activity=(
         "stock_longhouse_antigravity_helm_launch",
         "hook_bound_conversation",
+        "idle_send_typed_by_launcher_and_answered",
         "remote_send_reply_archived",
         "steer_claimed_by_pre_invocation_hook",
         "interrupt_ended_turn_at_invocation_boundary",
         "remote_terminate_provider_group_dead",
+        "remote_terminate_served_run_ended",
     ),
     acquisition_methods=("staged_release", "observed_install"),
     credential_binding_ids=(),
@@ -206,6 +212,62 @@ def send_delivered(
     return verdict
 
 
+def send_idle_delivered(
+    *, claims: list[dict[str, Any]], requests: list[str], marker: str, answered: bool, error: str | None, idle_at_send: bool
+) -> dict[str, Any]:
+    """A remote send to an idle session started a turn: it was claimed as a send, the model received it, and its reply was archived.
+
+    The hook fires only on a model invocation, so an idle session has nobody to claim the message; a claim here is the
+    launcher typing it into the terminal. ``idle_at_send`` says the session really was idle (no turn in flight), so the
+    cell cannot pass on a send that merely joined a running turn.
+    """
+
+    claimed = [row for row in claims if row.get("intent") == "send" and marker in str(row.get("text") or "")]
+    reached_model = any(marker in body for body in requests)
+    verdict = {
+        "send_error": error,
+        "idle_at_send": idle_at_send,
+        "send_claimed": bool(claimed),
+        "claimed_by": claimed[0].get("claimed_by") if claimed else None,
+        "model_received_it": reached_model,
+        "sent_reply_archived": answered,
+    }
+    verdict["passed"] = error is None and idle_at_send and bool(claimed) and reached_model and answered
+    if error is not None:
+        verdict["failure_code"] = "idle_send_rejected"
+    elif not idle_at_send:
+        verdict["failure_code"] = "session_not_idle"
+    elif not claimed:
+        verdict["failure_code"] = "idle_send_not_claimed"
+    elif not reached_model:
+        verdict["failure_code"] = "idle_send_never_reached_the_model"
+    elif not answered:
+        verdict["failure_code"] = "idle_send_reply_missing"
+    return verdict
+
+
+def terminate_held(*, dispatched: bool, provider_dead: bool, group_dead: bool, run_lifecycle: str | None) -> dict[str, Any]:
+    """A remote terminate ended the owned process group and the served run.
+
+    The process facts say agy is gone; the served run reading ``ended`` says the launcher reported it, as the other Helm
+    launchers do. A run still ``running`` after its provider died is the gap this cell exists to catch.
+    """
+
+    verdict = {
+        "terminate_dispatched": dispatched,
+        "provider_process_dead": provider_dead,
+        "provider_group_dead": group_dead,
+        "run_lifecycle": run_lifecycle,
+        "served_run_ended": run_lifecycle == "ended",
+    }
+    verdict["passed"] = dispatched and provider_dead and group_dead and run_lifecycle == "ended"
+    if not (dispatched and provider_dead and group_dead):
+        verdict["failure_code"] = "terminate_did_not_stop_the_group"
+    elif run_lifecycle != "ended":
+        verdict["failure_code"] = "served_run_still_running_after_terminate"
+    return verdict
+
+
 def interrupt_held(
     *, claims: list[dict[str, Any]], requests: list[str], tool_output: str, tui_alive: bool, recovered: bool, later_marker: str = ""
 ) -> dict[str, Any]:
@@ -247,6 +309,7 @@ def lifecycle_assertions(report: Mapping[str, Any], *, cleanup_ok: bool) -> dict
     passed = report.get("status") == "passed"
     return {
         "antigravity_helm_launch_registration": held("launch_registration"),
+        "antigravity_helm_send_idle": held("send_idle"),
         "antigravity_helm_send_active": held("send_active"),
         "antigravity_helm_steer_active": held("steer_active"),
         "antigravity_helm_interrupt": held("interrupt"),
@@ -502,6 +565,37 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             "send_control_served": _can_send_canonical(control),
         }
 
+        # Idle send: nothing is running, so no hook fires; the launcher must claim the message and start a turn.
+        idle_marker = _marker("IDLE")
+        idle_at_send = hook_state().get("state") == "idle"
+        idle_error: str | None = None
+        try:
+            idle_response = httpx.post(
+                f"{api_url}/api/agents/sessions/{session_id}/send-live",
+                headers=headers,
+                json={"message": f"Reply with exactly {idle_marker}"},
+                timeout=40,
+            )
+            lifecycle["send_idle_dispatch"] = {"status_code": idle_response.status_code, "body": idle_response.text[:300]}
+            if idle_response.is_error:
+                idle_error = f"HTTP {idle_response.status_code}: {idle_response.text[:500]}"
+            elif idle_response.json().get("accepted") is not True:
+                idle_error = f"not accepted: {idle_response.text[:500]}"
+        except httpx.HTTPError as exc:
+            idle_error = f"{type(exc).__name__}: {exc}"
+        idle_answered = idle_error is None and bool(poll(lambda: answered(idle_marker), timeout=timeout, interval=0.25))
+        lifecycle["send_idle"] = send_idle_delivered(
+            claims=claim_receipts(inbox_dir),
+            requests=model_requests(lane.dump_dir),
+            marker=idle_marker,
+            answered=idle_answered,
+            error=idle_error,
+            idle_at_send=idle_at_send,
+        )
+        if idle_error is not None:
+            raise RuntimeError(f"Runtime Host idle send failed: {idle_error}")
+        settled()
+
         # Send: a turn the person started runs a slow tool; the remote message joins it at the next invocation.
         send_task = _marker("SENDTASK")
         sent = _marker("SENT")
@@ -608,15 +702,12 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
             "activity": (final_state or {}).get("activity"),
             "keys": sorted(final_state) if isinstance(final_state, dict) else None,
         }
-        lifecycle["terminate_owned"] = {
-            # Helm agy has no launcher report of run end: the served run stays "running" until its evidence lapses, so
-            # the cell holds the owned process and group gone, and records what the run read as.
-            "passed": terminate_dispatched and provider_dead and group_dead,
-            "terminate_dispatched": terminate_dispatched,
-            "run_lifecycle": _run_lifecycle(final_state),
-            "provider_process_dead": provider_dead,
-            "provider_group_dead": group_dead,
-        }
+        lifecycle["terminate_owned"] = terminate_held(
+            dispatched=terminate_dispatched,
+            provider_dead=provider_dead,
+            group_dead=group_dead,
+            run_lifecycle=_run_lifecycle(final_state),
+        )
         report.update({"status": "passed" if all(isinstance(v, dict) and v.get("passed", True) for v in lifecycle.values()) else "failed"})
     except Exception as exc:  # noqa: BLE001 - the report carries what was observed up to the failure
         report.update(failed_report(exc))

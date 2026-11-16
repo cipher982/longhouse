@@ -29,11 +29,16 @@ def _marker(kind: str) -> str:
 
 def test_the_helm_fixture_answers_every_step_with_its_own_turn() -> None:
     turns = lane.helm_script(TAG)["turns"]
-    launch, send_task, sent, first, steered, interrupt, recover = (
-        _marker(k) for k in ("LAUNCH", "SENDTASK", "SENT", "STEER_FIRST", "STEERED", "INTERRUPT", "RECOVER")
+    launch, idle, send_task, sent, first, steered, interrupt, recover = (
+        _marker(k) for k in ("LAUNCH", "IDLE", "SENDTASK", "SENT", "STEER_FIRST", "STEERED", "INTERRUPT", "RECOVER")
     )
     history = [_user(f"Reply with exactly {launch}"), _model(launch)]
     assert _plan(turns, history).turn_id == "launch"
+    # An idle send is a turn of its own, answered with its own marker.
+    history += [_user(f"Reply with exactly {idle}")]
+    assert _plan(turns, history).turn_id == "idle"
+    assert _plan(turns, history).text == idle
+    history += [_model(idle)]
     # A send: a slow tool, then the tool result alone (no send landed) or with the remote message beside it.
     history += [_user(f"Do the first slow task: {send_task}")]
     assert _plan(turns, history).tool_call is not None
@@ -115,6 +120,67 @@ def test_a_send_that_joined_the_running_turn_passes() -> None:
     assert verdict["passed"] is True
 
 
+def _idle_verdict(**overrides) -> dict:
+    marker = _marker("IDLE")
+    arguments = {
+        "claims": [{**_claim("send", f"Reply with exactly {marker}", "IdleWake"), "claimed_by": "launcher"}],
+        "requests": [f"history {marker}"],
+        "marker": marker,
+        "answered": True,
+        "error": None,
+        "idle_at_send": True,
+    }
+    arguments.update(overrides)
+    return helm.send_idle_delivered(**arguments)
+
+
+def test_a_send_to_an_idle_session_that_started_a_turn_passes() -> None:
+    verdict = _idle_verdict()
+    assert verdict["passed"] is True
+    assert verdict["claimed_by"] == "launcher"
+
+
+def test_an_idle_send_that_timed_out_does_not_pass() -> None:
+    verdict = _idle_verdict(claims=[], requests=[], answered=False, error='HTTP 503: {"detail":"Request timed out"}')
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "idle_send_rejected"
+
+
+def test_an_idle_send_that_was_never_claimed_does_not_pass() -> None:
+    assert _idle_verdict(claims=[])["failure_code"] == "idle_send_not_claimed"
+
+
+def test_an_idle_send_the_model_never_received_does_not_pass() -> None:
+    assert _idle_verdict(requests=["nothing"])["failure_code"] == "idle_send_never_reached_the_model"
+
+
+def test_an_idle_send_with_no_archived_reply_does_not_pass() -> None:
+    assert _idle_verdict(answered=False)["failure_code"] == "idle_send_reply_missing"
+
+
+def test_a_send_to_a_session_that_was_not_idle_does_not_count_as_an_idle_send() -> None:
+    verdict = _idle_verdict(idle_at_send=False)
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "session_not_idle"
+
+
+def test_a_terminate_that_ended_the_group_and_the_served_run_passes() -> None:
+    verdict = helm.terminate_held(dispatched=True, provider_dead=True, group_dead=True, run_lifecycle="ended")
+    assert verdict["passed"] is True
+
+
+def test_a_terminate_that_left_the_served_run_running_does_not_pass() -> None:
+    verdict = helm.terminate_held(dispatched=True, provider_dead=True, group_dead=True, run_lifecycle="running")
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "served_run_still_running_after_terminate"
+
+
+def test_a_terminate_that_left_the_group_alive_does_not_pass() -> None:
+    verdict = helm.terminate_held(dispatched=True, provider_dead=True, group_dead=False, run_lifecycle="ended")
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "terminate_did_not_stop_the_group"
+
+
 def test_a_send_to_an_idle_session_that_timed_out_does_not_pass() -> None:
     sent, output = _marker("SENT"), lane.helm_send_tool_output(TAG)
     verdict = helm.send_delivered(
@@ -165,6 +231,7 @@ def test_the_cells_follow_the_lifecycle_report() -> None:
         "status": "passed",
         "lifecycle": {
             "launch_registration": {"a": True, "b": True},
+            "send_idle": {"passed": True},
             "send_active": {"passed": True},
             "steer_active": {"passed": True},
             "interrupt": {"passed": True},

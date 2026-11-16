@@ -53,7 +53,7 @@ HELM_PREFIX = "LH_ANTIGRAVITY_HELM"
 HELM_INTERRUPT_TOOL_OUTPUT = "AGY_HELM_INTERRUPT_DONE_8"
 HELM_STEER_SLEEP_SECONDS = 15
 HELM_INTERRUPT_SLEEP_SECONDS = 8
-HELM_EXPECTED_TURNS = frozenset({"launch", "send-first", "sent", "steer-first", "steered", "interrupt", "recover"})
+HELM_EXPECTED_TURNS = frozenset({"launch", "idle", "send-first", "sent", "steer-first", "steered", "interrupt", "recover"})
 
 _steer_tag: str | None = None
 
@@ -150,6 +150,8 @@ def helm_script(tag: str) -> dict[str, Any]:
             "match_scope": "any_user",
             "tool_call": shell(f"sleep {HELM_STEER_SLEEP_SECONDS} && echo {HELM_PREFIX}_SENDTOOL_$((40+2))_{tag}"),
         },
+        # The idle send: a remote message typed into an idle session starts a turn of its own.
+        {"id": "idle", "match": f"{HELM_PREFIX}_IDLE_", "match_scope": "any_user", "reply": echo},
         {"id": "launch", "match": f"{HELM_PREFIX}_LAUNCH_", "match_scope": "any_user", "reply": echo},
     ]
     return {"turns": turns}
