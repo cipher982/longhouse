@@ -2960,6 +2960,23 @@
               "assurance_priority": "sampled"
             },
             {
+              "id": "antigravity_helm_send_idle",
+              "scenario_id": "antigravity_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/antigravity_helm_lifecycle.py",
+              "minimum_scenario_revision": 2,
+              "acceptable_evidence": [
+                "scripted_model"
+              ],
+              "required_evidence_classes": [
+                "scripted_model"
+              ],
+              "max_age_seconds": 1800,
+              "max_age_seconds_by_evidence_class": {
+                "scripted_model": 1800
+              },
+              "assurance_priority": "sampled"
+            },
+            {
               "id": "antigravity_helm_send_active",
               "scenario_id": "antigravity_helm_lifecycle",
               "oracle_source": "server/zerg/qa/antigravity_helm_lifecycle.py",
@@ -3014,7 +3031,7 @@
               "id": "antigravity_helm_terminate_owned",
               "scenario_id": "antigravity_helm_lifecycle",
               "oracle_source": "server/zerg/qa/antigravity_helm_lifecycle.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "scripted_model"
               ],
@@ -3121,7 +3138,7 @@
           "level": "live_token",
           "source": "real agy --print PreInvocation hook-inbox injection changed the model-visible turn",
           "disposition": "implemented",
-          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release: the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing. Hooks fire under GEMINI_API_KEY auth (observed on agy 1.5.6 and again on 1.5.9, including the Stop hook's terminationReason).",
+          "reason": "Proven live by scripts/qa/provider-control-e2e-canary.py --antigravity-real-agy-send: a queued message is claimed at PreInvocation, the inbox drains, and the injected text replaces the model-visible turn. Availability follows the hook rather than the release: the control fact's granted_operations is empty whenever the hook has not been seen recently, so a healthy but uncontrollable session offers nothing. An idle session makes no invocation, so no hook fires: the launcher, which owns agy's PTY, claims the message itself (claim receipt hook_event IdleWake) and types it as the user's own words, starting a turn (antigravity_helm_send_idle). Hooks fire under GEMINI_API_KEY auth (observed on agy 1.5.6 and again on 1.5.9, including the Stop hook's terminationReason).",
           "observed_provider_version": "1.5.9"
         },
         "interrupt": {
@@ -3186,13 +3203,13 @@
         },
         "terminate": {
           "disposition": "implemented",
-          "reason": "Helm: the launcher records agy's pid, process group and start time in the session state file; terminate verifies that identity (a recycled pid is never signalled) and stops the whole group with SIGTERM then SIGKILL, because a tool's child outlived a plain kill of agy on 1.5.9. Live on 1.5.9: the group was gone in 28 ms. Console turns are stopped through turn interrupt and close their own group.",
+          "reason": "Helm: the launcher records agy's pid, process group and start time in the session state file; terminate verifies that identity (a recycled pid is never signalled) and stops the whole group with SIGTERM then SIGKILL, because a tool's child outlived a plain kill of agy on 1.5.9. Live on 1.5.9: the group was gone in 28 ms. The launcher owns agy's PTY, sees the exit and queues the terminal event, so the served run ends too (asserted by the cell). Console turns are stopped through turn interrupt and close their own group.",
           "required_assertions": [
             {
               "id": "antigravity_helm_terminate_owned",
               "scenario_id": "antigravity_helm_lifecycle",
               "oracle_source": "server/zerg/qa/antigravity_helm_lifecycle.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "scripted_model"
               ],
