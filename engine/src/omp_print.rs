@@ -5391,7 +5391,7 @@ for line in sys.stdin:
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("closed"));
                 assert_eq!(first_claim.pending_count, 0);
                 wait_for_process_group_exit(first_pgid).await;
-                assert!(!crate::process_group::group_is_alive(first_pgid));
+                crate::process_group::assert_group_gone(first_pgid, "stopped").await;
                 let terminal = runtime_events()
                     .into_iter()
                     .find(|event| {
@@ -5439,7 +5439,7 @@ for line in sys.stdin:
                     .unwrap()
                     .contains("cleanup pending work"));
                 wait_for_process_group_exit(first_pgid).await;
-                assert!(!crate::process_group::group_is_alive(first_pgid));
+                crate::process_group::assert_group_gone(first_pgid, "stopped").await;
             }
             LifecycleScenario::StopWhileParked => {
                 assert_eq!(first_claim.invocation_state.as_deref(), Some("parked"));
@@ -5610,7 +5610,7 @@ for line in sys.stdin:
                     assert_eq!(wake_claim.invocation_state.as_deref(), Some("closed"));
                     assert_eq!(wake_turn.launch_id, first.launch_id);
                     wait_for_process_group_exit(first_pgid).await;
-                    assert!(!crate::process_group::group_is_alive(first_pgid));
+                    crate::process_group::assert_group_gone(first_pgid, "stopped").await;
                     let resumed_run_id = Uuid::new_v4().to_string();
                     claims
                         .claim(&resumed_run_id, &session_id, &thread_id, None, None, "omp")
@@ -5853,7 +5853,7 @@ for line in sys.stdin:
             .unwrap();
         assert_eq!(stopped.stopped[0].id, "job-1");
         wait_for_process_group_exit(process_group_id).await;
-        assert!(!crate::process_group::group_is_alive(process_group_id));
+        crate::process_group::assert_group_gone(process_group_id, "stopped").await;
 
         let mismatch_session = Uuid::new_v4().to_string();
         let mismatch_thread = Uuid::new_v4().to_string();

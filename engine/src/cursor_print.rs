@@ -1585,7 +1585,7 @@ elif prompt == "restart-mismatch":
         let lock = File::create(temp.path().join("lock")).unwrap();
         monitor_cursor_print(&mut child, &stdout_path, &stderr_path, sink, lock).await;
 
-        assert!(!crate::process_group::group_is_alive(process_group_id));
+        crate::process_group::assert_group_gone(process_group_id, "stopped").await;
         match previous_home {
             Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },

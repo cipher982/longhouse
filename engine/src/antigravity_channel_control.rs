@@ -480,10 +480,11 @@ mod tests {
                     matches!(outcome.shutdown, "terminated" | "killed"),
                     "{outcome:?}"
                 );
-                assert!(
-                    !crate::process_group::group_is_alive(pid as i32),
-                    "the process group must be gone"
-                );
+                crate::process_group::assert_group_gone(
+                    pid as i32,
+                    "the process group must be gone",
+                )
+                .await;
                 assert_eq!(
                     unsafe { libc::kill(tool_pid, 0) },
                     -1,

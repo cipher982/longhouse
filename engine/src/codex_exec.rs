@@ -5869,9 +5869,8 @@ for line in sys.stdin:
                     .expect("parked Codex invocation should close");
             assert_eq!(stopped.stopped.len(), 1);
             assert_eq!(stopped.stopped[0].id, "exec-1");
-            assert!(!crate::process_group::group_is_alive(
-                first.process_group_id.unwrap()
-            ));
+            crate::process_group::assert_group_gone(first.process_group_id.unwrap(), "stopped")
+                .await;
             assert!(crate::process_identity::try_collect_process_fact(background_pid).is_none());
             wait_for_codex_invocation_closed(&launch_id).await;
 

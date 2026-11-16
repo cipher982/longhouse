@@ -3926,7 +3926,7 @@ mod tests {
                 .requests()
                 .iter()
                 .any(|line| line == &format!("POST /session/{}/abort", fake_server::SESSION)));
-            assert!(!crate::process_group::group_is_alive(process_group_id));
+            crate::process_group::assert_group_gone(process_group_id, "stopped").await;
         }
 
         {

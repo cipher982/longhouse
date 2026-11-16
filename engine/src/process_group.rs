@@ -365,6 +365,25 @@ pub async fn shutdown_owned_child(
     }
 }
 
+/// Test support: wait, bounded, for every member of `pgid` to be gone.
+///
+/// `killpg(_, 0)` counts zombies, and a stopped group's orphaned members are
+/// reparented to init and reaped on init's schedule, which stretches under CI
+/// load. An immediate `!group_is_alive` after a stop therefore races. The
+/// product already treats a group of zombies as stopped
+/// ([`group_has_running_member`]); only these assertions need the wait.
+#[cfg(all(test, unix))]
+pub(crate) async fn assert_group_gone(pgid: i32, what: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while group_is_alive(pgid) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "process group {pgid} still has members after 30s: {what}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -406,7 +425,7 @@ mod tests {
         assert!(outcome.is_gone(), "{outcome:?}");
         assert!(!group_has_running_member(pgid));
         let _ = child.wait().await;
-        assert!(!group_is_alive(pgid));
+        assert_group_gone(pgid, "stopped").await;
     }
 
     #[tokio::test]
@@ -434,7 +453,7 @@ mod tests {
         assert!(!group_has_running_member(pgid), "only zombies remain");
 
         let _ = child.wait().await;
-        assert!(!group_is_alive(pgid));
+        assert_group_gone(pgid, "stopped").await;
         assert!(!group_has_running_member(pgid));
     }
 
@@ -457,7 +476,7 @@ mod tests {
 
         assert_eq!(outcome, GroupShutdown::Terminated);
         assert!(outcome.is_gone());
-        assert!(!group_is_alive(pgid), "group outlived shutdown");
+        assert_group_gone(pgid, "group outlived shutdown").await;
     }
 
     #[tokio::test]
@@ -499,7 +518,7 @@ mod tests {
             shutdown_owned_child(&mut child, Some(pgid), Duration::from_millis(100)).await;
 
         assert_eq!(outcome, GroupShutdown::Killed);
-        assert!(!group_is_alive(pgid), "group survived SIGKILL");
+        assert_group_gone(pgid, "group survived SIGKILL").await;
     }
 
     #[tokio::test]

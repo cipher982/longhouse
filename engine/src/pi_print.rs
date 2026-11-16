@@ -2291,7 +2291,7 @@ if args[:2] == ["--mode", "rpc"]:
             .await
             .unwrap();
         wait_for_pi_invocation_close(&stop).await;
-        assert!(!crate::process_group::group_is_alive(stop.process_group_id));
+        crate::process_group::assert_group_gone(stop.process_group_id, "stopped").await;
 
         let mismatch_session = Uuid::new_v4().to_string();
         let mismatch_thread = Uuid::new_v4().to_string();
