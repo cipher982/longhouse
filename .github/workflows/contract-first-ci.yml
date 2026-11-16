@@ -240,7 +240,10 @@ jobs:
           fi
 
       - name: Produce executable provider capability proof bundle
-        timeout-minutes: 3
+        # The budget covers test-isolation's image check (2.5 min on a loaded
+        # runner in run 43800147904, before any work started) plus about a
+        # minute of work. It was 3 and timed out on prep alone.
+        timeout-minutes: 8
         run: |
           make provider-capability-coordination-proof \
             STORE_ROOT="/work/artifacts/provider-capability-proof/store" \
