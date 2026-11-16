@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useInRouterContext } from "react-router";
 import {
   formatTime,
   summarizeApiError,
@@ -11,8 +12,19 @@ import type { AgentEvent } from "@/shared/api/agents";
  * A provider notification (a background job finishing, waiting-on-agents status,
  * or API retry notice) as one collapsed row in the Thinking row's vocabulary.
  */
-export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; isSelected: boolean }) {
+export function ProviderNoticeRow({
+  event,
+  isSelected,
+  recovered = false,
+  subagentSessionId = null,
+}: {
+  event: AgentEvent;
+  isSelected: boolean;
+  recovered?: boolean;
+  subagentSessionId?: string | null;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const inRouter = useInRouterContext();
 
   if (event.waiting_background_agents != null && event.waiting_background_agents > 0) {
     const count = event.waiting_background_agents;
@@ -28,7 +40,7 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
           <span className="tl-reasoning__chev tl-waiting-agents__glyph" aria-hidden="true">*</span>
           <span className="tl-reasoning__label">{label}</span>
           <span className="tl-reasoning__summary" />
-          <span className="tl-reasoning__time">{formatTime(event.timestamp)}</span>
+          <span className="tl-reasoning__time" title={formatTime(event.timestamp)}>{formatTime(event.timestamp)}</span>
         </div>
       </div>
     );
@@ -40,7 +52,57 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
     const hasResult = summary.result !== null;
     const statusClass = summary.status ? ` is-status-${summary.status}` : "";
     const className = `tl-reasoning tl-reasoning--notice tl-task-notice${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`;
-    const time = <span className="tl-reasoning__time">{formatTime(event.timestamp)}</span>;
+    const time = <span className="tl-reasoning__time" title={formatTime(event.timestamp)}>{formatTime(event.timestamp)}</span>;
+    const openLink = subagentSessionId ? (
+      inRouter ? (
+        <Link
+          className="tl-task-notice__open-link"
+          to={`/timeline/${subagentSessionId}`}
+          title="Open subagent session"
+          aria-label="Open subagent session"
+          data-testid="session-task-notification-open"
+        >
+          ↗
+        </Link>
+      ) : (
+        <a
+          className="tl-task-notice__open-link"
+          href={`/timeline/${subagentSessionId}`}
+          title="Open subagent session"
+          aria-label="Open subagent session"
+          data-testid="session-task-notification-open"
+        >
+          ↗
+        </a>
+      )
+    ) : null;
+
+    const head = hasResult ? (
+      <button
+        type="button"
+        className="tl-reasoning__head"
+        aria-expanded={expanded}
+        aria-controls={bodyId}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${summary.title}`}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className={`tl-reasoning__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
+        <span className="tl-task-notice__dot" aria-hidden="true" />
+        <span className="tl-reasoning__label">{summary.title}</span>
+        {summary.meta ? <span className="tl-task-notice__meta">{summary.meta}</span> : null}
+        {summary.note ? <span className="tl-task-notice__note">{summary.note}</span> : null}
+        {time}
+      </button>
+    ) : (
+      <div className="tl-reasoning__head">
+        <span className="tl-reasoning__chev" aria-hidden="true">•</span>
+        <span className="tl-task-notice__dot" aria-hidden="true" />
+        <span className="tl-reasoning__label">{summary.title}</span>
+        {summary.meta ? <span className="tl-task-notice__meta">{summary.meta}</span> : null}
+        {summary.note ? <span className="tl-task-notice__note">{summary.note}</span> : null}
+        {time}
+      </div>
+    );
 
     return (
       <div
@@ -49,31 +111,13 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
         data-testid="session-task-notification"
         data-row-kind="provider-notification"
       >
-        {hasResult ? (
-          <button
-            type="button"
-            className="tl-reasoning__head"
-            aria-expanded={expanded}
-            aria-controls={bodyId}
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${summary.title}`}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <span className={`tl-reasoning__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
-            <span className="tl-task-notice__dot" aria-hidden="true" />
-            <span className="tl-reasoning__label">{summary.title}</span>
-            {summary.meta ? <span className="tl-task-notice__meta">{summary.meta}</span> : null}
-            {summary.note ? <span className="tl-task-notice__note">{summary.note}</span> : null}
-            {time}
-          </button>
-        ) : (
-          <div className="tl-reasoning__head">
-            <span className="tl-reasoning__chev" aria-hidden="true">•</span>
-            <span className="tl-task-notice__dot" aria-hidden="true" />
-            <span className="tl-reasoning__label">{summary.title}</span>
-            {summary.meta ? <span className="tl-task-notice__meta">{summary.meta}</span> : null}
-            {summary.note ? <span className="tl-task-notice__note">{summary.note}</span> : null}
-            {time}
+        {openLink ? (
+          <div className="tl-task-notice__row">
+            {head}
+            {openLink}
           </div>
+        ) : (
+          head
         )}
         {summary.entries.length > 1 ? (
           <ul className="tl-task-notice__entries">
@@ -103,8 +147,8 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
     const apiNotice = summarizeApiError(event.api_error, event.content_text);
     const bodyId = `provider-notice-body-${event.id}`;
     const hasDetails = apiNotice.detail !== null;
-    const className = `tl-reasoning tl-reasoning--notice tl-api-error${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`;
-    const time = <span className="tl-reasoning__time">{formatTime(event.timestamp)}</span>;
+    const className = `tl-reasoning tl-reasoning--notice tl-api-error${recovered ? " tl-api-error--recovered" : ""}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`;
+    const time = <span className="tl-reasoning__time" title={formatTime(event.timestamp)}>{formatTime(event.timestamp)}</span>;
 
     return (
       <div
@@ -129,7 +173,7 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
           </button>
         ) : (
           <div className="tl-reasoning__head">
-            <span className="tl-reasoning__chev" aria-hidden="true">!</span>
+            <span className="tl-reasoning__chev" aria-hidden="true">{recovered ? "↻" : "!"}</span>
             {apiNotice.badge ? <span className="tl-api-error__badge">{apiNotice.badge}</span> : null}
             <span className="tl-reasoning__label">{apiNotice.title}</span>
             {time}
@@ -147,7 +191,7 @@ export function ProviderNoticeRow({ event, isSelected }: { event: AgentEvent; is
   const { title, hint, body } = summarizeProviderNotice(event.content_text);
   const bodyId = `provider-notice-body-${event.id}`;
   const className = `tl-reasoning tl-reasoning--notice${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`;
-  const time = <span className="tl-reasoning__time">{formatTime(event.timestamp)}</span>;
+  const time = <span className="tl-reasoning__time" title={formatTime(event.timestamp)}>{formatTime(event.timestamp)}</span>;
 
   return (
     <div

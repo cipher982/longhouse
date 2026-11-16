@@ -61,6 +61,7 @@ import {
 } from "@/shared/session/sessionRuntime";
 import { TimelinePane } from "./TimelinePane";
 import { useWallClock } from "@/shared/hooks/useWallClock";
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useSessionWorkspace } from "./useSessionWorkspace";
 import { useHeaderSlot } from "@/app/headerSlot";
 import { useStoredState } from "@/shared/hooks/useStoredState";
@@ -90,7 +91,12 @@ import {
   formatCompactTokens,
   formatTurnDuration,
   getSessionInteractionCapabilities,
+  summarizeEditedFiles,
 } from "@/shared/session/model";
+import {
+  BackgroundTaskRosterList,
+  summarizeBackgroundRoster,
+} from "./BackgroundTaskRoster";
 import type { OutboxEntry } from "./OutboxRow";
 import "./session-workspace.css";
 
@@ -140,6 +146,7 @@ function SessionDetailWorkspaceRoute({
     loadedEntryCount,
     events,
     items,
+    subagents,
     eventsLoading,
     eventsError,
     controlOnly,
@@ -233,6 +240,11 @@ function SessionDetailWorkspaceRoute({
     sessionState: session?.session_state,
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [recapDismissedKey, setRecapDismissedKey] = useState<string | null>(null);
+  const [recapExpanded, setRecapExpanded] = useState(false);
+  const [rosterInspectorOpen, setRosterInspectorOpen] = useState(false);
+  const isDesktopInspector = useMediaQuery("(min-width: 1280px)");
+  const editedFilesSummary = useMemo(() => summarizeEditedFiles(items), [items]);
   // Sends the composer owns but the transcript renders at its tail.
   const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);
 
@@ -451,7 +463,6 @@ function SessionDetailWorkspaceRoute({
   const runtime = resolveSessionRuntimeState(displaySession);
   const headerState = getSessionHeaderState(displaySession, nowMs, turnStartMs);
   const hasPlumbingWarning =
-    !streamConnected ||
     displaySession.session_state.host.state !== "online" ||
     displaySession.session_state.transcript.convergence === "lagging";
   // When the session is live and plumbing is healthy, the bottom composer dock
@@ -463,18 +474,36 @@ function SessionDetailWorkspaceRoute({
     Boolean(composerDisabledReason) ||
     headerState.tone !== "live" ||
     hasPlumbingWarning;
+  const totalMessages = Math.max(
+    (displaySession.user_messages ?? 0) + (displaySession.assistant_messages ?? 0),
+    transcriptCounts.messages,
+  );
+  const totalToolCalls = Math.max(displaySession.tool_calls ?? 0, transcriptCounts.toolCalls);
   // Plain items, " · "-joined. Counts prefer the session's own totals so a
   // partly loaded transcript does not shrink them.
   const metaItems = buildSessionMetaItems({
     provider: interaction.providerLabel || null,
     project: displaySession.project?.trim() || null,
     host: identityHost,
-    messages: Math.max(
-      (displaySession.user_messages ?? 0) + (displaySession.assistant_messages ?? 0),
-      transcriptCounts.messages,
-    ),
-    toolCalls: Math.max(displaySession.tool_calls ?? 0, transcriptCounts.toolCalls),
+    messages: totalMessages,
+    toolCalls: totalToolCalls,
   });
+  const coreMetaItems = buildSessionMetaItems({
+    provider: interaction.providerLabel || null,
+    project: displaySession.project?.trim() || null,
+    host: identityHost,
+    messages: 0,
+    toolCalls: 0,
+  });
+  const usageSegments = usageLabel
+    ? usageLabel
+        .split(" · ")
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+    : [];
+  const primaryModelLabel = usageSegments[0] ?? null;
+  const secondaryUsageLabel =
+    usageSegments.length > 1 ? usageSegments.slice(1).join(" · ") : null;
   const identityLabel = [...metaItems, ...(usageLabel ? [usageLabel] : [])].join(" · ") || null;
   const contextTokens = displaySession.usage_latest?.context_tokens ?? null;
   const contextWindow = displaySession.usage_latest?.context_window ?? null;
@@ -503,14 +532,21 @@ function SessionDetailWorkspaceRoute({
     cumulativeDurationMs > 0
       ? formatTurnDuration(cumulativeDurationMs)
       : null;
+  const highRateLimits = (displaySession.usage_latest?.rate_limits ?? []).filter(
+    (limit) => typeof limit.percent_used === "number" && limit.percent_used >= 75,
+  );
   const cwdLeaf = displaySession.cwd
     ? displaySession.cwd.split("/").filter(Boolean).pop() ?? null
     : null;
   const worktreeName = displaySession.worktree?.name?.trim() || null;
   const gitBranch = displaySession.worktree?.branch?.trim() || displaySession.git_branch?.trim() || null;
+  const branchMatchesWorktree =
+    Boolean(worktreeName && gitBranch) &&
+    (gitBranch!.toLowerCase() === worktreeName!.toLowerCase() ||
+      gitBranch!.split("/").pop()?.toLowerCase() === worktreeName!.toLowerCase());
   const gitContextLabel = [
     cwdLeaf,
-    gitBranch ? `git:(${gitBranch})` : null,
+    !branchMatchesWorktree && gitBranch ? `git:(${gitBranch})` : null,
     worktreeName ? `wt:${worktreeName}` : null,
   ]
     .filter(Boolean)
@@ -525,6 +561,24 @@ function SessionDetailWorkspaceRoute({
           ? "don't ask"
           : permissionModeRaw;
   const sessionCronCount = displaySession.session_crons?.length ?? 0;
+  const hasUsageTrigger = Boolean(usageLabel || contextPercentLabel || costLabel);
+  const hasPopoverDetails = Boolean(
+    totalMessages > 0 ||
+      totalToolCalls > 0 ||
+      editedFilesSummary.fileCount > 0 ||
+      secondaryUsageLabel ||
+      cumulativeDurationLabel ||
+      sessionCronCount > 0 ||
+      (displaySession.usage_latest?.rate_limits?.length ?? 0) > 0,
+  );
+  const recapKey = displaySession.recap?.text
+    ? `${displaySession.recap.at ?? ""}|${displaySession.recap.text}`
+    : null;
+  const showAwayRecap =
+    Boolean(displaySession.recap?.text) && recapDismissedKey !== recapKey;
+  const showAttentionBanner =
+    displaySession.session_state.disposition.state === "open" &&
+    (Boolean(activePauseRequest) || needsSessionAttention(displaySession));
   // The branch form sits beside Resume in the Run ended notice. A refusal gets
   // words only when `branchUnavailableNote` has some; see there for which.
   const branchAction = branchSourceSession.session_state.control.actions.branch;
@@ -636,56 +690,43 @@ function SessionDetailWorkspaceRoute({
         <span className="session-workspace-header__name" title={title}>
           {title}
         </span>
-        {identityLabel ? (
-          <span
+        {identityLabel || gitContextLabel || permissionModeLabel || hasUsageTrigger ? (
+          <div
             className="session-workspace-header__identity"
             data-testid="session-identity"
-            title={identityLabel}
+            title={identityLabel ?? undefined}
           >
-            {displaySession.provider ? (
-              <ProviderGlyph
-                provider={displaySession.provider}
-                size={13}
-                variant="bare"
-                className="session-workspace-header__provider-glyph"
-              />
-            ) : null}
-            <span className="session-workspace-header__meta-text">
-              {metaItems.join(" · ")}
-              {usageLabel || contextPercentLabel ? (
-                <span className="session-workspace-header__usage" data-testid="session-usage">
-                  {metaItems.length > 0 ? " · " : ""}
-                  {contextFraction != null ? (
-                    <span
-                      className="session-context-ring"
-                      data-testid="session-context-ring"
-                      style={{ ["--ring-fill" as string]: `${Math.round(contextFraction * 100)}%` }}
-                      title={`${Math.round(contextFraction * 100)}% of the context window`}
-                      aria-hidden="true"
+            <div className="session-workspace-header__meta-line">
+              {coreMetaItems.length > 0 ? (
+                <span className="session-workspace-header__lead-group">
+                  {displaySession.provider ? (
+                    <ProviderGlyph
+                      provider={displaySession.provider}
+                      size={13}
+                      variant="bare"
+                      className="session-workspace-header__provider-glyph"
                     />
                   ) : null}
-                  {usageLabel ?? contextPercentLabel}
-                  {usageLabel && contextPercentLabel && !usageLabel.includes(contextPercentLabel)
-                    ? ` · ${contextPercentLabel}`
-                    : ""}
+                  <span>{coreMetaItems.join(" · ")}</span>
                 </span>
+              ) : displaySession.provider ? (
+                <ProviderGlyph
+                  provider={displaySession.provider}
+                  size={13}
+                  variant="bare"
+                  className="session-workspace-header__provider-glyph"
+                />
               ) : null}
-              {costLabel ? (
-                <span className="session-workspace-header__cost" data-testid="session-cost">
-                  {` · ${costLabel}`}
-                </span>
-              ) : null}
-              {cumulativeDurationLabel ? (
-                <span
-                  className="session-workspace-header__duration"
-                  data-testid="session-cumulative-duration"
-                >
-                  {` · ${cumulativeDurationLabel}`}
+              {primaryModelLabel && primaryModelLabel !== contextPercentLabel ? (
+                <span className="session-workspace-header__model">
+                  {coreMetaItems.length > 0 ? " · " : ""}
+                  {primaryModelLabel}
                 </span>
               ) : null}
               {gitContextLabel ? (
                 <span className="session-workspace-header__git" data-testid="session-git-context">
-                  {` · ${gitContextLabel}`}
+                  {coreMetaItems.length > 0 || primaryModelLabel ? " · " : ""}
+                  {gitContextLabel}
                 </span>
               ) : null}
               {permissionModeLabel ? (
@@ -701,22 +742,105 @@ function SessionDetailWorkspaceRoute({
                   </span>
                 </>
               ) : null}
-              {sessionCronCount > 0 ? (
-                <>
-                  {" · "}
-                  <button
-                    type="button"
-                    className="session-permission-pill session-cron-pill"
-                    data-testid="session-crons-pill"
-                    title="View scheduled session crons"
-                    onClick={() => setDrawerOpen(true)}
-                  >
-                    {sessionCronCount} {sessionCronCount === 1 ? "cron" : "crons"}
-                  </button>
-                </>
-              ) : null}
-            </span>
-          </span>
+              {highRateLimits.map((limit) => (
+                <span
+                  key={limit.kind}
+                  className="session-permission-pill session-rate-limit-pill"
+                  data-testid="session-hud-rate-limit"
+                  title={limit.resets_at ? `Resets ${limit.resets_at}` : undefined}
+                >
+                  ⚠ {limit.kind} {Math.round(limit.percent_used ?? 0)}%
+                </span>
+              ))}
+              {hasUsageTrigger ? (
+                <details className="session-hud-usage-popover">
+                  <summary className="session-hud-usage-trigger">
+                    <span className="session-workspace-header__usage" data-testid="session-usage">
+                      {contextFraction != null ? (
+                        <span
+                          className="session-context-ring"
+                          data-testid="session-context-ring"
+                          style={{ ["--ring-fill" as string]: `${Math.round(contextFraction * 100)}%` }}
+                          title={`${Math.round(contextFraction * 100)}% of the context window`}
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                      {contextPercentLabel ?? primaryModelLabel}
+                    </span>
+                    {costLabel ? (
+                      <span className="session-workspace-header__cost" data-testid="session-cost">
+                        {` · ${costLabel}`}
+                      </span>
+                    ) : null}
+                  </summary>
+                  {hasPopoverDetails ? (
+                    <div className="session-hud-usage-panel" data-testid="session-hud-usage-panel">
+                      {totalMessages > 0 || totalToolCalls > 0 ? (
+                        <div className="session-hud-usage-row">
+                          <span>Activity</span>
+                          <span>
+                            {[
+                              totalMessages > 0 ? `${totalMessages} ${totalMessages === 1 ? "msg" : "msgs"}` : null,
+                              totalToolCalls > 0 ? `${totalToolCalls} ${totalToolCalls === 1 ? "tool" : "tools"}` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        </div>
+                      ) : null}
+                      {secondaryUsageLabel ? (
+                        <div className="session-hud-usage-row">
+                          <span>Tokens</span>
+                          <span>{secondaryUsageLabel}</span>
+                        </div>
+                      ) : null}
+                      {cumulativeDurationLabel ? (
+                        <div className="session-hud-usage-row">
+                          <span>Session time</span>
+                          <span
+                            className="session-workspace-header__duration"
+                            data-testid="session-cumulative-duration"
+                          >
+                            {cumulativeDurationLabel}
+                          </span>
+                        </div>
+                      ) : null}
+                      {editedFilesSummary.fileCount > 0 ? (
+                        <div
+                          className="session-hud-usage-row"
+                          title={editedFilesSummary.fileNames.join(", ")}
+                        >
+                          <span>Files</span>
+                          <span>{editedFilesSummary.label}</span>
+                        </div>
+                      ) : null}
+                      {sessionCronCount > 0 ? (
+                        <div className="session-hud-usage-row">
+                          <span>Schedules</span>
+                          <button
+                            type="button"
+                            className="session-permission-pill session-cron-pill"
+                            data-testid="session-crons-pill"
+                            title="View scheduled session crons"
+                            onClick={() => setDrawerOpen(true)}
+                          >
+                            {sessionCronCount} {sessionCronCount === 1 ? "cron" : "crons"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </details>
+              ) : (
+                metaItems.slice(coreMetaItems.length).length > 0 ? (
+                  <span className="session-workspace-header__counts">
+                    {" · "}
+                    {metaItems.slice(coreMetaItems.length).join(" · ")}
+                  </span>
+                ) : null
+              )}
+            </div>
+          </div>
         ) : null}
         {branchedFromSessionId ? (
           <button
@@ -848,17 +972,147 @@ function SessionDetailWorkspaceRoute({
     >
       {launchPendingBanner}
       {sessionRail?.turnsTarget ? createPortal(turnOutline, sessionRail.turnsTarget) : null}
-      <div className="session-workspace-shell">
-        <TimelinePane
-          items={items}
-          provider={displaySession.provider}
-          outbox={outboxEntries}
-          liveness={{ facts: displaySession.session_state, host: identityHost }}
-          topBanner={
-            displaySession.recap?.text ? (
-              <div className="session-away-recap" data-testid="session-away-recap">
-                <div className="session-away-recap__label">While you were away</div>
-                <div className="session-away-recap__text">{displaySession.recap.text}</div>
+      <div className="session-workspace-body">
+        <div className="session-workspace-shell">
+          <TimelinePane
+            items={items}
+            subagents={subagents}
+            provider={displaySession.provider}
+            outbox={outboxEntries}
+            liveness={{ facts: displaySession.session_state, host: identityHost }}
+            topBanner={
+              showAttentionBanner ||
+              primaryModelLabel ||
+              gitContextLabel ||
+              permissionModeLabel ||
+              contextPercentLabel ||
+              costLabel ||
+              showAwayRecap ? (
+                <div className="session-top-stack">
+                  {showAttentionBanner ? (
+                    <div
+                      className="session-attention-banner"
+                      data-testid="session-needs-attention-banner"
+                    >
+                      <div className="session-attention-banner__copy">
+                        <span className="session-attention-banner__badge">Needs you</span>
+                        <span className="session-attention-banner__text">
+                          {activePauseRequest?.title?.trim() ||
+                            activePauseRequest?.summary?.trim() ||
+                            displaySession.session_state.presentation.primary?.label ||
+                            "Waiting for your response"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="session-attention-banner__action"
+                        onClick={() => {
+                          timelineList?.scrollTo({
+                            top: timelineList.scrollHeight,
+                            behavior: "smooth",
+                          });
+                        }}
+                      >
+                        Respond ↓
+                      </button>
+                    </div>
+                  ) : null}
+                {primaryModelLabel ||
+                gitContextLabel ||
+                permissionModeLabel ||
+                contextPercentLabel ||
+                costLabel ? (
+                  <div className="session-mobile-hud" data-testid="session-mobile-hud">
+                    <div className="session-mobile-hud__track">
+                      {primaryModelLabel ? (
+                        <span className="session-mobile-hud__item">{primaryModelLabel}</span>
+                      ) : null}
+                      {worktreeName || gitBranch ? (
+                        <span className="session-mobile-hud__item">
+                          {worktreeName ? `wt:${worktreeName}` : `git:${gitBranch}`}
+                        </span>
+                      ) : null}
+                      {permissionModeLabel ? (
+                        <span
+                          className={`session-permission-pill${
+                            permissionModeRaw === "bypassPermissions"
+                              ? " session-permission-pill--bypass"
+                              : ""
+                          }`}
+                        >
+                          {permissionModeLabel}
+                        </span>
+                      ) : null}
+                      {contextPercentLabel || costLabel ? (
+                        <span className="session-mobile-hud__item session-mobile-hud__usage">
+                          {contextFraction != null ? (
+                            <span
+                              className="session-context-ring"
+                              style={{
+                                ["--ring-fill" as string]: `${Math.round(contextFraction * 100)}%`,
+                              }}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          {[contextPercentLabel, costLabel].filter(Boolean).join(" · ")}
+                        </span>
+                      ) : null}
+                      {highRateLimits.map((limit) => (
+                        <span
+                          key={limit.kind}
+                          className="session-permission-pill session-rate-limit-pill"
+                        >
+                          ⚠ {limit.kind} {Math.round(limit.percent_used ?? 0)}%
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {showAwayRecap && displaySession.recap?.text ? (
+                  <div className="session-away-recap" data-testid="session-away-recap">
+                    <div className="session-away-recap__head">
+                      <span className="session-away-recap__label">Since last view</span>
+                      <div className="session-away-recap__actions">
+                        {displaySession.recap.text.length > 120 ? (
+                          <button
+                            type="button"
+                            className="session-away-recap__action"
+                            onClick={() => setRecapExpanded((open) => !open)}
+                          >
+                            {recapExpanded ? "Less" : "More"}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="session-away-recap__action"
+                          onClick={() => {
+                            timelineList?.scrollTo({
+                              top: timelineList.scrollHeight,
+                              behavior: "smooth",
+                            });
+                          }}
+                        >
+                          Jump to latest ↓
+                        </button>
+                        <button
+                          type="button"
+                          className="session-away-recap__dismiss"
+                          aria-label="Dismiss recap"
+                          title="Dismiss"
+                          data-testid="session-away-recap-dismiss"
+                          onClick={() => setRecapDismissedKey(recapKey)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className={`session-away-recap__text${recapExpanded ? " is-expanded" : ""}`}
+                    >
+                      {displaySession.recap.text}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null
           }
@@ -979,6 +1233,10 @@ function SessionDetailWorkspaceRoute({
                     activityFeed={activityFeed ?? null}
                     onOutboxChange={setOutboxEntries}
                     streamConnected={streamConnected}
+                    rosterInspectorOpen={rosterInspectorOpen}
+                    onToggleRosterInspector={() => setRosterInspectorOpen((v) => !v)}
+                    editedFilesLabel={editedFilesSummary.label || null}
+                    editedFilesTitle={editedFilesSummary.fileNames.join(", ") || null}
                     composerHeaderAccessory={
                       <SessionRuntimeStrip
                         session={displaySession}
@@ -999,6 +1257,50 @@ function SessionDetailWorkspaceRoute({
           <div className="session-workspace-debug">
             <RenderTelemetryPanel sessionId={session.id} />
           </div>
+        ) : null}
+        </div>
+        {isDesktopInspector &&
+        rosterInspectorOpen &&
+        ((displaySession.session_state?.delegation?.items?.length ?? 0) > 0 ||
+          (displaySession.pending_background_agent_count ?? 0) > 0) ? (
+          <aside
+            className="session-live-inspector"
+            data-testid="session-live-inspector"
+            aria-label="Background work"
+          >
+            <div className="session-live-inspector__head">
+              <div className="session-live-inspector__head-copy">
+                <span className="session-live-inspector__title">
+                  {summarizeBackgroundRoster(
+                    displaySession.session_state?.delegation?.items ?? [],
+                    displaySession.pending_background_agent_count,
+                  )}
+                </span>
+                {editedFilesSummary.label ? (
+                  <span
+                    className="session-live-inspector__files"
+                    title={editedFilesSummary.fileNames.join(", ")}
+                  >
+                    {editedFilesSummary.label}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="session-live-inspector__close"
+                aria-label="Close background inspector"
+                onClick={() => setRosterInspectorOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="session-live-inspector__body">
+              <BackgroundTaskRosterList
+                delegation={displaySession.session_state?.delegation}
+                nowMs={nowMs}
+              />
+            </div>
+          </aside>
         ) : null}
       </div>
       <SessionInfoDrawer

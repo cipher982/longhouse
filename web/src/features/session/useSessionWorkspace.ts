@@ -1069,6 +1069,7 @@ export function useSessionWorkspace(
     hasPreviousPage,
     isFetchingPreviousPage,
     items: model.items,
+    subagents,
     selectedKey,
     selectedSelection,
     selectKey,

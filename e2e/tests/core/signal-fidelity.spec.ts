@@ -391,7 +391,7 @@ test.describe("0-to-1 engine-to-pixel signal fidelity", () => {
       expect(codexSeamBox!.height).toBeGreaterThan(14);
       const codexUsage = page.getByTestId("session-usage");
       await expect(codexUsage).toBeVisible();
-      await expect(codexUsage).toContainText("/258k ctx");
+      await expect(codexUsage).toContainText("10% of 258.4k");
       const codexRing = page.getByTestId("session-context-ring");
       await expect(codexRing).toHaveCount(1);
       await expect(codexRing).toBeVisible();
@@ -749,7 +749,7 @@ test.describe("0-to-1 engine-to-pixel signal fidelity", () => {
       await expect(page.getByTestId("session-usage")).toContainText("13% of 1.0M");
       await expect(page.getByTestId("session-cost")).toContainText("$53.89");
       await expect(page.getByTestId("session-cumulative-duration")).toContainText("8h 1m");
-      await expect(page.getByTestId("session-git-context")).toContainText("git:(claude-fidelity) wt:claude-fidelity");
+      await expect(page.getByTestId("session-git-context")).toContainText("wt:claude-fidelity");
       await expect(page.getByTestId("session-permission-mode")).toContainText("bypass permissions");
       await expect(page.getByTestId("session-crons-pill")).toContainText("1 cron");
       await expect(page.getByTestId("session-away-recap")).toContainText("Landed Step 2 projections.");

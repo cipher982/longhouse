@@ -94,6 +94,8 @@ export {
   DIFF_CELL_BUDGET,
   formatEditStat,
   getEditStat,
+  summarizeEditedFiles,
+  type EditedFilesSummary,
   type EditStat,
 } from "./editSummary";
 

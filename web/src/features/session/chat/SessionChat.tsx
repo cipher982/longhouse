@@ -47,7 +47,7 @@ import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
 import { Nixie } from "@/shared/instruments/Nixie";
 import { StatusBulb } from "@/shared/instruments/StatusLamp";
-import { getRunningTurnStartMs } from "@/shared/instruments/toolActivity";
+import { findRunningTool, getRunningTurnStartMs } from "@/shared/instruments/toolActivity";
 import {
   formatClockTime,
   formatElapsedClock,
@@ -57,6 +57,7 @@ import type { SessionActivityFeed } from "../sessionActivityFeed";
 import { BackgroundTaskRoster } from "../BackgroundTaskRoster";
 import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import {
   isActivityExecuting,
@@ -215,6 +216,10 @@ interface SessionChatProps {
   onOutboxChange?: (entries: OutboxEntry[]) => void;
   /** The session's live workspace stream is connected and fresh. */
   streamConnected?: boolean;
+  rosterInspectorOpen?: boolean;
+  onToggleRosterInspector?: () => void;
+  editedFilesLabel?: string | null;
+  editedFilesTitle?: string | null;
 }
 
 export type SessionChatTarget = Pick<
@@ -709,6 +714,10 @@ export function SessionChat({
   composerHeaderAccessory,
   onOutboxChange,
   streamConnected = false,
+  rosterInspectorOpen = false,
+  onToggleRosterInspector,
+  editedFilesLabel = null,
+  editedFilesTitle = null,
 }: SessionChatProps) {
   const outboxInTranscript = Boolean(onOutboxChange);
   const activity = session.session_state.activity;
@@ -731,6 +740,7 @@ export function SessionChat({
   const showComposerUnavailableState =
     isComposerDisabled && !retainDockComposer;
   const queryClient = useQueryClient();
+  const isMobileComposer = useMediaQuery("(max-width: 767px)");
   const [draft, setDraft] = useState("");
   const [selectedModel, setSelectedModel] = useState(
     () => session.selected_model?.trim() ?? "",
@@ -2771,6 +2781,17 @@ export function SessionChat({
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
   const composerWorkingLabel = workingStatusLabel(session.session_state);
+  const runningToolInfo = useMemo(
+    () => findRunningTool(timelineItems ?? []),
+    [timelineItems],
+  );
+  const composerForegroundDetail =
+    composerState.tone === "live" &&
+    runningToolInfo &&
+    runningToolInfo.label &&
+    runningToolInfo.label !== runningToolInfo.toolName
+      ? runningToolInfo.label
+      : null;
   const hasBackgroundRoster =
     (session.session_state?.delegation?.items?.length ?? 0) > 0 ||
     (session.pending_background_agent_count ?? 0) > 0;
@@ -2778,6 +2799,7 @@ export function SessionChat({
     composerState.tone === "live" && !hasBackgroundRoster
       ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
       : null;
+  const composerHeadDetail = composerForegroundDetail || composerDelegatedDetail;
   const leafRef = useRef<HTMLSpanElement | null>(null);
   const leafAnimationRef = useRef<Animation | null>(null);
   const leafLive = composerState.tone === "live" && !isDelegatedWork;
@@ -2911,44 +2933,45 @@ export function SessionChat({
       addDisabled={!attachmentInputEnabled}
     />
   ) : null;
+  const stopInterruptButton = showInlineInterrupt ? (
+    <Button
+      type="button"
+      variant="danger"
+      size="sm"
+      className="session-chat-btn session-chat-btn--stop"
+      aria-label={isInterrupting ? "Stopping" : interruptActionLabel}
+      title={parkedBackgroundWork ? "Stop background work owned by this provider" : "Interrupt the active turn"}
+      onClick={() => void handleInterrupt()}
+      disabled={isInterrupting}
+      data-testid="session-chat-interrupt"
+    >
+      <svg
+        className="session-chat-action-icon"
+        width="16"
+        height="16"
+        viewBox="0 0 18 18"
+        aria-hidden="true"
+      >
+        <rect
+          x="5"
+          y="5"
+          width="8"
+          height="8"
+          rx="1"
+          fill="currentColor"
+        />
+      </svg>
+      <span className="session-chat-action-label">
+        {isInterrupting ? "Stopping" : interruptActionLabel}
+      </span>
+    </Button>
+  ) : null;
   const composerActions = (
     <>
       {isManagedLocal && sentConfirmation && !outboxInTranscript ? (
         <span className="session-chat-sent-notice">Sent</span>
       ) : null}
-      {showInlineInterrupt ? (
-        <Button
-          type="button"
-          variant="danger"
-          size="sm"
-          className="session-chat-btn session-chat-btn--stop"
-          aria-label={isInterrupting ? "Stopping" : interruptActionLabel}
-          title={parkedBackgroundWork ? "Stop background work owned by this provider" : "Interrupt the active turn"}
-          onClick={() => void handleInterrupt()}
-          disabled={isInterrupting}
-          data-testid="session-chat-interrupt"
-        >
-          <span className="session-chat-action-label">
-            {isInterrupting ? "Stopping" : interruptActionLabel}
-          </span>
-          <svg
-            className="session-chat-action-icon"
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            aria-hidden="true"
-          >
-            <rect
-              x="5"
-              y="5"
-              width="8"
-              height="8"
-              rx="1"
-              fill="currentColor"
-            />
-          </svg>
-        </Button>
-      ) : null}
+      {!(isMobileComposer && composerHeadVisible) ? stopInterruptButton : null}
       {canSteerNow && canQueueNow ? (
         <Button
           type="button"
@@ -3150,25 +3173,7 @@ export function SessionChat({
         onDrop={attachmentInputEnabled ? handleComposerDrop : undefined}
         onDragOver={attachmentInputEnabled ? handleComposerDragOver : undefined}
       >
-        <>
-            <span ref={leafRef} className="session-chat-composer__leaf" aria-hidden="true" />
-            <span
-              className="session-chat-composer__point session-chat-composer__point--tl"
-              aria-hidden="true"
-            />
-            <span
-              className="session-chat-composer__point session-chat-composer__point--tr"
-              aria-hidden="true"
-            />
-            <span
-              className="session-chat-composer__point session-chat-composer__point--bl"
-              aria-hidden="true"
-            />
-            <span
-              className="session-chat-composer__point session-chat-composer__point--br"
-              aria-hidden="true"
-            />
-          </>
+        <span ref={leafRef} className="session-chat-composer__leaf" aria-hidden="true" />
         {composerHeadVisible ? (
           <div
             className="session-chat-composer__head"
@@ -3183,13 +3188,17 @@ export function SessionChat({
                 <span className="session-chat-composer__head-label">
                   {composerWorkingLabel}
                 </span>
-                {composerDelegatedDetail ? (
+                {composerHeadDetail ? (
                   <span
                     className="session-chat-composer__head-detail"
-                    title={composerDelegatedDetail}
-                    data-testid="session-chat-composer-delegated-detail"
+                    title={composerHeadDetail}
+                    data-testid={
+                      composerForegroundDetail
+                        ? "session-chat-composer-foreground-detail"
+                        : "session-chat-composer-delegated-detail"
+                    }
                   >
-                    {composerDelegatedDetail}
+                    {composerHeadDetail}
                   </span>
                 ) : null}
                 {composerElapsedSeconds != null ? (
@@ -3219,6 +3228,11 @@ export function SessionChat({
                 ) : null}
               </>
             ) : null}
+            {isMobileComposer && stopInterruptButton ? (
+              <span className="session-chat-composer__head-stop">
+                {stopInterruptButton}
+              </span>
+            ) : null}
             {composerHeaderAccessory ? (
               <span className="session-chat-composer__head-accessory">
                 {composerHeaderAccessory}
@@ -3230,6 +3244,10 @@ export function SessionChat({
           delegation={session.session_state?.delegation}
           pendingBackgroundAgentCount={session.pending_background_agent_count}
           nowMs={activityNowMs}
+          inspectorOpen={rosterInspectorOpen}
+          onToggleInspector={onToggleRosterInspector}
+          editedFilesLabel={editedFilesLabel}
+          editedFilesTitle={editedFilesTitle}
         />
         {queuedBanner}
         {showComposerUnavailableState ? (

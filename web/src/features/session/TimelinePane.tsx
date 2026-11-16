@@ -138,6 +138,67 @@ interface TimelinePaneProps {
    *  running call renders as a plain row and never animates. */
   liveness?: TimelineLiveness | null;
   topBanner?: ReactNode;
+  subagents?: readonly SubagentChild[];
+}
+
+function isWithheldReasoningEvent(event: AgentEvent): boolean {
+  const raw = event.content_text || "";
+  const cleaned = (raw.startsWith("Thinking:\n") ? raw.slice("Thinking:\n".length) : raw).trim();
+  const isWithheld = Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
+  return isWithheld && (!cleaned || cleaned === "[Reasoning withheld]");
+}
+
+function tier3ItemLabel(item: TimelineItem): string | null {
+  if (item.kind === "compaction") {
+    return /microcompact/i.test(item.event.content_text ?? "") ? "Microcompacted" : "Compacted";
+  }
+  if (item.kind === "reasoning" && isWithheldReasoningEvent(item.event)) {
+    return "Reasoning withheld";
+  }
+  if (item.kind === "provider_notification") {
+    if (item.event.waiting_background_agents != null && item.event.waiting_background_agents > 0) {
+      return "Waiting on agents";
+    }
+    if (item.event.api_error) {
+      return "Retried API error";
+    }
+  }
+  return null;
+}
+
+function isTier3MechanicalItem(item: TimelineItem, index: number, lastProgressIndex: number): boolean {
+  if (item.kind === "compaction") {
+    return summarizeCompactionNotice(item.event.content_text).title === "Context microcompacted";
+  }
+  if (item.kind === "reasoning") return isWithheldReasoningEvent(item.event);
+  if (item.kind === "provider_notification") {
+    if (item.event.waiting_background_agents != null && item.event.waiting_background_agents > 0) {
+      return true;
+    }
+    if (item.event.api_error && index < lastProgressIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveTaskNotificationSubagentId(
+  taskNotif: NonNullable<AgentEvent["task_notification"]>,
+  lookup: ReadonlyMap<string, string>,
+): string | null {
+  const taskId = typeof taskNotif.task_id === "string" ? taskNotif.task_id.trim() : "";
+  if (taskId) {
+    const direct = lookup.get(taskId);
+    if (direct) return direct;
+    const bare = taskId.startsWith("agent-") ? taskId.slice(6) : taskId;
+    const fromBare = lookup.get(bare) ?? lookup.get(`agent-${bare}`);
+    if (fromBare) return fromBare;
+  }
+  const toolUseId = typeof taskNotif.tool_use_id === "string" ? taskNotif.tool_use_id.trim() : "";
+  if (toolUseId) {
+    return lookup.get(`tool:${toolUseId}`) ?? null;
+  }
+  return null;
 }
 
 function timelineItemTimeMs(item: TimelineItem): number {
@@ -230,14 +291,24 @@ const SeamRow = memo(function SeamRow({ seam }: { seam: TimelineSeam }) {
 
 const CompactionRow = memo(function CompactionRow({ event }: { event: AgentEvent }) {
   const { title, detail } = summarizeCompactionNotice(event.content_text);
+  const isMicro = title === "Context microcompacted";
   return (
-    <div id={`event-${event.id}`} className="tl-seam tl-seam--compaction" data-testid="session-compaction-boundary">
+    <div
+      id={`event-${event.id}`}
+      className={`tl-seam tl-seam--compaction${isMicro ? " tl-compaction" : ""}`}
+      data-testid="session-compaction-boundary"
+    >
       <div className="tl-seam__rule" />
-      <div className="tl-seam__body">
-        <span className="tl-seam__label">{title}</span>
-        {detail ? <span className="tl-seam__description">{detail}</span> : null}
+      <div className={isMicro ? "tl-compaction__body" : "tl-seam__body"}>
+        <span className={`tl-seam__label${isMicro ? " tl-compaction__label" : ""}`}>{title}</span>
+        {detail ? (
+          <span className={`tl-seam__description${isMicro ? " tl-compaction__detail" : ""}`}>{detail}</span>
+        ) : null}
       </div>
-      <div className="tl-seam__stamp">{formatContinuationStamp(event.timestamp)}</div>
+      <div className="tl-seam__rule" />
+      <div className={isMicro ? "tl-compaction__stamp" : "tl-seam__stamp"} title={formatTime(event.timestamp)}>
+        {formatContinuationStamp(event.timestamp)}
+      </div>
     </div>
   );
 });
@@ -434,7 +505,6 @@ function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined
         {prefix} {formatTurnDuration(turnEnd.duration_ms)} · {suffix} {formatTime(turnEnd.ended_at)}
         {hookSuffix}
       </span>
-      <span className="tl-turn-end__rule" aria-hidden="true" />
     </div>
   );
 }
@@ -500,6 +570,7 @@ const MessageRow = memo(function MessageRow({
   provider,
   send = null,
   viaLonghouse = false,
+  apiErrorRecovered = false,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
   renderMedia: boolean;
@@ -508,6 +579,7 @@ const MessageRow = memo(function MessageRow({
   send?: OutboxEntry | null;
   /** The row echoes a Longhouse send the server did not stamp with its origin. */
   viaLonghouse?: boolean;
+  apiErrorRecovered?: boolean;
 }) {
   const isUser = event.role === "user";
   const split = isUser ? splitAttachmentsBlock(getTimelineMessagePreview(event)) : null;
@@ -634,7 +706,10 @@ const MessageRow = memo(function MessageRow({
         ) : null}
       </div>
       {inlineApiError ? (
-        <div className="tl-api-error tl-api-error--inline" data-testid="session-api-error-notice">
+        <div
+          className={`tl-api-error tl-api-error--inline${apiErrorRecovered ? " tl-api-error--recovered" : ""}`}
+          data-testid="session-api-error-notice"
+        >
           {inlineApiError.badge ? <span className="tl-api-error__badge">{inlineApiError.badge}</span> : null}
           <span className="tl-api-error__title">{inlineApiError.title}</span>
         </div>
@@ -1364,6 +1439,7 @@ export const TimelinePane = memo(function TimelinePane({
   outbox = EMPTY_OUTBOX,
   liveness = null,
   topBanner = null,
+  subagents = [],
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1518,6 +1594,7 @@ export const TimelinePane = memo(function TimelinePane({
   // Unread counter — increments while user is scrolled up and new items append.
   // Resets to 0 when the user is back at the bottom.
   const [unreadCount, setUnreadCount] = useState(0);
+  const [isScrolledAway, setIsScrolledAway] = useState(false);
 
   // Track "at bottom" continuously so the next append knows whether to
   // stick. We read scrollTop on every scroll, not only on mutation, so the
@@ -1529,6 +1606,7 @@ export const TimelinePane = memo(function TimelinePane({
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       const atBottom = distance < STICK_THRESHOLD;
       wasAtBottomRef.current = atBottom;
+      setIsScrolledAway(!atBottom && distance > 240);
       const anchorTop = timelineRowTop(prevFirstRowIdRef.current);
       if (anchorTop !== null) prevFirstRowTopRef.current = anchorTop;
       if (atBottom) {
@@ -1638,6 +1716,48 @@ export const TimelinePane = memo(function TimelinePane({
     }
     return { trail, thoughtTimes, currentRunning };
   }, [filteredItems]);
+  const lastProgressIndex = useMemo(() => {
+    for (let idx = filteredItems.length - 1; idx >= 0; idx -= 1) {
+      const candidate = filteredItems[idx];
+      if (candidate.kind === "tool" || candidate.kind === "activity_group" || candidate.kind === "compaction") {
+        return idx;
+      }
+      if (candidate.kind === "message" && !candidate.event.api_error) return idx;
+      if (candidate.kind === "message" && candidate.event.api_error && (candidate.event.content_text ?? "").trim()) {
+        return idx;
+      }
+    }
+    return -1;
+  }, [filteredItems]);
+  const subagentByTaskKey = useMemo(() => {
+    const map = new Map<string, string>();
+    const addChild = (child: SubagentChild) => {
+      const sessionId = child.session_id?.trim();
+      if (!sessionId) return;
+      const providerSessionId = child.provider_session_id?.trim();
+      if (providerSessionId) {
+        map.set(providerSessionId, sessionId);
+        const bare = providerSessionId.startsWith("agent-") ? providerSessionId.slice(6) : providerSessionId;
+        map.set(bare, sessionId);
+        map.set(`agent-${bare}`, sessionId);
+      }
+      const parentToolCallId = child.parent_tool_call_id?.trim();
+      if (parentToolCallId) {
+        map.set(`tool:${parentToolCallId}`, sessionId);
+      }
+    };
+    for (const child of subagents) addChild(child);
+    for (const item of items) {
+      if (item.kind === "tool") {
+        for (const child of item.interaction.children ?? []) addChild(child);
+      } else if (item.kind === "activity_group") {
+        for (const interaction of item.group.interactions) {
+          for (const child of interaction.children ?? []) addChild(child);
+        }
+      }
+    }
+    return map;
+  }, [subagents, items]);
   const livenessValue = useMemo(
     () => ({ liveness, provider: provider ?? null, currentRunning: narration.currentRunning }),
     [liveness, provider, narration.currentRunning],
@@ -1832,13 +1952,55 @@ export const TimelinePane = memo(function TimelinePane({
   function renderDurableRows(): ReactNode[] {
     const rows: ReactNode[] = [];
     let next = 0;
-    for (const item of durableItems) {
-      const itemMs = timelineItemTimeMs(item);
-      while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
-        rows.push(renderOutboxEntry(placedOutbox[next++]));
+    let tier3Run: Array<{ item: TimelineItem; index: number }> = [];
+
+    const flushTier3Run = () => {
+      if (tier3Run.length === 0) return;
+      if (tier3Run.length === 1) {
+        const only = tier3Run[0];
+        rows.push(renderTimelineItem(only.item, only.index));
+      } else {
+        const labels = Array.from(
+          new Set(
+            tier3Run
+              .map(({ item }) => tier3ItemLabel(item))
+              .filter((label): label is string => Boolean(label)),
+          ),
+        );
+        const firstKey = timelineItemIdentity(tier3Run[0].item);
+        const lastKey = timelineItemIdentity(tier3Run[tier3Run.length - 1].item);
+        rows.push(
+          <details key={`tier3:${firstKey}:${lastKey}`} className="tl-tier3-cluster" data-testid="session-tier3-cluster">
+            <summary className="tl-tier3-cluster__summary">
+              <span className="tl-tier3-cluster__count">{tier3Run.length} system events</span>
+              {labels.length > 0 ? <span className="tl-tier3-cluster__parts">{labels.join(", ")}</span> : null}
+            </summary>
+            <div className="tl-tier3-cluster__items">
+              {tier3Run.map(({ item, index }) => renderTimelineItem(item, index))}
+            </div>
+          </details>,
+        );
       }
-      rows.push(renderTimelineItem(item));
+      tier3Run = [];
+    };
+
+    for (let idx = 0; idx < durableItems.length; idx += 1) {
+      const item = durableItems[idx];
+      const itemMs = timelineItemTimeMs(item);
+      if (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
+        flushTier3Run();
+        while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
+          rows.push(renderOutboxEntry(placedOutbox[next++]));
+        }
+      }
+      if (isTier3MechanicalItem(item, idx, lastProgressIndex)) {
+        tier3Run.push({ item, index: idx });
+      } else {
+        flushTier3Run();
+        rows.push(renderTimelineItem(item, idx));
+      }
     }
+    flushTier3Run();
     for (const entry of placedOutbox.slice(next)) {
       rows.push(renderOutboxEntry(entry));
     }
@@ -1851,7 +2013,7 @@ export const TimelinePane = memo(function TimelinePane({
     return [
       ...renderDurableRows(),
       ...outboxBeforePreview.map(renderOutboxEntry),
-      ...filteredItems.slice(livePreviewStart).map(renderTimelineItem),
+      ...filteredItems.slice(livePreviewStart).map((item, offset) => renderTimelineItem(item, livePreviewStart + offset)),
       ...outboxAfterPreview.map(renderOutboxEntry),
     ];
   }
@@ -1893,7 +2055,8 @@ export const TimelinePane = memo(function TimelinePane({
     return bound && !stampedSendKeys.has(bound) ? bound : event.id;
   }
 
-  const renderTimelineItem = (item: TimelineItem) => {
+  const renderTimelineItem = (item: TimelineItem, itemIndex: number) => {
+    const apiErrorRecovered = itemIndex < lastProgressIndex;
     if (item.kind === "seam") {
       return <SeamRow key={item.seam.key} seam={item.seam} />;
     }
@@ -1916,11 +2079,16 @@ export const TimelinePane = memo(function TimelinePane({
     }
 
     if (item.kind === "provider_notification") {
+      const subagentSessionId = item.event.task_notification
+        ? resolveTaskNotificationSubagentId(item.event.task_notification, subagentByTaskKey)
+        : null;
       return (
         <ProviderNoticeRow
           key={item.event.id}
           event={item.event}
           isSelected={timelineItemContainsSelection(item, selectedKey)}
+          recovered={apiErrorRecovered}
+          subagentSessionId={subagentSessionId}
         />
       );
     }
@@ -1935,6 +2103,7 @@ export const TimelinePane = memo(function TimelinePane({
             key={item.event.id}
             event={item.event}
             isSelected={timelineItemContainsSelection(item, selectedKey)}
+            recovered={apiErrorRecovered}
           />
         );
       }
@@ -1947,6 +2116,7 @@ export const TimelinePane = memo(function TimelinePane({
           renderMedia={renderMedia}
           provider={provider}
           viaLonghouse={typeof key === "string" && key.startsWith("send:")}
+          apiErrorRecovered={apiErrorRecovered}
         />
       );
     }
@@ -2107,13 +2277,14 @@ export const TimelinePane = memo(function TimelinePane({
         </div>
       ) : null}
 
+      {topBanner}
+
       <div className="timeline-pane__body">
         <div
           ref={attachScrollContainer}
           className="timeline-pane__list timeline-events"
           data-testid="session-timeline-list"
         >
-        {topBanner}
         {hasPreviousPage || isFetchingPreviousPage ? (
           <div
             ref={topSentinelRef}
@@ -2202,9 +2373,28 @@ export const TimelinePane = memo(function TimelinePane({
             });
             wasAtBottomRef.current = true;
             setUnreadCount(0);
+            setIsScrolledAway(false);
           }}
         >
           ↓ {unreadCount} new
+        </button>
+      ) : isScrolledAway && liveness?.facts?.disposition?.state === "open" ? (
+        <button
+          type="button"
+          className="timeline-pane__unread-pill timeline-pane__unread-pill--jump"
+          data-testid="timeline-jump-live-pill"
+          onClick={() => {
+            const container = scrollContainerRef.current;
+            if (!container) return;
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: "smooth",
+            });
+            wasAtBottomRef.current = true;
+            setIsScrolledAway(false);
+          }}
+        >
+          ↓ Jump to live
         </button>
       ) : null}
 

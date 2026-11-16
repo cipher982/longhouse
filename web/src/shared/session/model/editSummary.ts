@@ -8,7 +8,7 @@
  * interaction and guarded by a cell budget checked *before* the LCS runs.
  */
 
-import type { ToolInteraction } from "./types";
+import type { TimelineItem, ToolInteraction } from "./types";
 import { lineDiff } from "./diff";
 
 /** Max LCS cells (old lines × new lines) we will spend on one interaction. */
@@ -176,4 +176,73 @@ export function formatEditStat(stat: EditStat): string | null {
   if (!name) return null;
   if (!stat.hasStat) return name;
   return `${name} +${stat.added} −${stat.removed}`;
+}
+
+export interface EditedFilesSummary {
+  fileCount: number;
+  added: number;
+  removed: number;
+  fileNames: string[];
+  label: string;
+}
+
+const EDIT_TOOL_NAMES = new Set([
+  "edit",
+  "multiedit",
+  "multi_edit",
+  "write",
+  "replace",
+  "notebookedit",
+  "notebook_edit",
+  "create_file",
+  "write_to_file",
+  "replace_file_content",
+  "multi_replace_file_content",
+  "apply_patch",
+  "patch",
+  "str_replace",
+]);
+
+function isEditInteractionStatCandidate(interaction: ToolInteraction, stat: EditStat): boolean {
+  if (stat.patch !== null || stat.hasStat) return true;
+  const names = [interaction.toolName, interaction.presentation?.tool_name]
+    .filter(Boolean)
+    .map((n) => String(n).trim().toLowerCase());
+  return names.some((name) => EDIT_TOOL_NAMES.has(name));
+}
+
+export function summarizeEditedFiles(items: readonly TimelineItem[]): EditedFilesSummary {
+  const seen = new Map<string, { name: string }>();
+  let added = 0;
+  let removed = 0;
+
+  const inspect = (interaction: ToolInteraction) => {
+    const stat = getEditStat(interaction);
+    if (!stat.fileName || !isEditInteractionStatCandidate(interaction, stat)) return;
+    const key = (stat.filePath ?? stat.fileName).trim();
+    if (!seen.has(key)) seen.set(key, { name: stat.fileName });
+    if (stat.hasStat) {
+      added += stat.added;
+      removed += stat.removed;
+    }
+  };
+
+  for (const item of items) {
+    if (item.kind === "tool") inspect(item.interaction);
+    else if (item.kind === "activity_group") {
+      for (const interaction of item.group.interactions) inspect(interaction);
+    }
+  }
+
+  const fileNames = Array.from(seen.values(), (entry) => entry.name);
+  const fileCount = fileNames.length;
+  const noun = fileCount === 1 ? "file" : "files";
+  const diffSuffix = added > 0 || removed > 0 ? ` (+${added} -${removed})` : "";
+  return {
+    fileCount,
+    added,
+    removed,
+    fileNames,
+    label: fileCount > 0 ? `${fileCount} ${noun} edited${diffSuffix}` : "",
+  };
 }

@@ -184,23 +184,23 @@
   position: relative;
   padding: 14px 18px 16px;
   border-top: 0;
-  border-radius: 2px;
+  border-radius: 16px;
   background: var(--color-surface-card);
-  box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   gap: var(--space-3);
 }
 
 .session-chat-composer--dock.session-chat-composer--running {
   box-shadow:
-    inset 0 0 0 1px rgba(70, 54, 41, 0.9),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.09),
     0 18px 50px -20px rgba(240, 138, 36, 0.35);
 }
 
 .session-chat-composer__leaf {
   position: absolute;
   top: -1px;
-  left: 8%;
-  right: 8%;
+  left: 16px;
+  right: 16px;
   height: 1px;
   background: linear-gradient(
     90deg,
@@ -213,36 +213,32 @@
   pointer-events: none;
 }
 
-.session-chat-composer__point {
-  position: absolute;
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(233, 185, 73, 0.85);
-  pointer-events: none;
-}
-.session-chat-composer__point--tl {
-  top: -2px;
-  left: -2px;
-}
-.session-chat-composer__point--tr {
-  top: -2px;
-  right: -2px;
-}
-.session-chat-composer__point--bl {
-  bottom: -2px;
-  left: -2px;
-}
-.session-chat-composer__point--br {
-  bottom: -2px;
-  right: -2px;
-}
-
 .session-chat-composer__head {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+.session-chat-composer__head-stop {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.session-chat-composer__head-stop .session-chat-btn--stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 2px 9px;
+  font-size: 12px;
+}
+.session-chat-composer__head-stop .session-chat-action-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.session-chat-composer__head-stop .session-chat-action-label {
+  display: inline;
 }
 .session-chat-composer__head-label {
   flex-shrink: 0;
@@ -356,9 +352,9 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 2px;
-  background: var(--color-surface-well);
-  box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.8);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.032);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .session-chat-composer-input:focus-within {
@@ -369,7 +365,7 @@
 .session-chat-composer--dock .session-chat-composer-input textarea:focus-visible {
   min-height: 34px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 10px;
   background: transparent;
   box-shadow: none;
 }
@@ -578,6 +574,12 @@
   }
 }
 
+@media (max-width: 767px) {
+  .session-chat-btn--queue {
+    display: none;
+  }
+}
+
 .session-chat-attachment-tray {
   display: flex;
   flex-wrap: wrap;
@@ -678,9 +680,9 @@
   flex-direction: column;
   gap: 6px;
   padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border-primary);
-  background: var(--color-surface-well);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.028);
 }
 
 .session-background-roster__summary {
@@ -732,37 +734,103 @@
   border-top: 1px solid var(--color-border-primary);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: min(30dvh, 250px);
+  gap: 6px;
+  max-height: min(32dvh, 220px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-@media (max-width: 720px) {
-  .session-background-roster__list {
-    max-height: min(22dvh, 170px);
-  }
+.session-background-roster__section-head {
+  padding-top: 4px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-background-roster__section-head:first-child {
+  padding-top: 0;
 }
 
 .session-background-roster__item {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.38;
+  padding: 5px 6px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.session-background-roster__item.is-linked:hover {
+  background: rgba(255, 255, 255, 0.048);
+}
+
+.session-background-roster__row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-background-roster__row-meta {
+  display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 4px 8px;
+  padding-left: 13px;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.session-background-roster__row-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 13px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.session-background-roster__branch {
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .session-background-roster__dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   flex-shrink: 0;
-  background: var(--color-intent-success);
+  background: var(--color-intent-warning);
 }
 
 .session-background-roster__dot--waiting {
-  background: var(--color-intent-warning);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-muted);
+}
+
+.session-background-roster__dot--done {
+  background: var(--color-intent-success);
+}
+
+.session-background-roster__dot--failed {
+  background: var(--color-intent-danger);
+}
+
+.session-background-roster__kind {
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
 }
 
 .session-background-roster__badge {
@@ -771,24 +839,31 @@
   border-radius: var(--radius-xs);
   border: 1px solid var(--color-border-primary);
   font-family: var(--font-family-mono);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--color-text-secondary);
 }
 
 .session-background-roster__badge--fork {
+  border-color: rgba(240, 138, 36, 0.35);
   color: var(--color-intent-warning);
 }
 
-.session-background-roster__status {
+.session-background-roster__stale-wait {
   flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid rgba(240, 138, 36, 0.35);
+  color: var(--color-intent-warning);
   font-family: var(--font-family-mono);
-  font-size: 10.5px;
-  color: var(--color-text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-background-roster__title {
-  color: var(--color-text-primary);
+  flex: 1 1 auto;
   min-width: 0;
+  color: var(--color-text-primary);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -803,8 +878,29 @@
   text-decoration: underline;
 }
 
+.session-background-roster__metrics {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-background-roster__tokens {
+  color: var(--color-text-secondary);
+}
+
+.session-background-roster__ext {
+  color: var(--color-text-muted);
+}
+
 .session-background-roster__step {
-  flex: 1 1 140px;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -813,10 +909,118 @@
 }
 
 .session-background-roster__meta {
-  margin-left: auto;
   flex-shrink: 0;
   font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.session-background-sheet {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  position: fixed;
+  inset: auto 0 0 0;
+  color: var(--color-text-primary);
+}
+
+.session-background-sheet::backdrop {
+  background: rgba(8, 6, 4, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.session-background-sheet__panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 75dvh;
+  border-top: 1px solid var(--color-border-primary);
+  border-radius: 18px 18px 0 0;
+  background: rgba(21, 16, 12, 0.88);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+  overscroll-behavior: contain;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .session-background-sheet__panel {
+    background: var(--color-surface-elevated, #15100c);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.session-background-sheet__grabber {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 8px;
+  border-radius: 999px;
+  background: var(--color-border-primary);
+}
+
+.session-background-sheet__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+}
+
+.session-background-sheet__title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-background-sheet__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.session-background-sheet__summary {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.session-background-sheet__done {
+  appearance: none;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-surface-well);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-xs);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.session-background-sheet__body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-background-sheet__body .session-background-roster__list,
+.session-live-inspector__body .session-background-roster__list {
+  max-height: none;
+  overflow: visible;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.session-background-sheet__footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
 }

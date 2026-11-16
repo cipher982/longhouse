@@ -242,6 +242,17 @@ export function getFailurePreview(interaction: ToolInteraction): string | null {
   return boundToolOutputPreview(text);
 }
 
+const AGENT_LAUNCH_TOOLS = new Set(["agent", "task", "spawn_agent", "subagent"]);
+
+function isAgentLaunchBoilerplate(interaction: ToolInteraction, text: string): boolean {
+  const names = [interaction.toolName, interaction.presentation?.tool_name]
+    .filter(Boolean)
+    .map((n) => String(n).trim().toLowerCase());
+  const isAgentTool = names.some((n) => AGENT_LAUNCH_TOOLS.has(n));
+  if (!isAgentTool && (interaction.children?.length ?? 0) === 0) return false;
+  return /^(?:async\s+agent\s+launched|background\s+agent\s+launched|launched(?:\s+successfully)?(?:\.|!|\s|$))/i.test(text);
+}
+
 /** Successful tool output shown inline while the row remains collapsed. */
 export function getToolOutputPreview(interaction: ToolInteraction): string | null {
   if (isToolInteractionFailed(interaction)) return null;
@@ -250,6 +261,7 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
   const parsed = parseLonghouseOutput(raw);
   const text = ((parsed ? parsed.output : raw) || "").trim();
   if (!text) return null;
+  if (isAgentLaunchBoilerplate(interaction, text)) return null;
   return boundToolOutputPreview(text);
 }
 

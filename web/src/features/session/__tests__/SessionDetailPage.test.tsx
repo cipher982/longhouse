@@ -1930,7 +1930,7 @@ describe("SessionDetailPage — header affordances", () => {
     expect(screen.getByTestId("session-usage")).toHaveTextContent("13% of 1.0M");
     expect(screen.getByTestId("session-cost")).toHaveTextContent("$53.89");
     expect(screen.getByTestId("session-cumulative-duration")).toHaveTextContent("8h 1m");
-    expect(screen.getByTestId("session-git-context")).toHaveTextContent("control-plane git:(claude-fidelity) wt:claude-fidelity");
+    expect(screen.getByTestId("session-git-context")).toHaveTextContent("control-plane wt:claude-fidelity");
     expect(screen.getByTestId("session-permission-mode")).toHaveTextContent("bypass permissions");
     expect(screen.getByTestId("session-away-recap")).toHaveTextContent("Landed Step 2 projections.");
     expect(screen.getByTestId("session-background-roster-toggle")).toHaveTextContent("1 agent (waiting) · 1 monitor");
