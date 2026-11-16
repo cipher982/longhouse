@@ -258,7 +258,11 @@ jobs:
   installer-public-canary:
     # Installs what the world actually gets: the latest published release,
     # against the default branch, with no locally built pair.
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_public_canary }}
+    #
+    # Skipped while the public standoff lasts (repo variable LONGHOUSE_PUBLIC_STANDOFF=1; see
+    # "Public standoff" in ~/git/zerg/AGENTS.md). The repo is private by choice, and a stranger's
+    # install with no credentials gets 404 on every release asset. Unset the variable to re-enable.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_public_canary && vars.LONGHOUSE_PUBLIC_STANDOFF != '1' }}
     env:
       GITHUB_TOKEN: ${{ github.token }}
     strategy:
