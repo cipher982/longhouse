@@ -26,6 +26,7 @@ from zerg.qa import opencode_helm_lifecycle
 from zerg.qa import provider_console_lifecycle
 from zerg.qa import provider_native_resume
 from zerg.qa import wait_kind
+from zerg.qa.live_kit import poll as wait_kind_poll
 from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_PROCESS
@@ -658,3 +659,124 @@ def test_the_post_resume_receipt_says_what_the_providers_hooks_showed() -> None:
         is False
     )
     assert provider_native_resume._with_hook_sequence(correlation, None) == correlation
+
+
+ECHO = f"Reply with exactly {MARKER}"
+
+
+def _cursor_first_turn(reply: str) -> list[dict[str, object]]:
+    """Cursor's hooks for a first turn, in the shape the factory retained on 2026-11-16."""
+
+    return [
+        {"event": "beforeSubmitPrompt", "prompt": ECHO, "generation_id": "g1"},
+        {"event": "afterAgentThought", "text": f'The user wants me to reply with exactly "{MARKER}".', "generation_id": "g1"},
+        {"event": "afterAgentResponse", "text": reply, "generation_id": "g1"},
+        {"event": "stop", "status": "completed", "generation_id": "g1"},
+    ]
+
+
+def test_a_cursor_reply_that_repeats_the_prompt_is_a_decline_not_a_slow_archive() -> None:
+    """Factory cell cursor_helm_steer_active failed three times with Cursor answering its own prompt back.
+
+    The archive served the repeat; the waiter only asked whether the marker had
+    been answered, burned the timeout and declared Longhouse's ingest.
+    """
+
+    rows = _cursor_first_turn(ECHO)
+
+    assert cursor_helm_product_e2e.reply_state(rows, [ECHO], MARKER) == "declined"
+    # The archive has not served the repeat yet: still waiting on it.
+    assert cursor_helm_product_e2e.reply_state(rows, [], MARKER) == "pending"
+    # An archived answer wins over any earlier repeat.
+    assert cursor_helm_product_e2e.reply_state(rows, [ECHO, MARKER], MARKER) == "answered"
+    # A real answer that is not archived yet is the archive's to serve, never a decline.
+    assert cursor_helm_product_e2e.reply_state(_cursor_first_turn(MARKER), [], MARKER) == "pending"
+
+
+def test_a_cursor_repeat_is_attributed_by_whether_the_archive_served_it() -> None:
+    rows = _cursor_first_turn(ECHO)
+
+    assert cursor_helm_product_e2e.hosted_reply_waited_on(rows, MARKER, [ECHO]) == PROVIDER_TURN
+    # Cursor said it, Longhouse did not serve it: that one is ingest.
+    assert cursor_helm_product_e2e.hosted_reply_waited_on(rows, MARKER, []) == LONGHOUSE_INGEST
+    # No view of the archive: nothing to declare about a reply that did not answer.
+    assert cursor_helm_product_e2e.hosted_reply_waited_on(rows, MARKER) is None
+    # A real answer the archive lacks is ingest, as before.
+    assert cursor_helm_product_e2e.hosted_reply_waited_on(_cursor_first_turn(MARKER), MARKER, []) == LONGHOUSE_INGEST
+
+
+def _fake_cursor(replies: list[str]):
+    """A Cursor whose Nth turn answers ``replies[N]``, with the archive serving each as it lands."""
+
+    rows: list[dict[str, object]] = []
+    served: list[str] = []
+    sends: list[str] = []
+
+    def take_prompt(prompt: str) -> None:
+        reply = replies[len(sends)]
+        sends.append(prompt)
+        rows.append({"event": "beforeSubmitPrompt", "prompt": prompt, "generation_id": f"g{len(sends)}"})
+        rows.append({"event": "afterAgentResponse", "text": reply, "generation_id": f"g{len(sends)}"})
+        served.append(reply)
+
+    take_prompt(ECHO)
+    return rows, served, sends, take_prompt
+
+
+def test_a_repeated_prompt_is_asked_again_once_and_recorded(monkeypatch) -> None:
+    rows, served, sends, take_prompt = _fake_cursor([ECHO, MARKER])
+    monkeypatch.setattr(cursor_helm_product_e2e, "_wait_until", lambda read, **kw: wait_kind_poll(read, **kw))
+    declines: list[str] = []
+
+    reply = cursor_helm_product_e2e.wait_for_marker_reply(
+        MARKER,
+        "first Cursor reply in hosted archive",
+        hosted_events=lambda: {"events": [{"role": "assistant", "content_text": text} for text in served]},
+        hook_rows=lambda: list(rows),
+        resend=lambda: take_prompt(f"again {MARKER}"),
+        declines=declines,
+        timeout=2,
+    )
+
+    assert declines == [ECHO]
+    assert len(sends) == 2
+    assert MARKER in [event["content_text"] for event in reply["events"]]
+
+
+def test_a_prompt_repeated_twice_fails_as_the_provider_turn(monkeypatch) -> None:
+    rows, served, sends, take_prompt = _fake_cursor([ECHO, ECHO])
+    monkeypatch.setattr(cursor_helm_product_e2e, "_wait_until", lambda read, **kw: wait_kind_poll(read, **kw))
+    declines: list[str] = []
+
+    with pytest.raises(RuntimeError, match="repeated the prompt") as raised:
+        cursor_helm_product_e2e.wait_for_marker_reply(
+            MARKER,
+            "first Cursor reply in hosted archive",
+            hosted_events=lambda: {"events": [{"role": "assistant", "content_text": text} for text in served]},
+            hook_rows=lambda: list(rows),
+            resend=lambda: take_prompt(f"again {MARKER}"),
+            declines=declines,
+            timeout=2,
+        )
+
+    assert waited_on(raised.value) == PROVIDER_TURN
+    assert declines == [ECHO, ECHO]
+
+
+def test_a_repeat_the_archive_never_served_waits_and_blames_ingest(monkeypatch) -> None:
+    rows, served, sends, take_prompt = _fake_cursor([ECHO])
+    served.clear()
+    monkeypatch.setattr(cursor_helm_product_e2e, "_wait_until", lambda read, **kw: wait_kind_poll(read, interval=0.05, **kw))
+
+    with pytest.raises(RuntimeError, match="timed out waiting for first Cursor reply") as raised:
+        cursor_helm_product_e2e.wait_for_marker_reply(
+            MARKER,
+            "first Cursor reply in hosted archive",
+            hosted_events=lambda: {"events": []},
+            hook_rows=lambda: list(rows),
+            resend=lambda: pytest.fail("a reply the archive lacks is not a decline"),
+            declines=[],
+            timeout=0.3,
+        )
+
+    assert waited_on(raised.value) == LONGHOUSE_INGEST

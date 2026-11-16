@@ -34,6 +34,7 @@ from zerg.qa.wait_kind import LONGHOUSE_ENGINE
 from zerg.qa.wait_kind import LONGHOUSE_INGEST
 from zerg.qa.wait_kind import PROVIDER_TURN
 from zerg.qa.wait_kind import RUNTIME_HOST
+from zerg.qa.wait_kind import expired
 from zerg.qa.wait_kind import failure_fields
 from zerg.services.longhouse_paths import get_managed_local_dir
 
@@ -59,6 +60,7 @@ def _now() -> str:
 
 
 _wait_until = functools.partial(poll, interval=0.25)
+_DECLINED = object()
 
 
 def _state_ids(root: Path) -> set[str]:
@@ -106,16 +108,54 @@ def _answered_in(payload: dict[str, Any] | None, marker: str) -> dict[str, Any] 
     return payload if payload and any_marker_answered(_assistant_texts(payload), marker) else None
 
 
-def hosted_reply_waited_on(rows: list[dict[str, Any]], marker: str) -> str | None:
+def _marker_response_text(rows: list[dict[str, Any]], marker: str) -> str | None:
+    """Cursor's own newest reply that names ``marker``, from its ``afterAgentResponse`` hook."""
+
+    texts = [str(row.get("text") or "") for row in rows if row.get("event") == "afterAgentResponse"]
+    return next((text for text in reversed(texts) if marker in text), None)
+
+
+def _served(text: str, hosted_texts: list[str]) -> bool:
+    wanted = text.strip()
+    return any(wanted and wanted in served.strip() for served in hosted_texts)
+
+
+def reply_state(rows: list[dict[str, Any]], hosted_texts: list[str], marker: str) -> str:
+    """Where one marker reply stands, from Cursor's hooks and what the archive served.
+
+    ``answered``: an assistant event in the archive answers with the marker.
+    ``declined``: Cursor's own reply to the prompt names the marker without
+    answering with it (the model repeated "Reply with exactly <marker>" back,
+    factory runs 2026-11-15T19:40Z, 2026-11-16T00:22Z and 03:18Z, all three
+    with the same 19 extra bytes in Cursor's own transcript) and the archive
+    already serves that very text. The turn is over and Longhouse kept its
+    word, so waiting longer learns nothing. Anything else is ``pending``,
+    including a reply the archive has not served yet.
+    """
+
+    if any_marker_answered(hosted_texts, marker):
+        return "answered"
+    reply = _marker_response_text(rows, marker)
+    if reply is not None and not marker_answered(reply, marker) and _served(reply, hosted_texts):
+        return "declined"
+    return "pending"
+
+
+def hosted_reply_waited_on(rows: list[dict[str, Any]], marker: str, hosted_texts: list[str] | None = None) -> str | None:
     """Which side of "the reply in the hosted archive" stopped, from Cursor's own hooks.
 
     That wait covers Cursor's turn and then Longhouse shipping the reply.
     Cursor fires ``beforeSubmitPrompt`` when it takes a prompt,
     ``afterAgentResponse`` with the reply text when its turn answers, and
     ``stop`` when a turn ends, so its hook record says which half never
-    happened. A response that names the marker means the turn is done and the
-    archive is what is awaited. A prompt that names it, with no response and no
-    ``stop`` after it, is a turn still open: Cursor's turn is what is awaited.
+    happened. A response that answers with the marker means the turn is done
+    and the archive is what is awaited. A response that only names the marker
+    (the model repeating the prompt) is not that reply: with the archive's
+    assistant texts in hand, one the archive serves is the model's failure to
+    answer (``PROVIDER_TURN``) and one it does not serve is Longhouse's
+    (``LONGHOUSE_INGEST``); without them nothing is declared. A prompt that
+    names the marker, with no response and no ``stop`` after it, is a turn
+    still open: Cursor's turn is what is awaited.
 
     Nothing is declared in the other two cases. A turn that stopped without
     the reply is over: Cursor answered with a failure of its own (its usage
@@ -124,9 +164,64 @@ def hosted_reply_waited_on(rows: list[dict[str, Any]], marker: str) -> str | Non
     Cursor, which this record cannot tell apart.
     """
 
-    if any(row.get("event") == "afterAgentResponse" and marker in str(row.get("text") or "") for row in rows):
-        return LONGHOUSE_INGEST
+    reply = _marker_response_text(rows, marker)
+    if reply is not None:
+        if marker_answered(reply, marker):
+            return LONGHOUSE_INGEST
+        if hosted_texts is None:
+            return None
+        return PROVIDER_TURN if _served(reply, hosted_texts) else LONGHOUSE_INGEST
     return open_turn_waited_on(rows, marker)
+
+
+def wait_for_marker_reply(
+    marker: str,
+    description: str,
+    *,
+    hosted_events: Any,
+    hook_rows: Any,
+    resend: Any,
+    declines: list[str],
+    timeout: float,
+) -> dict[str, Any]:
+    """Wait for the marker reply; when Cursor's model repeats the prompt instead, ask once more.
+
+    A repeat that the archive served is a finished turn the model got wrong,
+    not archive latency: waiting the full window on it burned the timeout and
+    then blamed ingest. Re-send the way the owner would, keep what Cursor said
+    in ``declines`` so a decline is on the record, and fail as a provider turn
+    if it repeats.
+    """
+
+    # Rows name their marker, so the first attempt reads from the top; only a re-send
+    # needs to ignore what Cursor already said.
+    start = 0
+    for attempt in range(2):
+        seen_texts: list[str] = []
+
+        def read() -> Any:
+            payload = hosted_events()
+            seen_texts[:] = _assistant_texts(payload) if payload else []
+            state = reply_state(hook_rows()[start:], seen_texts, marker)
+            return payload if state == "answered" else (_DECLINED if state == "declined" else None)
+
+        outcome = _wait_until(
+            read,
+            timeout=timeout,
+            description=description,
+            waited_on=lambda: hosted_reply_waited_on(hook_rows()[start:], marker, seen_texts),
+        )
+        if outcome is not _DECLINED:
+            return outcome
+        declines.append(_marker_response_text(hook_rows()[start:], marker) or "")
+        if attempt == 1:
+            raise expired(
+                RuntimeError(f"Cursor repeated the prompt instead of answering {marker} twice: {declines}"),
+                PROVIDER_TURN,
+            )
+        start = len(hook_rows())
+        resend()
+    raise AssertionError("unreachable")
 
 
 def open_turn_waited_on(rows: list[dict[str, Any]], prompt_marker: str) -> str | None:
@@ -721,12 +816,31 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 waited_on=RUNTIME_HOST,
             )
 
-        first = _wait_until(
-            lambda: _answered_in(hosted_events(), marker_one),
-            timeout=args.timeout,
-            description="first Cursor reply in hosted archive",
-            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), marker_one),
-        )
+        declined_replies: list[str] = []
+        report["declined_replies"] = declined_replies
+
+        def reply_in_archive(marker: str, description: str) -> dict[str, Any]:
+            def resend() -> None:
+                settled(args.timeout)
+                _wait_until(
+                    lambda: (state if _can_send_canonical(state) else None) if (state := session_state()) else None,
+                    timeout=args.timeout,
+                    description="Cursor live-control lease on Runtime Host",
+                    waited_on=RUNTIME_HOST,
+                )
+                send_live(f"That was not the reply I asked for. Reply with exactly {marker} and nothing else.")
+
+            return wait_for_marker_reply(
+                marker,
+                description,
+                hosted_events=hosted_events,
+                hook_rows=lambda: _hook_rows(root, session_id),
+                resend=resend,
+                declines=declined_replies,
+                timeout=args.timeout,
+            )
+
+        first = reply_in_archive(marker_one, "first Cursor reply in hosted archive")
         first_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_one)).total_seconds()
         first_settled = settled(args.timeout)
         bound_run_id = _run_id(first_settled)
@@ -737,12 +851,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             waited_on=RUNTIME_HOST,
         )
         send_live(f"Reply with exactly {marker_two}")
-        second = _wait_until(
-            lambda: _answered_in(hosted_events(), marker_two),
-            timeout=args.timeout,
-            description="remote Cursor reply in hosted archive",
-            waited_on=lambda: hosted_reply_waited_on(_hook_rows(root, session_id), marker_two),
-        )
+        second = reply_in_archive(marker_two, "remote Cursor reply in hosted archive")
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
         settled(args.timeout)
 
