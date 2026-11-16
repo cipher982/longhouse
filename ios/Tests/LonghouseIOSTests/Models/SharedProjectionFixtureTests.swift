@@ -24,6 +24,42 @@ final class SharedProjectionFixtureTests: XCTestCase {
         let rendersPreview: Bool
     }
 
+    /// Grouping these fixtures lives in the shared TypeScript model
+    /// (`sharedProjectionFixtures.test.ts`). iOS owns the step before it:
+    /// decode the served projection and hand every event to the document
+    /// with its identity and tool pairing intact.
+    func testSharedProjectionFixturesReachTheDocumentIntact() throws {
+        for fixtureName in [
+            "codex-wrapper-presentation.json",
+            "live-claude-session.json",
+            "structured-output-final-answer.json",
+        ] {
+            let data = try Data(contentsOf: RepoRoot.url()
+                .appendingPathComponent("tests/fixtures/session-projection")
+                .appendingPathComponent(fixtureName))
+            let projection = try JSONDecoder.snakeCase.decode(ProjectionFixture.self, from: data).projection
+            let payload = WebTranscriptView.payloadData(
+                serverURL: nil,
+                projectionItems: projection.items,
+                subagents: [],
+                submittedInputs: [],
+                errorMessage: nil,
+                liteBodies: LiteBodyState()
+            )
+            let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: payload) as? [String: Any], fixtureName)
+            let sent = try XCTUnwrap((root["projection"] as? [String: Any])?["items"] as? [[String: Any]], fixtureName)
+            let sentEvents = sent.compactMap { $0["event"] as? [String: Any] }
+            let fixtureEvents = projection.items.compactMap(\.event)
+            XCTAssertEqual(sentEvents.count, fixtureEvents.count, fixtureName)
+            XCTAssertEqual(sentEvents.map { "\($0["id"] ?? "")" }, fixtureEvents.map(\.id), fixtureName)
+            XCTAssertEqual(sentEvents.map { $0["tool_call_id"] as? String }, fixtureEvents.map(\.toolCallId), fixtureName)
+        }
+    }
+
+    private struct ProjectionFixture: Decodable {
+        let projection: SessionProjectionResponse
+    }
+
     func testSharedTranscriptPreviewFixtures() throws {
         let fixture = try loadTranscriptPreviewFixture()
         for fixtureCase in fixture.cases {
