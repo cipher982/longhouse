@@ -244,7 +244,10 @@ jobs:
               jq -sr --arg target "$release_version" '
                 def version: ltrimstr("v") | split(".") | map(tonumber);
                 ($target | version) as $target_version |
+                # Only a complete release (its checksum manifest is uploaded last) can be installed;
+                # v0.1.80 and v0.1.81 lost their macOS build and never got one.
                 [.[][] | select(.draft == false and .prerelease == false) |
+                  select(any(.assets[]; .name == "local-runtime-checksums.txt")) |
                   .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
                   select(version < $target_version)] |
                 sort_by(version) | last // error("No previous stable release")')"
@@ -309,7 +312,10 @@ jobs:
             jq -sr --arg target "$release_tag" '
               def version: ltrimstr("v") | split(".") | map(tonumber);
               ($target | version) as $target_version |
+              # Only a complete release (its checksum manifest is uploaded last) can be installed;
+              # v0.1.80 and v0.1.81 lost their macOS build and never got one.
               [.[][] | select(.draft == false and .prerelease == false) |
+                select(any(.assets[]; .name == "local-runtime-checksums.txt")) |
                 .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
                 select(version < $target_version)] |
               sort_by(version) | last // error("No previous stable release")')"
