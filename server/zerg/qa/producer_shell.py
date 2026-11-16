@@ -257,6 +257,8 @@ class Producer:
     fault_receipts: str | None = FAULT_RECEIPTS
     # Per assertion, the observation records that exist only once that step's verdict was decided (failed_results.reached_only).
     reached: Mapping[str, Sequence[str]] | None = None
+    # Per assertion, the records that exist only when the step failed on the product's side (``failed_results.reached_only``).
+    decided_false: Mapping[str, Sequence[str]] | None = None
     refuse: Callable[[argparse.Namespace], str | None] | None = None
     add_arguments: Callable[[argparse.ArgumentParser], None] | None = None
     # Whether a run may end ``blocked`` (Run.block). Never for a producer the factory manifest lists.
@@ -335,7 +337,11 @@ class Producer:
             failure["negative_control"] = self._unjudged_control(run, control)
         if run.controlled:
             return {**failure, "observation": run.observation, "assertions": dict(run.assertions)}
-        assertions = run.assertions if self.reached is None else reached_only(run.assertions, run.observation or {}, self.reached)
+        assertions = (
+            run.assertions
+            if self.reached is None
+            else reached_only(run.assertions, run.observation or {}, self.reached, self.decided_false)
+        )
         return settle_failed_result(failure, observation=run.observation, assertions=assertions)
 
     def _unjudged_control(self, run: Run, control: str) -> dict[str, Any]:

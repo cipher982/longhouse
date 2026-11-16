@@ -2542,6 +2542,13 @@ class Lifecycle:
                 }
             )
 
+    def target_failure(self, step: str, code: str, detail: str | None = None) -> None:
+        """Record that a step failed on the product's side: the command was refused, or the effect it was accepted for
+        never came within the step's budget. The result then reports that step's cell as false (a finding) even though the
+        run raises there and never reaches the records a passing step leaves (``Producer.decided_false``)."""
+
+        self.observation.setdefault("target_failures", {})[step] = {"code": code, **({"detail": detail} if detail else {})}
+
     def reply(
         self,
         marker: str,
@@ -2779,12 +2786,16 @@ class Lifecycle:
             record["marker_wait"]["status"] = "answered"
         finally:
             # Whatever the wait came to. A send that was taken and whose prompt the provider never held started no turn.
-            self.observation[f"{name}_turn_verdict"] = send_turn_verdict(
+            verdict = self.observation[f"{name}_turn_verdict"] = send_turn_verdict(
                 self.session_file,
                 marker=marker,
                 accepted=command.get("accepted") is True,
                 answered=record["marker_wait"]["status"] == "answered",
             )
+            # A send the Runtime Host refused, or took and never started a turn for, is the product's. A turn that started
+            # and did not answer is the model's wait, and stays the run's failure.
+            if verdict["code"] in {"send_not_accepted", "send_accepted_without_a_turn"}:
+                self.target_failure(name, str(verdict["code"]))
         record.update(marker_row=row, evidence=evidence)
         if self.scripted_turn_barrier:
             self.wait_for_turn_completion(before_state, row, marker=marker)
@@ -2835,8 +2846,18 @@ class Lifecycle:
         if not local:
             # A remote steer is judged by the host's served state, which trails the local phase: steer once it shows the turn.
             self.observation[f"{name}_served_turn"] = _wait_served_turn(self.api_url, self.token, self.session_id)
-        command = self.control("steer", prompt, local=local)
-        row, evidence = self.reply(marker, offset, timeout=150)
+        try:
+            command = self.control("steer", prompt, local=local)
+        except RuntimeHostError as exc:
+            self.target_failure(name, "steer_not_accepted", str(exc)[:300])
+            raise
+        try:
+            row, evidence = self.reply(marker, offset, timeout=150)
+        except RuntimeError:
+            # A steer taken whose text the provider never held was dropped; one it held and did not answer is a stalled model.
+            if not provider_holds_prompt(self.session_file, marker):
+                self.target_failure(name, "steer_accepted_without_a_turn")
+            raise
         settled = self.settle()
         verdict = steer_turn_verdict(read_session_entries(self.session_file), task_marker=task, steer_marker=marker, task_done_marker=done)
         self.observation[f"{name}_turn_verdict"] = verdict
@@ -2879,18 +2900,24 @@ class Lifecycle:
         }
         native_session_id = str(self.state.get("native_session_id") or "")
         if f.channel_terminal:
-            agent_end, channel_state = _wait_channel_terminal(
-                self.home,
-                f,
-                session_id=self.session_id,
-                native_session_id=native_session_id,
-                session_file=self.session_file,
-                minimum_turn_seq=_turn_sequence(active_state),
-            )
-            record["agent_end"] = agent_end
-            record["evidence"] = _channel_terminal_evidence(
-                agent_end, channel_state, native_session_id=native_session_id, session_file=self.session_file
-            )
+            try:
+                agent_end, channel_state = _wait_channel_terminal(
+                    self.home,
+                    f,
+                    session_id=self.session_id,
+                    native_session_id=native_session_id,
+                    session_file=self.session_file,
+                    minimum_turn_seq=_turn_sequence(active_state),
+                )
+            except RuntimeError as exc:
+                # An accepted abort whose turn never ends is the abort not working: the cell reads false from the
+                # missing native abort below, not a stalled run.
+                self.observation[f"{name}_terminal_wait_error"] = f"{type(exc).__name__}: {exc}"
+            else:
+                record["agent_end"] = agent_end
+                record["evidence"] = _channel_terminal_evidence(
+                    agent_end, channel_state, native_session_id=native_session_id, session_file=self.session_file
+                )
         else:
             # No channel event says the turn is over: the launcher's state leaving the turn does.
             record["settled_state"] = dict(
@@ -3069,8 +3096,9 @@ class Lifecycle:
         f = self.f
         state = dict(self.state)
         command = self.control("terminate")
-        control = self.negative_control == "terminate"
-        stopped = self._stopped(state, self.terminals[0], owner="replacement", tolerate=control)
+        # An accepted terminate whose owners are still alive at the deadline is the terminate not working: recorded below
+        # and reported as a false cell, not raised as a stalled wait.
+        stopped = self._stopped(state, self.terminals[0], owner="replacement", tolerate=True)
         owned = command.get("accepted") is True and (
             stopped.get("owners_dead") is True if f.terminate_proves_owners_dead else stopped.get("terminal_reason") == "remote_terminate"
         )
@@ -3089,7 +3117,9 @@ class Lifecycle:
             ),
         }
         self.controls["terminate"] = {"action_label": "terminate", "state": state, "command": command, "stopped_state": stopped}
-        if f.refused_command_ends_run and not owned and not control:
+        if not owned:
+            self.target_failure("terminate", "terminate_left_owners_alive" if command.get("accepted") is True else "terminate_not_accepted")
+        if f.refused_command_ends_run and not owned and self.negative_control != "terminate":
             raise RuntimeError(f"{f.name} Helm terminate was not proven after the recorded execution owners exited")
         # Retirement is the cleanup proof, not the terminate assertion, so it is
         # recorded after the verdict: under the terminate control the run stays

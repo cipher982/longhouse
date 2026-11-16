@@ -143,6 +143,12 @@ REACHED_MARKERS: dict[str, tuple[str, ...]] = {
     "omp_helm_stale_owner_refused": ("controls.stale_owner",),
     "omp_helm_native_replacement_bound": ("controls.replacement", "convergence.replacement"),
 }
+# A step that failed on the product's side leaves its own record, and the cell reads false from it (`Producer.decided_false`).
+DECIDED_FALSE: dict[str, tuple[str, ...]] = {
+    "omp_helm_send_idle": ("target_failures.send",),
+    "omp_helm_steer_active": ("target_failures.steer",),
+    "omp_helm_terminate_owned": ("target_failures.terminate",),
+}
 _HOST_CONTROLS = ("send", "follow_up", "steer", "abort", "replacement", "terminate", "final_terminate")
 
 
@@ -153,7 +159,7 @@ def _mapping(value: object) -> Mapping[str, Any]:
 def reached_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     """The verdicts of the steps this observation actually reached."""
 
-    return reached_only(omp_helm_lifecycle_assertions(observation), observation, REACHED_MARKERS)
+    return reached_only(omp_helm_lifecycle_assertions(observation), observation, REACHED_MARKERS, DECIDED_FALSE)
 
 
 def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
@@ -502,6 +508,7 @@ PRODUCER = Producer(
     negative_controls=tuple(NEGATIVE_CONTROLS),
     # A run that raised reports verdicts only for the steps it reached.
     reached=REACHED_MARKERS,
+    decided_false=DECIDED_FALSE,
 )
 
 

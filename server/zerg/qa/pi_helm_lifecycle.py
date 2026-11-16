@@ -144,6 +144,12 @@ REACHED_MARKERS: dict[str, tuple[str, ...]] = {
     "pi_helm_cold_resume_exact_file": ("controls.cold_resume", "convergence.resume_context", "control_identity.final"),
     "pi_helm_stale_owner_refused": ("controls.stale_owner",),
 }
+# A step that failed on the product's side leaves its own record, and the cell reads false from it (`Producer.decided_false`).
+DECIDED_FALSE: dict[str, tuple[str, ...]] = {
+    "pi_helm_send_idle": ("target_failures.send",),
+    "pi_helm_steer_active": ("target_failures.steer",),
+    "pi_helm_terminate_owned": ("target_failures.terminate",),
+}
 _HOST, _LOCAL = "runtime_host_agents_api", "local_engine_command"
 _BOUND = ("one_session", "one_thread", "provider_session_bound")
 
@@ -551,6 +557,7 @@ PRODUCER = Producer(
     variants=_VARIANTS,
     # A run that raised reports verdicts only for the steps it reached.
     reached=REACHED_MARKERS,
+    decided_false=DECIDED_FALSE,
     model_env="LONGHOUSE_PI_QUALIFICATION_MODEL",
     negative_controls=tuple(NEGATIVE_CONTROLS),
 )

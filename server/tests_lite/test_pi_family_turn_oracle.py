@@ -495,3 +495,48 @@ def test_a_control_that_ends_at_its_target_decides(provider, control, tmp_path, 
     # The receipt is the launcher's, for this session and this fault.
     receipts = map(json.loads, (root / "qa-fault-receipt.jsonl").read_text(encoding="utf-8").splitlines())
     assert {(line["fault"], line["session_id"]) for line in receipts} == {(verdict["fault"], result["observation"]["session_id"])}
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    ("fault", "cell", "code_key", "code"),
+    [
+        ("send_noop", "send_idle", "send_turn_verdict", "send_accepted_without_a_turn"),
+        ("terminate_noop", "terminate_owned", "terminate_verdict", "terminate_left_owners_alive"),
+    ],
+)
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_an_honest_run_reports_the_cell_false_when_the_effect_never_comes(
+    provider, fault, cell, code_key, code, tmp_path, monkeypatch, capsys
+):
+    """No control flag anywhere on the producer: the engine alone drops the send or keeps the owners alive.
+
+    The producer must report the target cell false (a product finding), not a harness failure with no verdict.
+    """
+
+    monkeypatch.delenv(fake.FAULT_ENV, raising=False)
+    monkeypatch.setenv("LONGHOUSE_QA_FAULT", f"{provider}_{fault}")
+    for name, seconds in _FAULT_WAITS[fault.split("_")[0]].items():
+        monkeypatch.setattr(
+            helm, name, lambda *a, _wait=getattr(helm, name), _seconds=seconds, **k: _wait(*a, **{**k, "timeout": _seconds})
+        )
+    _code, root, _left = fake.run_lifecycle(provider, tmp_path, monkeypatch.setenv)
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    assert result["status"] == "fail" and "negative_control" not in result
+    assert result["assertions"][f"{provider}_helm_{cell}"] is False
+    assert result["observation"][code_key]["code"] == code
+    assert result["observation"]["target_failures"][cell.split("_")[0]]["code"] == code
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("provider", ["omp", "pi"])
+def test_an_honest_steer_held_as_a_follow_up_reports_the_cell_false(provider, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(fake.FAULT_ENV, "steer_as_follow_up")
+    _code, root, _left = fake.run_lifecycle(provider, tmp_path, monkeypatch.setenv)
+    result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+    capsys.readouterr()
+
+    assert result["assertions"][f"{provider}_helm_steer_active"] is False
+    assert result["observation"]["steer_turn_verdict"]["code"] == "steer_delivered_as_queued_follow_up"

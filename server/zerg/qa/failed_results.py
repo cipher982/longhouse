@@ -49,6 +49,7 @@ def reached_only(
     assertions: Mapping[str, bool],
     observation: Mapping[str, Any],
     markers: Mapping[str, Sequence[str]],
+    decided_false: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, bool]:
     """The verdicts of the steps an errored run actually reached.
 
@@ -74,10 +75,19 @@ def reached_only(
     def present(value: Any) -> bool:
         return value is not None and not (isinstance(value, (Mapping, list, str)) and not value)
 
+    # ``decided_false`` names, per assertion, records that exist only when the step's own verdict failed for a reason the
+    # product owns (the command was refused, the effect never came within the step's budget). The step is then decided
+    # as a False without the later records ``markers`` asks for, which a step that failed there never reaches; the
+    # computed verdict must itself be False, so these records can never make a cell pass.
+    def decided_as_failure(assertion_id: str, verdict: bool) -> bool:
+        names = (decided_false or {}).get(assertion_id)
+        return bool(names) and verdict is False and all(present(value_at(marker)) for marker in names)
+
     # An assertion with no marker entry was never proven reached: absent, so a
     # producer that grows an assertion cannot crash its own error path.
     return {
         assertion_id: verdict
         for assertion_id, verdict in assertions.items()
-        if markers.get(assertion_id) and all(present(value_at(marker)) for marker in markers[assertion_id])
+        if decided_as_failure(assertion_id, verdict)
+        or (markers.get(assertion_id) and all(present(value_at(marker)) for marker in markers[assertion_id]))
     }
