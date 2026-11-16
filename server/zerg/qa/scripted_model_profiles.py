@@ -353,8 +353,9 @@ def configure_scripted_model_profile(
 
 # Names that would point agy (or a Longhouse hook it fires) at a real surface from an ambient shell. The wrapper
 # agy-dangerously-skip-permissions resolves "$HOME/.local/bin/agy", which does not exist under an isolated HOME.
+ANTIGRAVITY_BIN_ENV = "LONGHOUSE_ANTIGRAVITY_BIN"
 _ANTIGRAVITY_AMBIENT_ENV_NAMES = (
-    "LONGHOUSE_ANTIGRAVITY_BIN",
+    ANTIGRAVITY_BIN_ENV,
     "LONGHOUSE_HOOK_TOKEN",
     "LONGHOUSE_HOOK_URL",
     "LONGHOUSE_OWNER_INPUT_ENGINE",

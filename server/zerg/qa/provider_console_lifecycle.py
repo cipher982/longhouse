@@ -3081,7 +3081,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
     # Antigravity's only registered class is scripted_model (antigravity_console_producer), whether or not the
     # command line names it.
     if provider == "antigravity" and getattr(args, "evidence_class", None) in (None, "", "scripted_model"):
-        scripted_lane = antigravity_scripted_lane.start(root, home, environment)
+        scripted_lane = antigravity_scripted_lane.start(root, home, environment, provider_bin=args.provider_bin)
         args.model = args.model or antigravity_scripted_lane.SCRIPTED_AGY_MODEL
 
     try:

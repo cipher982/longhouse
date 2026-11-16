@@ -214,7 +214,7 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
     observation: dict[str, Any] = {"provider": provider}
     scripted_lane: antigravity_scripted_lane.ScriptedLane | None = None
     if provider == "antigravity":
-        scripted_lane = antigravity_scripted_lane.start(root, home, environment, tuple(markers))
+        scripted_lane = antigravity_scripted_lane.start(root, home, environment, tuple(markers), provider_bin=args.provider_bin)
         args.model = args.model or antigravity_scripted_lane.SCRIPTED_AGY_MODEL
     failure: BaseException | None = None
     try:

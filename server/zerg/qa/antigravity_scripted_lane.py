@@ -209,11 +209,16 @@ def start(
     search_markers: tuple[dict[str, str], ...] = (),
     *,
     helm: bool = False,
+    provider_bin: Path | None = None,
 ) -> ScriptedLane:
     """Serve the fixture on loopback and point a scratch agy profile (``home``) at it.
 
     ``helm`` serves the Helm lifecycle's fixture and keeps every request body under ``root/model-requests``, which its
     oracle reads to see what the model was sent and when.
+
+    The profile scrubs ``LONGHOUSE_ANTIGRAVITY_BIN`` (an ambient wrapper path must not reach agy), but the Machine Agent
+    advertises ``antigravity.turn_start`` only when it finds that binary, so ``provider_bin`` is put back afterwards.
+    A caller that starts the Machine Agent without it gets ``adapter_unavailable`` on every Console cell.
     """
 
     global _steer_tag
@@ -259,6 +264,8 @@ def start(
         environment[scripted_model_profiles.SCRIPTED_MODEL_BASE_URL_ENV] = server.endpoint
         environment[scripted_model_profiles.SCRIPTED_MODEL_SCRIPT_ENV] = str(path)
         scripted_model_profiles.configure_scripted_model_profile("antigravity", home, environment)
+        if provider_bin is not None:
+            environment[scripted_model_profiles.ANTIGRAVITY_BIN_ENV] = str(provider_bin)
     except BaseException:
         lane.close()
         raise

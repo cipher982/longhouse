@@ -167,3 +167,24 @@ def test_transcript_search_prompts_are_answered_with_their_joined_word():
     assert registration["providers"] == ["antigravity"]
     assert registration["evidence_classes"] == ["scripted_model"]
     assert registration["credential_binding_ids_by_evidence_class"] == {"scripted_model": ["runtime_host_control"]}
+
+
+def test_start_puts_the_provider_binary_back_after_the_profile_scrubs_it(tmp_path):
+    # The Machine Agent advertises antigravity.turn_start only when it finds LONGHOUSE_ANTIGRAVITY_BIN (or agy on
+    # PATH), and the profile scrubs that name as an ambient wrapper path. Without the put-back every Console cell
+    # failed with `adapter_unavailable` (2026-11-15).
+    home = tmp_path / "home"
+    home.mkdir()
+    binary = tmp_path / "provider"
+    env = {"LONGHOUSE_ANTIGRAVITY_BIN": "/Users/someone/.local/bin/agy-wrapper"}
+    scripted = lane.start(tmp_path, home, env, provider_bin=binary)
+    try:
+        assert env["LONGHOUSE_ANTIGRAVITY_BIN"] == str(binary)
+    finally:
+        scripted.close()
+    bare: dict[str, str] = {"LONGHOUSE_ANTIGRAVITY_BIN": "/ambient/agy"}
+    scripted = lane.start(tmp_path, home, bare)
+    try:
+        assert "LONGHOUSE_ANTIGRAVITY_BIN" not in bare
+    finally:
+        scripted.close()
