@@ -358,7 +358,10 @@
 
 @media (max-width: 720px) {
   .session-ledger[data-surface="composer"] .session-ledger__evidence {
-    width: min(320px, calc(100vw - 56px));
+    /* The info button sits about 85px in from the right edge (beside the send
+       button) and the panel is right-aligned to it, so reserve that run plus a
+       12px gutter or the panel's left edge leaves the window. */
+    width: min(320px, calc(100vw - 104px));
     max-height: min(28dvh, 220px);
   }
 }
