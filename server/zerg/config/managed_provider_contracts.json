@@ -3171,7 +3171,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             },
             {
               "id": "antigravity_helm_send_idle",
@@ -3188,7 +3188,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             },
             {
               "id": "antigravity_helm_send_active",
@@ -3205,7 +3205,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             },
             {
               "id": "antigravity_helm_steer_active",
@@ -3222,7 +3222,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             },
             {
               "id": "antigravity_helm_interrupt",
@@ -3239,7 +3239,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             },
             {
               "id": "antigravity_helm_terminate_owned",
@@ -3256,7 +3256,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             }
           ]
         },
@@ -3328,7 +3328,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             }
           ],
           "level": "live_no_token",
@@ -3376,7 +3376,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             }
           ],
           "observed_provider_version": "1.5.9",
@@ -3402,7 +3402,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             }
           ],
           "observed_provider_version": "1.5.9",
@@ -3436,7 +3436,7 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
+              "oracle_digest": "f5bf6d9e829050e38412d360b841190f4e57887cc027aee2be641413f3dfc90a"
             }
           ],
           "observed_provider_version": "1.5.9",

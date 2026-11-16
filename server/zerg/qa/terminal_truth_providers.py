@@ -468,7 +468,7 @@ def _install_antigravity_hook(home: Path, environment: dict[str, str]) -> None:
 
     if Path(environment["HOME"]).resolve() != home.resolve():
         raise RuntimeError("refusing to install the Antigravity hook outside the isolated HOME")
-    source = (SERVER_ROOT / "zerg" / "services" / "antigravity_hook_inbox.py").read_text()
+    source = (SERVER_ROOT / "zerg" / "provider_contract" / "antigravity_hook_inbox.py").read_text()
     template = next(
         (
             ast.literal_eval(node.value)

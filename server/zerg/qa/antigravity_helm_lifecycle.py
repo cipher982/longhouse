@@ -349,8 +349,8 @@ def _marker(kind: str) -> str:
     return f"{PREFIX}_{kind}_{uuid4().hex}"
 
 
-# Named by string only: the child process imports it, the verifier never does.
-SUBJECT_HOOK_MODULE = ".".join(["zerg", "services", "antigravity" + "_hook_inbox"])
+# The child process imports it; it lives in the neutral package.
+SUBJECT_HOOK_MODULE = "zerg.provider_contract.antigravity_hook_inbox"
 
 
 def _install_hook(args: argparse.Namespace, home: Path, longhouse_home: Path, environment: dict[str, str]) -> None:
