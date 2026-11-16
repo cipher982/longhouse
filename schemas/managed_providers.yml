@@ -1875,10 +1875,8 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
         max_age_seconds: 604800
-    # Console on `agy acp` (antigravity-parity.md step 2). The factory proves these through the shared
-    # Console lifecycle and transcript-search producers, which a live run needs a billed Gemini key
-    # for (the CI key is free tier), so the rows stay `sampled` and gate nothing until a key or the
-    # factory's scripted lane covers them.
+    # Console on `agy acp` (antigravity-parity.md step 2). The factory proves these on the scripted Gemini
+    # endpoint (no billed key needed), so they gate a release like every other provider's Console cells.
     session.turn.start:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1895,7 +1893,6 @@ providers:
         acceptable_evidence: [scripted_model]
         required_evidence_classes: [scripted_model]
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
     session.turn.steer:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1913,7 +1910,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
     session.transcript.search:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1931,7 +1927,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1955,7 +1950,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       - id: antigravity_helm_send_idle
         scenario_id: antigravity_helm_lifecycle
         oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
@@ -1964,7 +1958,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       - id: antigravity_helm_send_active
         scenario_id: antigravity_helm_lifecycle
         oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
@@ -1973,7 +1966,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       - id: antigravity_helm_steer_active
         scenario_id: antigravity_helm_lifecycle
         oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
@@ -1982,7 +1974,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       - id: antigravity_helm_interrupt
         scenario_id: antigravity_helm_lifecycle
         oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
@@ -1991,7 +1982,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       - id: antigravity_helm_terminate_owned
         scenario_id: antigravity_helm_lifecycle
         oracle_source: server/zerg/qa/antigravity_helm_lifecycle.py
@@ -2000,7 +1990,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
     session.input.send:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -2044,7 +2033,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
     run_once:
       level: none
       source: "Console routes through session.turn.start, not the legacy run_once command"
@@ -2105,7 +2093,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       observed_provider_version: "1.5.9"
 
     steer_active_turn:
@@ -2120,7 +2107,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       observed_provider_version: "1.5.9"
       owner_action: "the factory's Helm lifecycle producer (antigravity.helm_lifecycle.v1) drives the real TUI under a PTY"
     answer_pause:
@@ -2147,7 +2133,6 @@ providers:
         required_evidence_classes: [scripted_model]
         max_age_seconds: 1800
         max_age_seconds_by_evidence_class: {scripted_model: 1800}
-        assurance_priority: sampled
       observed_provider_version: "1.5.9"
     tail_output:
       level: hermetic

@@ -2851,8 +2851,7 @@
               ],
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ]
         },
@@ -2884,8 +2883,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ]
         },
@@ -2915,8 +2913,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ]
         },
@@ -2956,8 +2953,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             },
             {
               "id": "antigravity_helm_send_idle",
@@ -2973,8 +2969,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             },
             {
               "id": "antigravity_helm_send_active",
@@ -2990,8 +2985,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             },
             {
               "id": "antigravity_helm_steer_active",
@@ -3007,8 +3001,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             },
             {
               "id": "antigravity_helm_interrupt",
@@ -3024,8 +3017,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             },
             {
               "id": "antigravity_helm_terminate_owned",
@@ -3041,8 +3033,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ]
         },
@@ -3111,8 +3102,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ],
           "level": "live_no_token",
@@ -3159,8 +3149,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ],
           "observed_provider_version": "1.5.9",
@@ -3185,8 +3174,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ],
           "observed_provider_version": "1.5.9",
@@ -3219,8 +3207,7 @@
               "max_age_seconds": 1800,
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
-              },
-              "assurance_priority": "sampled"
+              }
             }
           ],
           "observed_provider_version": "1.5.9",

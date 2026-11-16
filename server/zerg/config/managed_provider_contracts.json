@@ -3065,7 +3065,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "23c21f149db4a58e71d2209a0d3fb2173b6ac68e118d001c4594b5bc8b4ce892"
             }
           ]
@@ -3099,7 +3098,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "23c21f149db4a58e71d2209a0d3fb2173b6ac68e118d001c4594b5bc8b4ce892"
             }
           ]
@@ -3131,7 +3129,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
             }
           ]
@@ -3174,7 +3171,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             },
             {
@@ -3192,7 +3188,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             },
             {
@@ -3210,7 +3205,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             },
             {
@@ -3228,7 +3222,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             },
             {
@@ -3246,7 +3239,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             },
             {
@@ -3264,7 +3256,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             }
           ]
@@ -3337,7 +3328,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             }
           ],
@@ -3386,7 +3376,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             }
           ],
@@ -3413,7 +3402,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             }
           ],
@@ -3448,7 +3436,6 @@
               "max_age_seconds_by_evidence_class": {
                 "scripted_model": 1800
               },
-              "assurance_priority": "sampled",
               "oracle_digest": "7017b5729ae707b1e410cf4ccdd6fdac1a6fd81aa3b32ab776c25d221e3083fd"
             }
           ],
