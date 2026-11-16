@@ -442,18 +442,20 @@ jobs:
     # A shard (37 captures, 2 at a time) took 5m48s on crunch; this runner ran
     # the sweep 1.8x slower than crunch, so ~10.5 min, and 15 min is the cap.
     #
-    # A push sweeps the desktop size only. All three sizes held three of this
-    # repo's three crunch slots for about 4.7 minutes each on every frontend or
-    # scripts push (155 slot-minutes a day on 2026-11-11/12) for a result
-    # nothing reads, and its one red streak that week hit every size at once.
-    # It runs for the web app and scripts/ui only (the ui_sweep path filter), not
-    # for every scripts/ change. ui-sweep-nightly.yml runs all three once a day
-    # whatever changed, where Sauron's
-    # ci-scheduled-red watches it; a manual run here also does all three.
+    # A push sweeps desktop and mobile; wide waits for the nightly. All three
+    # sizes held three of this repo's three crunch slots for about 4.7 minutes
+    # each on every frontend push (155 slot-minutes a day on 2026-11-11/12), so
+    # wide stays nightly. Desktop alone missed two mobile-only regressions on
+    # 2026-11-15 (the evidence panel clipped at the left edge, the Jump to live
+    # pill over the model chip), and queue waits are about a minute, so mobile
+    # earns its slot. It runs for the web app and scripts/ui only (the ui_sweep
+    # path filter), not for every scripts/ change. ui-sweep-nightly.yml runs all
+    # three once a day whatever changed, where Sauron's ci-scheduled-red watches
+    # it; a manual run here also does all three.
     strategy:
       fail-fast: false
       matrix:
-        viewport: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["desktop","wide","mobile"]' || '["desktop"]') }}
+        viewport: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["desktop","wide","mobile"]' || '["desktop","mobile"]') }}
     name: "UI popover sweep (${{ matrix.viewport }})"
     env:
       # The hosted arm64 runner has 4 vCPUs; the guest defaults to 2.

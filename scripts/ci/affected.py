@@ -81,8 +81,8 @@ FILTER_PLANS: dict[str, FilterPlan] = {
     ),
     "ui_sweep": FilterPlan(
         ("ubuntu-24.04-arm",),
-        ("make test-ui-sweep ARGS=--viewports=desktop",),
-        "A push sweeps the desktop size; the nightly sweep covers wide and mobile.",
+        ("make test-ui-sweep ARGS=--viewports=desktop", "make test-ui-sweep ARGS=--viewports=mobile"),
+        "A push sweeps the desktop and mobile sizes; the nightly sweep adds wide.",
     ),
     "runtime_image": FilterPlan(
         ("cube-maint",),

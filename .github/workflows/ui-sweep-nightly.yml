@@ -1,8 +1,8 @@
 name: UI Sweep Nightly
 
 # Opens every menu on every fixture scene at all three sizes (scripts/ui/popover-sweep.ts).
-# CI runs the desktop size on a frontend or scripts push; this is where the wide and mobile
-# sizes run. A scheduled workflow so that a red streak pages through Sauron's
+# CI runs the desktop and mobile sizes on a frontend push; this is where the wide size
+# runs, and all three run whatever changed. A scheduled workflow so that a red streak pages through Sauron's
 # ci-scheduled-red, which CI's advisory sweep job never did: it was red on 14 CI runs in a
 # row (2026-11-10 to 11-12) and nobody was told.
 on:
