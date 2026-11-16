@@ -199,6 +199,70 @@ class ImportGraph(unittest.TestCase):
             self.assertEqual(sorted(vb.read_sources(root)), [CANARY, "server/zerg/a.py"])
 
 
+class HiddenReferences(unittest.TestCase):
+    """A module named by a built string or a file read by path is a dependency an import walk does not show."""
+
+    SOURCES = {
+        "server/zerg/services/x.py": "",
+        "server/zerg/services/y.py": "",
+        "server/zerg/provider_contract/z.py": "",
+    }
+
+    def edges(self, qa_source):
+        return vb.import_edges({**self.SOURCES, QA + "probe.py": qa_source})
+
+    def test_a_module_name_folded_from_literals_is_an_edge(self):
+        for source in (
+            'NAME = ".".join(["zerg", "services", "x"])\n',
+            'NAME = "zerg.services." + "x"\n',
+            'NAME = "zerg.services" + ".x"\n',
+        ):
+            self.assertEqual(self.edges(source), {(QA + "probe.py", SVC + "x.py")}, source)
+
+    def test_a_module_name_with_an_interpolated_part_is_an_edge_to_the_package_it_can_reach(self):
+        self.assertEqual(
+            self.edges('def f(name):\n    return f"zerg.services.{name}"\n'), {(QA + "probe.py", SVC + "*")}
+        )
+        self.assertEqual(
+            self.edges('def f(name):\n    return "zerg.services." + name\n'), {(QA + "probe.py", SVC + "*")}
+        )
+
+    def test_a_path_read_is_an_edge(self):
+        for source in (
+            'from pathlib import Path\nR = Path(".")\nS = (R / "zerg" / "services" / "x.py").read_text()\n',
+            'import os\nS = open(os.path.join(".", "zerg", "services", "x.py")).read()\n',
+            'from pathlib import Path\nS = Path(".").joinpath("zerg", "services", "x.py")\n',
+            'S = "server/zerg/services/x.py"\n',
+            'S = "zerg/services/x.py"\n',
+        ):
+            self.assertEqual(self.edges(source), {(QA + "probe.py", SVC + "x.py")}, source)
+
+    def test_the_neutral_package_and_prose_are_not_crossings(self):
+        edges = self.edges('S = "zerg/provider_contract/z.py"\nT = f"zerg.provider_contract.{1}"\n')
+        self.assertEqual(vb.crossing_edges(edges), set())
+        self.assertEqual(self.edges('"""Reads server/zerg/services/x.py and zerg.services.x."""\nVALUE = 1\n'), set())
+        self.assertEqual(self.edges('S = "zerg/services/nothing_here.py"\nT = "not zerg"\n'), set())
+
+    def test_a_reference_the_base_already_held_is_carried_not_new(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Tree(tmp)
+            tree.init_git()
+            tree.write(SVC + "x.py", "")
+            tree.write(QA + "probe.py", 'S = "server/zerg/services/x.py"\n')
+            tree.write(vb.ALLOWLIST, "")
+            base = tree.commit("base: the reference exists, the old detector never listed it")
+            tree.write(vb.ALLOWLIST, f"{QA}probe.py -> {SVC}x.py  # reads it by path\n")
+            tree.commit("head lists it")
+            done = tree.run("check", "--base", base)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            tree.write(QA + "probe2.py", 'S = "server/zerg/services/x.py"\n')
+            tree.write(vb.ALLOWLIST, f"{QA}probe.py -> {SVC}x.py  # a\n{QA}probe2.py -> {SVC}x.py  # b\n")
+            tree.commit("head adds a second reader")
+            grown = tree.run("check", "--base", base)
+            self.assertEqual(grown.returncode, 1)
+            self.assertIn("grew", grown.stderr)
+
+
 class Crossing(unittest.TestCase):
     def test_directions(self):
         v, s, n = QA + "o.py", SVC + "s.py", "server/zerg/provider_contract/p.py"

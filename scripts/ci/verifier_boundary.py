@@ -7,12 +7,13 @@ This is step 3.3a of `control-plane/docs/specs/provider-factory-findings-loop.md
 
 Sides, by path:
   verifier   server/zerg/qa/**  and  scripts/qa/provider-control-e2e-canary.py
-  neutral    server/zerg/provider_contract/**  (shared proof vocabulary; none yet)
+  neutral    server/zerg/provider_contract/**  (shared proof vocabulary and session identity helpers)
   subject    every other module under server/zerg/
 
 Any import edge from verifier to subject, subject to verifier, or neutral to either,
-(real imports, literal import_module calls, and `from zerg... import` lines inside code
-strings the verifier hands to a subprocess) must be listed in scripts/ci/verifier-boundary.allow with a reason. The list is a
+(real imports, literal import_module calls, `from zerg... import` lines inside code
+strings the verifier hands to a subprocess, a module name built from literals or an interpolated string, and a subject file
+named by a path string or read through a path join) must be listed in scripts/ci/verifier-boundary.allow with a reason. The list is a
 ratchet: a new edge fails, a listed edge that no longer exists fails (delete the
 line), and with --base REV an entry the base did not already carry fails.
 
@@ -175,6 +176,125 @@ def import_edges(sources: Mapping[str, str]) -> set[Edge]:
             elif isinstance(node, ast.Call) and _is_dynamic_import(node.func, loaders):
                 if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
                     add(node.args[0].value)
+        found.discard(importer)
+        edges.update((importer, path) for path in found)
+    edges.update(hidden_reference_edges(sources))
+    return edges
+
+
+# --- references an import walk does not see ----------------------------------
+#
+# A verifier that names a subject module by string, or reads a subject file by path, depends on it as much as an import
+# does: the 2026-11-16 move of the proof vocabulary found two (`".".join(["zerg", "services", ...])` and
+# `SERVER_ROOT / "zerg" / "services" / "x.py"`) that no import edge showed. These are counted as edges too.
+
+_WILDCARD = "\0"
+_PATH_IN_STRING = re.compile(r"(?:server/)?(zerg/[\w/]+\.py)")
+
+
+def _fold(node: ast.AST) -> str | None:
+    """The string an expression builds, with `\\0` where a part is not a literal; None when it is not a string build."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value if isinstance(part, ast.Constant) else _WILDCARD for part in node.values  # type: ignore[union-attr]
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _fold(node.left), _fold(node.right)
+        if left is None and right is None:
+            return None
+        return (left if left is not None else _WILDCARD) + (right if right is not None else _WILDCARD)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and isinstance(node.func.value, ast.Constant)
+        and isinstance(node.func.value.value, str)
+        and len(node.args) == 1
+        and isinstance(node.args[0], (ast.List, ast.Tuple))
+    ):
+        parts = [_fold(item) for item in node.args[0].elts]
+        return node.func.value.value.join(_WILDCARD if part is None else part for part in parts)
+    return None
+
+
+def _path_components(node: ast.AST) -> list[str | None] | None:
+    """The components of `a / "b" / "c"`, `os.path.join(a, "b", "c")` and `p.joinpath("b", "c")`, with None for a part that is
+    not a literal; None when the node is not a path join."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _path_components(node.left)
+        if left is None:
+            left = [_fold(node.left)]
+        right = _fold(node.right)
+        return [*left, right]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        if node.func.attr == "join" and isinstance(node.func.value, (ast.Attribute, ast.Name)) and len(node.args) >= 2:
+            if getattr(node.func.value, "attr", getattr(node.func.value, "id", "")) == "path":
+                return [_fold(arg) for arg in node.args]
+        if node.func.attr == "joinpath":
+            return [_fold(node.func.value), *(_fold(arg) for arg in node.args)]
+    return None
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def hidden_reference_edges(sources: Mapping[str, str]) -> set[Edge]:
+    """(importer path, referenced path) for a subject file or module named by a built string or a path read.
+
+    Seen: a literal `server/zerg/x.py` or `zerg/x.py` in a string, a path join whose literal parts spell `zerg/.../x.py`,
+    a module name built from literals (`".".join(["zerg", "services", "x"])`, `"zerg.services." + "x"`) and one built with
+    an interpolated part (`f"zerg.services.{name}"`), which is an edge to the package it can reach (`server/zerg/services/*`).
+    Docstrings are prose and are skipped."""
+    modules = {module: path for path in sources if (module := _module_of(path))}
+    edges: set[Edge] = set()
+
+    def module_target(dotted: str) -> str | None:
+        parts = dotted.split(".")
+        while parts:
+            if (path := modules.get(".".join(parts))) is not None:
+                return path
+            parts.pop()
+        return None
+
+    for importer, source in sources.items():
+        tree = ast.parse(source, filename=importer)
+        skip = _docstring_ids(tree)
+        found: set[str] = set()
+        for node in ast.walk(tree):
+            if id(node) in skip:
+                continue
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in _PATH_IN_STRING.finditer(node.value):
+                    candidate = f"server/{match.group(1)}"
+                    if candidate in sources:
+                        found.add(candidate)
+            components = _path_components(node)
+            if components is not None and "zerg" in components:
+                tail = components[components.index("zerg") :]
+                literal = [part for part in tail if part is not None]
+                if len(literal) == len(tail) and tail[-1] and tail[-1].endswith(".py"):
+                    candidate = "server/" + "/".join(tail)
+                    if candidate in sources:
+                        found.add(candidate)
+            folded = _fold(node) if isinstance(node, (ast.BinOp, ast.JoinedStr, ast.Call)) else None
+            if folded and (folded.startswith("zerg.") or folded == "zerg"):
+                if _WILDCARD not in folded:
+                    if (path := module_target(folded)) is not None:
+                        found.add(path)
+                else:
+                    prefix = folded.split(_WILDCARD)[0]
+                    reachable = f"server/{prefix.replace('.', '/')}"
+                    if any(path.startswith(reachable) for path in sources):
+                        found.add(f"{reachable}*")
         found.discard(importer)
         edges.update((importer, path) for path in found)
     return edges
@@ -395,6 +515,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         allowlist = tree / ALLOWLIST
         allowed, problems = parse_allowlist(allowlist.read_text(encoding="utf-8") if allowlist.is_file() else "")
         base_allowed = _base_allowlist(root, args.base) if args.base else None
+        if base_allowed is not None:
+            # A reference the base's tree already held but its older detector could not see (a built module name, a path
+            # read) is carried, not new: the detector widened, the code did not.
+            with tempfile.TemporaryDirectory() as base_scratch:
+                export_tree(root, args.base, Path(base_scratch))
+                base_allowed = {
+                    **{edge: "" for edge in hidden_reference_edges(read_sources(Path(base_scratch)))},
+                    **base_allowed,
+                }
         edges = import_edges(read_sources(tree))
         problems += check_edges(edges, allowed, base_allowed)
         for problem in problems:
