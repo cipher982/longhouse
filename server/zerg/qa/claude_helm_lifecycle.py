@@ -606,6 +606,21 @@ def _served_state(api_url: str, token: str, session_id: str) -> dict[str, Any]:
     return shadow if isinstance(shadow, dict) else {}
 
 
+LEASE_LOST_AFTER_INTERRUPT = "send_input_lease_lost_after_interrupt"
+
+
+def lease_waited_on(*, interrupt_accepted: bool) -> str | None:
+    """What a wait for the send_input lease was blocked on, for failure classing.
+
+    Before any interrupt the lease is the Runtime Host's to grant, so a timeout
+    is a wait that got no verdict. After an accepted interrupt the session is
+    alive and held the lease a moment earlier: the Runtime Host not offering it
+    again is the product losing control, so no wait is declared and the failure
+    carries the typed reason `LEASE_LOST_AFTER_INTERRUPT` instead.
+    """
+    return None if interrupt_accepted else RUNTIME_HOST
+
+
 def _action_available(state: dict[str, Any], action: str) -> bool:
     actions = (state.get("control") or {}).get("actions") if isinstance(state.get("control"), dict) else None
     entry = actions.get(action) if isinstance(actions, dict) else None
@@ -873,13 +888,23 @@ def _drive_lifecycle(
             waited_on=lambda: open_turn_waited_on(rows(), prompt_marker),
         )
 
+    interrupt_accepted = False
+
     def wait_can_send() -> None:
-        wait_until(
-            lambda: _action_available(_served_state(api, token, session_id), "send_input"),
-            timeout=args.response_timeout_secs,
-            description="Claude live-control lease on Runtime Host",
-            waited_on=RUNTIME_HOST,
-        )
+        try:
+            wait_until(
+                lambda: _action_available(_served_state(api, token, session_id), "send_input"),
+                timeout=args.response_timeout_secs,
+                description="Claude live-control lease on Runtime Host",
+                waited_on=lease_waited_on(interrupt_accepted=interrupt_accepted),
+            )
+        except ScenarioError as error:
+            if not interrupt_accepted:
+                raise
+            raise ScenarioError(
+                f"{LEASE_LOST_AFTER_INTERRUPT}: the session stayed alive after an accepted interrupt "
+                f"and Runtime Host never offered send_input again ({error})"
+            ) from error
 
     def send_marker_prompt(marker: str, description: str) -> list[str]:
         """Send a marker prompt from Longhouse and wait for the answer to archive.
@@ -1075,6 +1100,7 @@ def _drive_lifecycle(
         time.sleep(3.0)
         interrupted_at = time.time()
         _post(api, token, f"sessions/{session_id}/interrupt-live")
+        interrupt_accepted = True
         try:
             wait_turn_end(abort_prompt, "interrupted Claude turn ending", tool_seconds + args.response_timeout_secs)
         except ScenarioError:

@@ -703,3 +703,15 @@ def test_the_row_the_mod_actually_records_ends_the_turn() -> None:
     assert turn_end(RECORDED_MOD_INTERRUPTED_ROW) is True
     # An ordinary prompt that mentions the marker mid-text does not end a turn.
     assert turn_end({"type": "user", "message": {"role": "user", "content": "why [Request interrupted by user]?"}}) is False
+
+
+def test_a_lease_timeout_after_an_accepted_interrupt_declares_no_wait():
+    from zerg.qa.claude_helm_lifecycle import LEASE_LOST_AFTER_INTERRUPT
+    from zerg.qa.claude_helm_lifecycle import lease_waited_on
+
+    assert LEASE_LOST_AFTER_INTERRUPT == "send_input_lease_lost_after_interrupt"
+    # Before any interrupt the Runtime Host owes the lease, so a timeout is a wait with no verdict.
+    assert lease_waited_on(interrupt_accepted=False) == "runtime_host"
+    # After an accepted interrupt the lease went missing from a live session: a product failure,
+    # so no wait is declared and the factory classifier does not read it as infrastructure.
+    assert lease_waited_on(interrupt_accepted=True) is None
