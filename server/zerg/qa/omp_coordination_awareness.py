@@ -10,7 +10,8 @@ OMP mounts extension tools as ``xd://`` devices by default (setting
 ``tools.xdevDocs``: built-in tools stay top-level, extension and MCP tools are
 fetched on demand), so the model invokes ``peers`` as ``write xd://peers`` after
 optionally reading ``xd://peers`` for its schema. With devices disabled the
-same tool is a top-level ``peers`` call. Either, with a non-error tool result,
+same tool is a top-level ``peers`` call, and the model may also call it from an
+``eval`` JS cell as ``tool.peers(...)``. Any of these, with a non-error tool result,
 is direct evidence the Longhouse extension's tool is visible to and callable by
 the model. Reading the device's docs alone is not an invocation.
 """
@@ -20,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -111,13 +113,21 @@ def _tool_text(message: Mapping[str, Any]) -> str:
     return ""
 
 
+_EVAL_PEERS_CALL = re.compile(r"\btool\.peers\s*\(")
+
+
 def _is_peers_invocation(call: Mapping[str, Any]) -> bool:
     name = str(call.get("name") or "")
     if name == "peers":
         return True
     arguments = call.get("arguments")
     path = str(arguments.get("path") or "") if isinstance(arguments, Mapping) else ""
-    return name == "write" and path.split("?", 1)[0].rstrip("/") == "xd://peers"
+    if name == "write" and path.split("?", 1)[0].rstrip("/") == "xd://peers":
+        return True
+    # OMP's JS ``eval`` tool exposes extension tools as ``tool.<name>(...)``: the
+    # model may call peers from a cell instead of writing to the device.
+    code = str(arguments.get("code") or "") if isinstance(arguments, Mapping) else ""
+    return name == "eval" and _EVAL_PEERS_CALL.search(code) is not None
 
 
 def peers_invocation_evidence(rows: list[Mapping[str, Any]]) -> dict[str, Any] | None:

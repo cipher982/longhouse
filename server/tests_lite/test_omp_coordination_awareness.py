@@ -98,3 +98,34 @@ def test_cleanup_passes_only_with_verified_birth_identities():
     assert _cleanup_status({**held, "birth_identities_verified": False}) == "fail"
     assert _cleanup_status(held) == "fail"
     assert _cleanup_status({**held, "birth_identities_verified": True, "isolation_removed": False}) == "fail"
+
+
+def test_a_peers_call_from_an_eval_cell_is_an_invocation():
+    # Observed live (OMP 18.20.3, DeepSeek V4.1 Flash): the model called peers as
+    # `tool.peers(...)` inside an eval cell and logged the result.
+    code = 'const res = await tool.peers({ repo: "probe", active_only: false });\nconsole.log(JSON.stringify(res, null, 2));'
+    rows = [
+        _assistant({"type": "toolCall", "id": "e", "name": "eval", "arguments": {"language": "js", "code": code}}),
+        _result("e", json.dumps({"repo": "probe", "active_only": False, "total": 0, "peers": []}, indent=2)),
+    ]
+    evidence = peers_invocation_evidence(rows)
+    assert evidence is not None and evidence["tool_name"] == "eval" and evidence["is_error"] is False
+
+
+def test_an_eval_cell_that_does_not_call_peers_is_not_an_invocation():
+    rows = [
+        _assistant({"type": "toolCall", "id": "e", "name": "eval", "arguments": {"language": "js", "code": "console.log(1)"}}),
+        _result("e", "1"),
+        _assistant({"type": "toolCall", "id": "f", "name": "eval", "arguments": {"language": "js", "code": "await tool.peersList()"}}),
+        _result("f", "x"),
+    ]
+    assert peers_invocation_evidence(rows) is None
+
+
+def test_a_refused_eval_peers_call_is_an_error():
+    rows = [
+        _assistant({"type": "toolCall", "id": "e", "name": "eval", "arguments": {"language": "js", "code": "await tool.peers({})"}}),
+        _result("e", json.dumps({"error": "registration_pending"})),
+    ]
+    evidence = peers_invocation_evidence(rows)
+    assert evidence is not None and evidence["is_error"] is True
