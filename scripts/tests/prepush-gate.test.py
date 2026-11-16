@@ -64,6 +64,27 @@ def test_a_separation_violation_blocks_even_with_skip() -> None:
     assert run_hook(line, {"SEPARATION_FAIL": "1", "LONGHOUSE_PREPUSH_GATE": f"done:{A}"}) == (1, [])
 
 
+def test_concurrent_gates_stage_privately_and_clean_up(tmp_path_factory=None) -> None:
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as work:
+        pg.WORK = Path(work)
+        pg.git = lambda *a, **k: ""
+        dead = Path(work) / f"{pg.STAGE_NAME}-999999999"
+        dead.mkdir()
+        with pg.Stage() as first:
+            assert not dead.exists(), "a dead gate's stage is swept"
+            first.mkdir()
+            other = pg.WORK / f"{pg.STAGE_NAME}-{os.getppid()}"  # a live process's stage is never touched
+            other.mkdir()
+            pg.sweep_dead_stages()
+            assert other.exists() and first.exists()
+            assert first.name == f"{pg.STAGE_NAME}-{os.getpid()}"
+        assert not first.exists(), "the gate removes its own stage"
+        subprocess.run(["true"], check=True)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

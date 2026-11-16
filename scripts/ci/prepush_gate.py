@@ -33,10 +33,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(os.environ.get("PREPUSH_GATE_WORK", "/tmp/agents/prepush"))
-STAGE_NAME = "longhouse-prepush"  # remote.sh keys its warm mirror on the checkout's directory name
+STAGE_NAME = "longhouse-prepush"  # per-run staging dirs are STAGE_NAME-<pid>
 ZERO = "0" * 40
 LANE_TIMEOUT = int(os.environ.get("PREPUSH_LANE_TIMEOUT", "1800"))
-LOCK_WAIT = int(os.environ.get("PREPUSH_LOCK_WAIT", "900"))
 
 
 def git(*args: str, cwd: Path = ROOT, check: bool = True) -> str:
@@ -55,33 +54,38 @@ def plan(base: str, head: str) -> dict:
     return json.loads(result.stdout)
 
 
-class StageLock:
-    """One gate at a time per machine: they share the staged directory and its warm mirror on the ci VM."""
+def sweep_dead_stages() -> None:
+    """Remove staged checkouts whose gate process is gone (killed, crashed)."""
+    for stage in WORK.glob(f"{STAGE_NAME}-*"):
+        try:
+            os.kill(int(stage.name.rsplit("-", 1)[1]), 0)
+        except ProcessLookupError:
+            shutil.rmtree(stage, ignore_errors=True)
+        except (ValueError, OSError):
+            continue
+    git("worktree", "prune", check=False)
+
+
+class Stage:
+    """A private staged checkout for this gate run.
+
+    The old shared directory needed a lock (one gate at a time, 900 s wait, then the push failed) only to protect
+    scratch: the staged tree and remote.sh's warm mirror keyed on its name. Nothing else is shared; the ci VM
+    queues runs for its own three slots (remote.sh waits for a free one). Each gate now stages into its own
+    directory, runs concurrently, and removes it afterwards. Cost: a cold rsync (about 20 s) instead of a warm one.
+    """
 
     def __init__(self) -> None:
-        self.path = WORK / "stage.lock"
+        self.path = WORK / f"{STAGE_NAME}-{os.getpid()}"
 
-    def __enter__(self) -> "StageLock":
+    def __enter__(self) -> Path:
         WORK.mkdir(parents=True, exist_ok=True)
-        deadline = time.time() + LOCK_WAIT
-        while True:
-            try:
-                self.path.mkdir()
-                (self.path / "pid").write_text(str(os.getpid()))
-                return self
-            except FileExistsError:
-                try:
-                    pid = int((self.path / "pid").read_text())
-                    os.kill(pid, 0)
-                except (OSError, ValueError):
-                    shutil.rmtree(self.path, ignore_errors=True)  # holder is gone
-                    continue
-                if time.time() > deadline:
-                    raise SystemExit(f"prepush-gate: another gate (pid {pid}) held {self.path} for over {LOCK_WAIT}s")
-                time.sleep(1)
+        sweep_dead_stages()
+        return self.path
 
     def __exit__(self, *exc: object) -> None:
         shutil.rmtree(self.path, ignore_errors=True)
+        git("worktree", "prune", check=False)
 
 
 def export_head(head: str, dest: Path) -> None:
@@ -200,10 +204,9 @@ def gate(base: str, head: str, *, dry_run: bool, only: set[str] | None, as_json:
         return 0
 
     results: dict[str, dict] = {}
-    with StageLock():
-        stage = WORK / STAGE_NAME
+    with Stage() as stage:
         export_head(head, stage)
-        logdir = WORK / "logs" / head[:12]
+        logdir = WORK / "logs" / f"{head[:12]}-{os.getpid()}"
         shutil.rmtree(logdir, ignore_errors=True)
         logdir.mkdir(parents=True)
         # Local lanes first (rustfmt takes a second and fails before the guest is touched), then every remote lane at once.
