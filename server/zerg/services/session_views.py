@@ -777,8 +777,8 @@ class LastTurnResponse(BaseModel):
     duration_ms: int = Field(..., description="Wall-clock milliseconds of the last finished turn")
     ended_at: datetime = Field(..., description="When the last turn finished")
     event_id: Optional[str] = Field(None, description="The event the turn ended on, when it is known")
-    outcome: Literal["completed", "aborted"] = Field(
-        "completed", description="Whether the provider finished the turn or the user stopped it"
+    outcome: Literal["completed", "aborted", "interrupted"] = Field(
+        "completed", description="Whether the provider finished the turn, aborted, or the user interrupted it"
     )
 
 

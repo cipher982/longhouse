@@ -5047,11 +5047,11 @@ export interface components {
             event_id?: string | null;
             /**
              * Outcome
-             * @description Whether the provider finished the turn or the user stopped it
+             * @description Whether the provider finished the turn, aborted, or the user interrupted it
              * @default completed
              * @enum {string}
              */
-            outcome: "completed" | "aborted";
+            outcome: "completed" | "aborted" | "interrupted";
         };
         /**
          * Lifecycle

@@ -1291,3 +1291,26 @@ async def test_engine_wire_fact_shapes_project_worktree_cron_waiting_and_dedup(m
     )
     projected_ids = [item["event"]["id"] for item in envelope["projection"]["items"] if item.get("event")]
     assert projected_ids == ["ev-user-msg"]
+
+
+def test_a_user_interrupted_claude_turn_is_servable_as_last_turn():
+    """The engine ships `turn.end` outcome=interrupted for Claude's interrupt marker.
+
+    `last_turn` carries that outcome through, so the served `LastTurnResponse`
+    must accept it. When it did not, the session state read failed with a 503
+    after every Claude interrupt and Runtime Host never offered send_input again.
+    """
+    from zerg.services.session_views import LastTurnResponse
+
+    t0 = datetime(2026, 11, 15, 20, 0, 0, tzinfo=UTC)
+    facts = [
+        {
+            "kind": "turn.end",
+            "at": t0,
+            "source_position": 9,
+            "payload": {"outcome": "interrupted", "source": "user_interrupt"},
+        }
+    ]
+    turn = last_turn(facts, {})
+    assert turn is not None and turn["outcome"] == "interrupted"
+    assert LastTurnResponse.model_validate(turn).outcome == "interrupted"
