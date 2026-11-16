@@ -205,17 +205,12 @@ def _turn_outcome(payload: Mapping[str, Any]) -> str:
 def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     """The newest finished turn, with its anchor event when it is on the page."""
     latest_duration = None
-    previous_duration_at = None
     latest_end = None
     for fact in facts:
         kind = fact.get("kind")
         if kind == TURN_DURATION and isinstance(fact["payload"].get("duration_ms"), int):
             if latest_duration is None or fact["at"] > latest_duration["at"]:
-                if latest_duration is not None:
-                    previous_duration_at = latest_duration["at"]
                 latest_duration = fact
-            elif previous_duration_at is None or fact["at"] > previous_duration_at:
-                previous_duration_at = fact["at"]
         elif kind == TURN_END:
             if latest_end is None or (fact["at"], int(fact.get("source_position") or 0)) > (
                 latest_end["at"],
@@ -228,21 +223,11 @@ def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]
         ended_at = latest_duration["at"].isoformat()
         event_id = next((eid for eid, turn in decorations.items() if turn.get("ended_at") == ended_at), None)
         anchored = decorations.get(event_id, {}) if event_id is not None else {}
-        outcome = anchored.get("outcome")
-        if outcome is None:
-            # No rows to anchor on (a header-only workspace, or the turn is
-            # off the page): an end fact newer than the previous turn's
-            # duration closed this same turn, and it carries the outcome.
-            outcome = _turn_outcome(latest_duration["payload"])
-            if latest_end is not None and (previous_duration_at is None or latest_end["at"] > previous_duration_at):
-                end_outcome = _turn_outcome(latest_end["payload"])
-                if end_outcome != "completed":
-                    outcome = end_outcome
         return {
             "duration_ms": latest_duration["payload"]["duration_ms"],
             "ended_at": ended_at,
             "event_id": event_id,
-            "outcome": outcome,
+            "outcome": anchored.get("outcome") or _turn_outcome(latest_duration["payload"]),
         }
     assert latest_end is not None
     ended_at = latest_end["at"].isoformat()

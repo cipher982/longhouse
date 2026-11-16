@@ -1314,26 +1314,3 @@ def test_a_user_interrupted_claude_turn_is_servable_as_last_turn():
     turn = last_turn(facts, {})
     assert turn is not None and turn["outcome"] == "interrupted"
     assert LastTurnResponse.model_validate(turn).outcome == "interrupted"
-
-
-def test_without_rows_the_last_turn_keeps_the_outcome_its_end_fact_gave():
-    """A header-only workspace has no rows to anchor on (catalog-read-path.md)."""
-
-    t0 = datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
-    earlier_turn = [
-        {"kind": "turn.end", "at": t0, "payload": {"outcome": "interrupted"}},
-        {"kind": "turn.duration", "at": t0 + timedelta(seconds=1), "payload": {"duration_ms": 1_000}},
-    ]
-    stopped = [
-        {"kind": "turn.end", "at": t0 + timedelta(minutes=5), "payload": {"outcome": "aborted"}},
-        {"kind": "turn.duration", "at": t0 + timedelta(minutes=5, seconds=1), "payload": {"duration_ms": 9_000}},
-    ]
-    assert last_turn(earlier_turn + stopped, {})["outcome"] == "aborted"
-    # The previous turn's end does not leak into a turn that finished cleanly.
-    finished = [{"kind": "turn.duration", "at": t0 + timedelta(minutes=5, seconds=1), "payload": {"duration_ms": 9_000}}]
-    assert last_turn(earlier_turn + finished, {}) == {
-        "duration_ms": 9_000,
-        "ended_at": finished[0]["at"].isoformat(),
-        "event_id": None,
-        "outcome": "completed",
-    }
