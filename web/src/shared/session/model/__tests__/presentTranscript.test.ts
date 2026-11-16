@@ -160,6 +160,62 @@ describe("presentTranscript lite pages", () => {
     expect(rowFor(gone, "cursor-3")?.bodyState).toBe("unavailable");
   });
 
+  it("binds a workflow run named only in a loaded body", () => {
+    const items = [
+      {
+        kind: "event",
+        event: {
+          id: 1,
+          role: "assistant",
+          timestamp: "2026-11-16T10:00:00Z",
+          tool_name: "Workflow",
+          tool_call_id: "call-w",
+          tool_input_json: { prompt: "audit" },
+        },
+      },
+      {
+        kind: "event",
+        event: {
+          id: 2,
+          role: "tool",
+          timestamp: "2026-11-16T10:00:05Z",
+          tool_call_id: "call-w",
+          tool_output_text: "Started the audit…",
+          tool_output_truncated: true,
+          lite_body: { session_id: "s", cursor: "cursor-w" },
+        },
+      },
+    ] as unknown as AgentSessionProjectionItem[];
+    const child = {
+      session_id: "child-1",
+      provider: "claude",
+      parent_tool_call_id: null,
+      run_id: "run-7",
+      description: "Audit worker",
+    };
+    const preview = presentTranscript({ items, subagents: [child] });
+    expect(preview.some((row) => row.subagents?.length)).toBe(false);
+
+    const loaded = presentTranscript({
+      items,
+      subagents: [child],
+      liteBodies: {
+        bodies: new Map([
+          [
+            "cursor-w",
+            {
+              id: 2,
+              cursor: "cursor-w",
+              tool_output_text: "Started the audit\nTranscript dir: /tmp/x/subagents/workflows/run-7",
+            } as never,
+          ],
+        ]),
+      },
+    });
+    expect(loaded.some((row) => row.subagents?.some((agent) => agent.sessionId === "child-1"))).toBe(true);
+    expect(loaded.some((row) => row.bodyCursors?.includes("cursor-w"))).toBe(false);
+  });
+
   it("a loaded body replaces the preview and drops the cursor", () => {
     const whole = "the whole output";
     const rows = presentTranscript({

@@ -305,7 +305,24 @@ function mergedEvent(event: AgentEvent | null, lite: LiteBodyState | undefined):
     tool_presentation: body.tool_presentation ?? event.tool_presentation,
     tool_input_truncated: false,
     tool_output_truncated: false,
+    lite_body: undefined,
   };
+}
+
+/**
+ * Loaded full bodies replace their previews before grouping, so grouping and
+ * final-answer text see what the user loaded (a workflow transcript dir in a
+ * tool output binds its subagents only from the full text).
+ */
+function withLiteBodies(
+  items: AgentSessionProjectionItem[],
+  lite: LiteBodyState | undefined,
+): AgentSessionProjectionItem[] {
+  if (!lite?.bodies?.size) return items;
+  return items.map((item) => {
+    const event = item.event ? mergedEvent(item.event, lite) : item.event;
+    return event === item.event ? item : { ...item, event };
+  });
 }
 
 function mergedInteraction(interaction: ToolInteraction, lite: LiteBodyState | undefined): ToolInteraction {
@@ -798,7 +815,7 @@ function isLiveAssistantRow(item: TimelineItem): boolean {
 
 /** Served projection items and native overlay rows to the embed's rows. */
 export function presentTranscript(input: PresentTranscriptInput): PresentedTranscriptItem[] {
-  const model = buildTimelineModel(input.items, input.subagents ?? []);
+  const model = buildTimelineModel(withLiteBodies(input.items, input.liteBodies), input.subagents ?? []);
   const trail = narrationTrail(model.items);
   const clock: ClockOptions = { now: input.now ?? new Date(), locale: input.locale, timeZone: input.timeZone };
   const rows: { row: PresentedTranscriptItem; sort: number | null; live: boolean; liveMs: number }[] = [];

@@ -114,6 +114,9 @@ extension WebTranscriptView {
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
         private var lastRenderedPayload: WebTranscriptPreparedPayload?
+        /// What the document reported for `lastRenderedPayload`: the rows are
+        /// built there now, so only it knows the row count and latest row id.
+        private var lastRenderedMetrics: WebTranscriptJavaScriptMetrics?
         private var lastPayload: String?
         private var lastDuplicatePayload: String?
         private var renderSequence = 0
@@ -545,6 +548,7 @@ extension WebTranscriptView {
             pendingPayload = nil
             inFlightPayload = nil
             lastRenderedPayload = nil
+            lastRenderedMetrics = nil
             lastPayload = nil
             lastDuplicatePayload = nil
             userScrollInProgress = false
@@ -714,13 +718,16 @@ extension WebTranscriptView {
                 && lhs.base64 == rhs.base64
         }
 
-        private func renderReceipt(for payload: WebTranscriptPreparedPayload) -> WebTranscriptRenderReceipt {
+        private func renderReceipt(
+            for payload: WebTranscriptPreparedPayload,
+            metrics: WebTranscriptJavaScriptMetrics?
+        ) -> WebTranscriptRenderReceipt {
             WebTranscriptRenderReceipt(
                 contentRevision: payload.contentRevision,
                 transcriptReadThrough: payload.transcriptReadThrough,
                 retryRevision: payload.retryRevision,
                 payloadFingerprint: payload.payloadFingerprint,
-                latestItemId: payload.latestItemId
+                latestItemId: metrics?.latestItemId ?? payload.latestItemId
             )
         }
 
@@ -767,10 +774,11 @@ extension WebTranscriptView {
                 else { return }
                 let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
                 let synchronousMetrics = value.flatMap(WebTranscriptJavaScriptMetrics.init)
-                let receipt = self.renderReceipt(for: payload)
+                let receipt = self.renderReceipt(for: payload, metrics: synchronousMetrics)
                 if error == nil {
                     self.lastPayload = payload.base64
                     self.lastRenderedPayload = payload
+                    self.lastRenderedMetrics = synchronousMetrics
                 } else {
                     self.jsFailureCount += 1
                     // Keep the identity: Renderer Retry increments its retry
@@ -821,7 +829,7 @@ extension WebTranscriptView {
                           self.documentGeneration == documentGeneration
                     else { return }
                     let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
-                    let receipt = self.renderReceipt(for: payload)
+                    let receipt = self.renderReceipt(for: payload, metrics: synchronousMetrics)
                     let frameMetrics: WebTranscriptJavaScriptMetrics?
                     switch frameResult {
                     case .success(let value):
@@ -901,7 +909,7 @@ extension WebTranscriptView {
                 error_description: error.map { String(describing: $0) }
             )
             logger.debug(
-                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) revision=\(payload.sourceRevision ?? -1) operation=\(payload.sourceOperation ?? "none", privacy: .public) rows=\(payload.rowCount) bytes=\(payload.payloadByteSize) latest=\(payload.latestItemId ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) prepare_ms=\(payload.prepareDurationMs) render_ms=\(renderDurationMs ?? -1) js_decode_ms=\(javaScriptMetrics?.decodeDurationMs ?? -1) js_html_ms=\(javaScriptMetrics?.htmlDurationMs ?? -1) js_dom_ms=\(javaScriptMetrics?.domDurationMs ?? -1) js_raf_ms=\(javaScriptMetrics?.rafDurationMs ?? -1)"
+                "webkit transcript stage=\(stage, privacy: .public) sequence=\(sequence) revision=\(payload.sourceRevision ?? -1) operation=\(payload.sourceOperation ?? "none", privacy: .public) rows=\(diagnostics.row_count) bytes=\(payload.payloadByteSize) latest=\(diagnostics.latest_item_id ?? "none", privacy: .public) failures=\(self.jsFailureCount) stick=\(self.shouldStickToBottom) prepare_ms=\(payload.prepareDurationMs) render_ms=\(renderDurationMs ?? -1) js_decode_ms=\(javaScriptMetrics?.decodeDurationMs ?? -1) js_html_ms=\(javaScriptMetrics?.htmlDurationMs ?? -1) js_dom_ms=\(javaScriptMetrics?.domDurationMs ?? -1) js_raf_ms=\(javaScriptMetrics?.rafDurationMs ?? -1)"
             )
             onDiagnostics?(diagnostics)
         }
@@ -913,11 +921,14 @@ extension WebTranscriptView {
         ) {
             guard payload.base64 != lastDuplicatePayload else { return }
             lastDuplicatePayload = payload.base64
+            // A duplicate shows what the last render left on screen, so it
+            // reports that render's document metrics, not the payload's.
             emitDiagnostics(
                 stage: "duplicate",
                 payload: payload,
                 sequence: renderSequence,
                 error: nil,
+                javaScriptMetrics: payloadMatches(payload, lastRenderedPayload) ? lastRenderedMetrics : nil,
                 diagnosticsEnabled: diagnosticsEnabled,
                 onDiagnostics: onDiagnostics
             )

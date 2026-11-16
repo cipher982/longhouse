@@ -159,6 +159,53 @@ struct LiteTranscriptPayloadTests {
         #expect(projection["serverUrl"] as? String == "https://example.test")
     }
 
+    /// The seam the shared model depends on: a served event decoded by the API
+    /// client, mapped to `SessionEvent`, and encoded for the document keeps its
+    /// item facts and provider-owned payloads in wire shape.
+    @Test
+    func servedItemFactsAndPayloadsSurviveTheTripToTheDocument() throws {
+        let wire = Data("""
+        {"id": 7, "role": "assistant", "timestamp": "2026-11-16T10:00:00Z",
+         "content_text": "Weighing the retry budget",
+         "item": {"kind": "reasoning", "visibility": "summary"},
+         "task_notification": {"task_id": "t-1", "status": "completed"},
+         "api_error": {"status_code": 529, "retry_attempt": 2},
+         "turn_end": {"duration_ms": 1200, "ended_at": "2026-11-16T10:00:01Z"}}
+        """.utf8)
+        let event = try JSONDecoder.snakeCase.decode(APIEventResponse.self, from: wire).sessionEvent
+        #expect(event.item?.kind == "reasoning")
+
+        let data = WebTranscriptView.payloadData(
+            serverURL: nil,
+            projectionItems: [SessionProjectionItem(
+                kind: "event",
+                sessionId: "session-1",
+                timestamp: "2026-11-16T10:00:00Z",
+                event: event,
+                continuedFromSessionId: nil,
+                continuationKind: nil,
+                originLabel: nil,
+                parentOriginLabel: nil,
+                parentContinuationKind: nil,
+                branchedFromEventId: nil
+            )],
+            subagents: [],
+            submittedInputs: [],
+            errorMessage: nil,
+            liteBodies: LiteBodyState()
+        )
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let projection = try #require(root["projection"] as? [String: Any])
+        let items = try #require(projection["items"] as? [[String: Any]])
+        let sent = try #require(items.first?["event"] as? [String: Any])
+        let item = try #require(sent["item"] as? [String: Any])
+        #expect(item["kind"] as? String == "reasoning")
+        #expect(item["visibility"] as? String == "summary")
+        #expect((sent["task_notification"] as? [String: Any])?["task_id"] as? String == "t-1")
+        #expect((sent["api_error"] as? [String: Any])?["status_code"] as? Int == 529)
+        #expect((sent["turn_end"] as? [String: Any])?["duration_ms"] as? Int == 1200)
+    }
+
     @Test
     func toolInputKeysAreProviderOwnedAndNeverRewritten() throws {
         let projection = try payload(LiteBodyState())

@@ -357,7 +357,8 @@ extension APIEventResponse {
             reasoningWithheld: (reasoningWithheld ?? false) || item?.visibility == "withheld",
             taskNotification: taskNotification,
             waitingBackgroundAgents: waitingBackgroundAgents,
-            apiError: apiError
+            apiError: apiError,
+            item: item
         )
     }
 }

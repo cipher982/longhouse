@@ -300,11 +300,12 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         realtimeContinuation = nil
     }
 
-    /// Returns the timeline row id the appended reply will have once a reload shows it.
+    /// Returns the projection item id (`SessionViewModel.items`) the appended
+    /// reply will have once a reload shows it.
     @discardableResult
     func appendAssistantMessage(_ text: String) -> String {
         let endedAt = ISO8601DateFormatter().string(from: Date())
-        let rowID = "prose:\(nextEventID)"
+        let rowID = "event:\(nextEventID)"
         events.append(Self.makeEvent(
             id: nextEventID,
             role: "assistant",
