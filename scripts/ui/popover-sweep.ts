@@ -291,6 +291,22 @@ export async function sweepPopovers(page: Page, shotPrefix?: string): Promise<Po
       };
       if (hit.state === "self") {
         await trigger.click({ force: true, timeout: 3_000 });
+      } else if (hit.state === "covered") {
+        // A sticky composer over a row that a still-settling transcript has not
+        // finished scrolling clear of is not a stuck trigger: centre it, let the
+        // layout settle, and judge again. A row that stays covered still fails.
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "center" })).catch(() => undefined);
+        await page.waitForTimeout(400);
+        const again = (await page.evaluate(`${TRIGGER_HIT}(${JSON.stringify(selector)})`)) as {
+          state: "self" | "modal" | "covered" | "gone";
+          by?: string;
+        };
+        if (again.state === "self") {
+          await trigger.click({ force: true, timeout: 3_000 });
+        } else {
+          report.failures.push({ trigger: name, overlay: name, rule: "unreachable", detail: `trigger covered by ${again.by ?? hit.by}` });
+          return null;
+        }
       } else if (hit.state === "modal" || hit.state === "gone") {
         report.skipped.push(`${name}: ${hit.state === "modal" ? "behind an open dialog" : "gone before its turn"}`);
         return null;

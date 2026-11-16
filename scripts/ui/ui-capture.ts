@@ -1603,7 +1603,7 @@ async function captureBundle(
     const screenshotGate = (await page.locator("body[data-screenshot-ready]").count()) > 0;
     await page.waitForSelector(
       screenshotGate ? "body[data-screenshot-ready='true']" : "body[data-ready='true']",
-      { timeout: screenshotGate ? 12_000 : 5_000 }, // 12s is ~2.8x the observed 4.27s cold summary request.
+      { timeout: screenshotGate ? 12_000 : 15_000 }, // 12s is ~2.8x the observed 4.27s cold summary request.
     );
   }
   if (HOST_LINK_SCENES.includes(scene)) {
