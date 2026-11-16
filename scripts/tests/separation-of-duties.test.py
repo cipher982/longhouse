@@ -67,6 +67,15 @@ class SeparationTest(unittest.TestCase):
         self.assertEqual(sod.classify(GUARD), "guard")
         self.assertIsNone(sod.classify("web/src/a.ts"))
         self.assertIsNone(sod.classify(ALLOW))
+        for derived in sod.DERIVED_FILES:
+            self.assertIsNone(sod.classify(derived))
+
+    def test_a_regenerated_manifest_rides_with_a_verifier_edit_but_not_a_subject_edit_in_disguise(self) -> None:
+        manifest = "server/zerg/config/managed_provider_contracts.json"
+        self.repo.write({ORACLE: "o1\n", manifest: "{}\n"})
+        self.assertIsNone(self.verdict(self.repo.commit("oracle and its regenerated digest")))
+        self.repo.write({ORACLE: "o2\n", manifest: "{1}\n", SUBJECT: "s1\n"})
+        self.assertIsNotNone(self.verdict(self.repo.commit("oracle, manifest and a subject edit")))
 
     def test_single_class_and_unclassified_pass(self) -> None:
         self.repo.write({ORACLE: "o1\n", CANARY: "c\n", "docs/a.md": "d1\n", ALLOW: "y\n"})

@@ -11,7 +11,8 @@ commit may therefore touch only one of these classes:
   guard     the code that enforces this rule and the verifier boundary (GUARD_FILES), and, as later phases of
             control-plane docs/specs/multi-agent-dev-loop-speed.md (change 6) land, the replay guard and corpus
 
-Files in none of these (web, ios, docs, tests, workflows, the boundary allowlist) combine with anything. The
+Files in none of these (web, ios, docs, tests, workflows, the boundary allowlist, the generated contract manifests in
+DERIVED_FILES) combine with anything. The
 allowlist `scripts/ci/verifier-boundary.allow` is ratcheted by its own check (shrink-only) and so is not a class.
 
 The unit is the commit, not the push: two commits in one push are fine. A commit that exactly restores the
@@ -44,11 +45,22 @@ GUARD_FILES = (
     "scripts/tests/verifier-boundary.test.py",
 )
 GUARD_PREFIXES = ("scripts/ci/verifier_guard/",)
+# Files generated from a source of one class and re-derived by `make validate` / the pre-commit autofix, which embed
+# digests of the other class (the contract manifests carry each oracle's `oracle_digest`). They are not a place to hide
+# a change: CI regenerates them and fails on any difference, so a hand edit cannot survive. Without this exemption every
+# oracle edit would need a second commit that the pre-commit hook folds back into the first.
+DERIVED_FILES = (
+    "server/zerg/config/managed_provider_contracts.json",
+    "engine/src/managed_provider_contracts.generated.json",
+    "docs/generated/provider_census.json",
+)
 
 VERIFIER, SUBJECT, GUARD = "verifier", "subject", "guard"
 
 
 def classify(path: str) -> str | None:
+    if path in DERIVED_FILES:
+        return None
     if path in GUARD_FILES or path.startswith(GUARD_PREFIXES):
         return GUARD
     if path.startswith(VERIFIER_PREFIXES) or path in VERIFIER_FILES:
