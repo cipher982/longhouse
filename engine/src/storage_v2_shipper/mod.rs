@@ -1916,6 +1916,56 @@ mod tests {
         assert_eq!(rendered[3].content_text.as_deref(), Some("done"));
     }
 
+    /// Shape of the factory's `cursor_helm_steer_active` flake: Cursor's model
+    /// sometimes answers "Reply with exactly MARKER" by repeating the prompt, and
+    /// the provider receipt carries that repeat as its reply. A reply that equals
+    /// the prompt is still the reply and must reach the head branch as assistant
+    /// text, not be dropped or relabelled as the user turn.
+    #[test]
+    fn cursor_reply_that_repeats_the_prompt_is_still_the_assistant_reply() {
+        let context = "0000000000000000000000000000000000000000000000000000000000000000";
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let prompt = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_e95fcad8fe";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                context,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_info>\nOS Version: linux\n</user_info>"}]}),
+            ),
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":format!("<user_query>\n{prompt}\n</user_query>")}]}),
+            ),
+            (
+                reply,
+                serde_json::json!({"role":"assistant","content":[
+                    {"type":"reasoning","text":"The user wants me to reply with exactly the string \"LONGHOUSE_CURSOR_PRODUCT_ONE_e95fcad8fe\"."},
+                    {"type":"text","text":prompt}
+                ]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-echo".to_string(),
+                launch_id: None,
+                prompt: prompt.to_string(),
+                response_text: Some(prompt.to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            ..Default::default()
+        };
+
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
+        let assistant_texts: Vec<_> = rendered
+            .iter()
+            .filter(|record| record.role == "assistant" && record.branch_kind.is_none())
+            .filter_map(|record| record.content_text.as_deref())
+            .collect();
+        assert_eq!(assistant_texts, vec![prompt]);
+    }
+
     /// A failed turn keeps its prose out of the head branch, which is right,
     /// but silence is not an outcome. The session row names the failure so the
     /// timeline says what the terminal said.
