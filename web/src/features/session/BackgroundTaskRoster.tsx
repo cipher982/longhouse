@@ -160,11 +160,25 @@ export function BackgroundTaskRosterList({
   onNavigate?: () => void;
 }) {
   const inRouter = useInRouterContext();
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const activeItems = useMemo(() => delegation?.items ?? [], [delegation?.items]);
   const rows = useMemo(() => buildRosterTree(activeItems), [activeItems]);
   const agentRows = rows.filter(({ task }) => classifyTaskCategory(task.kind) === "agent");
   const otherRows = rows.filter(({ task }) => classifyTaskCategory(task.kind) !== "agent");
   const hasBothGroups = agentRows.length > 0 && otherRows.length > 0;
+  const allSameNonAgentCategory =
+    agentRows.length === 0 &&
+    otherRows.length > 0 &&
+    new Set(otherRows.map(({ task }) => classifyTaskCategory(task.kind))).size === 1;
+
+  const toggleExpanded = (taskId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
 
   const renderRow = ({ task, depth }: RosterTreeNode) => {
     const category = classifyTaskCategory(task.kind);
@@ -189,6 +203,9 @@ export function BackgroundTaskRosterList({
       metaParts.push(`${progress.tool_count} ${progress.tool_count === 1 ? "tool" : "tools"}`);
     }
 
+    const showKindLabel = !allSameNonAgentCategory;
+    const hasExpandableDetail = !task.session_id;
+    const isDetailOpen = hasExpandableDetail && expandedIds.has(task.id);
     const hasRichMeta =
       category === "agent" ||
       Boolean(task.is_fork) ||
@@ -196,21 +213,13 @@ export function BackgroundTaskRosterList({
       (tokens != null && tokens > 0) ||
       metaParts.length > 0;
 
-    return (
-      <li
-        key={task.id}
-        className={`session-background-roster__item${task.session_id ? " is-linked" : ""}`}
-        data-testid="session-background-roster-item"
-        data-task-kind={category}
-        data-task-status={tone}
-        data-spawn-depth={depth}
-        style={depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined}
-      >
+    const rowContent = (
+      <>
         <div className="session-background-roster__row-top">
           <span className={`session-background-roster__dot session-background-roster__dot--${tone}`} aria-hidden="true" />
           {depth > 0 ? <span className="session-background-roster__branch" aria-hidden="true">└─</span> : null}
-          {!hasRichMeta ? <span className="session-background-roster__kind">{kindLabel}</span> : null}
-          <span className="session-background-roster__title">
+          {!hasRichMeta && showKindLabel ? <span className="session-background-roster__kind">{kindLabel}</span> : null}
+          <span className="session-background-roster__title" title={title}>
             {task.session_id ? (
               inRouter ? (
                 <Link
@@ -244,9 +253,9 @@ export function BackgroundTaskRosterList({
             ) : null}
           </div>
         </div>
-        {hasRichMeta ? (
+        {hasRichMeta && (showKindLabel || task.is_fork || (isStaleWait && elapsedMs != null) || (tokens != null && tokens > 0) || metaParts.length > 0) ? (
           <div className="session-background-roster__row-meta">
-            <span className="session-background-roster__kind">{kindLabel}</span>
+            {showKindLabel ? <span className="session-background-roster__kind">{kindLabel}</span> : null}
             {task.is_fork ? <span className="session-background-roster__badge session-background-roster__badge--fork">fork</span> : null}
             {isStaleWait && elapsedMs != null ? (
               <span className="session-background-roster__stale-wait" title="Waiting for background work">
@@ -268,6 +277,31 @@ export function BackgroundTaskRosterList({
             </span>
           </div>
         ) : null}
+      </>
+    );
+
+    return (
+      <li
+        key={task.id}
+        className={`session-background-roster__item${task.session_id ? " is-linked" : " is-expandable"}${isDetailOpen ? " is-detail-open" : ""}`}
+        data-testid="session-background-roster-item"
+        data-task-kind={category}
+        data-task-status={tone}
+        data-spawn-depth={depth}
+        style={depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined}
+      >
+        {hasExpandableDetail ? (
+          <button
+            type="button"
+            className="session-background-roster__row-button"
+            aria-expanded={isDetailOpen}
+            onClick={() => toggleExpanded(task.id)}
+          >
+            {rowContent}
+          </button>
+        ) : (
+          rowContent
+        )}
       </li>
     );
   };
@@ -290,16 +324,12 @@ export function BackgroundTaskRoster({
   delegation,
   pendingBackgroundAgentCount,
   nowMs,
-  inspectorOpen = false,
-  onToggleInspector,
   editedFilesLabel = null,
   editedFilesTitle = null,
 }: {
   delegation: SessionStateFacts["delegation"] | null | undefined;
   pendingBackgroundAgentCount?: number | null;
   nowMs: number;
-  inspectorOpen?: boolean;
-  onToggleInspector?: () => void;
   editedFilesLabel?: string | null;
   editedFilesTitle?: string | null;
 }) {
@@ -307,7 +337,6 @@ export function BackgroundTaskRoster({
   const [sheetOpen, setSheetOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const listId = useId();
-  const isDesktopInspector = useMediaQuery("(min-width: 1280px)");
   const isMobileSheet = useMediaQuery("(max-width: 767px)");
   const supportsDialog =
     typeof HTMLDialogElement !== "undefined" &&
@@ -316,7 +345,6 @@ export function BackgroundTaskRoster({
   const activeItems = useMemo(() => delegation?.items ?? [], [delegation?.items]);
   const pendingCount = pendingBackgroundAgentCount ?? 0;
 
-  const useInspectorMode = Boolean(onToggleInspector) && isDesktopInspector;
   const useSheetMode = isMobileSheet && supportsDialog;
 
   useEffect(() => {
@@ -337,16 +365,10 @@ export function BackgroundTaskRoster({
 
   const summary = summarizeBackgroundRoster(activeItems, pendingCount);
   const canExpand = activeItems.length > 0;
-  const expanded = useInspectorMode
-    ? inspectorOpen
-    : useSheetMode
-      ? sheetOpen
-      : inlineExpanded;
+  const expanded = useSheetMode ? sheetOpen : inlineExpanded;
 
   const handleToggle = () => {
-    if (useInspectorMode) {
-      onToggleInspector?.();
-    } else if (useSheetMode) {
+    if (useSheetMode) {
       setSheetOpen((prev) => !prev);
     } else {
       setInlineExpanded((prev) => !prev);
@@ -364,21 +386,31 @@ export function BackgroundTaskRoster({
           className="session-background-roster__summary"
           data-testid="session-background-roster-toggle"
           aria-expanded={expanded}
-          aria-controls={!useInspectorMode && !useSheetMode ? listId : undefined}
+          aria-controls={!useSheetMode ? listId : undefined}
           onClick={handleToggle}
         >
           <span className={`session-background-roster__chev${expanded ? " is-open" : ""}`} aria-hidden="true">
             ›
           </span>
           <span className="session-background-roster__label">{summary}</span>
+          {editedFilesLabel ? (
+            <span className="session-background-roster__files" title={editedFilesTitle ?? undefined}>
+              {editedFilesLabel}
+            </span>
+          ) : null}
         </button>
       ) : (
         <div className="session-background-roster__summary session-background-roster__summary--static">
           <span className="session-background-roster__label">{summary}</span>
+          {editedFilesLabel ? (
+            <span className="session-background-roster__files" title={editedFilesTitle ?? undefined}>
+              {editedFilesLabel}
+            </span>
+          ) : null}
         </div>
       )}
 
-      {canExpand && !useInspectorMode && !useSheetMode && inlineExpanded ? (
+      {canExpand && !useSheetMode && inlineExpanded ? (
         <BackgroundTaskRosterList
           id={listId}
           delegation={delegation}

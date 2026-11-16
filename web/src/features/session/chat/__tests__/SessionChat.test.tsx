@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiError } from "@/shared/api/base";
@@ -4652,5 +4653,66 @@ describe("SessionChat composer status", () => {
 
     fireEvent.click(toggle);
     expect(screen.getByTestId("session-background-roster-list")).toHaveTextContent("194.2k tok");
+  });
+
+  it("omits redundant per-row shell prefixes, expands shell rows on click, and avoids repeating Background in the placeholder", () => {
+    const now = Date.now();
+    const delegatedFacts = makeSessionStateFacts({
+      access: "live_control",
+      activity: "quiescent",
+      observedAt: new Date(now - 5_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    delegatedFacts.presentation.primary = {
+      key: "delegated_work",
+      label: "Background · 2 commands",
+      tone: "idle",
+      observed_at: new Date(now - 5_000).toISOString(),
+    };
+    delegatedFacts.delegation = {
+      state: "pending",
+      count: 2,
+      kinds: { shell: 2 },
+      items: [
+        {
+          id: "sh-1",
+          kind: "shell",
+          status: "running",
+          description: "Wait for the zero-gain control run to finish on the bench",
+          started_at: new Date(now - 90_000).toISOString(),
+        },
+        {
+          id: "sh-2",
+          kind: "shell",
+          status: "running",
+          description: "Wait for the second teacher search to converge cleanly",
+          started_at: new Date(now - 60_000).toISOString(),
+        },
+      ],
+    };
+
+    renderSessionChat(
+      {
+        session: makeSession({
+          ended_at: null,
+          session_state: delegatedFacts,
+        }),
+      },
+      { queryClient: lockedClient() },
+    );
+
+    const textarea = screen.getByLabelText("Next instruction");
+    expect(textarea).toHaveAttribute("placeholder", "Message to continue");
+
+    fireEvent.click(screen.getByTestId("session-background-roster-toggle"));
+    const list = screen.getByTestId("session-background-roster-list");
+    expect(list.querySelector(".session-background-roster__kind")).toBeNull();
+
+    const firstRow = screen.getAllByTestId("session-background-roster-item")[0];
+    const rowButton = within(firstRow).getByRole("button");
+    expect(rowButton).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(rowButton);
+    expect(rowButton).toHaveAttribute("aria-expanded", "true");
+    expect(firstRow).toHaveClass("is-detail-open");
   });
 });

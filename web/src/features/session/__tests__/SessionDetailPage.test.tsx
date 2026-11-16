@@ -1937,4 +1937,88 @@ describe("SessionDetailPage — header affordances", () => {
     await openInfoDrawer(user);
     expect(screen.getByTestId("session-crons")).toHaveTextContent("*/15 * * * *");
   });
+
+  it("expands background shells inline on desktop and suppresses redundant header, cwd, and model duplicates", () => {
+    const originalMatchMedia = window.matchMedia;
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(min-width: 1280px)",
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+    try {
+      const now = Date.parse("2026-03-22T22:04:30Z");
+      const delegatedFacts = makeSessionStateFacts({
+        access: "live_control",
+        activity: "quiescent",
+        observedAt: new Date(now - 5_000).toISOString(),
+        activityValidUntil: new Date(now + 60_000).toISOString(),
+      });
+      delegatedFacts.host.state = "online";
+      delegatedFacts.presentation.primary = {
+        key: "delegated_work",
+        label: "Background · 2 commands",
+        tone: "idle",
+        observed_at: new Date(now - 5_000).toISOString(),
+      };
+      delegatedFacts.delegation = {
+        state: "pending",
+        count: 2,
+        kinds: { shell: 2 },
+        items: [
+          {
+            id: "sh-1",
+            kind: "shell",
+            status: "running",
+            description: "Wait for the zero-gain control run to finish",
+            started_at: new Date(now - 180_000).toISOString(),
+          },
+          {
+            id: "sh-2",
+            kind: "shell",
+            status: "running",
+            description: "Wait for the second teacher search to converge",
+            started_at: new Date(now - 120_000).toISOString(),
+          },
+        ],
+      };
+
+      const session = makeSession({
+        provider: "claude",
+        project: "g55",
+        cwd: "/Users/example/git/g55",
+        git_branch: "main",
+        permission_mode: "bypassPermissions",
+        usage_latest: {
+          label: "fable 5.2",
+        },
+        session_state: delegatedFacts,
+      });
+
+      renderSessionDetailPageAt("/timeline/session-codex", { session });
+
+      expect(screen.queryByTestId("session-header-state")).not.toBeInTheDocument();
+      expect(screen.getByTestId("session-git-context")).toHaveTextContent("git:(main)");
+      expect(screen.getByTestId("session-git-context").textContent).not.toContain("g55");
+      expect(screen.getByTestId("session-identity").textContent?.match(/fable 5\.2/g)).toHaveLength(1);
+
+      const toggle = screen.getByTestId("session-background-roster-toggle");
+      expect(toggle).toHaveTextContent("2 shells");
+      fireEvent.click(toggle);
+
+      const roster = screen.getByTestId("session-background-roster");
+      const list = screen.getByTestId("session-background-roster-list");
+      expect(roster).toContainElement(list);
+      expect(screen.queryByTestId("session-live-inspector")).not.toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
 });

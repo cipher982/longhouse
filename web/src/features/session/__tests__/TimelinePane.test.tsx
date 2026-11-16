@@ -1965,4 +1965,57 @@ describe("TimelinePane outbox", () => {
     expect(screen.getByTestId("session-api-error-notice")).toHaveTextContent("retry 1/4 · HTTP 529");
     expect(screen.getByTestId("session-turn-end")).toHaveTextContent("Stop hook verified");
   });
+
+  it("deduplicates repeated withheld reasoning rows within a turn and resets on the next user prompt", () => {
+    const makeProjectionItem = (
+      id: number,
+      contentText: string,
+      role: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      kind: "event" as const,
+      session_id: "sess-1",
+      timestamp: `2026-04-15T16:01:${String(id).padStart(2, "0")}Z`,
+      event: {
+        ...messageItem.event,
+        id,
+        role,
+        content_text: contentText,
+        timestamp: `2026-04-15T16:01:${String(id).padStart(2, "0")}Z`,
+        ...overrides,
+      },
+    });
+    const rawEvents = [
+      makeProjectionItem(1, "First prompt", "user"),
+      makeProjectionItem(2, "Thinking:\n[Reasoning withheld]", "system", {
+        interaction_kind: "provider_reasoning",
+        reasoning_withheld: true,
+      }),
+      makeProjectionItem(3, "", "assistant", {
+        tool_name: "Bash",
+        tool_call_id: "call-1",
+        tool_input_json: { command: "ls" },
+      }),
+      makeProjectionItem(4, "", "tool", {
+        tool_name: "Bash",
+        tool_call_id: "call-1",
+        tool_output_text: "ok",
+      }),
+      makeProjectionItem(5, "Thinking:\n[Reasoning withheld]", "system", {
+        interaction_kind: "provider_reasoning",
+        reasoning_withheld: true,
+      }),
+      makeProjectionItem(6, "Done with turn 1.", "assistant"),
+      makeProjectionItem(7, "Second prompt", "user"),
+      makeProjectionItem(8, "Thinking:\n[Reasoning withheld]", "system", {
+        interaction_kind: "provider_reasoning",
+        reasoning_withheld: true,
+      }),
+      makeProjectionItem(9, "Done with turn 2.", "assistant"),
+    ];
+
+    renderPane(buildTimelineModel(rawEvents).items);
+
+    expect(screen.getAllByTestId("session-reasoning-withheld")).toHaveLength(2);
+  });
 });

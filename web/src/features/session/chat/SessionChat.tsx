@@ -216,8 +216,6 @@ interface SessionChatProps {
   onOutboxChange?: (entries: OutboxEntry[]) => void;
   /** The session's live workspace stream is connected and fresh. */
   streamConnected?: boolean;
-  rosterInspectorOpen?: boolean;
-  onToggleRosterInspector?: () => void;
   editedFilesLabel?: string | null;
   editedFilesTitle?: string | null;
 }
@@ -714,8 +712,6 @@ export function SessionChat({
   composerHeaderAccessory,
   onOutboxChange,
   streamConnected = false,
-  rosterInspectorOpen = false,
-  onToggleRosterInspector,
   editedFilesLabel = null,
   editedFilesTitle = null,
 }: SessionChatProps) {
@@ -2853,15 +2849,18 @@ export function SessionChat({
   const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
   // Dock: the status line shows only while something runs or needs a
   // decision; at rest on an open session the placeholder carries it ("Idle
-  // since 2:21 AM — message to continue"). A closed session that still takes
-  // input keeps the caller's placeholder rather than "Ended … — continue".
+  // since 2:21 AM — message to continue"). When BackgroundTaskRoster already
+  // summarizes background work just above the input, avoid repeating
+  // "Background · N commands" inside the placeholder.
   const composerHeadVisible =
     showComposerUnavailableState || composerState.tone !== "cool";
   // Only an open, resting session continues from here; an ended one that
   // still accepts input keeps the caller's own placeholder.
   const dockPlaceholder =
     composerState.tone === "cool" && !isSessionClosed(session)
-      ? `${composerState.text} — message to continue`
+      ? hasBackgroundRoster && composerState.text.startsWith("Background")
+        ? "Message to continue"
+        : `${composerState.text} — message to continue`
       : composerPlaceholder || "Message";
 
   // Renders inside the composer frame itself, between the head row and the
@@ -3244,8 +3243,6 @@ export function SessionChat({
           delegation={session.session_state?.delegation}
           pendingBackgroundAgentCount={session.pending_background_agent_count}
           nowMs={activityNowMs}
-          inspectorOpen={rosterInspectorOpen}
-          onToggleInspector={onToggleRosterInspector}
           editedFilesLabel={editedFilesLabel}
           editedFilesTitle={editedFilesTitle}
         />

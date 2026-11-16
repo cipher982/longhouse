@@ -1970,6 +1970,7 @@ export const TimelinePane = memo(function TimelinePane({
   function renderDurableRows(): ReactNode[] {
     const rows: ReactNode[] = [];
     let next = 0;
+    let sawWithheldInTurn = false;
     let tier3Run: Array<{ item: TimelineItem; index: number }> = [];
 
     const flushTier3Run = () => {
@@ -2010,6 +2011,17 @@ export const TimelinePane = memo(function TimelinePane({
         while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
           rows.push(renderOutboxEntry(placedOutbox[next++]));
         }
+      }
+      if (item.kind === "seam" || (item.kind === "message" && item.event.role === "user")) {
+        sawWithheldInTurn = false;
+      }
+      if (item.kind === "reasoning" && isWithheldReasoningEvent(item.event)) {
+        const itemKey = `event:${item.event.id}`;
+        const isExplicitlySelected = selectedKey === itemKey;
+        if (sawWithheldInTurn && !isExplicitlySelected) {
+          continue;
+        }
+        sawWithheldInTurn = true;
       }
       if (isTier3MechanicalItem(item, idx, lastProgressIndex)) {
         tier3Run.push({ item, index: idx });

@@ -708,6 +708,24 @@
   color: var(--color-text-primary);
 }
 
+.session-background-roster__summary:focus {
+  outline: none;
+}
+
+.session-background-roster__summary:focus-visible {
+  outline: 1px solid rgba(240, 168, 84, 0.45);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.session-background-roster__files {
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
 .session-background-roster__chev {
   display: inline-flex;
   font-family: var(--font-family-mono);
@@ -730,18 +748,19 @@
 .session-background-roster__list {
   list-style: none;
   margin: 0;
-  padding: 4px 0 0;
+  padding: 6px 0 2px;
   border-top: 1px solid var(--color-border-primary);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: min(32dvh, 220px);
+  gap: 4px;
+  max-height: min(40dvh, 300px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .session-background-roster__section-head {
-  padding-top: 4px;
+  flex-shrink: 0;
+  padding: 4px 6px 0;
   font-family: var(--font-family-mono);
   font-size: 10px;
   font-weight: 600;
@@ -755,6 +774,7 @@
 }
 
 .session-background-roster__item {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -762,11 +782,44 @@
   line-height: 1.38;
   padding: 5px 6px;
   border-radius: 8px;
-  overflow: hidden;
 }
 
-.session-background-roster__item.is-linked:hover {
+.session-background-roster__item.is-linked:hover,
+.session-background-roster__item.is-expandable:hover {
   background: rgba(255, 255, 255, 0.048);
+}
+
+.session-background-roster__row-button {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-background-roster__row-button:focus {
+  outline: none;
+}
+
+.session-background-roster__row-button:focus-visible {
+  outline: 1px solid rgba(240, 168, 84, 0.45);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.session-background-roster__item.is-detail-open .session-background-roster__title,
+.session-background-roster__item.is-detail-open .session-background-roster__step {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
 }
 
 .session-background-roster__row-top {
@@ -1008,8 +1061,7 @@
   overscroll-behavior: contain;
 }
 
-.session-background-sheet__body .session-background-roster__list,
-.session-live-inspector__body .session-background-roster__list {
+.session-background-sheet__body .session-background-roster__list {
   max-height: none;
   overflow: visible;
   border-top: 0;
