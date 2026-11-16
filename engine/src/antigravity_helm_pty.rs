@@ -291,6 +291,8 @@ fn child_env(command: &Command, size: &libc::winsize) -> anyhow::Result<Vec<CStr
 }
 
 fn pty_command(command: &Command, size: &libc::winsize) -> anyhow::Result<PtyCommand> {
+    // no managed identity: this only translates the Command it is handed. The
+    // launcher applied the identity overlay to that Command before calling.
     let program = resolve_program(command.get_program());
     let mut argv = vec![CString::new(program.as_os_str().as_bytes())
         .context("Antigravity binary path cannot contain NUL")?];
