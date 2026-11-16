@@ -9,6 +9,49 @@
 //! a producer that "fails" for an unrelated reason (timeout, crash, missing
 //! credentials) is inconclusive rather than a passed negative control.
 
+/// Where the provider factory leaves a fault selection for a QA engine, inside the sandbox it runs the producer in.
+/// This is the engine-only channel: the producer is never told a fault is active, it only sees an engine that
+/// misbehaves, and its own oracle has to notice (spec multi-agent-dev-loop-speed.md, change 6, blind fault injection).
+#[cfg(feature = "qa-fault-injection")]
+pub const FAULT_CONFIG_PATH: &str = "/run/longhouse-qa/fault.json";
+
+/// Read `FAULT_CONFIG_PATH` once, at process start, and publish its values as the `LONGHOUSE_QA_FAULT*` variables
+/// every reader below (and the child processes and provider extensions an engine starts) already consults. A missing
+/// or unreadable file changes nothing. Call before any thread starts: it sets process environment.
+///
+/// Keys: `fault` (name), `receipt` (path of the JSONL receipt), `marker` (exact marker text) and `marker_prefix` with
+/// `marker_hex_len` (redact every `<prefix><hex digits>` token, for a marker the engine cannot know in advance).
+#[cfg(feature = "qa-fault-injection")]
+pub fn load_config() {
+    let Ok(text) = std::fs::read_to_string(FAULT_CONFIG_PATH) else {
+        return;
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    for (key, variable) in [
+        ("fault", "LONGHOUSE_QA_FAULT"),
+        ("receipt", "LONGHOUSE_QA_FAULT_RECEIPT"),
+        ("marker", "LONGHOUSE_QA_FAULT_MARKER"),
+        ("marker_prefix", "LONGHOUSE_QA_FAULT_MARKER_PREFIX"),
+        ("marker_hex_len", "LONGHOUSE_QA_FAULT_MARKER_HEX_LEN"),
+    ] {
+        let value = match config.get(key) {
+            Some(serde_json::Value::String(text)) => text.clone(),
+            Some(serde_json::Value::Number(number)) => number.to_string(),
+            _ => continue,
+        };
+        if key == "fault" {
+            // Cursor's launcher reads its own name for the same selection.
+            std::env::set_var("LH_QA_FAULT", &value);
+        }
+        std::env::set_var(variable, value);
+    }
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn load_config() {}
+
 /// Faults injected at the Codex bridge dispatch boundary shared by
 /// `codex-bridge <verb>` and the control channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,20 +146,75 @@ pub fn claude_background_writer_disabled() -> bool {
 /// The raw bytes, envelope identity and acknowledgement are untouched, so the
 /// session looks healthy while served search can no longer find the marker --
 /// the silent-ingest-loss shape a search oracle must catch.
+///
+/// The marker is either the exact text in `LONGHOUSE_QA_FAULT_MARKER` or every token made of
+/// `LONGHOUSE_QA_FAULT_MARKER_PREFIX` followed by `LONGHOUSE_QA_FAULT_MARKER_HEX_LEN` hex digits (the factory's blind
+/// control cannot know a marker the producer draws at run time). Returns the redacted text and the number of tokens
+/// blanked, or `None` when the fault is off or nothing matched.
 #[cfg(feature = "qa-fault-injection")]
-pub fn ingest_redact_marker() -> Option<String> {
+pub fn redact_ingest_markers(text: &str) -> Option<(String, usize)> {
     if std::env::var("LONGHOUSE_QA_FAULT").ok()?.as_str() != "ingest_redact_marker" {
         return None;
     }
-    std::env::var("LONGHOUSE_QA_FAULT_MARKER")
+    let exact = std::env::var("LONGHOUSE_QA_FAULT_MARKER")
         .ok()
         .map(|marker| marker.trim().to_string())
-        .filter(|marker| !marker.is_empty())
+        .filter(|marker| !marker.is_empty());
+    let prefix = std::env::var("LONGHOUSE_QA_FAULT_MARKER_PREFIX")
+        .ok()
+        .filter(|prefix| !prefix.is_empty());
+    let hex_len = std::env::var("LONGHOUSE_QA_FAULT_MARKER_HEX_LEN")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(16);
+    redact_markers(text, exact.as_deref(), prefix.as_deref(), hex_len)
 }
 
 #[cfg(not(feature = "qa-fault-injection"))]
-pub fn ingest_redact_marker() -> Option<String> {
+pub fn redact_ingest_markers(_text: &str) -> Option<(String, usize)> {
     None
+}
+
+#[cfg(feature = "qa-fault-injection")]
+fn redact_markers(
+    text: &str,
+    exact: Option<&str>,
+    prefix: Option<&str>,
+    hex_len: usize,
+) -> Option<(String, usize)> {
+    let mut out = text.to_string();
+    let mut redacted = 0usize;
+    if let Some(marker) = exact {
+        let count = out.matches(marker).count();
+        if count > 0 {
+            redacted += count;
+            out = out.replace(marker, &"x".repeat(marker.len()));
+        }
+    }
+    if let Some(prefix) = prefix {
+        let mut result = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(prefix) {
+            let after = &rest[at + prefix.len()..];
+            let digits = after
+                .bytes()
+                .take_while(|byte| byte.is_ascii_hexdigit())
+                .count();
+            result.push_str(&rest[..at]);
+            if digits >= hex_len {
+                let length = prefix.len() + hex_len;
+                result.push_str(&"x".repeat(length));
+                redacted += 1;
+                rest = &rest[at + length..];
+            } else {
+                result.push_str(prefix);
+                rest = after;
+            }
+        }
+        result.push_str(rest);
+        out = result;
+    }
+    (redacted > 0).then_some((out, redacted))
 }
 
 /// Append one JSON line to `LONGHOUSE_QA_FAULT_RECEIPT`. A fault that cannot
@@ -253,4 +351,33 @@ pub fn patch_asset<'a>(asset: &str, text: &'a str) -> std::borrow::Cow<'a, str> 
 #[cfg(not(feature = "qa-fault-injection"))]
 pub fn patch_asset<'a>(_asset: &str, text: &'a str) -> std::borrow::Cow<'a, str> {
     std::borrow::Cow::Borrowed(text)
+}
+
+#[cfg(all(test, feature = "qa-fault-injection"))]
+mod blind_tests {
+    use super::redact_markers;
+
+    #[test]
+    fn prefix_token_is_blanked_to_the_same_length() {
+        let text =
+            "found lhsearch0123456789abcdef and lhsearch00ff and lhsearchfedcba9876543210 end";
+        let (out, count) = redact_markers(text, None, Some("lhsearch"), 16).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(out.len(), text.len());
+        assert_eq!(
+            out,
+            format!(
+                "found {} and lhsearch00ff and {} end",
+                "x".repeat(24),
+                "x".repeat(24)
+            )
+        );
+    }
+
+    #[test]
+    fn exact_marker_and_no_match() {
+        let (out, count) = redact_markers("a MARK b MARK", Some("MARK"), None, 16).unwrap();
+        assert_eq!((out.as_str(), count), ("a xxxx b xxxx", 2));
+        assert!(redact_markers("nothing here", Some("MARK"), Some("lhsearch"), 16).is_none());
+    }
 }

@@ -1241,6 +1241,11 @@ fn serve(
                     &dir.join(format!("{session_id}.qa-fault.json")),
                     &json!({"fault":"cursor_steer_queue_only","generation_id":expected}),
                 );
+                crate::qa_fault::record_fired_named(
+                    "cursor_steer_queue_only",
+                    &session_id,
+                    json!({"generation_id":expected}),
+                );
             }
             for (bytes, settle_env, default_ms) in writes {
                 if let Err(error) = terminal.write(bytes) {
@@ -1283,6 +1288,11 @@ fn serve(
                 let _ = write_json(
                     &dir.join(format!("{session_id}.qa-fault.json")),
                     &json!({"fault":"cursor_abort_noop","generation_id":expected}),
+                );
+                crate::qa_fault::record_fired_named(
+                    "cursor_abort_noop",
+                    &session_id,
+                    json!({"generation_id":expected}),
                 );
                 return response(
                     &mut stream,

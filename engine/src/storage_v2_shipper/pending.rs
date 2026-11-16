@@ -18,22 +18,18 @@ pub(super) fn persist_prepared(
 /// render records funnel through `persist_prepared`, so blanking the marker
 /// here loses it for Claude, Codex, Cursor, OpenCode, Pi and OMP alike.
 pub(super) fn qa_fault_redact_ingest_marker(prepared: &mut PreparedStorageV2Envelope) {
-    let Some(marker) = crate::qa_fault::ingest_redact_marker() else {
-        return;
-    };
     let Some(render) = prepared.envelope.render.as_mut() else {
         return;
     };
-    let blank = "x".repeat(marker.len());
     let mut redacted = 0usize;
     for record in &mut render.records {
         for text in [&mut record.content_text, &mut record.tool_output_text]
             .into_iter()
             .flatten()
         {
-            if text.contains(&marker) {
-                redacted += text.matches(&marker).count();
-                *text = text.replace(&marker, &blank);
+            if let Some((blanked, count)) = crate::qa_fault::redact_ingest_markers(text) {
+                redacted += count;
+                *text = blanked;
             }
         }
     }

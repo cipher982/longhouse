@@ -5318,6 +5318,8 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // A QA engine reads the factory's fault selection before anything else (no-op in a release build).
+    qa_fault::load_config();
     let cli = Cli::parse();
     match cli
         .command
