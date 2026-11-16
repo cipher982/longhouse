@@ -183,6 +183,17 @@ fail() {
   echo "FAIL: $*" >&2
   echo "--- server log tail ---" >&2
   tail -40 "$SERVER_LOG" >&2 || true
+  # What the Machine Agent still holds undelivered and what it said about it:
+  # a run that never ends is a delivery question before it is a server one.
+  echo "--- engine log tail ---" >&2
+  tail -60 "$ENGINE_LOG" >&2 2>/dev/null || true
+  echo "--- runtime-events outbox (pending, dead-letter) ---" >&2
+  ls -la --time-style=full-iso "$HOME_DIR/.longhouse/agent/runtime-events-outbox" >&2 2>/dev/null || true
+  ls -la --time-style=full-iso "$HOME_DIR/.longhouse/agent/runtime-events-outbox/dead-letter" >&2 2>/dev/null || true
+  echo "--- live runs and connections ---" >&2
+  sqlite3 "$TEST_ROOT/longhouse-live.db" \
+    "SELECT 'run', id, provider, started_at, ended_at, exit_status FROM live_session_runs ORDER BY started_at;" \
+    "SELECT 'conn', run_id, state, released_at FROM live_session_connections ORDER BY run_id;" >&2 2>/dev/null || true
   retain_failure_diagnostics "$*"
   exit 1
 }
