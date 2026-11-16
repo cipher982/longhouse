@@ -639,6 +639,28 @@ describe("Claude fidelity signals", () => {
     expect(apiErr?.textContent).toContain("Overloaded");
   });
 
+  it("leads a narration step with its intent, since the step drops its tool title", () => {
+    render({
+      items: [
+        {
+          id: "tool:trail",
+          kind: "tool",
+          title: "Bash",
+          subtitle: "uv run pytest tests/test_refresh.py",
+          status: "completed",
+          toolIntent: "Run the refresh test",
+          narrationTrail: true,
+          calls: [],
+        } as TranscriptItem,
+      ],
+    });
+
+    const row = root().querySelector("details.tool.trail");
+    expect(row).not.toBeNull();
+    expect(row?.querySelector(".tool-title")).toBeNull();
+    expect(row?.querySelector(".tool-subtitle")?.textContent).toBe("Run the refresh test");
+  });
+
   it("renders running tool intent, live timer attribute, output tail, and nested subagents", () => {
     const postMessage = vi.fn();
     (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { longhouse: { postMessage } } };

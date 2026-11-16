@@ -88,7 +88,10 @@ export function toolDetails(item: TranscriptItem): string {
   const metaAttr = hasFreshRunningClock
     ? ` data-started-at-ms="${Math.round(item.startedAtMs as number)}"`
     : "";
-  const subtitleText = item.subtitle || item.toolIntent || "";
+  // A step trailing a commentary line drops its tool title, so its stated
+  // intent leads the row; elsewhere the intent is a note beside the subtitle.
+  const subtitleText =
+    item.narrationTrail && item.toolIntent ? item.toolIntent : item.subtitle || item.toolIntent || "";
   const intentNote =
     item.toolIntent && item.toolIntent !== subtitleText
       ? `<span class="tool-intent">${escapeHtml(item.toolIntent)}</span>`

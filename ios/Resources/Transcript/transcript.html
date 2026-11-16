@@ -1536,7 +1536,7 @@ details.trail .tool-meta {
 		const runningClock = hasFreshRunningClock ? formatRunningElapsed(item.startedAtMs) : null;
 		const status = isFailure ? item.status || "failed" : runningClock || item.duration || item.status || "";
 		const metaAttr = hasFreshRunningClock ? ` data-started-at-ms="${Math.round(item.startedAtMs)}"` : "";
-		const subtitleText = item.subtitle || item.toolIntent || "";
+		const subtitleText = item.narrationTrail && item.toolIntent ? item.toolIntent : item.subtitle || item.toolIntent || "";
 		const intentNote = item.toolIntent && item.toolIntent !== subtitleText ? `<span class="tool-intent">${escapeHtml(item.toolIntent)}</span>` : "";
 		const diffHtml = renderDiff(item.diff);
 		const input = diffHtml ? diffHtml : item.input ? "<div class=\"section-label\">Input</div><pre><code>" + escapeHtml(item.input) + "</code></pre>" : "";
