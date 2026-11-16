@@ -278,6 +278,7 @@ def _event_projection(
         thinking_fact = pos_facts.get("turn.thinking")
         if (
             item_facts.get("visibility") == "withheld"
+            # Stored renders before engine parser v5 carry the literal text.
             or event.get("content_text") == "Thinking:\n[Reasoning withheld]"
             or (isinstance(thinking_fact, Mapping) and thinking_fact.get("withheld") is True and int(thinking_fact.get("chars") or 0) == 0)
         ):

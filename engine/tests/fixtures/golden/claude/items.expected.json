@@ -48,7 +48,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "claude_thinking",
-      "content_text": "Thinking:\nAll 42 passed, so the answer is yes.",
+      "content_text": "All 42 passed, so the answer is yes.",
       "item": {
         "kind": "reasoning",
         "visibility": "full"

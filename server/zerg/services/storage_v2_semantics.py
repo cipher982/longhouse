@@ -1,15 +1,21 @@
-"""Recover parser-owned semantic facts for legacy storage-v2 render objects."""
+"""Recover parser-owned semantic facts for legacy storage-v2 render objects.
+
+Raw replay is write-time only. ``enrich_render_interaction_kinds`` runs at
+ingest; ``recover_render_interaction_kinds``, ``recover_render_spec`` and
+``repair_storage_session_semantic_projection`` run in the semantic projector and
+``db semantic-backfill``, which re-seal the corrected kinds into the render
+object at ``SEMANTIC_PROJECTION_VERSION``. Request-time reads and the search
+projector never call them: an older object serves its stored kinds as is.
+"""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
 from collections.abc import MutableMapping
-from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
-from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -57,17 +63,6 @@ _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
 _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
 
-@dataclass(slots=True)
-class SemanticRecoveryStats:
-    """Bounded per-request evidence for storage-v2 semantic recovery."""
-
-    selected_records: int = 0
-    raw_companions_read: int = 0
-    raw_manifest_duration_ms: float = 0.0
-    raw_companion_duration_ms: float = 0.0
-    sequence_context_duration_ms: float = 0.0
-
-
 async def recover_render_interaction_kinds(
     *,
     catalog: CatalogClient,
@@ -80,16 +75,13 @@ async def recover_render_interaction_kinds(
     manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
     sequence_context_cache: MutableMapping[tuple[str, ...], dict[str, object]] | None = None,
     reclassify_sequence_controls: bool = False,
-    projector_read: bool = False,
-    stats: SemanticRecoveryStats | None = None,
 ) -> dict[int, str]:
     """Return semantic kinds for render records from the immutable raw companion.
 
-    Render format v2 predates ``interaction_kind``. Those objects remain valid
-    immutable history, but replaying them without their raw companion would
-    silently turn provider-local controls back into user messages. Production
-    projectors pass the raw worker pool; tests and already-enriched objects take
-    the zero-work path.
+    Write-time only (semantic projector and ``db semantic-backfill``); a read
+    never calls this. Render objects below ``SEMANTIC_PROJECTION_VERSION`` keep
+    stale kinds, so the writer replays their raw companion once and re-seals the
+    result. Already-final objects take the zero-work path.
     """
     normalized_provider = provider.strip().lower()
     selected = {
@@ -116,51 +108,25 @@ async def recover_render_interaction_kinds(
             or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
         )
     }
-    if stats is not None:
-        stats.selected_records += len(selected)
     if not selected:
         return {}
     if raw_workers is None:
         raise StorageV2SemanticRecoveryError("raw worker pool is required to recover legacy render semantics")
-    read_lane = "repair" if projector_read else "user"
+    read_lane = "repair"
 
-    # A neighborhood is complete only for its center. Reusing the session-level
-    # union for a later companion could put that companion at the cached edge
-    # and omit the following caveat that proves its semantic kind.
-    manifest_cache_key = session_id if projector_read else f"{session_id}:{source_envelope_id}"
-    manifests = manifest_cache.setdefault(manifest_cache_key, {})
+    manifests = manifest_cache.setdefault(session_id, {})
     manifest = manifests.get(source_envelope_id)
     if manifest is None:
-        started_at = monotonic()
-        try:
-            loaded = (
-                await _load_raw_manifests(
-                    catalog,
-                    session_id=session_id,
-                    owner_id=owner_id,
-                    projector_read=True,
-                )
-                if projector_read
-                else await _load_raw_neighborhood(
-                    catalog,
-                    session_id=session_id,
-                    owner_id=owner_id,
-                    source_envelope_id=source_envelope_id,
-                )
-            )
-        finally:
-            if stats is not None:
-                stats.raw_manifest_duration_ms += (monotonic() - started_at) * 1000.0
+        loaded = await _load_raw_manifests(catalog, session_id=session_id, owner_id=owner_id, projector_read=True)
         manifests.update(loaded)
         manifest = manifests.get(source_envelope_id)
     if manifest is None:
         # A projector may observe the render object before the raw companion's
         # catalog row is visible. Do not pin that transient absence for the
         # lifetime of the worker; the next retry must reload the manifest.
-        manifest_cache.pop(manifest_cache_key, None)
+        manifest_cache.pop(session_id, None)
         raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} is missing for storage session {session_id}")
 
-    raw_read_started_at = monotonic()
     try:
         decoded = await raw_workers.read(
             str(manifest["object_path"]),
@@ -171,61 +137,50 @@ async def recover_render_interaction_kinds(
         )
     except Exception as exc:  # worker errors are provider-independent recovery failures
         raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} could not be read") from exc
-    finally:
-        if stats is not None:
-            stats.raw_companion_duration_ms += (monotonic() - raw_read_started_at) * 1000.0
-    if stats is not None:
-        stats.raw_companions_read += 1
 
     if str(decoded.envelope_id) != source_envelope_id:
         raise StorageV2SemanticRecoveryError("raw companion envelope identity does not match render object")
 
     raw_records = decoded.spec.records
-    context_started_at = monotonic()
-    try:
-        sequence_candidates = _claude_sequence_candidate_ordinals(
+    sequence_candidates = _claude_sequence_candidate_ordinals(
+        raw_records=raw_records,
+        records=records,
+    )
+    if reclassify_sequence_controls and sequence_candidates:
+        current_only = _classify_render_records_in_raw_order(
+            provider=provider,
             raw_records=raw_records,
             records=records,
+            selected=set(selected),
+            sequence_context={},
+            source_surface="storage-v2-replay",
         )
-        if reclassify_sequence_controls and sequence_candidates:
-            current_only = _classify_render_records_in_raw_order(
-                provider=provider,
-                raw_records=raw_records,
-                records=records,
-                selected=set(selected),
-                sequence_context={},
-                source_surface="storage-v2-replay",
-            )
-            if all(current_only.get(ordinal) in {"local_control", "local_control_output"} for ordinal in sequence_candidates):
-                return current_only
-            sequence_context = await _seed_sequence_context_from_adjacent_raw(
-                raw_workers=raw_workers,
-                session_id=session_id,
-                provider=provider,
-                current_raw_spec=decoded.spec,
-                current_envelope_id=source_envelope_id,
-                manifests=manifests,
-                sequence_context_cache=sequence_context_cache,
-                stats=stats,
-                lane=read_lane,
-            )
-        elif reclassify_sequence_controls:
-            sequence_context = {}
-        else:
-            sequence_context = await _seed_sequence_context_from_prior_raw(
-                catalog=catalog,
-                raw_workers=raw_workers,
-                session_id=session_id,
-                owner_id=owner_id,
-                provider=provider,
-                current_raw_spec=decoded.spec,
-                current_envelope_id=source_envelope_id,
-                manifests=manifests,
-                lane=read_lane,
-            )
-    finally:
-        if stats is not None:
-            stats.sequence_context_duration_ms += (monotonic() - context_started_at) * 1000.0
+        if all(current_only.get(ordinal) in {"local_control", "local_control_output"} for ordinal in sequence_candidates):
+            return current_only
+        sequence_context = await _seed_sequence_context_from_adjacent_raw(
+            raw_workers=raw_workers,
+            session_id=session_id,
+            provider=provider,
+            current_raw_spec=decoded.spec,
+            current_envelope_id=source_envelope_id,
+            manifests=manifests,
+            sequence_context_cache=sequence_context_cache,
+            lane=read_lane,
+        )
+    elif reclassify_sequence_controls:
+        sequence_context = {}
+    else:
+        sequence_context = await _seed_sequence_context_from_prior_raw(
+            catalog=catalog,
+            raw_workers=raw_workers,
+            session_id=session_id,
+            owner_id=owner_id,
+            provider=provider,
+            current_raw_spec=decoded.spec,
+            current_envelope_id=source_envelope_id,
+            manifests=manifests,
+            lane=read_lane,
+        )
     return _classify_render_records_in_raw_order(
         provider=provider,
         raw_records=raw_records,
@@ -477,7 +432,6 @@ async def _seed_sequence_context_from_adjacent_raw(
     current_envelope_id: str,
     manifests: Mapping[str, dict[str, object]],
     sequence_context_cache: MutableMapping[tuple[str, ...], dict[str, object]] | None,
-    stats: SemanticRecoveryStats | None,
     lane: str,
 ) -> dict[str, object]:
     """Seed Claude evidence from the fixed native interaction neighborhood.
@@ -551,8 +505,6 @@ async def _seed_sequence_context_from_adjacent_raw(
             )
         except Exception as exc:  # provider-independent raw recovery failure
             raise StorageV2SemanticRecoveryError(f"raw companion {envelope_id} could not be read") from exc
-        if stats is not None:
-            stats.raw_companions_read += 1
         if str(decoded.envelope_id) != envelope_id:
             raise StorageV2SemanticRecoveryError("raw companion envelope identity does not match manifest")
         for raw_record in decoded.spec.records:
@@ -674,40 +626,6 @@ async def _load_raw_manifests(
         if after_source_key == previous_source_key:
             raise StorageV2SemanticRecoveryError("raw manifest cursor did not advance")
         previous_source_key = after_source_key
-
-
-async def _load_raw_neighborhood(
-    catalog: CatalogClient,
-    *,
-    session_id: str,
-    owner_id: str,
-    source_envelope_id: str,
-) -> dict[str, dict[str, object]]:
-    page = await catalog.call(
-        "storage.session.raw_neighborhood.v2",
-        {
-            "session_id": session_id,
-            "owner_id": owner_id,
-            "envelope_id": source_envelope_id,
-        },
-        timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
-    )
-    if page.get("found") is not True:
-        raise StorageV2SemanticRecoveryError("storage session raw neighborhood is unavailable")
-    objects = page.get("objects")
-    if not isinstance(objects, list) or len(objects) > (_SEQUENCE_CONTEXT_NEIGHBOR_OBJECTS * 2) + 1:
-        raise StorageV2SemanticRecoveryError("catalog returned an invalid raw neighborhood")
-    manifests: dict[str, dict[str, object]] = {}
-    for item in objects:
-        if not isinstance(item, dict):
-            raise StorageV2SemanticRecoveryError("catalog returned an invalid raw neighborhood row")
-        envelope_id = item.get("envelope_id")
-        if not isinstance(envelope_id, str) or not envelope_id:
-            raise StorageV2SemanticRecoveryError("raw neighborhood row has no envelope id")
-        manifests[envelope_id] = item
-    if page.get("companion_found") is not True or source_envelope_id not in manifests:
-        raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} is missing from its source stream")
-    return manifests
 
 
 def _raw_manifest_signature(manifests: Mapping[str, Mapping[str, object]]) -> tuple[tuple[str, ...], ...]:
@@ -866,7 +784,6 @@ async def repair_storage_session_semantic_projection(
                 spec=spec,
                 manifest_cache=raw_manifest_cache,
                 sequence_context_cache=sequence_context_cache,
-                projector_read=True,
             )
             aggregate = aggregate_render_object(recovered_spec)
             if any(
@@ -1035,13 +952,11 @@ async def recover_render_spec(
     spec: RenderObjectSpec,
     manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
     sequence_context_cache: MutableMapping[tuple[str, ...], dict[str, object]] | None = None,
-    projector_read: bool = False,
-    stats: SemanticRecoveryStats | None = None,
 ) -> RenderObjectSpec:
     """The render spec with each record's interaction kind replayed from raw history.
 
-    Semantic repair and the turn index use this so a decoded object yields the
-    same aggregates the repaired catalog row would hold.
+    Write-time only: semantic repair and ``db semantic-backfill`` use this so a
+    decoded object yields the aggregates the repaired catalog row will hold.
     """
 
     recovered = await recover_render_interaction_kinds(
@@ -1055,8 +970,6 @@ async def recover_render_spec(
         manifest_cache=manifest_cache,
         sequence_context_cache=sequence_context_cache,
         reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
-        projector_read=projector_read,
-        stats=stats,
     )
     return replace(
         spec,
@@ -1074,7 +987,6 @@ def _repaired_interaction_kind(existing: str | None, recovered: str | None) -> s
 
 
 __all__ = [
-    "SemanticRecoveryStats",
     "StorageV2SemanticRecoveryError",
     "StorageV2SemanticRecoveryPermanentError",
     "enrich_render_interaction_kinds",

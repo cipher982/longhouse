@@ -20,7 +20,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "pi_thinking",
-      "content_text": "Thinking:\nStart with the suite.",
+      "content_text": "Start with the suite.",
       "item": {
         "kind": "reasoning",
         "visibility": "full"

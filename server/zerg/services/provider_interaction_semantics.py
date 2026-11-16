@@ -46,8 +46,10 @@ _TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION
 
 # Providers that publish model reasoning as an assistant content part which
 # Longhouse normalizes to a system-role row. The engine projects that row's
-# content behind this marker (engine/src/pipeline/parser.rs); the marker is
-# selection evidence only, and the raw thinking part remains the authority.
+# content behind this marker; the marker is selection evidence only, and the raw
+# thinking part remains the authority. Engine parser revision v5 stopped writing
+# it (rows carry `item.kind = reasoning`), so it survives only to select rows of
+# older stored renders for the write-time backfill. Never read it at request time.
 REASONING_PROJECTION_PREFIX = "Thinking:\n"
 REASONING_PART_PROVIDERS = frozenset({"claude", "omp", "pi"})
 

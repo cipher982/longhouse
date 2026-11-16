@@ -44,7 +44,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "codex_reasoning",
-      "content_text": "Thinking:\nThe build succeeded.",
+      "content_text": "The build succeeded.",
       "item": {
         "kind": "reasoning",
         "visibility": "summary"

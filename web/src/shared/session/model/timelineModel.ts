@@ -23,6 +23,7 @@ import {
   type ToolColorToken,
   type ToolTier,
 } from "./toolTiers.generated";
+import { isReasoningEvent, stripLegacyReasoningPrefix } from "./thoughtProse";
 import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
 import { formatFinalAnswer } from "./finalAnswer";
 import { childrenForToolCall } from "./subagents";
@@ -603,8 +604,9 @@ function thinkingPreviewItem(
     event: {
       id: -(Math.abs(thinking.event_id) + 1_000_000_000),
       role: "assistant",
-      content_text: `Thinking:\n${thinking.text}`,
+      content_text: thinking.text,
       interaction_kind: "provider_reasoning",
+      item: { kind: "reasoning", visibility: "full" },
       tool_name: null,
       tool_input_json: null,
       tool_output_text: null,
@@ -645,7 +647,7 @@ export function projectionItemsWithTranscriptPreview(
         item.kind === "event" &&
         item.event &&
         item.event.role !== "user" &&
-        item.event.interaction_kind !== "provider_reasoning",
+        !isReasoningEvent(item.event),
     );
   const latestDurableAt = latestDurable?.event ? Date.parse(latestDurable.event.timestamp) : Number.NaN;
   if (!Number.isNaN(thinkingAt) && !Number.isNaN(latestDurableAt) && latestDurableAt >= thinkingAt) return withReply;
@@ -1024,7 +1026,7 @@ export function buildTimelineModel(
       } else {
         eventIdToSelectionKey.set(event.id, `tool:orphan:${event.id}`);
       }
-    } else if (event.interaction_kind === "provider_reasoning") {
+    } else if (isReasoningEvent(event)) {
       eventIdToSelectionKey.set(event.id, `reasoning:${event.id}`);
     } else if (event.interaction_kind === "compaction_boundary") {
       eventIdToSelectionKey.set(event.id, `compaction:${event.id}`);
@@ -1059,10 +1061,10 @@ export function buildTimelineModel(
       Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
     if (event.item?.kind === "turn_end" && !event.content_text) continue;
     if (event.item?.kind === "reasoning" && !event.content_text && !isWithheldReasoning) continue;
-    if (event.interaction_kind === "provider_reasoning") {
+    if (isReasoningEvent(event)) {
       // Older rows carry no `item`: an empty thought with no withheld mark is
       // noise whether or not the host stamped its kind (matches iOS).
-      if (!isWithheldReasoning && !(event.content_text ?? "").replace(/^Thinking:/, "").trim()) continue;
+      if (!isWithheldReasoning && !stripLegacyReasoningPrefix(event.content_text ?? "").replace(/^Thinking:/, "").trim()) continue;
       items.push({ kind: "reasoning", event });
       continue;
     }

@@ -4,13 +4,12 @@ import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
 
 import { useLiveThinkingExpanded, useLiveThinkingHotkey, LIVE_THINKING_TOGGLE_KEY } from "./liveThinkingPreference";
-import { stripMarkdown, thoughtProse } from "@/shared/session/model/thoughtProse";
+import { stripLegacyReasoningPrefix, stripMarkdown, thoughtProse } from "@/shared/session/model/thoughtProse";
 
 export { stripMarkdown, thoughtProse };
 
 export function reasoningText(event: AgentEvent): string {
-  const rawText = event.content_text || "";
-  return rawText.startsWith("Thinking:\n") ? rawText.slice("Thinking:\n".length) : rawText;
+  return stripLegacyReasoningPrefix(event.content_text || "");
 }
 
 /**

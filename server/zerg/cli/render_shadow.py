@@ -206,7 +206,6 @@ async def _semantic_backfill(sessions: list[str], *, apply: bool, limit: int | N
                         owner_id=str(entry["owner_id"]),
                         spec=decoded.spec,
                         manifest_cache=cache,
-                        projector_read=True,
                     )
                     changed = sum(
                         old.interaction_kind != new.interaction_kind

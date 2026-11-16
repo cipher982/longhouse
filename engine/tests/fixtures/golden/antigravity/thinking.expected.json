@@ -11,7 +11,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "antigravity_thinking",
-      "content_text": "Thinking:\n**Observing the Request**\n\nI'm focusing now on the user's input and will answer with the requested word.",
+      "content_text": "**Observing the Request**\n\nI'm focusing now on the user's input and will answer with the requested word.",
       "item": {
         "kind": "reasoning",
         "visibility": "full"

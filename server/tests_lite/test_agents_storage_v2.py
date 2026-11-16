@@ -522,69 +522,6 @@ async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monkeypatch):
-    session_id = uuid4()
-    generation_id = uuid4()
-    object_hash = "a" * 64
-    source_envelope_id = "b" * 64
-
-    class _Catalog:
-        async def call(self, method, _params, *, timeout_seconds=None):
-            assert method == "storage.session.render_manifest.v2"
-            assert timeout_seconds == 4.25
-            return {
-                "found": True,
-                "current_generation_id": str(generation_id),
-                "generation": {"generation_id": str(generation_id), "event_count": 1},
-                "abandoned_events": 0,
-                "objects": [
-                    {
-                        "object_path": "render.zst",
-                        "object_hash": object_hash,
-                        "source_envelope_id": source_envelope_id,
-                    }
-                ],
-            }
-
-    class _RenderPool:
-        async def read(self, *_args, **_kwargs):
-            return SimpleNamespace(
-                object_hash=object_hash,
-                spec=SimpleNamespace(
-                    session_id=session_id,
-                    render_generation=generation_id,
-                    source_envelope_id=source_envelope_id,
-                    provider="claude",
-                    records=(SimpleNamespace(),),
-                ),
-            )
-
-    class _RawPool:
-        pass
-
-    async def pending_recovery(**_kwargs):
-        raise storage_router.StorageV2SemanticRecoveryError("raw companion unavailable")
-
-    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
-    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
-    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: _RawPool())
-    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", pending_recovery)
-
-    with pytest.raises(storage_router.HTTPException) as raised:
-        await storage_router.read_storage_v2_session_events_page(
-            session_id=session_id,
-            owner_id="1",
-            cursor=None,
-            anchor="tail",
-            limit=20,
-        )
-
-    assert raised.value.status_code == 503
-    assert raised.value.detail["code"] == "semantic_recovery_pending"
-    assert raised.value.headers == {"Retry-After": "60"}
-
-
-@pytest.mark.asyncio
 async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_raw_replay(monkeypatch):
     session_id = uuid4()
     generation_id = uuid4()
@@ -680,7 +617,7 @@ async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_
     assert page["branch_mode"] == "head"
     assert page["has_more"] is True
     assert "read_admission" in (timing.header_value() or "")
-    assert "semantic_recover" in (timing.header_value() or "")
+    assert "render_object_read" in (timing.header_value() or "")
 
 
 @pytest.mark.asyncio
@@ -2358,13 +2295,13 @@ async def test_storage_v2_render_page_drops_one_unreadable_event_instead_of_the_
         async def read(self, *_args, **_kwargs):
             return SimpleNamespace(spec=spec, object_hash=object_hash, payload_hash=object_hash)
 
-    async def no_recovery(**_kwargs):
-        return {}
-
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
     monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
-    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: SimpleNamespace())
-    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", no_recovery)
+
+    def _no_raw():
+        raise AssertionError("a session detail read must never open raw")
+
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _no_raw)
 
     page = await storage_router.read_storage_v2_session_events_page(
         session_id=session_id,
@@ -2676,13 +2613,9 @@ async def test_storage_v2_render_reader_pages_the_manifest_only_as_far_as_it_rea
         async def read(self, object_path, *_args, **_kwargs):
             return SimpleNamespace(spec=specs[object_path], object_hash=object_path, payload_hash=object_path)
 
-    async def no_recovery(**_kwargs):
-        return {}
-
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
     monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
     monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: SimpleNamespace())
-    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", no_recovery)
 
     page = await storage_router.read_storage_v2_session_events_page(
         session_id=session_id,

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 361,
+  "file_count": 360,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2728,13 +2728,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/routers/agents_storage_v2.py",
-      "providers": [
-        "claude",
-        "cursor"
       ]
     },
     {

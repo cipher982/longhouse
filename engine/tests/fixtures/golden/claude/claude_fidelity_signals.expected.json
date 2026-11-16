@@ -11,7 +11,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "claude_thinking",
-      "content_text": "Thinking:\nInspecting git status and spawning background audit.",
+      "content_text": "Inspecting git status and spawning background audit.",
       "item": {
         "kind": "reasoning",
         "visibility": "full"

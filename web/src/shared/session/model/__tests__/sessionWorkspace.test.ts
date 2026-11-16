@@ -1019,7 +1019,8 @@ describe("projectionItemsWithTranscriptPreview kinds", () => {
     expect(out[1]?.event).toMatchObject({ content_text: "Last reply" });
     const row = out[2]!.event!;
     expect(row.interaction_kind).toBe("provider_reasoning");
-    expect(row.content_text).toBe("Thinking:\npondering");
+    expect(row.content_text).toBe("pondering");
+    expect(row.item?.kind).toBe("reasoning");
     expect(row.id).toBeLessThanOrEqual(0);
     expect(row.id).not.toBe(out[1]!.event!.id);
     const model = buildTimelineModel(out, { sessionId: "session-1" } as never);

@@ -31,6 +31,7 @@ import type {
   TurnEnd,
 } from "@/embeds/ios-transcript/types";
 import { collapseUnchanged, lineDiff } from "./diff";
+import { stripLegacyReasoningPrefix } from "./thoughtProse";
 import { getEditStat, formatEditStat } from "./editSummary";
 import { formatTurnDuration, splitAttachmentsBlock } from "./formatters";
 import { flattenSubagentTree, subagentLabel, summarizeSubagents } from "./subagents";
@@ -738,8 +739,6 @@ function rowId(item: TimelineItem): string | null {
   }
 }
 
-const THINKING_PREFIX = "Thinking:\n";
-
 function mapItem(
   item: TimelineItem,
   id: string,
@@ -767,7 +766,7 @@ function mapItem(
     case "reasoning": {
       const text = item.event.content_text ?? "";
       row = baseRow(id, "reasoning");
-      row.body = text.startsWith(THINKING_PREFIX) ? text.slice(THINKING_PREFIX.length) : text;
+      row.body = stripLegacyReasoningPrefix(text);
       if (item.event.reasoning_withheld || item.event.item?.visibility === "withheld") row.reasoningWithheld = true;
       return row;
     }

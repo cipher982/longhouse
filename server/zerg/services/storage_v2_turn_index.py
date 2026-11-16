@@ -26,13 +26,9 @@ from zerg.routers.agents_storage_v2 import _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import resolve_session_alias
 from zerg.services.catalogd_supervisor import get_catalogd_client
-from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import get_render_object_worker_pool
-from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
-from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
-from zerg.services.storage_v2_semantics import recover_render_spec
 from zerg.storage_v2.branching import infers_branches_from_parent_links
 from zerg.storage_v2.branching import superseded_user_event_ids
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
@@ -154,9 +150,6 @@ async def read_session_turn_index(
     decoded_objects = 0
     if pending:
         workers = get_render_object_worker_pool()
-        raw_workers = get_raw_object_worker_pool()
-        manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
-        sequence_context_cache: dict[tuple[str, ...], dict[str, object]] = {}
         try:
             for start in range(0, len(pending), _DECODE_BATCH):
                 batch = pending[start : start + _DECODE_BATCH]
@@ -185,33 +178,13 @@ async def read_session_turn_index(
                             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="A render object does not match its catalog manifest.",
                         )
-                    recovered = await recover_render_spec(
-                        catalog=catalogd,
-                        raw_workers=raw_workers,
-                        session_id=str(session_id),
-                        owner_id=str(owner_id),
-                        spec=spec,
-                        manifest_cache=manifest_cache,
-                        sequence_context_cache=sequence_context_cache,
-                    )
-                    entries.extend(aggregate_render_object(recovered)["user_turns"])  # type: ignore[arg-type]
+                    entries.extend(aggregate_render_object(spec)["user_turns"])  # type: ignore[arg-type]
                 decoded_objects += len(batch)
         except RenderObjectWorkerBusy as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Session history is temporarily busy; retry shortly.",
                 headers={"Retry-After": "1"},
-            ) from exc
-        except StorageV2SemanticRecoveryPermanentError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
-            ) from exc
-        except StorageV2SemanticRecoveryError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Provider interaction semantics are pending immutable raw history; retry shortly.",
-                headers={"Retry-After": "60"},
             ) from exc
         except (RenderObjectCorruptError, RenderObjectWorkerError) as exc:
             raise HTTPException(

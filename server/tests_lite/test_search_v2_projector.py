@@ -10,7 +10,6 @@ from uuid import uuid4
 
 import pytest
 
-from zerg.services import search_v2_projector
 from zerg.services.search_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.search_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.search_v2_projector import SearchV2Projector
@@ -38,16 +37,6 @@ class FakeRenderWorkers:
 
     async def read(self, object_path, object_hash, *, lane):
         self.calls.append((object_path, object_hash, lane))
-        return self.decoded
-
-
-class FakeRawWorkers:
-    def __init__(self, decoded):
-        self.decoded = decoded
-        self.calls: list[tuple[str, str, str]] = []
-
-    async def read(self, object_path, object_hash, tenant_id, *, lane="user", queue_timeout_seconds=None):
-        self.calls.append((object_path, object_hash, tenant_id))
         return self.decoded
 
 
@@ -105,73 +94,6 @@ async def test_search_projector_quarantines_corrupt_render_object(monkeypatch):
     failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
     assert failed["error_code"] == "render_object_permanent"
     assert failed["retry_at"] == failed["failed_at"]
-
-
-@pytest.mark.asyncio
-async def test_search_projector_publishes_when_semantic_recovery_hits_archive_bound(monkeypatch):
-    session_id = str(uuid4())
-    generation_id = str(uuid4())
-    source_epoch = uuid4()
-    object_id = hashlib.sha256(b"bounded-render-object").hexdigest()
-    record = SimpleNamespace(
-        event_id="event-1",
-        order_time_us=1,
-        source_position=0,
-        event_subordinal=0,
-        raw_record_ordinal=0,
-        role="user",
-        content_text="the actual user question",
-        interaction_kind="durable_user_message",
-        tool_name=None,
-        tool_output_text=None,
-        tool_call_id=None,
-        thread_id=None,
-        branch_kind=None,
-    )
-    decoded = SimpleNamespace(
-        object_hash=object_id,
-        spec=SimpleNamespace(
-            session_id=UUID(session_id),
-            render_generation=UUID(generation_id),
-            provider="claude",
-            machine_id="cinder",
-            opaque_source_id="history.jsonl",
-            source_epoch=source_epoch,
-            source_envelope_id="a" * 64,
-            records=(record,),
-        ),
-    )
-    catalog = FakeClient(
-        {
-            "storage.session.projector.raw_manifest.v2": {"found": True, "objects": [], "objects_truncated": False},
-        }
-    )
-    search = FakeClient({"search.index.object.v2": {"created": True}})
-    projector = SearchV2Projector(
-        catalog=catalog,
-        search=search,
-        render_workers=FakeRenderWorkers(decoded),
-        raw_workers=FakeRawWorkers(SimpleNamespace()),
-    )
-
-    async def bounded(**_kwargs):
-        from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
-
-        raise StorageV2SemanticRecoveryPermanentError("archive too large")
-
-    monkeypatch.setattr(search_v2_projector, "recover_render_interaction_kinds", bounded)
-
-    await projector._index_object(
-        manifest={"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"},
-        session_id=session_id,
-        generation_id=generation_id,
-        claimed_revision=1,
-        session={"owner_id": "42", "project": "longhouse", "environment": "local"},
-        sequence_context_cache=projector._sequence_context_cache,
-    )
-
-    assert any(method == "search.index.object.v2" for method, _ in search.calls)
-    assert projector._semantic_recovery_degraded_sessions == {session_id}
 
 
 @pytest.mark.asyncio
@@ -437,13 +359,12 @@ async def test_search_projector_reuses_already_indexed_objects_without_reading_t
 
 
 @pytest.mark.asyncio
-async def test_search_projector_recovers_semantics_for_legacy_render_object():
+async def test_search_projector_indexes_stored_kinds_and_never_opens_raw():
     session_id = str(uuid4())
     generation_id = str(uuid4())
     source_epoch = uuid4()
     envelope_id = "a" * 64
     object_id = hashlib.sha256(b"legacy-render-object").hexdigest()
-    raw_hash = hashlib.sha256(b"legacy-raw-object").hexdigest()
     record = SimpleNamespace(
         event_id="event-1",
         order_time_us=1,
@@ -472,16 +393,6 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
             records=(record,),
         ),
     )
-    raw_decoded = SimpleNamespace(
-        envelope_id=envelope_id,
-        spec=SimpleNamespace(
-            records=(
-                SimpleNamespace(
-                    data=b'{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
-                ),
-            ),
-        ),
-    )
     now = datetime.now(UTC).replace(microsecond=0)
     catalog = FakeClient(
         {
@@ -505,18 +416,6 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
                 "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
                 "has_more": False,
             },
-            "storage.session.projector.raw_manifest.v2": {
-                "found": True,
-                "objects_truncated": False,
-                "objects": [
-                    {
-                        "envelope_id": envelope_id,
-                        "object_hash": raw_hash,
-                        "object_path": "raw.zst",
-                        "tenant_id": "tenant-1",
-                    }
-                ],
-            },
             "projector.state.complete.v2": {"changed": True},
             "projector.state.fail.v2": {"changed": True},
         }
@@ -530,24 +429,11 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
             "search.index.publish.v2": {"published": True},
         }
     )
-    projector = SearchV2Projector(
-        catalog=catalog,
-        search=search,
-        render_workers=FakeRenderWorkers(decoded),
-        raw_workers=FakeRawWorkers(raw_decoded),
-    )
+    projector = SearchV2Projector(catalog=catalog, search=search, render_workers=FakeRenderWorkers(decoded))
 
     assert await projector.run_once(now=now) == 1
     index_call = next(params for method, params in search.calls if method == "search.index.object.v2")
-    assert index_call["records"][0]["interaction_kind"] == "local_control"
-
-    missing_raw_projector = SearchV2Projector(
-        catalog=catalog,
-        search=search,
-        render_workers=FakeRenderWorkers(decoded),
-        raw_workers=None,
-        worker_id="missing-raw",
-    )
-    assert await missing_raw_projector.run_once(now=now) == 1
-    failed = [params for method, params in catalog.calls if method == "projector.state.fail.v2"][-1]
-    assert failed["error_code"] == "semantic_recovery_pending"
+    # The object's stored kind is indexed as is, even though a raw replay would
+    # call it local_control; only the write-time backfill corrects it.
+    assert index_call["records"][0]["interaction_kind"] == "durable_user_message"
+    assert not any(method.endswith("raw_manifest.v2") for method, _ in catalog.calls)

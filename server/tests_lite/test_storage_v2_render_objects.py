@@ -19,7 +19,6 @@ os.environ.setdefault("TESTING", "1")
 from tests_lite._process_helpers import child_is_gone
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
-from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import _repaired_interaction_kind
 from zerg.services.storage_v2_semantics import _semantic_repair_replay_set
@@ -1265,7 +1264,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
         calls = 0
 
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_neighborhood.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             self.calls += 1
             if self.calls == 1:
                 return {**missing_page, "companion_found": False}
@@ -1293,7 +1292,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     catalog = Catalog()
-    with pytest.raises(StorageV2SemanticRecoveryError, match="raw (neighborhood|companion)"):
+    with pytest.raises(StorageV2SemanticRecoveryError, match="raw (manifest|companion)"):
         await recover_render_interaction_kinds(
             catalog=catalog,
             raw_workers=RawReader(),
@@ -1447,7 +1446,7 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
 
     class Catalog:
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_neighborhood.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": True,
                 "companion_found": True,
@@ -1595,7 +1594,7 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
 
     class Catalog:
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_neighborhood.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": True,
                 "companion_found": True,
@@ -1640,7 +1639,6 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
             }
 
     reader = RawReader()
-    stats = SemanticRecoveryStats()
     recovered = await recover_render_interaction_kinds(
         catalog=Catalog(),
         raw_workers=reader,
@@ -1652,17 +1650,15 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
         manifest_cache={},
         sequence_context_cache={},
         reclassify_sequence_controls=True,
-        stats=stats,
     )
 
     assert recovered == {0: "local_control"}
     assert reader.reads == 3
-    assert stats.raw_companions_read == 3
 
 
 @pytest.mark.asyncio
 async def test_storage_semantic_recovery_reclassifies_a_sealed_omp_background_result(tmp_path):
-    """Rows sealed before background results were served gain them at read.
+    """Rows sealed before background results were served gain them at write time (backfill).
 
     Those render objects stored the notice under the general scaffolding kind.
     Recovery re-reads the immutable raw record, where the provider's own
@@ -1710,7 +1706,7 @@ async def test_storage_semantic_recovery_reclassifies_a_sealed_omp_background_re
 
     class Catalog:
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_neighborhood.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": True,
                 "companion_found": True,

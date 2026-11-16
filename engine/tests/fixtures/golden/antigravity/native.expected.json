@@ -11,7 +11,7 @@
       "kind": "event",
       "role": "system",
       "raw_type": "antigravity_thinking",
-      "content_text": "Thinking:\n**Assessing the request**\n\nI will run the command and then answer.",
+      "content_text": "**Assessing the request**\n\nI will run the command and then answer.",
       "item": {
         "kind": "reasoning",
         "visibility": "full"

@@ -65,7 +65,9 @@ use self::render::*;
 use self::resume::*;
 pub(crate) use self::ship::*;
 
-pub(crate) const PARSER_REVISION: &str = "engine-parser-v4";
+// v5: reasoning rows carry `item.kind = reasoning` and no longer prefix their
+// text with "Thinking:". Hosts rebuild every render from raw.
+pub(crate) const PARSER_REVISION: &str = "engine-parser-v5";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.

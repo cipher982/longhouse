@@ -45,6 +45,15 @@ describe("timeline model matches the iOS builder (HNT Phase 7 step 1)", () => {
     expect(kinds([reasoning(5, { content_text: "Thinking:\nreal thought" })])).toEqual(["reasoning"]);
   });
 
+  it("classifies reasoning by item.kind, with no Thinking prefix on the text", () => {
+    const row = (id: number, extra: Partial<AgentEvent>) =>
+      ev({ id, role: "system", item: { kind: "reasoning", visibility: "full" }, ...extra });
+    const model = buildTimelineModel([row(1, { content_text: "real thought" })]);
+    expect(model.items.map((i) => i.kind)).toEqual(["reasoning"]);
+    expect(model.eventIdToSelectionKey.get(1)).toBe("reasoning:1");
+    expect(kinds([row(2, {})])).toEqual([]);
+  });
+
   const pair = (id: number, call: Partial<AgentEvent>, result: Partial<AgentEvent>) => [
     ev({ id, role: "assistant", tool_name: "Read", tool_call_id: `c${id}`, ...call }),
     ev({ id: id + 1, role: "tool", tool_call_id: `c${id}`, tool_output_text: "ok", ...result }),

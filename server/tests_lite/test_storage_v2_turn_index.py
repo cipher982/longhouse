@@ -228,7 +228,6 @@ async def test_turn_index_matches_full_transcript_read(monkeypatch, name):
     for module in (storage_router, turn_index_module):
         monkeypatch.setattr(module, "get_catalogd_client", session.catalog)
         monkeypatch.setattr(module, "get_render_object_worker_pool", session.render_pool)
-        monkeypatch.setattr(module, "get_raw_object_worker_pool", lambda: None)
 
     expected = await _transcript_user_rows(session)
     actual, result = await _turn_ids(session)
@@ -247,7 +246,6 @@ async def test_turn_index_rows_carry_time_and_preview(monkeypatch):
     for module in (storage_router, turn_index_module):
         monkeypatch.setattr(module, "get_catalogd_client", session.catalog)
         monkeypatch.setattr(module, "get_render_object_worker_pool", session.render_pool)
-        monkeypatch.setattr(module, "get_raw_object_worker_pool", lambda: None)
 
     result = await turn_index_module.read_session_turn_index(session_id=session.session_id, owner_id=42)
 
@@ -310,7 +308,6 @@ async def test_limit_keeps_the_newest_turns_and_reports_the_total(monkeypatch):
     for module in (storage_router, turn_index_module):
         monkeypatch.setattr(module, "get_catalogd_client", session.catalog)
         monkeypatch.setattr(module, "get_render_object_worker_pool", session.render_pool)
-        monkeypatch.setattr(module, "get_raw_object_worker_pool", lambda: None)
 
     result = await turn_index_module.read_session_turn_index(session_id=session.session_id, owner_id=42, limit=2)
 

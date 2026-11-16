@@ -53,11 +53,9 @@ from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
-from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
-from zerg.services.storage_v2_semantics import recover_render_interaction_kinds
 from zerg.storage_v2.branching import infers_branches_from_parent_links
 from zerg.storage_v2.branching import superseded_user_event_ids
 from zerg.storage_v2.contracts import DurableReceipt
@@ -82,7 +80,6 @@ from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectValidationError
-from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
 from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
@@ -2041,9 +2038,6 @@ async def _read_storage_v2_session_events_page_admitted(
         return bool(more)
 
     workers = get_render_object_worker_pool()
-    raw_workers = get_raw_object_worker_pool()
-    raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
-    sequence_context_cache: dict[tuple[str, ...], dict[str, object]] = {}
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
     claude_generation = False
     claude_branch_records: list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]] = []
@@ -2051,8 +2045,6 @@ async def _read_storage_v2_session_events_page_admitted(
     next_object_index = 0
     cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
     object_read_duration_ms = 0.0
-    semantic_recovery_duration_ms = 0.0
-    semantic_recovery_stats = SemanticRecoveryStats()
     try:
         while next_object_index < len(objects) or await fetch_more_objects():
             batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
@@ -2083,40 +2075,14 @@ async def _read_storage_v2_session_events_page_admitted(
                     or decoded.object_hash != item.get("object_hash")
                 ):
                     raise ValueError("render object does not match its catalog manifest")
-                semantic_recovery_started_at = monotonic()
-                try:
-                    # A final object (version 2) holds its own kinds, so the
-                    # page reads no raw for it; only older objects replay.
-                    recovered_kinds = (
-                        {}
-                        if int(item.get("semantic_projection_version") or 0) >= SEMANTIC_PROJECTION_VERSION
-                        else await recover_render_interaction_kinds(
-                            catalog=catalogd,
-                            raw_workers=raw_workers,
-                            session_id=str(session_id),
-                            owner_id=owner_id,
-                            provider=spec.provider,
-                            records=spec.records,
-                            source_envelope_id=spec.source_envelope_id,
-                            manifest_cache=raw_manifest_cache,
-                            sequence_context_cache=sequence_context_cache,
-                            reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
-                            stats=semantic_recovery_stats,
-                        )
-                    )
-                finally:
-                    semantic_recovery_duration_ms += (monotonic() - semantic_recovery_started_at) * 1000.0
-                for ordinal, record in enumerate(spec.records):
+                for record in spec.records:
                     key = _render_record_order_key(decoded, record)
                     if claude_generation:
                         claude_branch_records.append((key, record))
-                    recovered_kind = recovered_kinds.get(ordinal)
-                    # A legacy render object may have persisted the ambiguous
-                    # command as durable before a later Claude caveat arrived.
-                    # Raw replay is authoritative for the current projection;
-                    # only fall back to the stored fact when replay has no
-                    # answer because evidence is unavailable.
-                    interaction_kind = recovered_kind if recovered_kind is not None else getattr(record, "interaction_kind", None)
+                    # Reads never open raw: the object's stored kind is served
+                    # as is. The semantic projector and `db semantic-backfill`
+                    # raise older objects to the final version at write time.
+                    interaction_kind = getattr(record, "interaction_kind", None)
                     is_timeline_surface_system = interaction_kind in {
                         INTERACTION_PROVIDER_NOTIFICATION,
                         INTERACTION_COMPACTION_BOUNDARY,
@@ -2193,19 +2159,6 @@ async def _read_storage_v2_session_events_page_admitted(
             "Session history is temporarily busy; retry shortly.",
             headers={"Retry-After": "1"},
         ) from exc
-    except StorageV2SemanticRecoveryPermanentError as exc:
-        raise _http_error(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "semantic_recovery_permanent",
-            "Provider interaction evidence exceeds the safe replay bound; manual repair is required.",
-        ) from exc
-    except StorageV2SemanticRecoveryError as exc:
-        raise _http_error(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "semantic_recovery_pending",
-            "Provider interaction semantics are pending immutable raw history; retry shortly.",
-            headers={"Retry-After": "60"},
-        ) from exc
     except (
         KeyError,
         TypeError,
@@ -2220,13 +2173,6 @@ async def _read_storage_v2_session_events_page_admitted(
         ) from exc
     finally:
         timing.record("render_object_read", object_read_duration_ms)
-        timing.record("semantic_recover", semantic_recovery_duration_ms)
-        if semantic_recovery_stats.raw_manifest_duration_ms > 0:
-            timing.record("raw_manifest_read", semantic_recovery_stats.raw_manifest_duration_ms)
-        if semantic_recovery_stats.raw_companion_duration_ms > 0:
-            timing.record("raw_companion_read", semantic_recovery_stats.raw_companion_duration_ms)
-        if semantic_recovery_stats.sequence_context_duration_ms > 0:
-            timing.record("sequence_context_seed", semantic_recovery_stats.sequence_context_duration_ms)
 
     abandoned_ids = _claude_abandoned_event_ids(claude_branch_records) if claude_generation else set()
     # Catalog counts cover all explicit abandoned records in the generation,
@@ -2243,16 +2189,13 @@ async def _read_storage_v2_session_events_page_admitted(
     page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
     has_more = len(ordered_events) > limit or next_object_index < len(objects) or objects_truncated
     logger.info(
-        "storage-v2 session detail read session_id=%s generation_id=%s anchor=%s branch_mode=%s "
-        "objects_read=%s events_kept=%s semantic_candidates=%s raw_companions=%s has_more=%s",
+        "storage-v2 session detail read session_id=%s generation_id=%s anchor=%s branch_mode=%s objects_read=%s events_kept=%s has_more=%s",
         session_id,
         generation_id,
         anchor,
         branch_mode,
         next_object_index,
         len(page),
-        semantic_recovery_stats.selected_records,
-        semantic_recovery_stats.raw_companions_read,
         has_more,
     )
     if retain_product_metrics:

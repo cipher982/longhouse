@@ -30,9 +30,24 @@ export function thoughtProse(text: string): string {
 }
 
 
-/** Provider reasoning rows carry this prefix on `content_text`. */
-export const REASONING_PREFIX = "Thinking:\n";
+/**
+ * Reasoning is identified by `item.kind === "reasoning"` and its text is the
+ * thought itself. The engine stopped writing a literal "Thinking:\n" prefix at
+ * parser revision v5, but stored renders from before that (laptop renders that
+ * history keeps, and host renders not yet rebuilt) still carry it, so the
+ * prefix is stripped wherever it is found. Remove this once no stored render
+ * below v5 can be served.
+ */
+const LEGACY_REASONING_PREFIX = "Thinking:\n";
 
-export function stripReasoningPrefix(text: string): string {
-  return text.startsWith(REASONING_PREFIX) ? text.slice(REASONING_PREFIX.length) : text;
+export function stripLegacyReasoningPrefix(text: string): string {
+  return text.startsWith(LEGACY_REASONING_PREFIX) ? text.slice(LEGACY_REASONING_PREFIX.length) : text;
+}
+
+/** True when the row is model reasoning: the host's item fact, or the server's classification of an older row without `item`. */
+export function isReasoningEvent(event: {
+  item?: { kind?: string | null } | null;
+  interaction_kind?: string | null;
+}): boolean {
+  return event.item?.kind === "reasoning" || event.interaction_kind === "provider_reasoning";
 }

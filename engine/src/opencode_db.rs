@@ -1780,7 +1780,7 @@ fn extract_events_from_part(
                 session_id: longhouse_session_id.to_string(),
                 timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
                 role: Role::System,
-                content_text: Some(format!("Thinking:\n{text}")),
+                content_text: Some(text.to_string()),
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
@@ -3636,7 +3636,7 @@ mod tests {
             ItemFacts::phase(Phase::Final, PhaseSource::Derived)
         );
         assert_eq!(
-            item_of("Thinking:\nThe suite is the check."),
+            item_of("The suite is the check."),
             ItemFacts::reasoning(Visibility::Full)
         );
         let items: Vec<&ItemFacts> = result.events.iter().map(|event| &event.item).collect();

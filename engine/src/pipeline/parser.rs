@@ -4213,7 +4213,7 @@ fn extract_pi_message_events(
                             &mut first_raw_line,
                             &format!("thinking-{index}"),
                             Role::System,
-                            text.map(|text| format!("Thinking:\n{text}")),
+                            text.map(str::to_string),
                             None,
                             None,
                             None,
@@ -5581,11 +5581,7 @@ fn extract_cursor_events(
                     session_id,
                     timestamp,
                     if reasoning { Role::System } else { role },
-                    Some(if reasoning {
-                        format!("Thinking:\n{text}")
-                    } else {
-                        text
-                    }),
+                    Some(text),
                     None,
                     None,
                     None,
@@ -6066,7 +6062,7 @@ fn extract_antigravity_events(
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::System,
-                content_text: Some(format!("Thinking:\n{thinking}")),
+                content_text: Some(thinking.to_string()),
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
@@ -7628,7 +7624,7 @@ fn extract_codex_events(
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::System,
-                content_text: summary.map(|text| format!("Thinking:\n{text}")),
+                content_text: summary,
                 tool_name: None,
                 tool_input_json: None,
                 tool_output_text: None,
@@ -7843,7 +7839,7 @@ fn extract_assistant_events(
                     session_id: session_id.to_string(),
                     timestamp,
                     role: Role::System,
-                    content_text: text.map(|text| format!("Thinking:\n{text}")),
+                    content_text: text.map(str::to_string),
                     tool_name: None,
                     tool_input_json: None,
                     tool_output_text: None,
