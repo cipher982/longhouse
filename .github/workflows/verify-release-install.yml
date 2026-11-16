@@ -1,0 +1,182 @@
+name: Verify Release Install
+
+# Installs a published release the way a user would and checks its identity. Called by the
+# release workflow after publishing; dispatch it by hand to re-verify an existing tag
+# without rebuilding or re-notarizing anything.
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Published release tag to verify (for example v0.1.82)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-install-from-release:
+    name: "verify-install-from-release--${{ matrix.os }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ci-fast
+          - os: wisp
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Use a scratch HOME on the wisp runner
+        # `uv tool install` and the release verification write into HOME; wisp is a
+        # persistent machine, so they land in a directory that goes away with the job.
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          scratch="$(mktemp -d "$RUNNER_TEMP/verify-home.XXXXXX")"
+          echo "HOME=$scratch" >> "$GITHUB_ENV"
+          echo "$scratch/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Python
+        # setup-python on a self-hosted Mac tries to create /Users/runner for its tool cache; there
+        # uv fetches the interpreter the wheel needs into the scratch HOME instead.
+        if: ${{ runner.os != 'macOS' }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Install longhouse wheel from the published release
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" \
+            --pattern 'longhouse-*-py3-none-any.whl' \
+            --dir "$work" \
+            --repo "${{ github.repository }}"
+          wheel="$(ls "$work"/longhouse-*-py3-none-any.whl | head -1)"
+          echo "Installing $wheel"
+          uv tool install --force --no-cache "$wheel"
+          echo "LONGHOUSE_VERIFY_WHEEL=$wheel" >> "$GITHUB_ENV"
+
+      - name: Verify installed CLI version matches release tag
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_TAG#v}"
+          version_line="$(longhouse-server --version 2>&1 | tail -1)"
+          actual="$(awk '{print $2}' <<< "$version_line")"
+          echo "expected=$expected actual=$actual line=$version_line"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "CLI version mismatch: expected $expected, got $actual" >&2
+            exit 1
+          fi
+
+      - name: Verify installed CLI build identity matches release commit
+        run: |
+          set -euo pipefail
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          python3 scripts/ci/assert-installed-build-identity.py \
+            --expected-commit "$expected_commit" \
+            --expected-version "${RELEASE_TAG#v}" \
+            --longhouse-bin longhouse-server
+
+      - name: Fetch engine binary from the same release via the installed wheel
+        env:
+          LONGHOUSE_SKIP_UPDATE_NOTIFIER: '1'
+        run: |
+          set -euo pipefail
+          LONGHOUSE_VERIFY_HOME="$RUNNER_TEMP/longhouse-verify-home"
+          rm -rf "$LONGHOUSE_VERIFY_HOME"
+          mkdir -p "$LONGHOUSE_VERIFY_HOME"
+          export HOME="$LONGHOUSE_VERIFY_HOME"
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          # Drive the wheel's own runtime-artifact fetcher. This proves the
+          # engine URL derived from the wheel's version resolves to the exact
+          # build identity expected for this release.
+          #
+          # The repository is private on purpose, and a private repository answers
+          # unauthenticated github.com release downloads with 404. The wrapper below
+          # rewrites only that repo's release-download URLs to the authenticated API
+          # asset endpoint, so the wheel's own URL derivation is still what is tested.
+          # It lives here (not in scripts/ci) because the checkout and the wheel are the
+          # release tag's, which may predate any fix.
+          cat > "$RUNNER_TEMP/authed-runtime-artifact-smoke.py" <<'PY'
+          import os
+          import re
+          import runpy
+          import sys
+
+          import httpx
+
+          token = os.environ["GH_TOKEN"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          download = re.compile(rf"^https://github\.com/{re.escape(repo)}/releases/download/([^/]+)/([^/?]+)$")
+          api = f"https://api.github.com/repos/{repo}"
+          auth = {"Authorization": f"Bearer {token}"}
+          real_get, real_stream = httpx.get, httpx.stream
+
+
+          def rewrite(url, kwargs):
+              match = download.match(str(url))
+              if not match:
+                  return url, kwargs
+              tag, name = match.groups()
+              release = real_get(
+                  f"{api}/releases/tags/{tag}",
+                  headers={**auth, "Accept": "application/vnd.github+json"},
+                  timeout=60,
+              )
+              release.raise_for_status()
+              asset = next((a for a in release.json()["assets"] if a["name"] == name), None)
+              if asset is None:
+                  raise RuntimeError(f"release {tag} has no asset {name}")
+              headers = {**kwargs.get("headers", {}), **auth, "Accept": "application/octet-stream"}
+              return f"{api}/releases/assets/{asset['id']}", {**kwargs, "headers": headers}
+
+
+          def get(url, **kwargs):
+              url, kwargs = rewrite(url, kwargs)
+              return real_get(url, **kwargs)
+
+
+          def stream(method, url, **kwargs):
+              url, kwargs = rewrite(url, kwargs)
+              return real_stream(method, url, **kwargs)
+
+
+          httpx.get, httpx.stream = get, stream
+          script = "scripts/ci/runtime-artifact-smoke.py"
+          sys.argv = [script, *sys.argv[1:]]
+          runpy.run_path(script, run_name="__main__")
+          PY
+          uv tool run --from "$LONGHOUSE_VERIFY_WHEEL" python "$RUNNER_TEMP/authed-runtime-artifact-smoke.py" \
+            --component engine \
+            --overwrite \
+            --expected-build-commit "$expected_commit" \
+            --expected-build-version "${RELEASE_TAG#v}"
+
+      - name: Assert engine binary is executable
+        run: |
+          set -euo pipefail
+          LONGHOUSE_VERIFY_HOME="$RUNNER_TEMP/longhouse-verify-home"
+          engine="$LONGHOUSE_VERIFY_HOME/.local/bin/longhouse-engine"
+          if [[ ! -x "$engine" ]]; then
+            echo "engine binary missing or not executable at $engine" >&2
+            ls -la "$(dirname "$engine")" || true
+            exit 1
+          fi
+          "$engine" --version

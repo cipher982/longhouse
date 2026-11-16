@@ -65,7 +65,7 @@ cleanup() {
   if [[ "$status" != 0 || -n "${LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR:-}" ]]; then
     printf '%s\n' "$status" > "$EVIDENCE_DIR/exit-status"
     rm -rf "$HOME_DIR" "$PAIR_DIR" "$TEST_ROOT/tmp"
-    rm -f "$TEST_ROOT/fake-runtime.js" "$TEST_ROOT/run-bounded.js" "$RUNTIME_PORT_FILE"
+    rm -f "$TEST_ROOT/gh-token" "$TEST_ROOT/fake-runtime.js" "$TEST_ROOT/run-bounded.js" "$RUNTIME_PORT_FILE"
     echo "native installer smoke evidence: $EVIDENCE_DIR" >&2
     [[ "$EVIDENCE_DIR" == "$TEST_ROOT/"* ]] || rm -rf "$TEST_ROOT"
   else
@@ -116,6 +116,47 @@ exit 97
 EOF
   chmod 755 "$HOME_DIR/traps/$command"
 done
+
+# A private repository answers unauthenticated release-asset downloads with 404, so
+# remote-release proofs run the real, unmodified scripts/install.sh behind a curl shim
+# that fetches github.com release downloads through the authenticated API asset endpoint.
+# Public behavior of install.sh is untouched; with no token the shim is not installed.
+GH_API_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if [[ "$REMOTE_RELEASE" == "1" && -n "$GH_API_TOKEN" ]]; then
+  ( umask 077; printf '%s' "$GH_API_TOKEN" > "$TEST_ROOT/gh-token" )
+  SMOKE_ENV+=("LONGHOUSE_SMOKE_GH_TOKEN_FILE=$TEST_ROOT/gh-token")
+  cat > "$HOME_DIR/traps/curl" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+REAL_CURL=/usr/bin/curl
+url="" out=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -o) out="${args[i + 1]:-}" ;;
+    https://*) url="${args[i]}" ;;
+  esac
+done
+re='^https://github\.com/cipher982/longhouse/releases/download/([^/]+)/([^/?]+)$'
+if [[ -z "$out" || ! "$url" =~ $re || ! -r "${LONGHOUSE_SMOKE_GH_TOKEN_FILE:-}" ]]; then
+  exec "$REAL_CURL" "$@"
+fi
+tag="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+token="$(cat "$LONGHOUSE_SMOKE_GH_TOKEN_FILE")"
+api="https://api.github.com/repos/cipher982/longhouse/releases/tags/$tag"
+asset_id="$("$LONGHOUSE_SMOKE_NODE" -e '
+const [name] = process.argv.slice(1);
+let data = "";
+process.stdin.on("data", chunk => data += chunk).on("end", () => {
+  const asset = (JSON.parse(data).assets || []).find(item => item.name === name);
+  if (!asset) { console.error(`release asset not found: ${name}`); process.exit(1); }
+  process.stdout.write(String(asset.id));
+});' "$name" < <("$REAL_CURL" -fsSL -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" "$api"))"
+exec "$REAL_CURL" -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" \
+  "https://api.github.com/repos/cipher982/longhouse/releases/assets/$asset_id" -o "$out"
+CURL_EOF
+  chmod 755 "$HOME_DIR/traps/curl"
+fi
 
 # Bound the entire command group, including installer downloads and engine children.
 # This host-side harness is Node; Python/uv remain unavailable to installed commands.
