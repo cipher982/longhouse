@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import signal
 import socket
 import sqlite3
@@ -37,6 +38,7 @@ from zerg.provider_contract.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 from zerg.qa.producer_shell import write_json as _write_json
 from zerg.qa.provider_artifacts import artifact_manifest
 from zerg.qa.provider_artifacts import now
+from zerg.qa.repo_root import default_repo_root
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
@@ -480,24 +482,95 @@ def _catalog_snapshot(database_path: Path, session_ids: list[str]) -> dict[str, 
     }
 
 
+def _sqlite_timestamp(value: datetime) -> str:
+    """The text form the catalog's SQLite DateTime columns store (naive UTC)."""
+
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+class _SessionRowInsert:
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.sql = f"INSERT INTO sessions ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})"
+        self.params = [_sqlite_timestamp(v) if isinstance(v, datetime) else v for v in values.values()]
+
+
+class _SessionRowSink:
+    """Authors catalog `sessions` rows with plain SQL, so the oracle's fixtures name columns, not the product's models."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def execute(self, statement: _SessionRowInsert) -> None:
+        self._connection.execute(statement.sql, statement.params)
+
+
+class _SessionTable:
+    def values(self, **values: Any) -> _SessionRowInsert:
+        return _SessionRowInsert(values)
+
+
+def _insert_session_row(_table: _SessionTable) -> _SessionTable:
+    return _SessionTable()
+
+
+def _initialize_catalog_database(database_path: Path) -> None:
+    """Let a real catalogd process create the catalog schema, then stop it cleanly.
+
+    The oracle never imports the product's schema module: catalogd is the schema's only author, so the
+    fixture asks it to write one and then adds rows behind it before a Runtime Host owns the file.
+    """
+
+    socket_root = Path(tempfile.mkdtemp(prefix="lh-title-schema-", dir="/tmp"))
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "zerg.catalogd", "--database", str(database_path), "--socket", str(socket_root / "c.sock")],
+            cwd=default_repo_root() / "server",
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(filter(None, [str(default_repo_root() / "server"), os.environ.get("PYTHONPATH", "")])),
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        def schema_ready() -> bool:
+            if process.poll() is not None:
+                raise RuntimeError(f"catalogd exited during schema initialization with {process.returncode}")
+            if not (socket_root / "c.sock").exists():
+                return False
+            with sqlite3.connect(database_path) as connection:
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            return {"sessions", "catalog_meta"} <= tables
+
+        _wait_for(schema_ready, timeout=90, description="catalogd to initialize the catalog schema")
+    finally:
+        if process is not None and process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        shutil.rmtree(socket_root, ignore_errors=True)
+
+
 def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[list[str], str, str, str]:
     """Author isolated fixture facts before catalogd becomes their sole owner."""
 
-    from sqlalchemy import insert
-
-    from zerg.catalogd.models import StorageSession
-    from zerg.catalogd.schema import create_catalog_engine
-    from zerg.catalogd.schema import initialize_catalog_schema
-
-    engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(engine)
+    insert = _insert_session_row
+    StorageSession = _SessionTable()  # noqa: N806 - keeps the fixture rows' shape
+    _initialize_catalog_database(database_path)
     observed = datetime.now(UTC).replace(microsecond=0)
     obligation_started = observed - timedelta(minutes=10)
     session_ids = [str(uuid4()) for _ in range(count)]
     unrelated_terminal_id = str(uuid4())
     row_local_empty_id = str(uuid4())
     provider_proof_workspace_id = str(uuid4())
-    with engine.begin() as connection:
+    raw = sqlite3.connect(database_path)
+    connection = _SessionRowSink(raw)
+    with raw:
         for index, session_id in enumerate(session_ids):
             connection.execute(
                 insert(StorageSession).values(
@@ -614,7 +687,7 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
                 updated_at=observed,
             )
         )
-    engine.dispose()
+    raw.close()
     return session_ids, unrelated_terminal_id, row_local_empty_id, provider_proof_workspace_id
 
 
