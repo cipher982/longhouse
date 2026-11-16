@@ -167,7 +167,7 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
     observed: dict = {}
     now = datetime.now(UTC)
 
-    def catalog_call(socket_path, method, *, params, timeout_seconds):
+    def catalog_call(socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         observed.update(
             socket_path=socket_path,
             method=method,
