@@ -36,22 +36,6 @@ class _RenderReader:
         return read_render_object(self.root, object_path, expected_object_hash=object_hash)
 
 
-class _RawReader:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-
-    async def read(
-        self,
-        object_path: str,
-        object_hash: str,
-        tenant_id: str,
-        *,
-        lane: str = "user",
-        queue_timeout_seconds: float | None = None,
-    ):
-        return read_raw_object(self.root, object_path, expected_object_hash=object_hash)
-
-
 def _socket_root(prefix: str) -> Path:
     root = Path("/tmp") / f"{prefix}-{uuid4().hex[:10]}"
     root.mkdir(mode=0o700)
@@ -274,14 +258,12 @@ async def test_corrupt_disposable_search_rebuilds_entirely_from_storage_v2_truth
         default_timeout_seconds=DESTRUCTIVE_PROOF_RPC_TIMEOUT_SECONDS,
     )
     reader = _RenderReader(object_root)
-    raw_reader = _RawReader(object_root)
     try:
         await catalog.call("storage.raw_object.commit.v2", params)
         first_projector = SearchV2Projector(
             catalog=catalog,
             search=search,
             render_workers=reader,
-            raw_workers=raw_reader,
             worker_id="destructive-proof-first",
         )
         assert await first_projector.run_once(now=now) == 1
@@ -306,7 +288,6 @@ async def test_corrupt_disposable_search_rebuilds_entirely_from_storage_v2_truth
             catalog=catalog,
             search=search,
             render_workers=reader,
-            raw_workers=raw_reader,
             worker_id="destructive-proof-rebuild",
         )
         assert await second_projector.run_once(now=now + timedelta(seconds=1)) == 1

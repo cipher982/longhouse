@@ -97,7 +97,6 @@ from zerg.storage_v2.contracts import envelope_id as compute_envelope_id  # noqa
 from zerg.storage_v2.contracts import hash_records  # noqa: E402
 from zerg.storage_v2.raw_objects import RawObjectSpec  # noqa: E402
 from zerg.storage_v2.raw_objects import RawRecord  # noqa: E402
-from zerg.storage_v2.raw_objects import read_raw_object  # noqa: E402
 from zerg.storage_v2.raw_objects import seal_raw_object  # noqa: E402
 from zerg.storage_v2.render_objects import RenderObjectSpec  # noqa: E402
 from zerg.storage_v2.render_objects import RenderRecord  # noqa: E402
@@ -204,22 +203,6 @@ class _RenderReader:
         queue_timeout_seconds: float | None = None,
     ):
         return read_render_object(self.root, object_path, expected_object_hash=object_hash)
-
-
-class _RawReader:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-
-    async def read(
-        self,
-        object_path: str,
-        object_hash: str,
-        tenant_id: str,
-        *,
-        lane: str = "user",
-        queue_timeout_seconds: float | None = None,
-    ):
-        return read_raw_object(self.root, object_path, expected_object_hash=object_hash)
 
 
 def _no_db() -> None:
@@ -681,7 +664,6 @@ class LiveCatalog:
             catalog=self._catalog,
             search=self._search,
             render_workers=_RenderReader(self.object_root),
-            raw_workers=_RawReader(self.object_root),
             worker_id="live-catalog-harness",
         )
         total = 0
