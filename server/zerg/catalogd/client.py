@@ -74,6 +74,12 @@ _SAFE_RETRY_METHODS = {
     "session.input.receipt.read.v2",
     "session.input.recent.list.v2",
     "session.read.v2",
+    # Pure reads on the two-slot interactive lane. A full lane answers
+    # resource_exhausted at once; without a retry here the session detail
+    # page's subagent list read 503s whenever it lands beside a transcript read.
+    "session.subagents.list.v2",
+    "session.provider_facts.list.v2",
+    "session.input.receipts.list.v2",
     "session.shadow_state.read.v2",
     "session.shadow_state.read.batch.v2",
     "session.shadow_state.health.v2",

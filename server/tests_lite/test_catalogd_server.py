@@ -1312,3 +1312,43 @@ async def test_backfill_hatch_run_lineage_binds_parent_session(daemon_paths, tmp
             await client.close()
     finally:
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_list_read_waits_out_a_full_read_lane(daemon_paths):
+    """The detail page reads its subagents beside transcript reads; a full
+    two-slot lane must delay that read, not turn it into a 503."""
+    import threading
+
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    assert daemon._store is not None
+    release = threading.Event()
+    real_list = daemon._store.list_session_subagents
+    calls = {"slow": 0}
+
+    def slow_read(**kwargs):
+        calls["slow"] += 1
+        release.wait(5)
+        return real_list(**kwargs)
+
+    client = CatalogClient(socket_path)
+    params = {"session_id": str(uuid4()), "owner_id": "7"}
+    try:
+        daemon._store.list_session_subagents = slow_read
+        holders = [asyncio.create_task(client.call("session.subagents.list.v2", params)) for _ in range(daemon._read_max_depth)]
+        while calls["slow"] < daemon._read_max_depth:
+            await asyncio.sleep(0.01)
+        daemon._store.list_session_subagents = real_list
+        waiting = asyncio.create_task(client.call("session.subagents.list.v2", params))
+        await asyncio.sleep(0.2)
+        assert not waiting.done()
+        release.set()
+        result = await waiting
+        assert "children" in result
+        await asyncio.gather(*holders)
+    finally:
+        release.set()
+        await client.close()
+        await daemon.close()
