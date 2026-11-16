@@ -166,6 +166,7 @@ DEFAULT_SLA_CASE_BY_PROFILE_PROVIDER = {
     ("warm-live", "codex"): "managed_codex_warm_live_graceful_close",
     ("warm-live", "claude"): "managed_claude_warm_live_graceful_close",
     ("warm-live", "cursor"): "managed_cursor_helm_content_promotion",
+    ("warm-live", "antigravity"): "managed_antigravity_helm_content_promotion",
 }
 
 
@@ -2715,6 +2716,345 @@ except Exception as exc:
                     pass
             if session is not None:
                 session.close()
+
+    def poll_local_antigravity_assistant_response(
+        self,
+        state_path: Path,
+        session_id: str,
+        nonce: str,
+        *,
+        case_id: str,
+        ownership: str,
+        timeout: float = 180,
+        interval: float = 0.1,
+    ) -> dict[str, Any] | None:
+        """Observe agy's own transcript for the model's answer to one marker (the hook state names the transcript)."""
+
+        deadline = time.monotonic() + timeout
+        transcript_path = ""
+        while time.monotonic() < deadline:
+            state = read_json(state_path) or {}
+            transcript_path = str(state.get("transcript_path") or transcript_path)
+            if transcript_path:
+                try:
+                    lines = Path(transcript_path).read_text(errors="ignore").splitlines()
+                except OSError:
+                    lines = []
+                for line in reversed(lines):
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if row.get("source") == "MODEL" and nonce in str(row.get("content") or ""):
+                        self.observe(
+                            case_id=case_id,
+                            provider=self.args.provider,
+                            ownership=ownership,
+                            source="antigravity_native_transcript",
+                            event="assistant_response_local",
+                            session_id=session_id,
+                            payload={"transcript_path": transcript_path, "record_type": row.get("type")},
+                        )
+                        return row
+            time.sleep(interval)
+        self.observe(
+            case_id=case_id,
+            provider=self.args.provider,
+            ownership=ownership,
+            source="antigravity_native_transcript",
+            event="assistant_response_local_timeout",
+            session_id=session_id,
+            payload={"transcript_path": transcript_path or None},
+        )
+        return None
+
+    def run_managed_antigravity(self) -> dict[str, Any]:
+        """Run the native Antigravity Helm path through durable content promotion.
+
+        agy is launched through `longhouse antigravity` in a PTY, as a person would. The observers start before the
+        prompt is typed, so the prompt-to-card measurements begin from a warm browser, and the session id is the one the
+        launcher mints into its state file (the hosted session carries the same id).
+        """
+
+        from zerg.qa.antigravity_helm_lifecycle import answer_terminal_queries
+        from zerg.qa.pty_session import ProviderPtySession
+        from zerg.services.longhouse_paths import get_managed_local_dir
+
+        case_id = "E1"
+        ownership = "managed"
+        nonce = f"LH_PROBE_ANTIGRAVITY_MANAGED_{self.run_id}"
+        workspace = Path(
+            self.args.antigravity_workspace
+            or Path.home() / ".longhouse" / "canaries" / "provider-live" / "antigravity" / "product-e2e" / "workspace"
+        ).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        state_root = get_managed_local_dir("antigravity") / "sessions"
+        before_ids = {path.name for path in state_root.glob("*.json")} if state_root.is_dir() else set()
+        terminal: Any | None = None
+        session_id: str | None = None
+        browser_ui: threading.Thread | None = None
+        content_promotion_poll: threading.Thread | None = None
+        timeline_live_poll: threading.Thread | None = None
+        timeline_live_sse: threading.Thread | None = None
+        timeline_close_sse: threading.Thread | None = None
+        content_promotion_case = bool(
+            self.sla_case
+            and "content_durable_to_timeline_card_paint_ms" in set(self.sla_case.get("metrics") or [])
+        )
+        session_id_file = self.output_dir / "browser-session-id.txt"
+        session_id_file.unlink(missing_ok=True)
+        terminal_path = self.output_dir / "antigravity-terminal.raw"
+
+        try:
+            self.browser_session_cookie()
+            if self.args.profile == "warm-live" and not self.args.skip_browser_ui:
+                browser_ui = self.start_browser_ui_observer(
+                    "-",
+                    nonce,
+                    case_id=case_id,
+                    ownership=ownership,
+                    session_id_file=session_id_file,
+                )
+                browser_ready = self.wait_for_observation(
+                    case_id, PENDING_BROWSER_SESSION_ID, "browser_ui_loaded", timeout=30
+                )
+                stream_ready = self.wait_for_observation(
+                    case_id, PENDING_BROWSER_SESSION_ID, "browser_timeline_stream_connected", timeout=10
+                )
+                if not browser_ready or not stream_ready:
+                    raise RuntimeError(
+                        "warm Antigravity browser observer did not reach ready state before managed launch: "
+                        f"browser_ready={browser_ready} stream_ready={stream_ready}"
+                    )
+
+            longhouse = shutil.which("longhouse")
+            if not longhouse:
+                raise RuntimeError("installed longhouse binary is required")
+            launch_cmd = [
+                longhouse,
+                "antigravity",
+                "--cwd",
+                str(workspace),
+                "--project",
+                self.project,
+                "--url",
+                self.browser_ui_base_url,
+            ]
+            if self.args.antigravity_model:
+                launch_cmd.extend(["--", "--model", self.args.antigravity_model])
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="launch_requested",
+                payload={"nonce": nonce, "cmd": redact_cmd(launch_cmd), "workspace": str(workspace)},
+            )
+            terminal = ProviderPtySession.start(
+                argv=launch_cmd, cwd=workspace, env=dict(os.environ), terminal_path=terminal_path, rows=50, columns=160
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="managed_launch_completed",
+                payload={"pid": terminal.process.pid, "terminal": str(terminal_path)},
+            )
+
+            answered_queries: set[bytes] = set()
+            trust_accepted = False
+            state: dict[str, Any] | None = None
+            state_path: Path | None = None
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline and state is None:
+                answer_terminal_queries(terminal, answered_queries)
+                try:
+                    screen = terminal_path.read_text(errors="ignore")
+                except OSError:
+                    screen = ""
+                if not trust_accepted and "Do you trust the contents of this project" in screen:
+                    terminal.write(b"\r")
+                    trust_accepted = True
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="antigravity_native_tui",
+                        event="antigravity_workspace_trust_accepted",
+                        payload={"workspace": str(workspace)},
+                    )
+                if state_root.is_dir():
+                    for path in sorted(state_root.glob("*.json")):
+                        if path.name in before_ids:
+                            continue
+                        row = read_json(path)
+                        if row and row.get("session_id"):
+                            state, state_path = row, path
+                            break
+                if not terminal.alive():
+                    raise RuntimeError(f"agy exited before its session state appeared (exit={terminal.process.returncode})")
+                time.sleep(0.1)
+            if state is None or state_path is None:
+                raise RuntimeError(f"timed out waiting for Antigravity Helm state under {state_root}")
+            session_id = str(state["session_id"])
+            session_id_file.write_text(session_id + "\n")
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="antigravity_native_hooks",
+                event="managed_state_observed",
+                session_id=session_id,
+                payload={"state": state, "state_root": str(state_root)},
+            )
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="session_id_observed",
+                session_id=session_id,
+                payload={"state_root": str(state_root)},
+            )
+
+            # The TUI draws its prompt only after the trust screen; the person types once it is there.
+            ready_deadline = time.monotonic() + 60
+            while time.monotonic() < ready_deadline:
+                answer_terminal_queries(terminal, answered_queries)
+                if "? for shortcuts" in terminal_path.read_text(errors="ignore"):
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("Antigravity never drew its prompt")
+
+            if self.args.profile not in {"cold-timeline", "warm-live"} and not self.args.skip_browser_ui:
+                browser_ui = self.start_browser_ui_observer(session_id, nonce, case_id=case_id, ownership=ownership)
+
+            if self.args.profile == "warm-live":
+                self.observe_content_promotion_baseline(session_id, case_id=case_id, ownership=ownership)
+                content_promotion_poll = self.start_content_promotion_poll(
+                    session_id, case_id=case_id, ownership=ownership
+                )
+            self.write_snapshot(case_id, ownership, session_id, "post_launch")
+
+            if self.args.profile != "cold-timeline":
+                timeline_live_poll = self.start_timeline_live_poll(session_id, nonce, case_id=case_id, ownership=ownership)
+                timeline_live_sse = self.start_timeline_live_sse(session_id, nonce, case_id=case_id, ownership=ownership)
+
+            if self.args.profile == "warm-live":
+                browser_session_ready = self.wait_for_observation(
+                    case_id, session_id, "browser_session_id_received", timeout=15
+                )
+                browser_workspace_ready = (
+                    self.event_observed_at_ms(case_id, session_id, "browser_detail_workspace_stream_ready") is not None
+                    if content_promotion_case
+                    else self.wait_for_observation(
+                        case_id, session_id, "browser_detail_workspace_stream_ready", timeout=45
+                    )
+                )
+                sse_ready = self.wait_for_observation(
+                    case_id, session_id, "timeline_transcript_preview_sse_ready", timeout=10
+                )
+                if not browser_session_ready or not sse_ready:
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="harness",
+                        event="provider_precondition_blocked",
+                        session_id=session_id,
+                        payload={
+                            "reason": "warm_live_precondition_timeout",
+                            "browser_session_ready": browser_session_ready,
+                            "browser_workspace_stream_ready": browser_workspace_ready,
+                            "timeline_sse_ready": sse_ready,
+                        },
+                    )
+                else:
+                    self.observe(
+                        case_id=case_id,
+                        provider=self.args.provider,
+                        ownership=ownership,
+                        source="harness",
+                        event="warm_ready_at",
+                        session_id=session_id,
+                        payload={
+                            "browser_session_ready": True,
+                            "browser_workspace_stream_ready": browser_workspace_ready,
+                            "browser_workspace_stream_required": not content_promotion_case,
+                            "timeline_sse_ready": True,
+                        },
+                    )
+
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="prompt_sent_started",
+                session_id=session_id,
+                payload={"transport": "antigravity_helm_typed_prompt", "nonce": nonce},
+            )
+            terminal.submit_line(f"Reply with exactly {nonce}")
+
+            self.poll_local_antigravity_assistant_response(
+                state_path, session_id, nonce, case_id=case_id, ownership=ownership, timeout=180
+            )
+            if self.event_observed_at_ms(case_id, session_id, "assistant_response_local") is not None:
+                self.poll_hosted_session(
+                    session_id,
+                    case_id=case_id,
+                    ownership=ownership,
+                    predicate=lambda data: hosted_assistant_events_contain(data, nonce),
+                    event="assistant_response_hosted",
+                    timeout=180,
+                    interval=0.5,
+                )
+            if content_promotion_poll is not None:
+                content_promotion_poll.join(timeout=95)
+            if timeline_live_poll is not None:
+                timeline_live_poll.join(timeout=95)
+            if timeline_live_sse is not None:
+                timeline_live_sse.join(timeout=95)
+            if browser_ui is not None:
+                browser_ui.join(timeout=150)
+            self.write_snapshot(case_id, ownership, session_id, "post_response")
+
+            timeline_close_sse = self.start_timeline_close_sse(session_id, case_id=case_id, ownership=ownership)
+            self.wait_for_observation(case_id, session_id, "timeline_close_sse_ready", timeout=10)
+            self.observe(
+                case_id=case_id,
+                provider=self.args.provider,
+                ownership=ownership,
+                source="harness",
+                event="shutdown_requested",
+                session_id=session_id,
+            )
+            terminal.close()
+            terminal = None
+            self.poll_hosted_session(
+                session_id,
+                case_id=case_id,
+                ownership=ownership,
+                predicate=lambda data: lifecycle_closed(data),
+                event="hosted_runtime_closed",
+                timeout=30,
+                interval=0.25,
+            )
+            if timeline_close_sse is not None:
+                timeline_close_sse.join(timeout=12)
+            self.write_snapshot(case_id, ownership, session_id, "post_shutdown")
+            return {
+                "case_id": case_id,
+                "session_id": session_id,
+                "nonce": nonce,
+                "state_root": str(state_root),
+                "workspace": str(workspace),
+            }
+        finally:
+            if terminal is not None:
+                terminal.close()
 
     def run_managed_claude(self) -> dict[str, Any]:
         case_id = "C1"
@@ -5391,7 +5731,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="baseline",
         help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
-    parser.add_argument("--provider", choices=["claude", "codex", "cursor", "omp"], default="codex")
+    parser.add_argument("--provider", choices=["claude", "codex", "cursor", "omp", "antigravity"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
     parser.add_argument("--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo"))
     parser.add_argument("--container")
@@ -5469,6 +5809,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--cursor-workspace",
         help="Isolated workspace for the native Cursor Helm canary. Defaults under ~/.longhouse/canaries/provider-live.",
     )
+    parser.add_argument(
+        "--antigravity-workspace",
+        help="Isolated workspace for the native Antigravity Helm canary. Defaults under ~/.longhouse/canaries/provider-live.",
+    )
+    parser.add_argument(
+        "--antigravity-model",
+        help="Model id passed to agy (`agy models` lists them); the provider default when unset.",
+    )
     return parser.parse_args(argv)
 
 
@@ -5480,7 +5828,7 @@ def normalize_args(args: argparse.Namespace) -> None:
         args.skip_unmanaged = True
 
 
-IMPLEMENTED_MANAGED_DRIVERS = frozenset({"codex", "claude", "cursor"})
+IMPLEMENTED_MANAGED_DRIVERS = frozenset({"codex", "claude", "cursor", "antigravity"})
 
 
 def refuse_unimplemented_managed_driver(args: argparse.Namespace) -> None:
@@ -5538,10 +5886,12 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             results.append(profiler.run_managed_claude())
         elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "cursor":
             results.append(profiler.run_managed_cursor())
+        elif args.ownership in {"managed", "all"} and not args.skip_managed and args.provider == "antigravity":
+            results.append(profiler.run_managed_antigravity())
     except Exception as exc:
         errors.append(f"managed {args.provider} failed: {exc}")
         profiler.observe(
-            case_id={"codex": "B1", "claude": "C1", "cursor": "D1"}.get(args.provider, "run"),
+            case_id={"codex": "B1", "claude": "C1", "cursor": "D1", "antigravity": "E1"}.get(args.provider, "run"),
             provider=args.provider,
             ownership="managed",
             source="harness",

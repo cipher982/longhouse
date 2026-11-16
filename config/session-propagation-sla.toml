@@ -305,6 +305,27 @@ metrics = [
 notes = "Native Cursor Helm content-promotion proof. Provider execution and Cursor archive lag remain separate diagnostics; this case gates only the served content-to-card, durable archive, and close observations."
 
 [[cases]]
+id = "managed_antigravity_helm_content_promotion"
+status = "experimental"
+provider = "antigravity"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "warm-live"
+profile_class = "warm_realtime"
+profiler_driver = "managed_antigravity_helm_warm_live"
+ci_mode = "report"
+launch = "longhouse antigravity"
+shutdown = "the provider process group is stopped with the launcher's terminal"
+truth_source = "antigravity_native_transcript"
+required_observers = ["managed_sessions_snapshot", "provider_transcript", "timeline_sse", "browser_card", "hosted_db"]
+metrics = [
+  "content_durable_to_timeline_card_paint_ms",
+  "durable_archive_local_to_hosted_ms",
+  "warm_close_local_to_db_ms",
+]
+notes = "Native Antigravity Helm content-promotion proof: the person types the prompt into the stock TUI after the browser observer is warm. Provider execution and agy's transcript write lag stay separate diagnostics; this case gates only the served content-to-card, durable archive and close observations. The first run on a real hosted tenant is what makes the status more than experimental."
+
+[[cases]]
 id = "unmanaged_codex_direct_graceful_close"
 status = "experimental"
 provider = "codex"

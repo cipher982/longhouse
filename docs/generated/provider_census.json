@@ -794,6 +794,7 @@
     {
       "path": "scripts/ops/managed_profiler/sla_manifest.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -815,6 +816,7 @@
     {
       "path": "scripts/ops/profile-managed-session-propagation.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -991,6 +993,7 @@
     {
       "path": "scripts/tests/session-propagation-sla.test.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

@@ -182,6 +182,49 @@ def test_cursor_stop_accepts_already_detached_session() -> None:
     assert not profiler.cursor_helm_stop_already_complete(result)
 
 
+def test_antigravity_warm_live_resolves_its_own_manifest_case() -> None:
+    args = argparse.Namespace(provider="antigravity", profile="warm-live", sla_case=None)
+    case = profiler.resolve_sla_case(args)
+    assert case is not None
+    assert case["id"] == "managed_antigravity_helm_content_promotion"
+    assert case["provider"] == "antigravity"
+    assert case["profiler_driver"] == "managed_antigravity_helm_warm_live"
+    assert "content_durable_to_timeline_card_paint_ms" in case["metrics"]
+
+
+def test_antigravity_local_response_is_the_model_record_not_the_prompt() -> None:
+    """The prompt carries the nonce too, so only a MODEL record answers it."""
+
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        transcript = root / "transcript_full.jsonl"
+        nonce = "LH_PROBE_ANTIGRAVITY_MANAGED_x"
+        transcript.write_text(
+            json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": f"Reply with exactly {nonce}"}) + "\n"
+        )
+        state = root / "state.json"
+        state.write_text(json.dumps({"transcript_path": str(transcript)}))
+        seen: list[dict] = []
+        instance = profiler.Profiler.__new__(profiler.Profiler)
+        instance.args = argparse.Namespace(provider="antigravity")
+        instance.observe = lambda **kwargs: seen.append(kwargs)  # type: ignore[method-assign]
+        none = instance.poll_local_antigravity_assistant_response(
+            state, "s1", nonce, case_id="E1", ownership="managed", timeout=0.3, interval=0.05
+        )
+        assert none is None
+        assert seen[-1]["event"] == "assistant_response_local_timeout"
+        with transcript.open("a") as handle:
+            handle.write(json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "content": nonce}) + "\n")
+        row = instance.poll_local_antigravity_assistant_response(
+            state, "s1", nonce, case_id="E1", ownership="managed", timeout=2, interval=0.05
+        )
+        assert row is not None and row["type"] == "PLANNER_RESPONSE"
+        assert seen[-1]["event"] == "assistant_response_local"
+
+
 def test_batch_preflight_accepts_current_healthy_transport_schema() -> None:
     assert profiler.local_transport_is_currently_healthy(
         {
@@ -261,9 +304,9 @@ def test_http_protocol_browser_error_is_transport_contamination() -> None:
 def test_unimplemented_managed_driver_is_refused_not_passed() -> None:
     """A selectable provider with no driver must not report an empty pass."""
 
-    assert profiler.IMPLEMENTED_MANAGED_DRIVERS == {"codex", "claude", "cursor"}
+    assert profiler.IMPLEMENTED_MANAGED_DRIVERS == {"codex", "claude", "cursor", "antigravity"}
 
-    for provider in ("codex", "claude", "cursor"):
+    for provider in ("codex", "claude", "cursor", "antigravity"):
         profiler.refuse_unimplemented_managed_driver(
             argparse.Namespace(provider=provider, ownership="managed", skip_managed=False)
         )
