@@ -20,17 +20,11 @@ def test_pacing_error_is_zero_for_a_terminal_that_streams_on_schedule() -> None:
     assert tt.pacing_error(schedule, {"A": 12.0, "B": 12.0, "C": 12.0}) > 0.9
 
 
-def test_selfcheck_recovers_the_fake_tui_schedule_and_reports_the_end_only_lane_late() -> None:
-    outcome = tt.run_selfcheck(markers=8, spacing_s=0.4)
-    assert outcome.passed, outcome.detail
-    # Redraws (spinner, bottom input box, a marker that exists only in the box) did not hide or move any marker.
-    assert outcome.schedule_error_max_s < 0.05
-    # Negative control: the lane that serves only at the end of the stream is late by about the stream length.
-    assert outcome.end_only_lane.first is not None
-    assert outcome.end_only_lane.first > 0.9 * outcome.stream_seconds
-    assert outcome.end_only_lane.worst is not None and outcome.end_only_lane.worst >= outcome.end_only_lane.first
-    # The prompt lane is not mistaken for a late one.
-    assert outcome.prompt_lane.worst is not None and outcome.prompt_lane.worst < 0.6
+# The real-time selfcheck (a fake TUI streamed against wall-clock tolerances of
+# tens of milliseconds) runs alone in `make terminal-truth-selfcheck`, a pre-push
+# and CI lane. Inside the parallel unit suite it cannot hold its tolerances under
+# CPU contention and failed release validation; the arithmetic it relies on is
+# checked deterministically here.
 
 
 def test_a_late_lane_is_never_scored_as_near_zero() -> None:
