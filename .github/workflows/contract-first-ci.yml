@@ -279,17 +279,20 @@ jobs:
         # catch a provider gate -- the exact hole the cursor outage fell through.
         run: make test-managed-launch-lifecycle
 
-      - name: Upload failure diagnostics
-        # The isolated container is gone when the job ends; its collected
-        # receipts (full server, catalogd and engine logs, tenant data dir
-        # summary) are the only record of why a flaky run failed.
+      - name: Record failure diagnostics receipt
+        # The ARC runner pod and the isolated container are gone when the job
+        # ends; the collected receipts (full server, catalogd and engine logs,
+        # tenant data dir summary) are the only record of why a flaky run
+        # failed. Stored as a CI receipt (object store), not a GitHub artifact.
+        # Fetch: python3 scripts/ops/ci_receipts.py get lifecycle-failure "$GITHUB_SHA" --dir DEST
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: lifecycle-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/
-          if-no-files-found: warn
-          retention-days: 7
+        run: |
+          if [[ -d artifacts/test-isolation ]]; then
+            tar -czf "$RUNNER_TEMP/lifecycle-failure.tgz" -C artifacts test-isolation
+            python3 scripts/ops/ci_receipts.py put lifecycle-failure "$GITHUB_SHA" "$RUNNER_TEMP/lifecycle-failure.tgz"
+          else
+            echo "No isolation receipts were written; nothing to record."
+          fi
 
   backend-shards:
     timeout-minutes: 30
@@ -396,17 +399,20 @@ jobs:
         if: ${{ needs.changes.outputs.engine != 'true' && github.event_name != 'workflow_dispatch' }}
         run: make test-shipper-e2e
 
-      - name: Upload failure diagnostics
-        # The isolated container is gone when the job ends; its collected
-        # receipts (full server, catalogd and engine logs, tenant data dir
-        # summary) are the only record of why a flaky run failed.
+      - name: Record failure diagnostics receipt
+        # The ARC runner pod and the isolated container are gone when the job
+        # ends; the collected receipts (full server, catalogd and engine logs,
+        # tenant data dir summary) are the only record of why a flaky run
+        # failed. Stored as a CI receipt (object store), not a GitHub artifact.
+        # Fetch: python3 scripts/ops/ci_receipts.py get shipper-e2e-failure "$GITHUB_SHA" --dir DEST
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: shipper-e2e-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/
-          if-no-files-found: warn
-          retention-days: 7
+        run: |
+          if [[ -d artifacts/test-isolation ]]; then
+            tar -czf "$RUNNER_TEMP/shipper-e2e-failure.tgz" -C artifacts test-isolation
+            python3 scripts/ops/ci_receipts.py put shipper-e2e-failure "$GITHUB_SHA" "$RUNNER_TEMP/shipper-e2e-failure.tgz"
+          else
+            echo "No isolation receipts were written; nothing to record."
+          fi
 
   frontend-tests:
     timeout-minutes: 20
@@ -536,17 +542,20 @@ jobs:
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
 
-      - name: Upload failure diagnostics
-        # The isolated container is gone when the job ends; its collected
-        # receipts (full server, catalogd and engine logs, tenant data dir
-        # summary) are the only record of why a flaky run failed.
+      - name: Record failure diagnostics receipt
+        # The ARC runner pod and the isolated container are gone when the job
+        # ends; the collected receipts (full server, catalogd and engine logs,
+        # tenant data dir summary) are the only record of why a flaky run
+        # failed. Stored as a CI receipt (object store), not a GitHub artifact.
+        # Fetch: python3 scripts/ops/ci_receipts.py get e2e-core-failure "$GITHUB_SHA" --dir DEST
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: e2e-core-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/test-isolation/
-          if-no-files-found: warn
-          retention-days: 7
+        run: |
+          if [[ -d artifacts/test-isolation ]]; then
+            tar -czf "$RUNNER_TEMP/e2e-core-failure.tgz" -C artifacts test-isolation
+            python3 scripts/ops/ci_receipts.py put e2e-core-failure "$GITHUB_SHA" "$RUNNER_TEMP/e2e-core-failure.tgz"
+          else
+            echo "No isolation receipts were written; nothing to record."
+          fi
 
   model-smoke:
     timeout-minutes: 20
