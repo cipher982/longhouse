@@ -480,7 +480,11 @@ sleep 1
 exit "${LONGHOUSE_FAKE_CURSOR_EXIT:-0}"
 EOF
 chmod 755 "$HOME_DIR/traps/cursor-agent"
-smoke_command 60 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45 \
+# The PTY helper is host tooling, not the installed product. A shared-library
+# Python (a runner tool cache) finds libpython only through LD_LIBRARY_PATH,
+# which the scrubbed SMOKE_ENV drops, so the helper alone gets its lib dir.
+smoke_command 60 env "LD_LIBRARY_PATH=$(dirname "$(dirname "$PYTHON_BIN")")/lib" \
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45 \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
   >"$EVIDENCE_DIR/cursor-pty.out" 2>"$EVIDENCE_DIR/cursor-pty.err" || {
     echo "native cursor PTY launch failed:" >&2
@@ -490,7 +494,7 @@ smoke_command 60 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45
   }
 grep -q 'CURSOR_NATIVE_PTY_OK' "$EVIDENCE_DIR/cursor-pty.out"
 cursor_exit=0
-smoke_command 60 env LONGHOUSE_FAKE_CURSOR_EXIT=7 \
+smoke_command 60 env LONGHOUSE_FAKE_CURSOR_EXIT=7 "LD_LIBRARY_PATH=$(dirname "$(dirname "$PYTHON_BIN")")/lib" \
   "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45 \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
   >"$EVIDENCE_DIR/cursor-exit-7.out" 2>"$EVIDENCE_DIR/cursor-exit-7.err" || cursor_exit=$?
