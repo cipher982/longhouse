@@ -323,13 +323,9 @@ def _capabilities(api_url: str, token: str | None, *, machine_id: str) -> dict[s
 
 
 def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, dict[str, Any]]:
-    # Registration loads this oracle from the immutable, narrow verifier
-    # bundle before a candidate checkout is selected. Storage-v2 is
-    # application source under test, so resolve its contract only when the
-    # product oracle executes against that exact checkout.
-    from zerg.storage_v2.contracts import EnvelopeIdentity
-    from zerg.storage_v2.contracts import envelope_id
-    from zerg.storage_v2.contracts import hash_records
+    from zerg.provider_contract.storage_envelope_contract import EnvelopeIdentity
+    from zerg.provider_contract.storage_envelope_contract import envelope_id
+    from zerg.provider_contract.storage_envelope_contract import hash_records
 
     session_id = str(uuid4())
     source_epoch = uuid4()
