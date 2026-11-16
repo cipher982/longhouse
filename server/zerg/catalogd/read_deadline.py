@@ -28,24 +28,43 @@ _bound = threading.local()
 
 
 class ReadDeadline:
-    """A monotonic-clock deadline (ns) that joining callers can only extend; None never expires."""
+    """A monotonic-clock deadline (ns) that joining callers can only extend; None never expires.
 
-    __slots__ = ("deadline_ns", "_lock")
+    Once it has fired it stays fired: a caller that arrives while the
+    interrupted read is still unwinding cannot revive it, and must start a
+    read of its own (``extend`` returns False).
+    """
+
+    __slots__ = ("deadline_ns", "tripped", "_lock")
 
     def __init__(self, deadline_ns: int | None) -> None:
         self.deadline_ns = deadline_ns
+        self.tripped = False
         self._lock = threading.Lock()
 
-    def extend(self, deadline_ns: int | None) -> None:
-        with self._lock:
-            if self.deadline_ns is None:
-                return
-            if deadline_ns is None or deadline_ns > self.deadline_ns:
-                self.deadline_ns = deadline_ns
+    def extend(self, deadline_ns: int | None) -> bool:
+        """Keep the read alive for a later caller; False once it has fired."""
 
-    def expired(self) -> bool:
+        with self._lock:
+            if self.tripped:
+                return False
+            if self.deadline_ns is not None and (deadline_ns is None or deadline_ns > self.deadline_ns):
+                self.deadline_ns = deadline_ns
+            return True
+
+    def trip_if_expired(self) -> bool:
+        """True once the deadline has passed; from then on it never un-fires."""
+
+        if self.tripped:
+            return True
         deadline_ns = self.deadline_ns
-        return deadline_ns is not None and time.monotonic_ns() > deadline_ns
+        if deadline_ns is None or time.monotonic_ns() <= deadline_ns:
+            return False
+        with self._lock:
+            # Re-check under the lock: a caller may have extended it meanwhile.
+            if self.deadline_ns is not None and time.monotonic_ns() > self.deadline_ns:
+                self.tripped = True
+            return self.tripped
 
 
 @contextmanager
@@ -59,7 +78,13 @@ def bound_read_deadline(deadline: ReadDeadline) -> Iterator[None]:
 
 
 def interrupt_expired_read() -> int:
-    """SQLite progress handler: nonzero interrupts the running statement."""
+    """SQLite progress handler: nonzero interrupts the running statement.
+
+    It interrupts once, when the deadline fires. After that it lets the read's
+    own cleanup (its ROLLBACK) run instead of interrupting that too.
+    """
 
     deadline = getattr(_bound, "deadline", None)
-    return 1 if deadline is not None and deadline.expired() else 0
+    if deadline is None or deadline.tripped:
+        return 0
+    return 1 if deadline.trip_if_expired() else 0

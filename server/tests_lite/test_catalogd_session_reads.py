@@ -1177,7 +1177,7 @@ def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):
 def test_catalog_gateway_gives_timeline_snapshot_its_measured_bounded_budget(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, _method, *, params, timeout_seconds):
+    def fake_call(_socket_path, _method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert params["owner_id"] == 1
         attempts.append(timeout_seconds)
         if len(attempts) == 1:
@@ -1196,7 +1196,7 @@ def test_catalog_gateway_gives_timeline_snapshot_its_measured_bounded_budget(mon
 def test_catalog_gateway_gives_workspace_ranking_its_measured_bounded_budget(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "machine.workspace.list.v2"
         assert params == {"owner_id": 1, "device_id": "cinder", "limit": 50, "days_back": 180}
         attempts.append(timeout_seconds)
@@ -1221,7 +1221,7 @@ def test_catalog_gateway_gives_workspace_ranking_its_measured_bounded_budget(mon
 def test_catalog_gateway_gives_search_hydration_its_measured_bounded_budget(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "session.shadow_state.read.v2"
         assert params == {"session_id": "session-1", "owner_id": 1}
         attempts.append(timeout_seconds)
@@ -1242,7 +1242,7 @@ def test_catalog_gateway_retries_retryable_read_lane_collision(monkeypatch):
     attempts: list[float] = []
     sleeps: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "session.shadow_state.read.batch.v2"
         assert params == {"session_ids": ["session-1"], "owner_id": 1}
         attempts.append(timeout_seconds)
@@ -1272,7 +1272,7 @@ def test_catalog_gateway_retries_retryable_read_lane_collision(monkeypatch):
 def test_catalog_gateway_gives_title_health_its_measured_bounded_budget(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "storage.session.title.dependency.health.v2"
         assert params == {}
         attempts.append(timeout_seconds)
@@ -1292,7 +1292,7 @@ def test_catalog_gateway_gives_title_health_its_measured_bounded_budget(monkeypa
 def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "auth.owner.get.v2"
         assert params == {}
         attempts.append(timeout_seconds)
@@ -1309,7 +1309,7 @@ def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
 def test_catalog_gateway_gives_composed_session_snapshots_a_bounded_retry_budget(monkeypatch, method):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, called_method, *, params, timeout_seconds):
+    def fake_call(_socket_path, called_method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert called_method == method
         assert params == {"session_ids": ["session-1"]}
         attempts.append(timeout_seconds)
@@ -1329,7 +1329,7 @@ def test_catalog_gateway_waits_through_cold_session_read_lane_burst(monkeypatch)
     sleeps: list[float] = []
     monotonic_seconds = 0.0
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "session.read.v2"
         assert params == {"session_id": "session-1", "owner_id": 1}
         attempts.append(timeout_seconds)
@@ -1363,7 +1363,7 @@ def test_catalog_gateway_waits_through_cold_session_read_lane_burst(monkeypatch)
 def test_catalog_gateway_uses_full_session_budget_after_transport_timeouts(monkeypatch):
     attempts: list[float] = []
 
-    def fake_call(_socket_path, method, *, params, timeout_seconds):
+    def fake_call(_socket_path, method, *, params, timeout_seconds, deadline_mono_ns=None):
         assert method == "session.read.v2"
         assert params == {"session_id": "session-1", "owner_id": 1}
         attempts.append(timeout_seconds)

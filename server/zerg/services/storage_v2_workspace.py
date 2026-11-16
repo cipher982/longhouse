@@ -761,7 +761,8 @@ async def _build_storage_v2_workspace(
             page=page,
             receipts=receipts,
             facts=facts,
-            media_refs=media_refs if isinstance(media_refs, list) else [],
+            # Media tokens are minted per row; without rows there is nothing to place.
+            media_refs=media_refs if isinstance(media_refs, list) and page is not None else [],
         )
     receipts, facts = await asyncio.gather(
         session_input_receipts(catalogd, session_id),

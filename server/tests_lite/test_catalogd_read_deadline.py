@@ -208,3 +208,58 @@ async def test_a_read_its_socket_caller_abandoned_stops_on_the_daemon(daemon_pat
         daemon._store.list_session_subagents = real_list
         await client.close()
         await daemon.close()
+
+
+def test_a_fired_deadline_stays_fired_and_refuses_extension():
+    deadline = ReadDeadline(_in(-0.001))
+    assert deadline.trip_if_expired() is True
+    # A caller arriving while the cut read unwinds cannot revive it.
+    assert deadline.extend(_in(5.0)) is False
+    assert deadline.trip_if_expired() is True
+    fresh = ReadDeadline(_in(0.01))
+    assert fresh.extend(_in(5.0)) is True
+    assert fresh.trip_if_expired() is False
+
+
+@pytest.mark.asyncio
+async def test_a_caller_arriving_after_a_shared_read_was_cut_gets_a_read_of_its_own(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    calls: list[int] = []
+    unwinding = threading.Event()
+    release = threading.Event()
+
+    def operation(**_key):
+        calls.append(1)
+        if len(calls) > 1:
+            return _busy_read(daemon._engine, 0.05)()
+        try:
+            return _busy_read(daemon._engine, 5.0)()
+        except Exception:
+            # Hold the cut read in its unwind, where a late caller can arrive.
+            unwinding.set()
+            release.wait(2)
+            raise
+
+    async def caller(deadline_ns: int):
+        token = _REQUEST_DEADLINE_NS.set(deadline_ns)
+        try:
+            return await daemon._coalesced_session_detail_read("test.shared", operation, key="same")
+        finally:
+            _REQUEST_DEADLINE_NS.reset(token)
+
+    try:
+        first = asyncio.create_task(caller(_in(0.05)))
+        assert await asyncio.to_thread(unwinding.wait, 2)
+        # Joining the dying read would revive its deadline and lose the error;
+        # the late caller must get a read of its own.
+        late = await caller(_in(5.0))
+        assert late == {"done": True}
+        assert len(calls) == 2
+        release.set()
+        with pytest.raises(CatalogReadExpired):
+            await first
+    finally:
+        release.set()
+        await daemon.close()

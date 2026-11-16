@@ -4520,13 +4520,13 @@ class CatalogDaemon:
         def run():
             # The executor's queue is FIFO; a read that waited past every
             # caller's deadline is dropped here instead of run for nobody.
-            if deadline.expired():
+            if deadline.trip_if_expired():
                 raise CatalogReadExpired("catalog read expired while queued")
             with bound_read_deadline(deadline):
                 try:
                     return operation(*args, **kwargs)
                 except sqlalchemy_exc.OperationalError as exc:
-                    if deadline.expired() and "interrupted" in str(exc.orig):
+                    if deadline.tripped and "interrupted" in str(exc.orig):
                         raise CatalogReadExpired("catalog read interrupted at its deadline") from exc
                     raise
 
@@ -4560,6 +4560,10 @@ class CatalogDaemon:
         assert self._store is not None
         key = tuple(sorted(params.items()))
         entry = self._timeline_reads.get(key)
+        # A read already cut at its deadline (or finished) is not joined: a
+        # late caller starts its own instead of inheriting the cut.
+        if entry is not None and (entry[0].done() or not entry[1].extend(_REQUEST_DEADLINE_NS.get())):
+            entry = None
         if entry is None:
             deadline = ReadDeadline(_REQUEST_DEADLINE_NS.get())
             task = asyncio.create_task(
@@ -4575,9 +4579,8 @@ class CatalogDaemon:
 
             task.add_done_callback(forget)
         else:
-            task, deadline = entry
-            # A later caller keeps the shared read alive until it gives up too.
-            deadline.extend(_REQUEST_DEADLINE_NS.get())
+            # The join above extended the shared deadline to this caller's.
+            task = entry[0]
         return await asyncio.shield(task)
 
     async def _coalesced_session_detail_read(self, label: str, operation, *args, **kwargs) -> dict:
@@ -4592,6 +4595,10 @@ class CatalogDaemon:
 
         key = (label, args, tuple(sorted(kwargs.items())))
         entry = self._session_detail_reads.get(key)
+        # A read already cut at its deadline (or finished) is not joined: a
+        # late caller starts its own instead of inheriting the cut.
+        if entry is not None and (entry[0].done() or not entry[1].extend(_REQUEST_DEADLINE_NS.get())):
+            entry = None
         if entry is None:
             deadline = ReadDeadline(_REQUEST_DEADLINE_NS.get())
             task = asyncio.create_task(
@@ -4607,9 +4614,8 @@ class CatalogDaemon:
 
             task.add_done_callback(forget)
         else:
-            task, deadline = entry
-            # A later caller keeps the shared read alive until it gives up too.
-            deadline.extend(_REQUEST_DEADLINE_NS.get())
+            # The join above extended the shared deadline to this caller's.
+            task = entry[0]
         return await asyncio.shield(task)
 
     async def _run_projector_read_store(self, operation, *args, **kwargs):

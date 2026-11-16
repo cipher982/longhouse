@@ -270,6 +270,9 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 method,
                 params=params,
                 timeout_seconds=min(attempt_seconds, remaining),
+                # The read lives until the whole budget is spent, so a retry
+                # after a short attempt joins it instead of starting over.
+                deadline_mono_ns=int(deadline * 1_000_000_000),
             )
         except CatalogRemoteError as exc:
             if exc.retryable:

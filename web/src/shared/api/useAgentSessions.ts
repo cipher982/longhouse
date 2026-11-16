@@ -90,7 +90,7 @@ export function agentSessionWorkspaceQueryOptions(
   return {
     queryKey,
     queryFn: async ({ signal }: { signal?: AbortSignal }) => {
-      const heldTail =
+      const heldTail = () =>
         headerRefreshFrom && headerRefreshFrom.getQueryData(queryKey) !== undefined
           ? tailPage(
               headerRefreshFrom.getQueryData<InfiniteData<AgentSessionProjectionResponse>>([
@@ -100,13 +100,15 @@ export function agentSessionWorkspaceQueryOptions(
               ]),
             )
           : undefined;
-      if (heldTail) {
+      const held = heldTail();
+      if (held) {
         const header = await fetchAgentSessionWorkspace(sessionId!, {
           ...params,
           include_projection: false,
           signal,
         });
-        return { ...header, projection: heldTail };
+        // Read the tail again: a transcript read may have landed meanwhile.
+        return { ...header, projection: heldTail() ?? held };
       }
       const workspace = await fetchAgentSessionWorkspace(sessionId!, { ...params, signal });
       // Its projection seeds the transcript pages: a full tail read.

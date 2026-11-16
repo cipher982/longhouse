@@ -238,6 +238,9 @@ def _call(method: str, params: dict) -> dict:
                 method,
                 params=params,
                 timeout_seconds=min(AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS, remaining),
+                # The read lives until the whole budget is spent, so a retry
+                # after a short attempt can still be answered.
+                deadline_mono_ns=int(deadline * 1_000_000_000),
             )
         except CatalogRemoteError as exc:
             if exc.code in {"conflict", "unknown_method"}:

@@ -365,15 +365,25 @@ def call_catalogd_sync(
     *,
     params: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
+    deadline_mono_ns: int | None = None,
 ) -> dict[str, Any]:
-    """One-shot RPC for synchronous health/readiness handlers."""
+    """One-shot RPC for synchronous health/readiness handlers.
+
+    ``timeout_seconds`` bounds this attempt's socket wait. ``deadline_mono_ns``
+    is when the caller stops wanting the answer at all (its whole retry
+    budget); catalogd cuts a read off at it, so a caller that retries must send
+    the outer deadline here, or each attempt's read is cut before its retry can
+    join it. Defaults to the attempt's own timeout.
+    """
 
     if timeout_seconds is None:
         timeout_seconds = default_catalog_rpc_timeout_seconds()
+    if deadline_mono_ns is None:
+        deadline_mono_ns = time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)
     request = CatalogRpcRequest(
         id=secrets.token_hex(16),
         method=method,
-        deadline_mono_ns=str(time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)),
+        deadline_mono_ns=str(deadline_mono_ns),
         params=params or {},
     )
     frame = _encode_request(request)
