@@ -557,6 +557,7 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
         assert read["facts"]["transcript_coordinates"] == {
             "source_revision": None,
             "durable_revision": 7,
+            "transcript_revision": 7,
             "render_revision": None,
             "last_append_at": None,
         }
@@ -571,6 +572,7 @@ async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_ca
         assert canonical.session_state.transcript.source_revision is None
         assert canonical.session_state.transcript.durable_revision == 7
         assert canonical.session_state.transcript.render_revision is None
+        assert canonical.session_state.transcript.transcript_revision == 7
         assert read["facts"]["card"]["archive_state"] == "current"
         assert read["facts"]["card"]["tool_calls"] == 4
         timeline = await client.call(
