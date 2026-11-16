@@ -1208,6 +1208,9 @@ fn parse_storage_v2_backpressure(
     let catalog_error = serde_json::from_str::<StorageV2ErrorResponse>(body).ok();
     let catalog_backpressure = catalog_error.as_ref().is_some_and(|response| {
         response.detail.code == "catalog_unavailable"
+            // The render worker failed or timed out; its message tells the
+            // caller to retry the same envelope.
+            || response.detail.code == "storage_worker_unavailable"
             || (response.detail.code == "resource_exhausted"
                 && response.detail.message.contains("catalog"))
     });

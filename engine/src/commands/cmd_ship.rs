@@ -46,6 +46,36 @@ pub fn detect_provider_for_file(
     }
 }
 
+/// Most 429/503 answers a one-shot ship waits out for one envelope.
+const ONE_SHOT_BACKPRESSURE_ATTEMPTS: u32 = 8;
+/// Longest single pause, the same cap the daemon's lane windows use.
+const ONE_SHOT_BACKPRESSURE_MAX_PAUSE: Duration = Duration::from_secs(30);
+
+/// How long to wait before resending after `error`, or None when the error is
+/// not backpressure or the attempt budget is spent. Honors the host's
+/// `Retry-After` (carried by `StorageV2Backpressure`); a bare 503/429 with no
+/// typed body backs off 1 s, 2 s, 3 s and so on.
+fn backpressure_pause(error: &anyhow::Error, attempt: u32) -> Option<Duration> {
+    if attempt > ONE_SHOT_BACKPRESSURE_ATTEMPTS {
+        return None;
+    }
+    let typed = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::shipping::client::StorageV2Backpressure>());
+    let pause = match typed {
+        Some(backpressure) => backpressure.retry_after,
+        None => {
+            let text = format!("{error:#}");
+            if text.contains("returned 503") || text.contains("returned 429") {
+                Duration::from_secs(u64::from(attempt))
+            } else {
+                return None;
+            }
+        }
+    };
+    Some(pause.min(ONE_SHOT_BACKPRESSURE_MAX_PAUSE))
+}
+
 async fn ship_path_storage_v2(
     conn: &mut rusqlite::Connection,
     client: &ShipperClient,
@@ -57,6 +87,7 @@ async fn ship_path_storage_v2(
     request_timeout: Duration,
 ) -> anyhow::Result<(usize, bool)> {
     let mut events_shipped = 0usize;
+    let mut backpressure_attempts = 0u32;
     loop {
         let prepared = if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
             crate::storage_v2_shipper::prepare_next_opencode_envelope(conn, capabilities, path)?
@@ -99,7 +130,7 @@ async fn ship_path_storage_v2(
             // Another sender already attempted this durable intent. It is now
             // the retry authority and cannot be discarded by a product gate.
         }
-        let outcome = crate::storage_v2_shipper::ship_prepared_envelope(
+        let outcome = match crate::storage_v2_shipper::ship_prepared_envelope(
             conn,
             client,
             capabilities,
@@ -107,7 +138,31 @@ async fn ship_path_storage_v2(
             "repair",
             request_timeout,
         )
-        .await?;
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // The daemon keeps a refused envelope and retries it after the
+                // host's Retry-After. A one-shot ship does the same, bounded:
+                // the envelope is durable, so the next loop turn re-prepares
+                // and resends the exact bytes.
+                backpressure_attempts += 1;
+                match backpressure_pause(&error, backpressure_attempts) {
+                    Some(pause) => {
+                        tracing::warn!(
+                            attempt = backpressure_attempts,
+                            pause_ms = pause.as_millis() as u64,
+                            error = %error,
+                            "Runtime Host asked the shipper to back off; retrying the same envelope"
+                        );
+                        tokio::time::sleep(pause).await;
+                        continue;
+                    }
+                    None => return Err(error),
+                }
+            }
+        };
+        backpressure_attempts = 0;
         events_shipped += outcome.events_shipped;
         if !outcome.has_more {
             return Ok((events_shipped, false));
@@ -533,5 +588,90 @@ mod tests {
             "{message}"
         );
         assert_nothing_was_recorded(&db_path, &file);
+    }
+
+    /// A Runtime Host that answers 503 `storage_worker_unavailable` with a
+    /// Retry-After, then accepts the same envelope, must not fail a one-shot
+    /// ship: the daemon retries it, so `ship --file` does too.
+    #[test]
+    fn one_shot_ship_retries_a_503_then_succeeds() {
+        use crate::shipping::client::StorageV2Backpressure;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0_u8; 65536];
+                let _ = stream.read(&mut buf);
+                let receipt = format!(
+                    r#"{{"v":2,"envelope_id":"{0}","object_hash":"{0}","commit_seq":"1","raw_state":"durable","render_state":"ready","media_state":"complete","missing_media_hashes":[]}}"#,
+                    "a".repeat(64)
+                );
+                let (status, extra, body) = if index == 0 {
+                    (
+                        "503 Service Unavailable",
+                        "Retry-After: 0\r\n",
+                        r#"{"detail":{"code":"storage_worker_unavailable","message":"Storage-v2 render worker failed; retry the same envelope.","details":{}}}"#.to_string(),
+                    )
+                } else {
+                    ("200 OK", "", receipt)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                seen.push(status);
+            }
+            seen
+        });
+        let config = crate::config::ShipperConfig {
+            api_url: format!("http://{address}"),
+            ..Default::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+        let envelope_id = "a".repeat(64);
+        let receipt = rt.block_on(async {
+            let mut attempt = 0u32;
+            loop {
+                let result = client
+                    .ship_storage_v2_body(
+                        crate::shipping::storage_v2::STORAGE_V2_ENVELOPES_PATH,
+                        "repair",
+                        b"{}".to_vec(),
+                        crate::shipping::storage_v2::StorageV2BodyEncoding::Identity,
+                        &envelope_id,
+                        Some(Duration::from_secs(5)),
+                    )
+                    .await;
+                match result {
+                    Ok(receipt) => break receipt,
+                    Err(error) => {
+                        attempt += 1;
+                        let pause = backpressure_pause(&error, attempt)
+                            .unwrap_or_else(|| panic!("503 must be backpressure: {error:#}"));
+                        assert!(error
+                            .chain()
+                            .any(|c| c.downcast_ref::<StorageV2Backpressure>().is_some()));
+                        tokio::time::sleep(pause).await;
+                    }
+                }
+            }
+        });
+        assert_eq!(receipt.commit_seq, "1");
+        assert_eq!(server.join().unwrap(), vec!["503 Service Unavailable", "200 OK"]);
+    }
+
+    #[test]
+    fn backpressure_pause_is_bounded_and_ignores_other_errors() {
+        let bare = anyhow::anyhow!("storage-v2 envelope POST returned 503 Service Unavailable: x");
+        assert_eq!(backpressure_pause(&bare, 3), Some(Duration::from_secs(3)));
+        assert_eq!(backpressure_pause(&bare, ONE_SHOT_BACKPRESSURE_ATTEMPTS + 1), None);
+        assert_eq!(
+            backpressure_pause(&anyhow::anyhow!("storage-v2 envelope POST returned 422"), 1),
+            None
+        );
     }
 }
