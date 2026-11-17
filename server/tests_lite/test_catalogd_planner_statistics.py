@@ -115,3 +115,27 @@ def test_a_table_with_an_unanalyzed_index_is_always_due(tmp_path) -> None:
         connection.exec_driver_sql("CREATE INDEX ix_test_media_updated ON media_objects(updated_at)")
     assert "media_objects" in store.tables_with_unanalyzed_indexes()
     engine.dispose()
+
+
+def test_projector_state_is_sampled_like_every_other_table(tmp_path) -> None:
+    """A full pass read all ten projector_state indexes cold: a 7 s writer hold on david010."""
+
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    assert {store.refresh_table_statistics(table)["sampled"] for table in store.planner_statistics_tables()} == {1}
+    engine.dispose()
+
+
+def test_statistics_pages_are_warmed_on_a_read_snapshot(tmp_path) -> None:
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    assert store.warm_table_statistics_pages("raw_objects") >= 7
+    try:
+        store.warm_table_statistics_pages('raw_objects"; DROP TABLE sessions; --')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unsafe table name was read")
+    engine.dispose()

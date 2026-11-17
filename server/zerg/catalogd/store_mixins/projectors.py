@@ -109,36 +109,61 @@ class ProjectorsMixin:
                 ).scalars()
             }
 
-    def refresh_table_statistics(self, table: str, now: datetime | None = None) -> dict[str, int]:
-        """ANALYZE one table in its own short write transaction.
+    def warm_table_statistics_pages(self, table: str) -> int:
+        """Read what a sampled ANALYZE reads, on a read snapshot, before it takes the writer.
 
-        One ANALYZE of the whole catalog held the single writer 1.7 s on a warm
-        5.4 GB snapshot and 34 s under disk contention, expiring queued writes,
-        so each table is its own transaction and other writes interleave. A
-        sample of 1,000 rows per index lands within 10% of real counts;
-        projector_state gets a full pass, because a sample misjudges its
-        mostly-NULL claim_token index (claim lookups scanned the projector,
-        28 ms against 0.14 ms).
+        A sampled ANALYZE reads about the first 1,000 entries of each index:
+        about 1 ms with the pages cached. Run cold, right after startup repair
+        had scanned 40k sessions, raw_objects held the single writer 7 s and
+        render_objects 2.9 s on david010 (2026-11-17). Reading the same pages
+        here moves that disk wait outside the writer; the ANALYZE then finds
+        them in the OS cache.
         """
 
         if not table.replace("_", "").isalnum():
             raise ValueError(f"not a catalog table name: {table!r}")
-        sampled = table != ProjectorState.__tablename__
+        warmed = 0
+        with _read_snapshot(self.engine) as connection:
+            indexes = [str(row[1]) for row in connection.exec_driver_sql(f'PRAGMA index_list("{table}")')]
+            for index in indexes:
+                columns = [str(row[2]) for row in connection.exec_driver_sql(f'PRAGMA index_info("{index}")') if row[2] is not None]
+                if not columns or not index.replace("_", "").isalnum():
+                    continue
+                quoted = ", ".join(f'"{column}"' for column in columns)
+                connection.exec_driver_sql(f'SELECT {quoted} FROM "{table}" INDEXED BY "{index}" LIMIT 1100').fetchall()
+                warmed += 1
+        return warmed
+
+    def refresh_table_statistics(self, table: str, now: datetime | None = None) -> dict[str, int]:
+        """ANALYZE one table, sampled, in its own short write transaction.
+
+        One ANALYZE of the whole catalog held the single writer 1.7 s on a warm
+        5.4 GB snapshot and 34 s under disk contention, expiring queued writes,
+        so each table is its own transaction and other writes interleave. A
+        sample of 1,000 rows per index lands within 10% of real counts.
+
+        Every table is sampled. projector_state used to get a full pass so its
+        mostly-NULL claim_token index would be priced right, but the claim
+        lookup pins that index (`INDEXED BY` in _PROJECTOR_ROWS_BY_CLAIM_TOKEN),
+        so statistics cannot change its plan. The full pass read all ten of its
+        indexes cold and held the writer 7 s on david010 (2026-11-17).
+        """
+
+        if not table.replace("_", "").isalnum():
+            raise ValueError(f"not a catalog table name: {table!r}")
         with _write_transaction(self.engine) as connection:
-            if sampled:
-                connection.exec_driver_sql("PRAGMA analysis_limit=1000")
+            connection.exec_driver_sql("PRAGMA analysis_limit=1000")
             try:
                 connection.exec_driver_sql(f'ANALYZE "{table}"')
             finally:
-                if sampled:
-                    connection.exec_driver_sql("PRAGMA analysis_limit=0")
+                connection.exec_driver_sql("PRAGMA analysis_limit=0")
             # Stamped in the same transaction, per table: a restart part way
             # through the list keeps what finished and resumes with the rest.
             connection.exec_driver_sql(
                 "UPDATE catalog_meta SET planner_statistics_json = json_set(COALESCE(planner_statistics_json, '{}'), ?, ?) WHERE singleton = 1",
                 (f'$."{table}"', (now or datetime.now(UTC)).isoformat()),
             )
-        return {"sampled": int(sampled)}
+        return {"sampled": 1}
 
     def scan_projector_repairs(self) -> ProjectorRepairPlan:
         """Find the sessions ``ensure_known_projector_states`` must repair.

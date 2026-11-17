@@ -85,6 +85,7 @@ _WRITER_RECENT_EXEC_WINDOW = 64
 _HEARTBEAT_PRUNE_MAX_BATCHES = 20
 # Startup refreshes planner statistics only when the last refresh is older.
 _PLANNER_STATISTICS_MAX_AGE = timedelta(hours=24)
+_PLANNER_STATISTICS_SLOW_TABLE_MS = 500.0
 _WRITER_RETRY_AFTER_MIN_MS = 1_000
 _WRITER_RETRY_AFTER_MAX_MS = 15_000
 
@@ -4715,8 +4716,14 @@ class CatalogDaemon:
             slowest_ms = 0.0
             for table in due:
                 table_started = time.perf_counter()
+                await asyncio.to_thread(self._store.warm_table_statistics_pages, table)
                 await self._run_startup_write(self._store.refresh_table_statistics, table)
-                slowest_ms = max(slowest_ms, (time.perf_counter() - table_started) * 1000.0)
+                table_ms = (time.perf_counter() - table_started) * 1000.0
+                slowest_ms = max(slowest_ms, table_ms)
+                if table_ms >= _PLANNER_STATISTICS_SLOW_TABLE_MS:
+                    # The writer-held line names only the operation; this names
+                    # the table, so a slow one can be fixed rather than guessed.
+                    logger.warning("catalogd statistics refresh slow table=%s elapsed_ms=%.0f", table, table_ms)
             _log_startup_stage(
                 "refresh_planner_statistics",
                 stage_started,
