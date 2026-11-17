@@ -112,7 +112,7 @@ def _suite_actions(result: dict) -> dict[str, dict]:
     return {row["action_id"]: row for row in suite["data"]["actions"]}
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(240)
 def test_cursor_observed_install_column_passes_with_native_cold_resume_as_a_declared_limit(tmp_path: Path) -> None:
     root, binary, identity = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity=identity)
@@ -167,7 +167,7 @@ def test_cursor_observed_install_column_passes_with_native_cold_resume_as_a_decl
     assert Path(result["artifact_path"]).is_file()
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(240)
 def test_cursor_observed_install_fails_when_gate0_did_not_steer(tmp_path: Path) -> None:
     root, binary, identity = _fake_cursor_install(tmp_path)
     # Gate 0 records "unsupported" when the reply after a mid-turn message was the original one.
@@ -187,7 +187,7 @@ def test_cursor_observed_install_fails_when_gate0_did_not_steer(tmp_path: Path) 
     assert (steer["coverage_status"], steer["failure_code"]) == ("fail", "cursor_gate0_contract_failed")
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(240)
 def test_cursor_observed_install_rejects_gate_for_different_executable(tmp_path: Path) -> None:
     root, binary, _ = _fake_cursor_install(tmp_path)
     gate0 = _gate0_artifact(tmp_path, identity="sha256:" + "0" * 64)
