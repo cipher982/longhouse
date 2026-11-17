@@ -18,8 +18,6 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -30,6 +28,7 @@ from zerg.provider_contract.catalogd_process import CatalogdHandle
 from zerg.provider_contract.storage_envelope_contract import EnvelopeIdentity
 from zerg.provider_contract.storage_envelope_contract import envelope_id
 from zerg.provider_contract.storage_envelope_contract import hash_records
+from zerg.qa.provider_artifacts import now
 from zerg.qa.repo_root import default_repo_root
 from zerg.qa.runtime_host import RuntimeHost
 
@@ -53,10 +52,6 @@ def transcript_host() -> Iterator[RuntimeHost]:
     finally:
         host.stop()
         shutil.rmtree(root, ignore_errors=True)
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _record_role(event: Mapping[str, Any]) -> str:
@@ -102,7 +97,7 @@ def ingest_events(
         range_end=total,
         record_hashes=hash_records(raw_lines),
     )
-    observed = _now()
+    observed = now()
     base_us = int(time.time() * 1_000_000)
     render_records = [
         {
