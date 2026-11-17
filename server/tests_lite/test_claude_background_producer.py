@@ -112,15 +112,25 @@ def test_source_rejects_identity_or_digest_drift() -> None:
 
 
 def _scenario(*, target: bool = False, native_source: bool = True, explicit_empty: bool = True) -> dict[str, Any]:
-    assertions = {name: True for name in oracle.ASSERTIONS}
-    assertions["claude_background_registry_served"] = target
-    assertions["claude_background_native_source"] = native_source
-    assertions["claude_background_explicit_empty"] = explicit_empty
+    """A scenario record holding the raw facts the oracle decides from (the producer judges them, it does not copy a verdict)."""
+
     return {
         "status": "pass" if target and native_source and explicit_empty else "fail",
-        "source": {"active_registry_observed": True, "explicit_empty_observed": explicit_empty},
-        "parent_turn": {"assistant_marker_archived": True},
-        "assertions": assertions,
+        "source": {
+            "identity_ok": native_source,
+            "digests_ok": True,
+            "active_registry_observed": True,
+            "active_registry_kinds": ["subagent", "shell"],
+            "active_registry_at_parent_turn_end": True,
+            "native_callbacks_matched": True,
+            "explicit_empty_observed": explicit_empty,
+        },
+        "parent_turn": {"assistant_marker_archived": True, "end_timestamp": 1.0},
+        "canonical_parent_observed": True,
+        "initial_served_active": False,
+        "child_callback_replaced_parent_tool": False,
+        "served_active": target,
+        "served_empty": target,
     }
 
 
@@ -435,5 +445,6 @@ def test_a_failed_run_whose_assertions_all_held_is_a_typed_harness_failure(monke
     assert result["status"] == "fail"
     assert "assertions" not in result and "observation" not in result
     assert isinstance(result["error"], str) and result["error"]
-    assert result["partial_observation"]["lifecycle"]["scenario"]["assertions"] == held["assertions"]
+    assert result["partial_observation"]["lifecycle"]["scenario"] == held
+    assert all(oracle.claude_background_assertions(held).values())
     assert_result_conforms(oracle, result, variant=oracle._VARIANTS[0])

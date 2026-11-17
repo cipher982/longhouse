@@ -42,6 +42,7 @@ JUDGING_MODULES = (
     "cursor_coordination_producer",
     "codex_coordination_native",
     "codex_native_resume",
+    "claude_background_producer",
 )
 
 
@@ -316,3 +317,82 @@ def test_a_written_result_carries_the_inputs_its_judge_reads(tmp_path):
 
 def resume_judge(stored):
     return resolve(stored["judge"]["entry_point"])(evidence_of(stored))
+
+
+# --- Claude background: the stored scenario record is judged from its raw facts, not from a stored verdict -----------------
+
+
+def _background_scenario() -> dict[str, Any]:
+    return {
+        "source": {
+            "identity_ok": True,
+            "digests_ok": True,
+            "active_registry_observed": True,
+            "active_registry_kinds": ["subagent", "shell"],
+            "active_registry_at_parent_turn_end": True,
+            "native_callbacks_matched": True,
+            "explicit_empty_observed": True,
+        },
+        "parent_turn": {"assistant_marker_archived": True, "end_timestamp": 12.5},
+        "canonical_parent_observed": True,
+        "initial_served_active": False,
+        "child_callback_replaced_parent_tool": False,
+        "served_active": True,
+        "served_empty": True,
+        # A producer that wrote a verdict here must not be believed: the judge ignores it.
+        "assertions": {},
+    }
+
+
+def _background(scenario: dict[str, Any]) -> dict[str, Any]:
+    return {"observation": {"background": scenario}}
+
+
+def test_claude_background_judges_the_stored_observation_and_ignores_a_stored_verdict(tmp_path):
+    from zerg.qa import claude_background_producer as m
+
+    judge = pure(m.judge)
+    healthy = _background_scenario()
+    healthy["assertions"] = {name: False for name in m.ASSERTIONS}  # a lying stored verdict
+    assert judge(_background(healthy)) == {name: True for name in m.ASSERTIONS}
+    stored = recorded(m.PRODUCER, tmp_path, observation={"background": _background_scenario()}, assertions={})
+    assert stored["judge"]["entry_point"] == "zerg.qa.claude_background_producer:judge"
+    assert all(judge(evidence_of(stored)).values())
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "fails"),
+    [
+        (("source", "identity_ok"), False, {"claude_background_native_source", "claude_background_callbacks_scoped"}),
+        (("source", "active_registry_kinds"), ["shell"], {"claude_background_native_source"}),
+        (("source", "active_registry_observed"), False, {"claude_background_native_source", "claude_background_parent_turn_boundary"}),
+        (("source", "active_registry_at_parent_turn_end"), False, {"claude_background_parent_turn_boundary"}),
+        (("parent_turn", "assistant_marker_archived"), False, {"claude_background_parent_turn_boundary"}),
+        (("parent_turn", "end_timestamp"), None, {"claude_background_parent_turn_boundary"}),
+        (("served_active",), False, {"claude_background_registry_served"}),
+        (("served_empty",), False, {"claude_background_registry_served"}),
+        (("child_callback_replaced_parent_tool",), True, {"claude_background_callbacks_scoped"}),
+        (("initial_served_active",), True, {"claude_background_callbacks_scoped"}),
+        (("canonical_parent_observed",), False, {"claude_background_callbacks_scoped"}),
+        (("source", "native_callbacks_matched"), False, {"claude_background_callbacks_scoped"}),
+        (("source", "explicit_empty_observed"), False, {"claude_background_explicit_empty"}),
+    ],
+)
+def test_claude_background_each_raw_fact_decides_its_assertions(path, value, fails):
+    from zerg.qa import claude_background_producer as m
+
+    scenario = _background_scenario()
+    target = scenario
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    verdict = pure(m.judge)(_background(scenario))
+    assert {name for name, held in verdict.items() if not held} == fails
+
+
+def test_claude_background_a_scenario_that_errored_or_is_missing_judges_false():
+    from zerg.qa import claude_background_producer as m
+
+    errored = _background_scenario() | {"error": "TimeoutError: x"}
+    assert not any(m.judge(_background(errored)).values())
+    assert not any(m.judge({"observation": {}}).values()) and not any(m.judge({}).values())

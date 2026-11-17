@@ -304,11 +304,57 @@ def _source_observation(records: list[dict[str, Any]], native_session_id: str | 
     }
 
 
-def claude_background_assertions(observation: Mapping[str, Any]) -> dict[str, bool]:
-    assertions = observation.get("assertions")
-    if not isinstance(assertions, Mapping):
+JUDGE_REVISION = 1
+JUDGE = "zerg.qa.claude_background_producer:judge"
+
+
+def claude_background_assertions(scenario: Mapping[str, Any]) -> dict[str, bool]:
+    """Decide the five assertions from the raw facts a scenario record holds. Pure.
+
+    ``scenario`` is the record ``_capture_background`` builds and the result keeps as ``observation["background"]``. The
+    verdicts are derived from its source captures, parent turn, served reads and flags, never copied from a stored
+    ``assertions`` map, so a second verifier can judge the same record. A scenario that recorded an ``error`` stopped
+    before its verdict: every assertion is false.
+    """
+
+    if not isinstance(scenario, Mapping) or scenario.get("error") is not None:
         return {name: False for name in ASSERTIONS}
-    return {name: assertions.get(name) is True for name in ASSERTIONS}
+    source = _mapping(scenario.get("source"))
+    parent_turn = _mapping(scenario.get("parent_turn"))
+    active_observed = source.get("active_registry_observed") is True
+    callbacks_scoped = (
+        scenario.get("canonical_parent_observed") is True
+        and source.get("identity_ok") is True
+        and source.get("digests_ok") is True
+        and source.get("native_callbacks_matched") is True
+        and scenario.get("initial_served_active") is not True
+        and scenario.get("child_callback_replaced_parent_tool") is False
+    )
+    return {
+        "claude_background_native_source": bool(
+            source.get("identity_ok") is True
+            and source.get("digests_ok") is True
+            and active_observed
+            and set(source.get("active_registry_kinds") or []) >= {"subagent", "shell"}
+        ),
+        "claude_background_parent_turn_boundary": bool(
+            parent_turn.get("assistant_marker_archived") is True
+            and parent_turn.get("end_timestamp") is not None
+            and active_observed
+            and source.get("active_registry_at_parent_turn_end") is True
+        ),
+        "claude_background_registry_served": bool(scenario.get("served_active") is True and scenario.get("served_empty") is True),
+        "claude_background_callbacks_scoped": callbacks_scoped,
+        "claude_background_explicit_empty": source.get("explicit_empty_observed") is True,
+    }
+
+
+def judge(evidence: Mapping[str, Any]) -> dict[str, bool]:
+    """Pure replay entry point: the assertions of the stored scenario record, ``observation["background"]``."""
+
+    observation = evidence.get("observation")
+    scenario = observation.get("background") if isinstance(observation, Mapping) else None
+    return claude_background_assertions(scenario if isinstance(scenario, Mapping) else {})
 
 
 def _capture_background(
@@ -457,29 +503,9 @@ def _capture_background(
             strings = _nested_strings(activity) + _nested_strings(state.get("active_tool"))
             callback_tool_replaced = callback_tool_replaced or any(child_id in text for child_id in child_ids for text in strings)
         observation["child_callback_replaced_parent_tool"] = callback_tool_replaced
-        callbacks_scoped = (
-            observation.get("canonical_parent_observed") is True
-            and source.get("identity_ok") is True
-            and source.get("digests_ok") is True
-            and source.get("native_callbacks_matched") is True
-            and observation.get("initial_served_active") is not True
-            and not callback_tool_replaced
-        )
         observation["served_empty"] = empty_served
-        observation["assertions"] = {
-            "claude_background_native_source": bool(
-                source.get("identity_ok") is True
-                and source.get("digests_ok") is True
-                and source.get("active_registry_observed") is True
-                and set(source.get("active_registry_kinds") or []) >= {"subagent", "shell"}
-            ),
-            "claude_background_parent_turn_boundary": bool(
-                parent_archived and parent_end_at is not None and source.get("active_registry_observed") is True and source_at_parent_end
-            ),
-            "claude_background_registry_served": bool(served_active and empty_served),
-            "claude_background_callbacks_scoped": callbacks_scoped,
-            "claude_background_explicit_empty": source.get("explicit_empty_observed") is True,
-        }
+        observation["served_active"] = served_active
+        observation["assertions"] = claude_background_assertions(observation)
         observation["status"] = "pass" if all(observation["assertions"].values()) else "fail"
         if observation["status"] != "pass":
             observation["failure_code"] = "claude_background_assertion_failed"
@@ -660,6 +686,8 @@ PRODUCER = Producer(
     model_env="ANTHROPIC_MODEL",
     negative_controls=(FAULT,),
     add_arguments=_add_arguments,
+    judge=JUDGE,
+    judge_revision=JUDGE_REVISION,
 )
 
 
