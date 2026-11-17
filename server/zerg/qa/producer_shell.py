@@ -142,7 +142,7 @@ FAULT_RECEIPTS = "qa-fault-receipt.jsonl"
 # and cleaned up words it as it always has, which is the wording the factory classes a failure by.
 _SHELL_FIELDS = frozenset(
     "schema_version artifact_kind producer provider variant scenario_id scenario_revision evidence_class generated_at".split()
-) | {"observation_scope", "status", "observation", "assertions", "artifact_manifest"}
+) | {"observation_scope", "status", "observation", "assertions", "artifact_manifest", "judge"}
 
 
 class _Fields(dict):
@@ -263,6 +263,12 @@ class Producer:
     add_arguments: Callable[[argparse.ArgumentParser], None] | None = None
     # Whether a run may end ``blocked`` (Run.block). Never for a producer the factory manifest lists.
     may_block: bool = False
+    # The replay contract: ``"module:function"`` of a pure ``judge(evidence) -> {assertion_id: bool}`` that reads only
+    # the recorded result (minus its assertions and this block) and decides this producer's assertions again, and the
+    # revision of that judgment. Both are recorded in every result, so the differential replay guard can call the entry
+    # point from an old and a new tree over a stored result.json without an allowlist.
+    judge: str | None = None
+    judge_revision: int = 1
 
     def __post_init__(self) -> None:
         defined = {action.dest for action in self.parser()._actions}
@@ -297,6 +303,8 @@ class Producer:
         }
         if registration.observation_scope == "scenario":
             envelope["observation_scope"] = "scenario"
+        if self.judge is not None:
+            envelope["judge"] = {"entry_point": self.judge, "revision": self.judge_revision}
         return envelope
 
     def _envelope(self, run: Run, identity: dict[str, Any]) -> dict[str, Any]:

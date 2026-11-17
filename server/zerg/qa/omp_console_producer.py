@@ -619,6 +619,19 @@ def _native_settlement(root: Path) -> dict[str, object]:
     }
 
 
+JUDGE_REVISION = 1
+JUDGE = "zerg.qa.omp_console_producer:judge"
+
+
+def judge(evidence: Mapping[str, object]) -> dict[str, bool]:
+    """Pure: the assertion a recorded OMP Console cell reached. A steer cell is judged by the shared lifecycle's steer rule."""
+
+    if evidence.get("steer") is not None:
+        return lifecycle.judge(evidence)
+    observation = evidence.get("observation")
+    return omp_console_assertions(observation if isinstance(observation, Mapping) else {})
+
+
 def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     settlement = observation.get("omp_settlement")
     settlement = settlement if isinstance(settlement, Mapping) else {}
@@ -706,7 +719,7 @@ def _reach(run: Run, args: argparse.Namespace, *, steer: bool) -> None:
         dispatch["native_model_evidence"] = dict(result_event) if isinstance(result_event, Mapping) else None
         lifecycle.write_json(root / "adapter-dispatch-receipt.json", dispatch)
     run.observation = observation
-    run.assertions = generic["assertions"] if steer else omp_console_assertions(observation)
+    run.assertions = judge({"observation": observation, "steer": generic["steer"]})
     run.fields.update(steer=generic["steer"], provider_binary=generic["provider_binary"])
 
 
@@ -778,6 +791,8 @@ PRODUCER = Producer(
     variants=(_VARIANT, _STEER_VARIANT),
     negative_controls=(lifecycle.CONSOLE_STEER_FAULT,),
     refuse=lifecycle.negative_control_needs_steer((_STEER_VARIANT,)),
+    judge=JUDGE,
+    judge_revision=JUDGE_REVISION,
 )
 
 

@@ -2595,6 +2595,29 @@ def console_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str,
     return {ASSERTION_ID: all(observation.get(fact) is True for fact in OBSERVED_ACTIVITY)}
 
 
+JUDGE_REVISION = 1
+JUDGE = "zerg.qa.provider_console_lifecycle:judge"
+
+
+def judge(evidence: Mapping[str, object]) -> dict[str, bool]:
+    """The assertion a recorded Console cell reached, from its recorded result alone.
+
+    Pure: it reads ``evidence`` (the cell's result.json without its assertions) and nothing else. The cell is a
+    steer cell when its result carries a steer receipt, and that cell's one assertion is the steer's; every other
+    cell's is the lifecycle's, with Pi's tool fact joined in.
+    """
+
+    steer = evidence.get("steer")
+    if steer is not None:
+        return {STEER_ASSERTION_ID: console_steer_assertion(steer if isinstance(steer, Mapping) else None)}
+    observation = evidence.get("observation")
+    observation = observation if isinstance(observation, Mapping) else {}
+    assertion = console_lifecycle_assertions(observation)[ASSERTION_ID]
+    if evidence.get("provider") == "pi":
+        assertion = assertion and observation.get("pi_tool_enabled") is True
+    return {ASSERTION_ID: assertion}
+
+
 def console_steer_assertion(steer: Mapping[str, object] | None) -> bool:
     """A steer entered the running turn: the same run answered it, no new turn
     was created, and the tool it interrupted nothing (its output is present)."""
@@ -3777,12 +3800,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path,
                 )
             )
         observation["provider_source_artifacts"] = retained_sources
-        assertion = console_lifecycle_assertions(observation)[ASSERTION_ID]
-        steer_passed = console_steer_assertion(steer_receipt)
-        if provider == "pi":
-            assertion = assertion and observation.get("pi_tool_enabled") is True
         return {
-            "assertions": {STEER_ASSERTION_ID: steer_passed} if steer else {ASSERTION_ID: assertion},
+            "assertions": judge({"provider": provider, "observation": observation, "steer": steer_receipt}),
             "steer": steer_receipt,
             "provider_binary": binary_receipt,
             "observation": observation,
@@ -3864,6 +3883,8 @@ PRODUCER = Producer(
     variant_required=False,
     negative_controls=(CONSOLE_STEER_FAULT,),
     refuse=_refuse,
+    judge=JUDGE,
+    judge_revision=JUDGE_REVISION,
 )
 
 

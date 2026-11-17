@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from zerg.provider_contract.provider_capability_proof import AssertionOutcome
@@ -80,7 +81,20 @@ _VARIANT = execution_variant_key(provider="pi", assertion_id=ASSERTION_ID, scena
 _STEER_VARIANT = lifecycle.steer_execution_variant("pi", SCENARIO_ID)
 
 
-def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool]:
+JUDGE_REVISION = 1
+JUDGE = "zerg.qa.pi_console_tool_producer:judge"
+
+
+def judge(evidence: Mapping[str, object]) -> dict[str, bool]:
+    """Pure: the assertion a recorded Pi Console cell reached. A steer cell is judged by the shared lifecycle's steer rule."""
+
+    if evidence.get("steer") is not None:
+        return lifecycle.judge(evidence)
+    observation = evidence.get("observation")
+    return pi_console_tool_assertions(observation if isinstance(observation, Mapping) else {})
+
+
+def pi_console_tool_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     generic = lifecycle.console_lifecycle_assertions(observation).get(lifecycle.ASSERTION_ID) is True
     return {
         ASSERTION_ID: generic and observation.get("pi_tool_enabled") is True and observation.get("continuation_context_recalled") is True
@@ -95,7 +109,7 @@ def run_pi_console_tool(args: argparse.Namespace, *, raises: bool = False) -> di
     def body(run: Run) -> None:
         generic = lifecycle._run_live("pi", lifecycle.SUPPORTED_VARIANT, args, run.root, steer=steer)
         run.observation = dict(generic["observation"])
-        run.assertions = generic["assertions"] if steer else pi_console_tool_assertions(run.observation)
+        run.assertions = judge({"observation": run.observation, "steer": generic["steer"]})
         run.fields.update(steer=generic["steer"], provider_binary=generic["provider_binary"])
 
     return lifecycle.run_console_cell(PRODUCER, args, body, raises=raises)
@@ -169,6 +183,8 @@ PRODUCER = Producer(
     variants=(_VARIANT, _STEER_VARIANT),
     negative_controls=(lifecycle.CONSOLE_STEER_FAULT,),
     refuse=lifecycle.negative_control_needs_steer((_STEER_VARIANT,)),
+    judge=JUDGE,
+    judge_revision=JUDGE_REVISION,
 )
 
 
