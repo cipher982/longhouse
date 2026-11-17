@@ -141,6 +141,20 @@ class RuntimeHost:
             self._log_stream = None
         return returncode
 
+    def catalogd_socket(self, *, timeout_seconds: float = 60.0) -> Path:
+        """Wait for the host's own catalogd socket and return its path.
+
+        Keep ``root`` short (under /tmp): a Unix socket path is limited to 104 bytes.
+        """
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            found = next(iter(self.root.rglob("catalogd.sock")), None)
+            if found is not None:
+                return found
+            time.sleep(0.1)
+        raise TimeoutError("Runtime Host catalogd socket did not appear")
+
     def __enter__(self) -> RuntimeHost:
         self.start()
         return self

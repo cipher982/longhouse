@@ -14,6 +14,8 @@ own event loop). Nothing from the product is imported here.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -62,6 +64,7 @@ class HarnessCatalog:
         cwd: str,
         project: str = "universal-agent-harness",
         now: datetime | None = None,
+        owner_id: int = HARNESS_OWNER_ID,
     ) -> str:
         """Bring one managed session into the catalog the way a launch does.
 
@@ -75,7 +78,7 @@ class HarnessCatalog:
             "session.launch.local.create.v2",
             {
                 "launch": {
-                    "owner_id": HARNESS_OWNER_ID,
+                    "owner_id": owner_id,
                     "git_repo": "cipher982/longhouse",
                     "git_branch": "main",
                     "started_at": now.isoformat(),
@@ -110,7 +113,7 @@ class HarnessCatalog:
                 "outcome": {
                     "session_id": session_id,
                     "run_id": run_id,
-                    "owner_id": HARNESS_OWNER_ID,
+                    "owner_id": owner_id,
                     "device_id": device_id,
                     "state": "adopted",
                     "error_code": None,
@@ -120,6 +123,66 @@ class HarnessCatalog:
             },
         )
         return run_id
+
+    def attach_control_lease(
+        self,
+        *,
+        session_id: str,
+        provider: str,
+        granted_operations: tuple[str, ...] = ("send_input", "interrupt", "terminate"),
+        now: datetime | None = None,
+    ) -> None:
+        """Put the session's control lease in the state a connected engine leaves it in.
+
+        Providers with a lease observer launch detached and attach once their
+        engine reports health, and the engine's control fact is what authorizes
+        a command. The verifier writes the same two things the engine's reports
+        land as: an attached, health-stamped connection bound to an adapter
+        identity, and a control fact head naming exactly that identity.
+        """
+
+        now = (now or datetime.now(UTC)).replace(microsecond=0)
+        stamp = now.strftime("%Y-%m-%d %H:%M:%S.%f")
+        self._catalog.execute(
+            "UPDATE live_session_connections SET state = 'attached', can_send_input = 1, can_interrupt = 1, can_terminate = 1, "
+            "last_health_at = ?, adapter_connection_id = COALESCE(adapter_connection_id, ?), "
+            "lease_generation = COALESCE(lease_generation, ?)",
+            (stamp, str(uuid4()), str(uuid4())),
+        )
+        rows = self._catalog.query(
+            "SELECT run_id, adapter_connection_id, lease_generation FROM live_session_connections ORDER BY id DESC LIMIT 1"
+        )
+        run_id, connection_id, lease_generation = rows[0]
+        source = f"{provider}_control_scan"
+        value = {
+            "authority_class": "provider_control",
+            "provider": provider,
+            "session_id": session_id,
+            "run_id": run_id,
+            "connection_id": connection_id,
+            "lease_generation": lease_generation,
+            "granted_operations": sorted(set(granted_operations)),
+            "state": "attached",
+            "lease_ttl_ms": 900_000,
+            "source": source,
+            "observed_at": now.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        }
+        evidence_hash = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        self._catalog.execute(
+            "INSERT INTO fact_heads (family, subject_key, source, source_epoch, session_id, ordering_mode, source_seq, evidence_hash, "
+            "observed_at, valid_until, value_json, raw_locator, updated_commit_seq, received_at) "
+            "VALUES ('control', ?, ?, ?, ?, 'observed_at', NULL, ?, ?, NULL, ?, NULL, 1, ?)",
+            (
+                f"connection:{connection_id}:{lease_generation}",
+                source,
+                lease_generation,
+                session_id,
+                evidence_hash,
+                stamp,
+                json.dumps(value),
+                stamp,
+            ),
+        )
 
     def pending_interaction(self, *, session_id: str) -> dict[str, Any] | None:
         """Return the one pending interaction for a session, if any."""

@@ -7,19 +7,16 @@ stay behind adapters while universal scenarios produce comparable evidence.
 from __future__ import annotations
 
 import argparse
-import asyncio
-import functools
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+import tempfile
 from collections.abc import Iterable
-from collections.abc import Iterator
 from collections.abc import Mapping
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -30,9 +27,12 @@ from typing import Any
 from typing import Protocol
 from uuid import uuid4
 
+import httpx
+
 from zerg.provider_contract.managed_provider_contracts import all_managed_provider_contracts
 from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.provider_contract.managed_provider_contracts import factory_provider_names
+from zerg.provider_contract.managed_provider_contracts import machine_control_capability_for_command
 from zerg.provider_contract.provider_action_coverage import derive_provider_action_coverage
 from zerg.provider_contract.provider_action_coverage import serialize_provider_action_coverage
 from zerg.provider_contract.provider_capability_proof import AssertionOutcome
@@ -742,40 +742,6 @@ def utc_now() -> str:
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-@contextmanager
-def _co_located_store_settings() -> Iterator[None]:
-    """Run with archive and Live Store schemas on one explicit engine.
-
-    A file-backed ``DATABASE_URL`` always implies a split Live Store, and
-    ``session_runtime`` then leaves runtime reduction to catalogd. The runtime
-    phase and pause-request scenarios bind both schemas to one engine on
-    purpose -- the isolated case the local reducer exists for -- so they run
-    with an anonymous in-memory URL, which configures no split store.
-    """
-    from zerg.database import refresh_database_settings_from_env
-
-    previous = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = "sqlite://"
-    refresh_database_settings_from_env()
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous
-        refresh_database_settings_from_env()
-
-
-def _with_co_located_store_settings(method: Callable[..., Any]) -> Callable[..., Any]:
-    @functools.wraps(method)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        with _co_located_store_settings():
-            return method(*args, **kwargs)
-
-    return wrapper
 
 
 def _json_safe(value: Any) -> Any:
@@ -2909,327 +2875,293 @@ class UniversalProviderAdapter:
         package.write_json("assertions/old_new_release_diff.json", payload)
         return payload
 
-    @_with_co_located_store_settings
     def _run_pause_request_service_projection(self, package: EvidencePackage, *, answer: bool) -> dict[str, Any]:
-        os.environ.setdefault("TESTING", "1")
+        """Hold a structured question in a served Runtime Host and answer it over HTTP.
 
-        from zerg.database import make_engine
-        from zerg.database import make_sessionmaker
-        from zerg.models.agents import AgentSession
-        from zerg.models.live_store import LiveInteractionRequest
-        from zerg.models.live_store import LiveRuntimeState
-        from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
-        from zerg.services.session_runtime import RuntimeEventIngest
-        from zerg.services.session_runtime import ingest_runtime_events
+        The host is a child process with auth off. A fake machine sits on its
+        control WebSocket, so the answer route dispatches a real command frame
+        and resolves the held question from the machine's reply.
+        """
 
-        def project_live_interaction(row: LiveInteractionRequest | None, *, can_respond: bool | None = None) -> dict[str, Any] | None:
-            if row is None:
-                return None
-            projection = dict(row.projection_json or {})
-            projection.update(
-                {
-                    "id": row.id,
-                    "request_key": row.request_key,
-                    "provider_request_id": row.provider_request_id,
-                    "status": row.status,
-                    "can_respond": bool(row.can_respond) if can_respond is None else can_respond,
-                    "response_payload": row.response_payload_json,
-                    "response_text": row.response_text,
-                    "resolved_at": row.resolved_at,
-                }
-            )
-            return projection
+        from zerg.provider_contract.catalogd_process import CatalogdHandle
+        from zerg.qa.fake_machine import FakeMachine
+        from zerg.qa.harness_catalog import HarnessCatalog
+        from zerg.qa.runtime_host import RuntimeHost
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
         contract = contract_for_provider(self.config.provider)
         managed_transport = contract.managed_transport.value if can_respond and contract is not None else None
-        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
-        db_path = package.path("longhouse", "pause-request-service.sqlite")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = make_engine(f"sqlite:///{db_path}")
-        _initialize_managed_control_database(engine)
-        session_factory = make_sessionmaker(engine)
-
-        with session_factory() as db:
-            session = AgentSession(
-                provider=self.config.provider,
-                environment="test",
-                project="universal-agent-harness",
-                device_id="universal-harness",
-                cwd=str(package.path("workspace")),
-                started_at=now - timedelta(minutes=5),
-                last_activity_at=now,
-                user_messages=1,
-                assistant_messages=0,
-            )
-            db.add(session)
-            db.flush()
-            db.refresh(session)
-            if managed_transport and contract is not None:
-                _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
-            runtime_key = f"{self.config.provider}:{session.id}:pause-request"
-            question_payload = {
-                "questions": [
-                    {
-                        "id": "approach",
-                        "header": "Approach",
-                        "question": "Which implementation approach should the agent use?",
-                        "multiSelect": False,
-                        "options": [
-                            {
-                                "label": "Small adapter path",
-                                "description": "Keep this provider-specific change narrow.",
-                            },
-                            {"label": "Broad refactor", "description": "Reshape the whole provider bridge."},
-                        ],
-                    }
-                ]
-            }
-            phase_result = ingest_runtime_events(
-                db,
-                [
-                    RuntimeEventIngest(
-                        runtime_key=runtime_key,
-                        session_id=session.id,
-                        provider=self.config.provider,
-                        device_id="universal-harness",
-                        source="universal_harness",
-                        kind="phase_signal",
-                        phase="needs_user",
-                        occurred_at=now,
-                        freshness_ms=10 * 60 * 1000,
-                        dedupe_key=f"{scenario}:phase-needs-user",
-                        payload={},
-                    )
-                ],
-            )
-            pause_result = ingest_runtime_events(
-                db,
-                [
-                    RuntimeEventIngest(
-                        runtime_key=runtime_key,
-                        session_id=session.id,
-                        provider=self.config.provider,
-                        device_id="universal-harness",
-                        source="universal_harness",
-                        kind="pause_request",
-                        tool_name=_provider_pause_tool_name(self.config.provider),
-                        occurred_at=now + timedelta(seconds=1),
-                        dedupe_key=f"{scenario}:pause-question",
-                        payload={
-                            "provider_request_id": "question-1",
-                            "kind": PAUSE_KIND_STRUCTURED_QUESTION,
-                            "title": "Choose approach",
-                            "summary": "The provider needs a structured user decision before continuing.",
-                            "request_payload": question_payload,
-                            "can_respond": can_respond,
-                            "provider_ref": {
-                                "source": "universal_harness",
-                                "scenario": scenario,
-                            },
-                        },
-                    )
-                ],
-            )
-            db.commit()
-
-            state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one_or_none()
-            active = (
-                db.query(LiveInteractionRequest)
-                .filter(LiveInteractionRequest.session_id == str(session.id), LiveInteractionRequest.status == "pending")
-                .order_by(LiveInteractionRequest.occurred_at.desc(), LiveInteractionRequest.created_at.desc())
-                .first()
-            )
-            pending_projection = _json_safe(project_live_interaction(active, can_respond=can_respond))
-            pending_rows = [
-                _json_safe(project_live_interaction(row))
-                for row in (
-                    db.query(LiveInteractionRequest)
-                    .filter(LiveInteractionRequest.session_id == str(session.id))
-                    .order_by(LiveInteractionRequest.created_at.asc())
-                    .all()
-                )
+        device_id = "universal-harness"
+        answer_text = "Use the small adapter path."
+        question_payload = {
+            "questions": [
+                {
+                    "id": "approach",
+                    "header": "Approach",
+                    "question": "Which implementation approach should the agent use?",
+                    "multiSelect": False,
+                    "options": [
+                        {"label": "Small adapter path", "description": "Keep this provider-specific change narrow."},
+                        {"label": "Broad refactor", "description": "Reshape the whole provider bridge."},
+                    ],
+                }
             ]
+        }
+        # A Unix socket path is limited to 104 bytes, so the host lives under /tmp.
+        root = Path(tempfile.mkdtemp(prefix="lh-pause-", dir="/tmp"))
+        machine: FakeMachine | None = None
+        host = RuntimeHost(
+            repo_root=default_repo_root(), root=root, instance_id="universal-pause-request", extra_env={"ENVIRONMENT": "test:e2e"}
+        )
+        try:
+            host.start()
+            socket_path = host.catalogd_socket()
+            handle = CatalogdHandle(database_path=host.database_path, socket_path=socket_path)
+            # Auth is off, so the host serves as its one active owner; the catalog starts without one.
+            owner_id = 1
+            handle.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (owner_id, "pause-request@longhouse.invalid"))
+            catalog = HarnessCatalog(database_path=host.database_path, socket_path=socket_path, _catalog=handle)
+            session_id = str(uuid4())
+            workspace = str(package.path("workspace"))
+            now = datetime.now(UTC).replace(microsecond=0)
+            if managed_transport and contract is not None:
+                catalog.create_managed_session(
+                    session_id=session_id,
+                    provider=self.config.provider,
+                    managed_transport=managed_transport,
+                    device_id=device_id,
+                    cwd=workspace,
+                    owner_id=owner_id,
+                    now=now - timedelta(seconds=30),
+                )
+                catalog.attach_control_lease(session_id=session_id, provider=self.config.provider, now=now)
+            else:
+                stamp = _catalog_timestamp(now - timedelta(minutes=5))
+                handle.execute(
+                    "INSERT INTO live_session_catalog (session_id, provider, environment, started_at, user_state) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, self.config.provider, "test", stamp, "active"),
+                )
+                # The owner binding the served session lookup requires.
+                handle.execute(
+                    "INSERT INTO live_sessions (session_id, owner_id, provider) VALUES (?, ?, ?)",
+                    (session_id, str(owner_id), self.config.provider),
+                )
+            runtime_key = f"{self.config.provider}:{session_id}:pause-request"
+            # The answer route sends the provider request id only for the opencode bridge's own events.
+            event_source = "opencode_bridge" if self.config.provider == "opencode" else "universal_harness"
+
+            def runtime_event(kind: str, offset_seconds: int, dedupe: str, **fields: Any) -> dict[str, Any]:
+                return {
+                    "runtime_key": runtime_key,
+                    "session_id": session_id,
+                    "provider": self.config.provider,
+                    "device_id": device_id,
+                    "source": event_source,
+                    "kind": kind,
+                    "occurred_at": (now + timedelta(seconds=offset_seconds)).isoformat(),
+                    "dedupe_key": f"{scenario}:{dedupe}",
+                    **fields,
+                }
+
+            phase_result = catalog.rpc(
+                "session.runtime.apply.v2",
+                {
+                    "events": [
+                        runtime_event("phase_signal", -3, "phase-needs-user", phase="needs_user", freshness_ms=10 * 60 * 1000, payload={})
+                    ]
+                },
+            )
+            pause_result = catalog.rpc(
+                "session.runtime.apply.v2",
+                {
+                    "events": [
+                        runtime_event(
+                            "pause_request",
+                            -2,
+                            "pause-question",
+                            tool_name=_provider_pause_tool_name(self.config.provider),
+                            payload={
+                                "provider_request_id": "question-1",
+                                "kind": "structured_question",
+                                "title": "Choose approach",
+                                "summary": "The provider needs a structured user decision before continuing.",
+                                "request_payload": question_payload,
+                                "can_respond": can_respond,
+                                "provider_ref": {"source": event_source, "scenario": scenario},
+                            },
+                        )
+                    ]
+                },
+            )
+
+            def state_row() -> dict[str, Any] | None:
+                columns = (
+                    "runtime_key",
+                    "session_id",
+                    "provider",
+                    "phase",
+                    "phase_source",
+                    "active_tool",
+                    "phase_started_at",
+                    "last_runtime_signal_at",
+                    "runtime_version",
+                )
+                rows = handle.query(f"SELECT {', '.join(columns)} FROM live_runtime_state WHERE runtime_key = ?", (runtime_key,))
+                return dict(zip(columns, rows[0], strict=True)) if rows else None
+
+            def served_requests(status_filter: str) -> list[dict[str, Any]]:
+                response = httpx.get(
+                    f"{host.api_url}/api/sessions/{session_id}/pause-requests",
+                    params={"status_filter": status_filter},
+                    timeout=20,
+                )
+                response.raise_for_status()
+                return list(response.json()["requests"])
+
+            def all_rows() -> list[dict[str, Any]]:
+                result = catalog.rpc("interaction.list.v2", {"session_id": session_id, "status": None, "limit": 20})
+                return [item for item in result.get("interactions") or [] if isinstance(item, dict)]
+
+            state = state_row()
+            pending_served = served_requests("pending")
+            active = pending_served[0] if pending_served else None
+            pending_projection = _json_safe(active)
+            raw_rows = all_rows()
+            pending_rows = _json_safe(raw_rows)
+            # The served projection omits the provider-facing request identity; the catalog row has it.
+            raw_active = next((row for row in raw_rows if active is not None and row.get("id") == active.get("id")), {})
             can_respond_matches_provider_contract = bool((pending_projection or {}).get("can_respond")) == can_respond
             pending_assertions = {
-                "runtime_phase_needs_user": state is not None and state.phase == "needs_user",
+                "runtime_phase_needs_user": state is not None and state.get("phase") == "needs_user",
                 "active_pause_request_visible": active is not None,
-                "pause_request_pending": active is not None and active.status == "pending",
+                "pause_request_pending": active is not None and active.get("status") == "pending",
                 "question_payload_projected": bool((pending_projection or {}).get("questions")),
                 "can_respond_matches_provider_contract": can_respond_matches_provider_contract,
             }
 
             resolved_projection = None
             active_after_response = None
-            all_rows_after_response: list[dict[str, Any] | None] = []
+            all_rows_after_response: list[Any] = []
             response_assertions: dict[str, bool] = {}
             answer_dispatch: dict[str, Any] | None = None
             if answer and active is not None:
-                if can_respond:
-                    from zerg.services import managed_local_control as control
-
-                    calls: list[dict[str, Any]] = []
-
-                    async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
-                        calls.append(
-                            {
-                                "owner_id": kwargs.get("owner_id"),
-                                "timeout_secs": kwargs.get("timeout_secs"),
-                                "command_type": kwargs.get("command_type"),
-                                "payload": kwargs.get("payload"),
-                                "request_id": kwargs.get("request_id"),
-                                "run_id": kwargs.get("run_id"),
-                                "provider": getattr(kwargs.get("session"), "provider", None),
-                                "managed_transport": _project_managed_transport(
-                                    kwargs.get("db"),
-                                    kwargs.get("session"),
-                                ),
-                            }
-                        )
-                        return SimpleNamespace(
-                            ok=True,
-                            transport="engine_channel",
-                            data={
-                                "exit_code": 0,
-                                "stdout": "",
-                                "stderr": "",
-                                "pause_response": {
-                                    "request_key": active.request_key,
-                                    "decision": "answer",
-                                    "answers": {"approach": "Small adapter path"},
-                                },
-                            },
-                            error=None,
-                        )
-
-                    original_dispatch = control.dispatch_managed_control_command
-                    original_transport_error = control._managed_control_transport_error
-                    control.dispatch_managed_control_command = fake_dispatch
-                    control._managed_control_transport_error = lambda *_args, **_kwargs: None
-                    try:
-                        dispatch_result = asyncio.run(
-                            control.answer_pause_request_on_managed_local_session(
-                                db=db,
-                                owner_id=1,
-                                session=session,
-                                request_key=active.request_key,
-                                decision="answer",
-                                answers={"approach": "Small adapter path"},
-                                message="Use the small adapter path.",
-                                provider_request_id=(active.provider_request_id if self.config.provider == "opencode" else None),
-                                request_id=f"universal-{self.config.provider}-answer-pause",
-                            )
-                        )
-                    finally:
-                        control.dispatch_managed_control_command = original_dispatch
-                        control._managed_control_transport_error = original_transport_error
-
-                    request = calls[0] if calls else {}
+                pause_response = {
+                    "request_key": raw_active.get("request_key"),
+                    "decision": "answer",
+                    "answers": {"approach": "Small adapter path"},
+                }
+                if can_respond and contract is not None:
+                    capability = machine_control_capability_for_command(self.config.provider, "session.answer_pause")
+                    machine = FakeMachine(
+                        api_url=host.api_url,
+                        device_id=device_id,
+                        supports=[capability] if capability else [],
+                        responder=lambda _frame: {
+                            "ok": True,
+                            "result": {"exit_code": 0, "stdout": "", "stderr": "", "pause_response": pause_response},
+                        },
+                    )
+                    machine.start()
+                    http_response = httpx.post(
+                        f"{host.api_url}/api/sessions/{session_id}/pause-requests/{active['id']}/response",
+                        json={
+                            "decision": "answer",
+                            "answers": {"approach": "Small adapter path"},
+                            "message": answer_text,
+                        },
+                        timeout=60,
+                    )
+                    request = dict(machine.commands[0]) if machine.commands else {}
                     expected_payload = {
                         "provider": self.config.provider,
-                        "request_key": active.request_key,
+                        "request_key": raw_active.get("request_key"),
                         "decision": "answer",
                         "answers": {"approach": "Small adapter path"},
-                        "message": "Use the small adapter path.",
+                        "message": answer_text,
                     }
                     if self.config.provider == "opencode":
-                        expected_payload["provider_request_id"] = active.provider_request_id
+                        expected_payload["provider_request_id"] = raw_active.get("provider_request_id")
+                    # The command must carry the grant minted from the bound lease.
+                    sent_payload = {key: value for key, value in (request.get("payload") or {}).items() if key != "longhouse_control_grant"}
+                    sent_grant = (request.get("payload") or {}).get("longhouse_control_grant") or {}
+                    lease_rows = handle.query("SELECT run_id, adapter_connection_id, lease_generation FROM live_session_connections")
+                    grant_matches_lease = (
+                        len(lease_rows) == 1
+                        and (sent_grant.get("run_id"), sent_grant.get("connection_id"), sent_grant.get("lease_generation")) == lease_rows[0]
+                    )
+                    # The frame carries the provider's control plane as the
+                    # capability the machine advertised; the lease row names the
+                    # plane the launch attached.
+                    lease_planes = {row[0] for row in handle.query("SELECT control_plane FROM live_session_connections")}
                     dispatch_assertions = {
-                        "command_dispatched": bool(calls),
+                        "command_dispatched": bool(machine.commands),
                         "command_type_matches": request.get("command_type") == "session.answer_pause",
-                        "payload_matches": request.get("payload") == expected_payload,
-                        "provider_matches": request.get("provider") == self.config.provider,
-                        "transport_matches": request.get("managed_transport") == managed_transport,
-                        "result_ok": dispatch_result.ok is True,
-                        "exit_code_zero": dispatch_result.exit_code == 0,
-                        "response_data_projected": bool(dispatch_result.response_data),
+                        "payload_matches": sent_payload == expected_payload and grant_matches_lease,
+                        "provider_matches": (request.get("payload") or {}).get("provider") == self.config.provider,
+                        "transport_matches": request.get("type") == "command" and lease_planes == {contract.control_plane},
+                        "result_ok": http_response.status_code == 200,
+                        "exit_code_zero": http_response.status_code == 200,
+                        "response_data_projected": http_response.status_code == 200 and bool(http_response.json().get("pause_request")),
                     }
                     answer_dispatch = {
-                        "calls": calls,
-                        "result": {
-                            "ok": dispatch_result.ok,
-                            "exit_code": dispatch_result.exit_code,
-                            "error": dispatch_result.error,
-                            "response_data": dispatch_result.response_data,
-                        },
+                        "calls": [request],
+                        "result": {"http_status": http_response.status_code, "body": _json_safe(http_response.json())},
                         "assertions": dispatch_assertions,
                     }
-                ingest_runtime_events(
-                    db,
-                    [
-                        RuntimeEventIngest(
-                            runtime_key=runtime_key,
-                            session_id=session.id,
-                            provider=self.config.provider,
-                            device_id="universal-harness",
-                            source="universal_harness",
-                            kind="pause_resolution",
-                            occurred_at=now + timedelta(seconds=5),
-                            dedupe_key=f"{scenario}:pause-resolution",
-                            payload={
-                                "request_key": active.request_key,
-                                "provider_request_id": active.provider_request_id,
-                                "status": "resolved",
-                                "response_payload": {"answers": {"approach": "Small adapter path"}},
-                                "response_text": "Use the small adapter path.",
-                            },
-                        )
-                    ],
-                )
-                db.commit()
-                resolved = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == active.request_key).one_or_none()
-                active_after = (
-                    db.query(LiveInteractionRequest)
-                    .filter(
-                        LiveInteractionRequest.session_id == str(session.id),
-                        LiveInteractionRequest.status == "pending",
+                else:
+                    catalog.rpc(
+                        "session.runtime.apply.v2",
+                        {
+                            "events": [
+                                runtime_event(
+                                    "pause_resolution",
+                                    0,
+                                    "pause-resolution",
+                                    payload={
+                                        "request_key": raw_active.get("request_key"),
+                                        "provider_request_id": raw_active.get("provider_request_id"),
+                                        "status": "resolved",
+                                        "response_payload": {"answers": {"approach": "Small adapter path"}},
+                                        "response_text": answer_text,
+                                    },
+                                )
+                            ]
+                        },
                     )
-                    .first()
-                )
-                active_after_response = _json_safe(project_live_interaction(active_after))
-                rows_after = (
-                    db.query(LiveInteractionRequest)
-                    .filter(LiveInteractionRequest.session_id == str(session.id))
-                    .order_by(LiveInteractionRequest.created_at.asc())
-                    .all()
-                )
-                all_rows_after_response = [_json_safe(project_live_interaction(row)) for row in rows_after]
-                resolved_projection = _json_safe(project_live_interaction(resolved, can_respond=can_respond))
+                still_pending = served_requests("pending")
+                active_after_response = _json_safe(still_pending[0]) if still_pending else None
+                resolved_served = served_requests("resolved")
+                resolved_projection = _json_safe(resolved_served[0]) if resolved_served else None
+                rows_after = all_rows()
+                all_rows_after_response = _json_safe(rows_after)
+                stored = next((row for row in rows_after if row.get("status") == "resolved"), {})
                 response_assertions = {
-                    "pause_request_resolved": resolved is not None and resolved.status == "resolved",
-                    "active_pause_request_cleared": active_after is None,
-                    "response_payload_stored": bool(getattr(resolved, "response_payload_json", None)),
-                    "response_text_stored": getattr(resolved, "response_text", None) == "Use the small adapter path.",
+                    "pause_request_resolved": resolved_projection is not None and resolved_projection.get("status") == "resolved",
+                    "active_pause_request_cleared": active_after_response is None,
+                    "response_payload_stored": bool(stored.get("response_payload")),
+                    "response_text_stored": stored.get("response_text") == answer_text,
                 }
 
-            state_projection = None
-            if state is not None:
-                state_projection = {
-                    "runtime_key": state.runtime_key,
-                    "session_id": str(state.session_id) if state.session_id else None,
-                    "provider": state.provider,
-                    "phase": state.phase,
-                    "phase_source": state.phase_source,
-                    "active_tool": state.active_tool,
-                    "phase_started_at": state.phase_started_at,
-                    "last_runtime_signal_at": state.last_runtime_signal_at,
-                    "runtime_version": state.runtime_version,
-                }
-
+            db_path = host.database_path
             db_summary = {
-                "session_id": str(session.id),
+                "session_id": session_id,
                 "runtime_key": runtime_key,
                 "db_path": str(db_path),
-                "phase_result": phase_result.model_dump(mode="json"),
-                "pause_result": pause_result.model_dump(mode="json"),
-                "state": _json_safe(state_projection),
+                "phase_result": phase_result,
+                "pause_result": pause_result,
+                "state": _json_safe(state),
                 "pending_pause_request": pending_projection,
                 "pending_pause_requests": pending_rows,
                 "resolved_pause_request": resolved_projection,
                 "active_after_response": active_after_response,
                 "all_rows_after_response": all_rows_after_response,
             }
+        finally:
+            if machine is not None:
+                machine.stop()
+            host.stop()
+            shutil.rmtree(root, ignore_errors=True)
 
         db_summary_path = package.write_json("longhouse/pause-request-service.json", _json_safe(db_summary))
         package.write_json(
@@ -4200,7 +4132,7 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "status": STATUS_PASS,
             "evidence_level": "hermetic",
             "proof_scope": "session_pause_request_projection",
-            "source": "server/zerg/services/session_pause_requests.py plus session_chat pause-request API tests",
+            "source": "session pause request projection plus session_chat pause-request API tests",
             "canary": "session_pause_request_projection_tests",
             "next": "Promote with provider-specific live structured-question canaries.",
         }
