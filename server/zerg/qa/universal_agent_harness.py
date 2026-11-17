@@ -22,9 +22,9 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from typing import Protocol
+from uuid import UUID
 from uuid import uuid4
 
 import httpx
@@ -38,8 +38,6 @@ from zerg.provider_contract.provider_action_coverage import serialize_provider_a
 from zerg.provider_contract.provider_capability_proof import AssertionOutcome
 from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_contract.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.provider_contract.session_state_vocabulary import SessionHostFacts
-from zerg.provider_contract.session_state_vocabulary import project_transcript_facts
 from zerg.qa import qualification_request as qualification_request_contract
 from zerg.qa.background_fidelity import combine_real_replay_results
 from zerg.qa.background_fidelity import run_claude_lifecycle_hook_replay
@@ -4680,39 +4678,58 @@ def delegation_projection(
     the real runtime writer, the real reducer and the real served projector.
     """
 
-    from zerg.provider_contract.catalogd_process import run_catalogd
-    from zerg.services.session_state_facts_projector import project_served_session_state_facts
+    from zerg.provider_contract.catalogd_process import CatalogdHandle
+    from zerg.qa.runtime_host import RuntimeHost
 
     now = datetime.now(UTC)
-    session_id = uuid4()
-    thread_id = uuid4()
-    run_id = uuid4()
+    # Two sessions in one served host, read at the host's real clock: one carries
+    # evidence observed now, the other the same evidence observed 32 minutes ago,
+    # past the 30 minute lease. Nothing in the product takes an injected clock.
+    aged_by = timedelta(minutes=32)
+    owner_id = 1
+    native_registry = _delegation_snapshot_from_engine_facts(native_facts)
+    registry = native_registry if native_facts is not None else {"count": 2, "kinds": {"subagent": 1, "shell": 1}}
+    # A Unix socket path is limited to 104 bytes, so the host lives under /tmp.
+    root = Path(tempfile.mkdtemp(prefix="lh-delegation-", dir="/tmp"))
+    host = RuntimeHost(
+        repo_root=default_repo_root(), root=root, instance_id="universal-delegation-projection", extra_env={"ENVIRONMENT": "test:e2e"}
+    )
+    try:
+        host.start()
+        catalog = CatalogdHandle(database_path=host.database_path, socket_path=host.catalogd_socket())
+        # Auth is off, so the host serves as its one active owner; the catalog starts without one.
+        catalog.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (owner_id, "delegation-projection@longhouse.invalid"))
 
-    with run_catalogd(server_root=default_repo_root() / "server") as catalog:
-        stamp = _catalog_timestamp(now)
-        catalog.execute("INSERT INTO users (id, email, is_active) VALUES (?, ?, 1)", (1, "delegation-projection@longhouse.invalid"))
-        catalog.execute(
-            "INSERT INTO live_session_catalog (session_id, provider, environment, started_at, user_state) VALUES (?, ?, ?, ?, ?)",
-            (str(session_id), provider, "harness", stamp, "active"),
-        )
-        # The owner binding the shadow-state read requires.
-        catalog.execute("INSERT INTO live_sessions (session_id, owner_id, provider) VALUES (?, ?, ?)", (str(session_id), "1", provider))
-        catalog.execute(
-            "INSERT INTO live_session_threads (id, session_id, provider, is_primary, branch_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(thread_id), str(session_id), provider, 1, "root", stamp, stamp),
-        )
-        catalog.execute(
-            "INSERT INTO live_session_runs (id, thread_id, provider, host_id, launch_origin, started_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (str(run_id), str(thread_id), provider, "harness", "longhouse_spawned", stamp),
-        )
+        def seed_session(*, started_at: datetime) -> tuple[UUID, UUID]:
+            session_id = uuid4()
+            thread_id = uuid4()
+            run_id = uuid4()
+            stamp = _catalog_timestamp(started_at)
+            catalog.execute(
+                "INSERT INTO live_session_catalog (session_id, provider, environment, started_at, user_state) VALUES (?, ?, ?, ?, ?)",
+                (str(session_id), provider, "harness", stamp, "active"),
+            )
+            # The owner binding the served session read requires.
+            catalog.execute(
+                "INSERT INTO live_sessions (session_id, owner_id, provider) VALUES (?, ?, ?)", (str(session_id), str(owner_id), provider)
+            )
+            catalog.execute(
+                "INSERT INTO live_session_threads (id, session_id, provider, is_primary, branch_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(thread_id), str(session_id), provider, 1, "root", stamp, stamp),
+            )
+            catalog.execute(
+                "INSERT INTO live_session_runs (id, thread_id, provider, host_id, launch_origin, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (str(run_id), str(thread_id), provider, "harness", "longhouse_spawned", stamp),
+            )
+            return session_id, run_id
 
-        def apply(*, occurred_at: datetime, payload: dict[str, Any], key: str) -> dict[str, Any]:
+        def apply(session_id: UUID, run_id: UUID, *, occurred_at: datetime, payload: dict[str, Any], key: str) -> dict[str, Any]:
             return catalog.rpc(
                 "session.runtime.apply.v2",
                 {
                     "events": [
                         {
-                            "runtime_key": f"{provider}:delegation-projection",
+                            "runtime_key": f"{provider}:delegation-projection:{session_id}",
                             "session_id": str(session_id),
                             "run_id": str(run_id),
                             "provider": provider,
@@ -4728,14 +4745,29 @@ def delegation_projection(
                 },
             )
 
-        native_registry = _delegation_snapshot_from_engine_facts(native_facts)
-        registry = native_registry if native_facts is not None else {"count": 2, "kinds": {"subagent": 1, "shell": 1}}
-        promoted = apply(
-            occurred_at=now,
-            payload={"delegation": registry} if registry is not None else {},
-            key="delegation-with",
-        )
-        silent = apply(occurred_at=now, payload={}, key="delegation-without")
+        native_updates = [
+            dict(fact["payload"])
+            for fact in native_facts or []
+            if isinstance(fact, Mapping) and fact.get("kind") == "delegation.lifecycle" and isinstance(fact.get("payload"), Mapping)
+        ]
+
+        def drive(session_id: UUID, run_id: UUID, *, observed_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+            promoted = apply(
+                session_id,
+                run_id,
+                occurred_at=observed_at,
+                payload={"delegation": registry} if registry is not None else {},
+                key="delegation-with",
+            )
+            silent = apply(session_id, run_id, occurred_at=observed_at, payload={}, key="delegation-without")
+            for index, update in enumerate(native_updates):
+                apply(session_id, run_id, occurred_at=observed_at, payload={"delegation_update": update}, key=f"native-lifecycle-{index}")
+            return promoted, silent
+
+        live_id, live_run = seed_session(started_at=now - timedelta(minutes=5))
+        expired_id, expired_run = seed_session(started_at=now - aged_by - timedelta(minutes=5))
+        promoted, silent = drive(live_id, live_run, observed_at=now)
+        drive(expired_id, expired_run, observed_at=now - aged_by)
         child_rows: tuple[dict[str, Any], ...] = ()
         served_child_facts: list[dict[str, Any]] = []
         if native_facts is not None and native_registry is None and isinstance(native_facts, list):
@@ -4767,17 +4799,11 @@ def delegation_projection(
             if child_rows:
                 catalog.rpc(
                     "session.provider_facts.insert.v2",
-                    {"session_id": str(session_id), "source_epoch": str(run_id), "provider_facts": list(child_rows)},
+                    {"session_id": str(live_id), "source_epoch": str(live_run), "provider_facts": list(child_rows)},
                 )
-                served_child_facts = catalog.rpc("session.provider_facts.list.v2", {"session_id": str(session_id)}).get("facts", [])
+                served_child_facts = catalog.rpc("session.provider_facts.list.v2", {"session_id": str(live_id)}).get("facts", [])
         expected_items = list(registry.get("items") or []) if registry is not None else []
-        native_updates = [
-            dict(fact["payload"])
-            for fact in native_facts or []
-            if isinstance(fact, Mapping) and fact.get("kind") == "delegation.lifecycle" and isinstance(fact.get("payload"), Mapping)
-        ]
-        for index, update in enumerate(native_updates):
-            apply(occurred_at=now, payload={"delegation_update": update}, key=f"native-lifecycle-{index}")
+        for update in native_updates:
             if update.get("operation") == "remove":
                 edge = update.get("item") or {}
                 expected_items = [item for item in expected_items if item.get("id") != edge.get("id")]
@@ -4795,86 +4821,70 @@ def delegation_projection(
         elif registry is not None:
             expected_kinds = dict(registry.get("kinds", {}))
 
-        heads = catalog.rpc("session.shadow_state.read.v2", {"session_id": str(session_id), "owner_id": 1}).get("heads", [])
-
+        heads = catalog.rpc("session.shadow_state.read.v2", {"session_id": str(live_id), "owner_id": owner_id}).get("heads", [])
         delegation_heads = [head for head in heads if str(head.get("family")) == "delegation"]
 
-        def served(head_rows: list[dict[str, Any]], *, at: datetime) -> Any:
-            return project_served_session_state_facts(
-                session_id=str(session_id),
-                commit_seq=1,
-                catalog_facts={
-                    "catalog": {"provider": provider},
-                    "latest_run": {"id": str(run_id), "started_at": now, "ended_at": None},
-                },
-                heads=head_rows,
-                supported_operations=(),
-                pending_interaction=None,
-                transcript=project_transcript_facts(
-                    session=SimpleNamespace(started_at=now, ended_at=None, launch_surface=None, transcript_revision=1),
-                    last_activity_at=now,
-                    user_messages=1,
-                    assistant_messages=1,
-                    archive_state="current",
-                    source_revision=1,
-                    durable_revision=1,
-                    render_revision=1,
-                ),
-                host=SessionHostFacts(state="unknown"),
-                now=at,
-            )
+        def served(session_id: UUID) -> dict[str, Any]:
+            response = httpx.get(f"{host.api_url}/api/timeline/sessions/{session_id}", timeout=30)
+            response.raise_for_status()
+            return dict(response.json()["session_state"])
 
-        live = served(heads, at=now)
-        expired = served(heads, at=now + timedelta(seconds=31 * 60))
+        live = served(live_id)
+        expired = served(expired_id)
+    finally:
+        host.stop()
+        shutil.rmtree(root, ignore_errors=True)
 
-        assertions = {
-            "registry_promoted_as_its_own_fact": (
-                int(promoted["delegation_facts"]["promoted"]) == (1 if registry is not None else 0)
-                and len(delegation_heads) == (1 if registry is not None else 0)
-            ),
-            "silent_observation_never_invents_a_registry": (
-                int(silent["delegation_facts"]["promoted"]) == 0 and len(delegation_heads) == (1 if registry is not None else 0)
-            ),
-            "child_evidence_served_without_membership": (
-                registry is not None or (bool(child_rows) and len(served_child_facts) >= len(child_rows))
-            ),
-            "served_as_pending_for_an_idle_session": (
+    live_delegation = live["delegation"]
+    live_primary = (live.get("presentation") or {}).get("primary")
+    assertions = {
+        "registry_promoted_as_its_own_fact": (
+            int(promoted["delegation_facts"]["promoted"]) == (1 if registry is not None else 0)
+            and len(delegation_heads) == (1 if registry is not None else 0)
+        ),
+        "silent_observation_never_invents_a_registry": (
+            int(silent["delegation_facts"]["promoted"]) == 0 and len(delegation_heads) == (1 if registry is not None else 0)
+        ),
+        "child_evidence_served_without_membership": (
+            registry is not None or (bool(child_rows) and len(served_child_facts) >= len(child_rows))
+        ),
+        "served_as_pending_for_an_idle_session": (
+            (
                 (
-                    (
-                        live.delegation.state == "pending"
-                        and live.delegation.count == expected_count
-                        and live.delegation.kinds == expected_kinds
-                        and live.presentation.primary is not None
-                        and live.presentation.primary.key == "delegated_work"
-                        and live.working_set == "open"
-                    )
-                    if expected_count > 0
-                    else live.delegation.state in {"none", "idle"} and live.working_set != "open"
+                    live_delegation["state"] == "pending"
+                    and live_delegation["count"] == expected_count
+                    and live_delegation["kinds"] == expected_kinds
+                    and live_primary is not None
+                    and live_primary["key"] == "delegated_work"
+                    and live["working_set"] == "open"
                 )
-                if registry is not None
-                else live.delegation.state != "pending" and live.working_set != "open"
-            ),
-            "expired_evidence_reads_unknown_never_none": expired.delegation.state == "unknown" and expired.working_set != "open",
-        }
-        if native_updates:
-            assertions["native_callback_retires_matching_task"] = [item.id for item in live.delegation.items or []] == [
-                item["id"] for item in expected_items
-            ] and live.delegation.count == expected_count
+                if expected_count > 0
+                else live_delegation["state"] in {"none", "idle"} and live["working_set"] != "open"
+            )
+            if registry is not None
+            else live_delegation["state"] != "pending" and live["working_set"] != "open"
+        ),
+        "expired_evidence_reads_unknown_never_none": expired["delegation"]["state"] == "unknown" and expired["working_set"] != "open",
+    }
+    if native_updates:
+        assertions["native_callback_retires_matching_task"] = [item["id"] for item in live_delegation.get("items") or []] == [
+            item["id"] for item in expected_items
+        ] and live_delegation["count"] == expected_count
 
-        payload_path = package.write_json(
-            "longhouse/delegation-projection.json",
-            {
-                "provider": provider,
-                "native_registry": registry,
-                "promoted": promoted["delegation_facts"],
-                "silent": silent["delegation_facts"],
-                "delegation_heads": len(delegation_heads),
-                "served_live": live.delegation.model_dump(mode="json"),
-                "served_expired": expired.delegation.model_dump(mode="json"),
-                "primary_key": live.presentation.primary.key if live.presentation.primary else None,
-                "working_set": live.working_set,
-            },
-        )
+    payload_path = package.write_json(
+        "longhouse/delegation-projection.json",
+        {
+            "provider": provider,
+            "native_registry": registry,
+            "promoted": promoted["delegation_facts"],
+            "silent": silent["delegation_facts"],
+            "delegation_heads": len(delegation_heads),
+            "served_live": live_delegation,
+            "served_expired": expired["delegation"],
+            "primary_key": live_primary["key"] if live_primary else None,
+            "working_set": live["working_set"],
+        },
+    )
 
     passed = all(assertions.values())
     return {
