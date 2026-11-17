@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa import provider_coordination_oracles
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import require_disposable_runtime
@@ -314,6 +315,8 @@ def _cleanup_status(cleanup: Mapping[str, Any]) -> str:
 
 PRODUCER = Producer(
     REGISTRATION,
+    judge=provider_coordination_oracles.JUDGE,
+    judge_revision=provider_coordination_oracles.JUDGE_REVISION,
     artifact_kind="omp_coordination_awareness_create_result",
     failure_code="omp_coordination_awareness_failed",
     variants=(_EXECUTION_VARIANT,),

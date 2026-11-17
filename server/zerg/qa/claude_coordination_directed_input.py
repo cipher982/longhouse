@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from zerg.qa import provider_coordination_oracles
 from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthorityUnavailable
 from zerg.qa.claude_live_session_support import RuntimeHostHTTPError
 from zerg.qa.claude_live_session_support import ScenarioError
@@ -415,6 +416,8 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
 
 PRODUCER = Producer(
     REGISTRATION,
+    judge=provider_coordination_oracles.JUDGE,
+    judge_revision=provider_coordination_oracles.JUDGE_REVISION,
     artifact_kind=_ARTIFACT_KIND,
     # A launch without coordination authority, or one that never came up, is
     # typed so the factory reports infrastructure rather than a model finding.

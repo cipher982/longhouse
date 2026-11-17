@@ -59,6 +59,7 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.qa import provider_coordination_oracles
 from zerg.qa.cursor_helm_product_e2e import _activity_state
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
@@ -1172,6 +1173,8 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
 
 PRODUCER = Producer(
     REGISTRATION,
+    judge=provider_coordination_oracles.JUDGE,
+    judge_revision=provider_coordination_oracles.JUDGE_REVISION,
     artifact_kind="direct_coordination_result",
     failure_code="direct_coordination_failed",
     needs=("evidence_root", "repo_root", "engine", "longhouse_cli", "provider_bin"),

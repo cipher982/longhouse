@@ -26,6 +26,7 @@ from typing import Any
 from typing import Mapping
 
 from zerg.qa import live_session_toolkit
+from zerg.qa import provider_resume_oracles
 from zerg.qa.producer_shell import Producer
 from zerg.qa.producer_shell import Run
 from zerg.qa.provider_console_lifecycle import _served_run_terminal_evidence
@@ -1932,6 +1933,8 @@ def _reach(run: Run, provider: str, args: argparse.Namespace) -> None:
 def producer_for(provider: str) -> Producer:
     return Producer(
         registration_for(provider),
+        judge=provider_resume_oracles.JUDGE,
+        judge_revision=provider_resume_oracles.JUDGE_REVISION,
         artifact_kind="direct_native_resume_result",
         failure_code=lambda exc: (
             "runtime_host_registration_temporarily_unavailable"

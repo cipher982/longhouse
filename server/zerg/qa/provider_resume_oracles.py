@@ -168,4 +168,22 @@ def assertions_for(scenario_id: str, observation: Mapping[str, object]) -> dict[
     raise KeyError(scenario_id)
 
 
-__all__ = ["ASSERTIONS_BY_SCENARIO", "assertions_for", "native_resume_assertions"]
+JUDGE_REVISION = 1
+JUDGE = "zerg.qa.provider_resume_oracles:judge"
+
+
+def judge(evidence: Mapping[str, object]) -> dict[str, bool]:
+    """Pure: the assertion a recorded native Resume cell reached.
+
+    The extra input of ``native_resume_assertions`` is the cell's variant (``clean_exit`` or ``process_loss``), which
+    every native Resume result records as its ``variant``.
+    """
+
+    observation = evidence.get("observation")
+    variant = evidence.get("variant")
+    if not isinstance(variant, str) or not isinstance(observation, Mapping):
+        raise ValueError("a native Resume result needs a variant and an observation")
+    return native_resume_assertions(variant, observation)
+
+
+__all__ = ["ASSERTIONS_BY_SCENARIO", "JUDGE", "JUDGE_REVISION", "assertions_for", "judge", "native_resume_assertions"]

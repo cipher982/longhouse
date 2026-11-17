@@ -38,6 +38,7 @@ from typing import Any
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa import provider_coordination_oracles
 from zerg.qa.live_kit import runtime_host_json as _api_call
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
@@ -821,6 +822,8 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
 
 PRODUCER = Producer(
     REGISTRATION,
+    judge=provider_coordination_oracles.JUDGE,
+    judge_revision=provider_coordination_oracles.JUDGE_REVISION,
     artifact_kind="codex_coordination_result",
     failure_code="codex_coordination_scenario_failed",
     needs=("evidence_root", "repo_root", "engine", "codex_bin"),

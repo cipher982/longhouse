@@ -34,6 +34,14 @@ JUDGING_MODULES = (
     "provider_console_lifecycle",
     "omp_console_producer",
     "pi_console_tool_producer",
+    "pi_coordination_awareness",
+    "omp_coordination_awareness",
+    "claude_coordination_awareness_create",
+    "claude_coordination_awareness_post_compaction",
+    "claude_coordination_directed_input",
+    "cursor_coordination_producer",
+    "codex_coordination_native",
+    "codex_native_resume",
 )
 
 
@@ -43,6 +51,9 @@ def _judging_producers() -> list[tuple[str, Producer]]:
         producer = importlib.import_module(f"{QA_PACKAGE}.{name}").PRODUCER
         assert isinstance(producer, Producer) and producer.judge is not None, name
         found.append((name, producer))
+    native = importlib.import_module(f"{QA_PACKAGE}.provider_native_resume")
+    for provider in native.SPECS:
+        found.append((f"provider_native_resume[{provider}]", native.producer_for(provider)))
     return found
 
 
@@ -72,6 +83,7 @@ def test_every_declared_judge_resolves_and_is_recorded(name: str, producer: Prod
     assert callable(resolve(producer.judge))
     module = importlib.import_module(producer.judge.partition(":")[0])
     assert module.JUDGE_REVISION == producer.judge_revision
+    assert module.JUDGE == producer.judge
     result = recorded(producer, tmp_path, observation={}, assertions={})
     assert result["judge"] == {"entry_point": producer.judge, "revision": producer.judge_revision}
 
@@ -158,3 +170,149 @@ def test_the_live_run_and_the_replay_share_one_judge():
     assert "judge(" in inspect.getsource(lifecycle._run_live)
     assert "judge(" in inspect.getsource(omp_console_producer._reach)
     assert "judge(" in inspect.getsource(pi_console_tool_producer.run_pi_console_tool)
+
+
+# --- coordination: the scenario a result records picks the oracle ---------------------------------------------------------
+
+COORDINATION = (
+    "pi_coordination_awareness",
+    "omp_coordination_awareness",
+    "claude_coordination_awareness_create",
+    "claude_coordination_awareness_post_compaction",
+    "claude_coordination_directed_input",
+    "cursor_coordination_producer",
+    "codex_coordination_native",
+)
+
+HELD = {
+    "awareness_create": {"coordination_instructions_model_visible": True},
+    "awareness_post_compaction": {
+        "coordination_instructions_model_visible_after_compaction": True,
+        "visible_bootstrap_count": 1,
+    },
+    "directed_input": {"input_persisted": True, "input_receipt_linked": True, "input_visible": True, "source_session_id": "s"},
+}
+
+
+def _scenario_ids(module_name: str) -> list[str]:
+    """The scenario ids a coordination producer's cells record: its registration's, and any further one it dispatches."""
+
+    module = importlib.import_module(f"{QA_PACKAGE}.{module_name}")
+    ids = {module.REGISTRATION.scenario_id}
+    for name in ("_DISPATCH",):
+        for value in getattr(module, name, {}).values():
+            ids.add(value[1])
+    for name in dir(module):
+        value = getattr(module, name)
+        if name.startswith("_SCENARIO") and isinstance(value, str):
+            ids.add(value)
+    return sorted(ids)
+
+
+@pytest.mark.parametrize("module_name", COORDINATION)
+def test_every_coordination_scenario_routes_to_its_oracle_and_decides_like_the_run(module_name, tmp_path):
+    from zerg.qa import provider_coordination_oracles as oracles
+
+    judge = pure(oracles.judge)
+    for scenario_id in _scenario_ids(module_name):
+        kind = next(kind for kind in HELD if scenario_id.endswith("_" + kind))
+        run_oracle = {
+            "awareness_create": oracles.awareness_create_assertions,
+            "awareness_post_compaction": oracles.awareness_post_compaction_assertions,
+            "directed_input": oracles.directed_input_assertions,
+        }[kind]
+        held = {"scenario_id": scenario_id, "observation": dict(HELD[kind])}
+        assert judge(held) == run_oracle(HELD[kind])
+        assert all(judge(held).values())
+        failed = {"scenario_id": scenario_id, "observation": {}}
+        assert judge(failed) == run_oracle({}) and not any(judge(failed).values())
+
+
+@pytest.mark.parametrize("module_name", COORDINATION)
+def test_the_judge_names_every_assertion_the_producer_registers(module_name):
+    from zerg.qa import provider_coordination_oracles as oracles
+
+    module = importlib.import_module(f"{QA_PACKAGE}.{module_name}")
+    registered = {assertion for assertion, _variant in module.REGISTRATION.assertion_cells}
+    judged = set()
+    for scenario_id in _scenario_ids(module_name):
+        kind = next(kind for kind in HELD if scenario_id.endswith("_" + kind))
+        judged |= set(oracles.judge({"scenario_id": scenario_id, "observation": HELD[kind]}))
+    assert registered <= judged
+
+
+def test_an_unknown_coordination_scenario_is_an_error_not_a_pass():
+    from zerg.qa import provider_coordination_oracles as oracles
+
+    for evidence in ({"scenario_id": "x_other", "observation": {}}, {"observation": {}}, {"scenario_id": "a_directed_input"}):
+        with pytest.raises((KeyError, ValueError)):
+            oracles.judge(evidence)
+
+
+# --- native Resume: the cell's variant is the named extra input ---------------------------------------------------------
+
+
+def _resume_observation(variant: str) -> dict[str, Any]:
+    facts = {
+        name: True
+        for name in (
+            "same_longhouse_session same_provider_thread new_run new_connection new_app_server_process provider_neutral_resume_intent "
+            "native_resume_command bridge_subscribed post_resume_provider_activity post_resume_response_correlated stale_input_rejected "
+            "concurrent_resume_refused artifact_secret_scan_passed final_cleanup_verified"
+        ).split()
+    }
+    facts.update(stale_generation_dispatched=False, orphan_count=0)
+    if variant == "clean_exit":
+        facts["clean_stop_verified"] = True
+    else:
+        facts.update(old_bridge_process_dead=True, old_app_server_process_dead=True, replacement_started_after_process_loss=True)
+    return facts
+
+
+@pytest.mark.parametrize("variant", ["clean_exit", "process_loss"])
+def test_native_resume_is_judged_by_its_recorded_variant(variant):
+    from zerg.qa import provider_resume_oracles as oracles
+
+    judge = pure(oracles.judge)
+    other = "process_loss" if variant == "clean_exit" else "clean_exit"
+    held = {"variant": variant, "observation": _resume_observation(variant)}
+    assert judge(held) == {"native_provider_resume_proven": True}
+    # The other variant's facts do not prove this one: the variant picks which facts are required.
+    assert judge({"variant": other, "observation": _resume_observation(variant)}) == {"native_provider_resume_proven": False}
+    broken = {"variant": variant, "observation": {**_resume_observation(variant), "stale_generation_dispatched": True}}
+    assert judge(broken) == {"native_provider_resume_proven": False}
+
+
+def test_native_resume_with_no_or_unknown_variant_is_an_error():
+    from zerg.qa import provider_resume_oracles as oracles
+
+    for evidence in ({"observation": {}}, {"variant": "other", "observation": {}}):
+        with pytest.raises((KeyError, ValueError)):
+            oracles.judge(evidence)
+
+
+def test_a_written_result_carries_the_inputs_its_judge_reads(tmp_path):
+    """Round trip through the shell: what the guard reads from result.json is enough to decide the assertions again."""
+
+    from zerg.qa import codex_coordination_native
+    from zerg.qa import codex_native_resume
+
+    resume = codex_native_resume.PRODUCER.verdict(
+        Run(root=tmp_path / "r", observation=_resume_observation("process_loss"), assertions={"native_provider_resume_proven": True}),
+        variant="process_loss",
+    )
+    (tmp_path / "r").mkdir(exist_ok=True)
+    stored = json.loads(json.dumps(resume))
+    assert resume_judge(stored) == stored["assertions"]
+
+    scenario = "codex_coordination_directed_input"
+    run = Run(root=tmp_path / "c", observation=dict(HELD["directed_input"]), assertions={})
+    coordination = codex_coordination_native.PRODUCER.verdict(run, scenario_id=scenario)
+    stored = json.loads(json.dumps(coordination))
+    assert stored["scenario_id"] == scenario
+    verdict = resolve(stored["judge"]["entry_point"])(evidence_of(stored))
+    assert verdict and all(verdict.values())
+
+
+def resume_judge(stored):
+    return resolve(stored["judge"]["entry_point"])(evidence_of(stored))

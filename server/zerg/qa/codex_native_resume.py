@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa import provider_resume_oracles
 from zerg.qa.live_kit import RuntimeHostError as _RuntimeHostHTTPError
 from zerg.qa.live_kit import poll
 from zerg.qa.live_kit import runtime_host_json
@@ -783,6 +784,8 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
 
 PRODUCER = Producer(
     REGISTRATION,
+    judge=provider_resume_oracles.JUDGE,
+    judge_revision=provider_resume_oracles.JUDGE_REVISION,
     artifact_kind="direct_native_resume_result",
     failure_code="direct_native_resume_failed",
     needs=("evidence_root", "repo_root", "engine", "codex_bin"),
