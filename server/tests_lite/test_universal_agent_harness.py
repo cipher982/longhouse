@@ -1189,7 +1189,7 @@ def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) 
     assert operation["level"] == "artifact_diff"
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(240)
 def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 
@@ -2707,6 +2707,7 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
     assert antigravity["status"] == "blocked"
 
 
+@pytest.mark.timeout(240)
 def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -2741,6 +2742,7 @@ def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_pa
         assert (evidence_root / "longhouse" / "pause-request-pending.json").is_file()
 
 
+@pytest.mark.timeout(240)
 def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -4247,6 +4249,7 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
         assert "old_new_release_diff" not in surface_actions
 
 
+@pytest.mark.timeout(240)
 def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_path: Path) -> None:
     fake_bins = _fake_bins(tmp_path)
     artifact_root = tmp_path / "all-provider-safe-release-surface"

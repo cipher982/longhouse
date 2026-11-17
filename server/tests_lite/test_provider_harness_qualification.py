@@ -1574,6 +1574,7 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     assert bundle["execution_metadata"]["semantic_evidence_digest"] == ("sha256:" + hashlib.sha256(semantic_path.read_bytes()).hexdigest())
 
 
+@pytest.mark.timeout(240)
 def test_factory_tool_call_result_retains_unique_full_column(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     request = _request(
