@@ -30,6 +30,7 @@ use crate::managed_antigravity_scan::AntigravityHookObservation;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
 use crate::managed_cursor_helm_scan::CursorHelmObservation;
+use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_omp_helm_scan::OmpHelmObservation;
 use crate::managed_opencode_scan::OpenCodeServerObservation;
 use crate::managed_pi_helm_scan::PiHelmObservation;
@@ -258,6 +259,54 @@ impl HeartbeatSendMetrics {
     }
 }
 
+const MAX_EVIDENCE_REFUSAL_HEADER_BYTES: usize = 4096;
+const MAX_EVIDENCE_REFUSAL_SUMMARY_CHARS: usize = 512;
+
+/// Render the server's refusal header (`{"refused":N,"groups":[...]}`) as one
+/// line a person can act on, e.g. `1 run fact refused (antigravity,
+/// source antigravity_hook_state): machine evidence run source is not ...`.
+fn evidence_refusal_summary(header: &str) -> Option<String> {
+    if header.len() > MAX_EVIDENCE_REFUSAL_HEADER_BYTES {
+        return None;
+    }
+    let body: serde_json::Value = serde_json::from_str(header).ok()?;
+    let refused = body.get("refused")?.as_u64()?;
+    let groups = body.get("groups")?.as_array()?;
+    let first = groups.first()?;
+    let text = |key: &str| first.get(key).and_then(serde_json::Value::as_str);
+    let family = text("family").unwrap_or("evidence");
+    let count = first
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(refused);
+    let mut origin = Vec::new();
+    if let Some(provider) = text("provider") {
+        origin.push(provider.to_string());
+    }
+    if let Some(source) = text("source") {
+        origin.push(format!("source {source}"));
+    }
+    let origin = if origin.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", origin.join(", "))
+    };
+    let noun = if count == 1 { "fact" } else { "facts" };
+    let mut summary = format!(
+        "{count} {family} {noun} refused{origin}: {}",
+        text("reason").unwrap_or("invalid")
+    );
+    if refused > count {
+        summary.push_str(&format!("; {} more refused", refused - count));
+    }
+    Some(
+        summary
+            .chars()
+            .take(MAX_EVIDENCE_REFUSAL_SUMMARY_CHARS)
+            .collect(),
+    )
+}
+
 fn percentile(sorted: &[u64], percentile: usize) -> u64 {
     let rank = (sorted.len() * percentile).div_ceil(100);
     sorted[rank.saturating_sub(1)]
@@ -281,12 +330,17 @@ pub struct HeartbeatTransportStatus {
     pub last_failure_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Plain-English summary of the facts the server refused in the latest
+    /// `partial` or `rejected` acknowledgement, from its refusal header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_refusal_summary: Option<String>,
     pub send_metrics: HeartbeatSendMetrics,
 }
 
 const MAX_HEARTBEAT_ERROR_CHARS: usize = 256;
 const MACHINE_EVIDENCE_DISPOSITIONS: &[&str] = &[
     "applied",
+    "partial",
     "disabled",
     "failed",
     "no_evidence",
@@ -304,6 +358,7 @@ impl Default for HeartbeatTransportStatus {
             last_success_at: None,
             last_failure_at: None,
             last_error: None,
+            evidence_refusal_summary: None,
             send_metrics: HeartbeatSendMetrics::default(),
         }
     }
@@ -329,7 +384,7 @@ impl HeartbeatTransportStatus {
     /// Missing or unrecognized values are deliberately `unknown`; only the
     /// explicit `applied` disposition proves that the catalog accepted
     /// machine evidence.
-    pub fn record_evidence_ack(&mut self, value: Option<&str>) -> bool {
+    pub fn record_evidence_ack(&mut self, value: Option<&str>, refused: Option<&str>) -> bool {
         let normalized = value
             .map(str::trim)
             .filter(|value| MACHINE_EVIDENCE_DISPOSITIONS.contains(value))
@@ -338,13 +393,25 @@ impl HeartbeatTransportStatus {
         if changed {
             normalized.clone_into(&mut self.evidence_state);
         }
+        self.evidence_refusal_summary = if normalized == "applied" {
+            None
+        } else {
+            refused.and_then(evidence_refusal_summary)
+        };
         changed
     }
 
+    /// True when some or all of the evidence was not applied. `partial` counts:
+    /// the facts the server refused are still missing from served state.
     pub fn evidence_refused(&self) -> bool {
         matches!(
             self.evidence_state.as_str(),
-            "disabled" | "failed" | "oversize_evidence" | "rejected" | "unsupported_schema"
+            "disabled"
+                | "failed"
+                | "oversize_evidence"
+                | "partial"
+                | "rejected"
+                | "unsupported_schema"
         )
     }
 
@@ -694,7 +761,11 @@ impl AcknowledgedEvidenceHashes {
         if !matches!(
             result,
             Ok(ack)
-                if ack.evidence_ack.as_deref().map(str::trim) == Some("applied")
+                // `partial` counts as answered. The header names refused facts
+                // only by group, so they are marked with the rest; the rotation
+                // re-offers acknowledged identities, so a fixed server still
+                // picks them up without an engine change.
+                if matches!(ack.evidence_ack.as_deref().map(str::trim), Some("applied" | "partial"))
         ) {
             return;
         }
@@ -899,21 +970,23 @@ pub struct TranscriptEvidence {
 
 #[allow(clippy::too_many_arguments)]
 fn exact_process_exit_evidence(
-    provider: &str,
+    provider: ManagedProvider,
     session_id: &str,
     run_id: Option<&str>,
-    process_role: &str,
     pid: Option<u32>,
     process_start_time: Option<&str>,
     boot_id: Option<&str>,
     process_snapshot_complete: bool,
     alive: bool,
-    source: &str,
     observed_at: &str,
 ) -> Option<RunEvidence> {
     if alive || !process_snapshot_complete {
         return None;
     }
+    // Role and source come from the provider schema, the same row the Runtime
+    // Host validates against, so the two sides cannot name different owners.
+    let (process_role, source) = provider.run_exit_authority();
+    let provider = provider.as_str();
     Some(RunEvidence {
         authority_class: "exact_process_exit".to_string(),
         provider: provider.to_string(),
@@ -2207,16 +2280,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     for obs in codex_observations {
         let at = observed_at(&obs.updated_at);
         if let Some(terminal) = exact_process_exit_evidence(
-            "codex",
+            ManagedProvider::Codex,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "app_server",
             obs.app_server_pid,
             obs.app_server_process_start_time.as_deref(),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.app_server_alive,
-            "codex_bridge_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2341,16 +2412,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         // envelope time: the host records `ended_at` from it, and an unobserved
         // exit is usually hours older than the heartbeat that notices it.
         if let Some(terminal) = exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "provider",
             obs.claude_pid,
             Some(&obs.started_at),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.claude_alive || obs.bridge_alive,
-            "claude_channel_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2459,16 +2528,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     for obs in opencode_observations {
         let at = observed_at(&obs.updated_at);
         if let Some(terminal) = exact_process_exit_evidence(
-            "opencode",
+            ManagedProvider::Opencode,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "provider",
             obs.pid,
             Some(&obs.process_start_time),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.server_alive,
-            "opencode_server_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2551,16 +2618,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     for obs in cursor_observations {
         let at = observed_at(&obs.updated_at);
         if let Some(terminal) = exact_process_exit_evidence(
-            "cursor",
+            ManagedProvider::Cursor,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "launcher",
             obs.launcher_pid,
             obs.launcher_process_start_time.as_deref(),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.launcher_alive,
-            "cursor_helm_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2636,16 +2701,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     for obs in pi_observations {
         let at = observed_at(&obs.updated_at);
         if let Some(terminal) = exact_process_exit_evidence(
-            "pi",
+            ManagedProvider::Pi,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "provider",
             obs.provider_pid,
             obs.provider_process_start_time.as_deref(),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.provider_alive,
-            "pi_helm_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2737,16 +2800,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     for obs in omp_observations {
         let at = observed_at(&obs.updated_at);
         if let Some(terminal) = exact_process_exit_evidence(
-            "omp",
+            ManagedProvider::Omp,
             &obs.session_id,
             obs.run_id.as_deref(),
-            "provider",
             obs.provider_pid,
             obs.provider_process_start_time.as_deref(),
             boot_id.as_deref(),
             managed_snapshot_complete,
             obs.provider_alive,
-            "omp_helm_scan",
             &at,
         ) {
             run.push(terminal);
@@ -2897,16 +2958,14 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         let at = observed_at(&obs.updated_at);
         if obs.provider_pid.is_some() {
             if let Some(terminal) = exact_process_exit_evidence(
-                "antigravity",
+                ManagedProvider::Antigravity,
                 &obs.session_id,
                 obs.run_id.as_deref(),
-                "provider",
                 obs.provider_pid,
                 obs.provider_process_start_time.as_deref(),
                 boot_id.as_deref(),
                 managed_snapshot_complete,
                 obs.provider_alive,
-                "antigravity_hook_state",
                 &at,
             ) {
                 run.push(terminal);
@@ -4714,6 +4773,8 @@ impl EmptyStringFallback for String {
 #[derive(Debug, Clone)]
 pub struct HeartbeatPostAck {
     pub evidence_ack: Option<String>,
+    /// The server's refusal header, when it refused some or all facts.
+    pub evidence_refused: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -4749,6 +4810,7 @@ pub async fn send_heartbeat(
     mut payload: HeartbeatPayload,
 ) -> HeartbeatSendAttempt {
     const MACHINE_EVIDENCE_ACK_HEADER: &str = "X-Longhouse-Machine-Evidence";
+    const MACHINE_EVIDENCE_REFUSED_HEADER: &str = "X-Longhouse-Machine-Evidence-Refused";
     const MACHINE_FRESH_HORIZON_HEADER: &str = "X-Longhouse-Machine-Fresh-Horizon";
     let started = Instant::now();
     let json = match serde_json::to_vec(&payload) {
@@ -4780,6 +4842,11 @@ pub async fn send_heartbeat(
                 .get(MACHINE_EVIDENCE_ACK_HEADER)
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string);
+            let evidence_refused = response
+                .headers
+                .get(MACHINE_EVIDENCE_REFUSED_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let fresh_horizon_secs = response
                 .headers
                 .get(MACHINE_FRESH_HORIZON_HEADER)
@@ -4788,7 +4855,10 @@ pub async fn send_heartbeat(
                 .filter(|value| *value > 0);
             client.host_link().record_heartbeat_ack(fresh_horizon_secs);
             HeartbeatSendAttempt {
-                result: Ok(HeartbeatPostAck { evidence_ack }),
+                result: Ok(HeartbeatPostAck {
+                    evidence_ack,
+                    evidence_refused,
+                }),
                 metrics: HeartbeatPostMetrics {
                     raw_bytes: response.raw_bytes,
                     wire_bytes: response.wire_bytes,
@@ -5438,17 +5508,17 @@ mod tests {
 
         // A successful POST without the new response header is not evidence
         // acceptance.
-        status.record_evidence_ack(None);
+        status.record_evidence_ack(None, None);
         assert_eq!(status.evidence_state, "unknown");
         assert!(!status.evidence_refused());
 
-        status.record_evidence_ack(Some("rejected"));
+        status.record_evidence_ack(Some("rejected"), None);
         status.record_success("2026-09-18T12:00:01Z".to_string());
         assert_eq!(status.state, "healthy");
         assert_eq!(status.evidence_state, "rejected");
         assert!(status.evidence_refused());
 
-        status.record_evidence_ack(Some("applied"));
+        status.record_evidence_ack(Some("applied"), None);
         status.record_success("2026-09-18T12:00:02Z".to_string());
         assert_eq!(status.evidence_state, "applied");
         assert!(!status.evidence_refused());
@@ -7704,16 +7774,14 @@ mod tests {
     #[test]
     fn exact_process_exit_requires_complete_run_and_process_identity() {
         let terminal = exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             "session-1",
             Some("run-1"),
-            "provider",
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
             true,
             false,
-            "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
         .unwrap();
@@ -7721,58 +7789,50 @@ mod tests {
         assert_eq!(terminal.end_reason, "process_gone");
 
         assert!(exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             "session-1",
             Some("run-1"),
-            "provider",
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
             true,
             true,
-            "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
         .is_none());
         assert!(exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             "session-1",
             None,
-            "provider",
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
             true,
             false,
-            "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
         .is_none());
         assert!(exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             "session-1",
             Some("run-1"),
-            "provider",
             Some(43123),
             None,
             Some("boot-cinder"),
             true,
             false,
-            "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
         .is_none());
         assert!(exact_process_exit_evidence(
-            "claude",
+            ManagedProvider::Claude,
             "session-1",
             Some("run-1"),
-            "provider",
             Some(43123),
             Some("2026-07-29T20:45:00Z"),
             Some("boot-cinder"),
             false,
             false,
-            "claude_channel_scan",
             "2026-07-29T20:50:00Z",
         )
         .is_none());
@@ -8416,6 +8476,7 @@ mod tests {
     fn applied_evidence_ack() -> std::result::Result<HeartbeatPostAck, String> {
         Ok(HeartbeatPostAck {
             evidence_ack: Some("applied".to_string()),
+            evidence_refused: None,
         })
     }
 
@@ -8440,6 +8501,34 @@ mod tests {
     }
 
     #[test]
+    fn partial_evidence_is_answered_and_names_what_was_refused() {
+        let identity = test_evidence_identity(0, "current");
+        let mut acknowledged = AcknowledgedEvidenceHashes::default();
+        let header = r#"{"refused":3,"groups":[{"family":"run","provider":"antigravity","source":"antigravity_hook_state","reason":"machine evidence run source is not the provider execution-owner authority","count":2},{"family":"control","provider":null,"source":null,"reason":"x","count":1}]}"#;
+        let partial = Ok(HeartbeatPostAck {
+            evidence_ack: Some("partial".to_string()),
+            evidence_refused: Some(header.to_string()),
+        });
+        acknowledged.record_send_result(&partial, std::slice::from_ref(&identity));
+        assert!(!acknowledged.identity_changed(&identity));
+
+        let mut status = HeartbeatTransportStatus::default();
+        assert!(status.record_evidence_ack(Some("partial"), Some(header)));
+        assert_eq!(status.evidence_state, "partial");
+        assert!(status.evidence_refused());
+        assert_eq!(
+            status.evidence_refusal_summary.as_deref(),
+            Some("2 run facts refused (antigravity, source antigravity_hook_state): machine evidence run source is not the provider execution-owner authority; 1 more refused")
+        );
+
+        status.record_evidence_ack(Some("applied"), None);
+        assert!(!status.evidence_refused());
+        assert_eq!(status.evidence_refusal_summary, None);
+        assert_eq!(evidence_refusal_summary("not json"), None);
+        assert_eq!(evidence_refusal_summary(&"x".repeat(5000)), None);
+    }
+
+    #[test]
     fn unacknowledged_evidence_is_not_marked_as_sent() {
         let identity = test_evidence_identity(0, "current");
         let mut acknowledged = AcknowledgedEvidenceHashes::default();
@@ -8460,11 +8549,15 @@ mod tests {
 
         let rejected = Ok(HeartbeatPostAck {
             evidence_ack: Some("rejected".to_string()),
+            evidence_refused: None,
         });
         acknowledged.record_send_result(&rejected, std::slice::from_ref(&identity));
         assert!(acknowledged.identity_changed(&identity));
 
-        let unconfirmed = Ok(HeartbeatPostAck { evidence_ack: None });
+        let unconfirmed = Ok(HeartbeatPostAck {
+            evidence_ack: None,
+            evidence_refused: None,
+        });
         acknowledged.record_send_result(&unconfirmed, std::slice::from_ref(&identity));
         assert!(acknowledged.identity_changed(&identity));
     }

@@ -748,6 +748,39 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func partialEvidenceNamesWhatTheServerRefused() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/native-desktop-health.json")
+        var envelope = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        let summary = "1 run fact refused (antigravity, source antigravity_hook_state): machine evidence run source is not the provider execution-owner authority"
+        envelope["heartbeat_transport"] = [
+            "state": "healthy",
+            "evidence_state": "partial",
+            "evidence_refusal_summary": summary,
+        ]
+        envelope["reasons"] = ["heartbeat_evidence_partial"]
+        let snapshot = try HealthSnapshotDecoder.decode(data: JSONSerialization.data(withJSONObject: envelope))
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800))
+        let heartbeat = try #require(presentation.facts.first(where: { $0.id == "heartbeat" }))
+        #expect(heartbeat.promotion == .inspect)
+        #expect(heartbeat.value == "Some evidence refused")
+        #expect(heartbeat.detail == summary)
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.promotion == .normal)
+    }
+
+    @Test
+    func backloggedRuntimeEventsSayTheServerIsBehind() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/native-desktop-health.json")
+        var envelope = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        envelope["reasons"] = ["runtime_events_backlogged"]
+        let snapshot = try HealthSnapshotDecoder.decode(data: JSONSerialization.data(withJSONObject: envelope))
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800))
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Longhouse server is behind on live updates")
+    }
+
+    @Test
     func incompleteSessionDiscoveryKeepsIndependentHealthFactsCurrent() {
         let control = SessionControlSnapshot(
             ownership: "machine",
@@ -5538,7 +5571,8 @@ private func presentationHeartbeatFailure() -> NativeHeartbeatTransportSnapshot 
         lastAttemptAt: "1970-01-01T00:00:04Z",
         lastSuccessAt: "1970-01-01T00:00:02Z",
         lastFailureAt: "1970-01-01T00:00:04Z",
-        lastError: "POST timed out"
+        lastError: "POST timed out",
+        evidenceRefusalSummary: nil
     )
 }
 
@@ -5549,7 +5583,8 @@ private func presentationHeartbeatSuccess(lastSuccessAt: String) -> NativeHeartb
         lastAttemptAt: lastSuccessAt,
         lastSuccessAt: lastSuccessAt,
         lastFailureAt: nil,
-        lastError: nil
+        lastError: nil,
+        evidenceRefusalSummary: nil
     )
 }
 

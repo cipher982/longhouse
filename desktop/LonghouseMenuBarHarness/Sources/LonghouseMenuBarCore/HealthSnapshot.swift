@@ -1632,6 +1632,8 @@ public struct NativeHeartbeatTransportSnapshot: Codable, Equatable, Sendable {
     public let lastSuccessAt: String?
     public let lastFailureAt: String?
     public let lastError: String?
+    /// One line naming what the server refused, from its refusal header.
+    public let evidenceRefusalSummary: String?
 }
 
 public struct ServiceSnapshot: Codable, Equatable, Sendable {

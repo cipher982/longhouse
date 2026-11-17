@@ -40,6 +40,21 @@ impl ManagedProvider {
             ManagedProvider::Pi => "pi",
         }
     }
+
+    /// The execution owner allowed to report this provider's process gone:
+    /// `(process_role, source)` on an `exact_process_exit` run fact. The
+    /// Runtime Host reads the same schema row and refuses any other pair.
+    pub const fn run_exit_authority(self) -> (&'static str, &'static str) {
+        match self {
+            ManagedProvider::Antigravity => ("provider", "antigravity_hook_state"),
+            ManagedProvider::Claude => ("provider", "claude_channel_scan"),
+            ManagedProvider::Codex => ("app_server", "codex_bridge_scan"),
+            ManagedProvider::Cursor => ("launcher", "cursor_helm_scan"),
+            ManagedProvider::Omp => ("provider", "omp_helm_scan"),
+            ManagedProvider::Opencode => ("provider", "opencode_server_scan"),
+            ManagedProvider::Pi => ("provider", "pi_helm_scan"),
+        }
+    }
 }
 
 /// Every launchable provider, in schema order.

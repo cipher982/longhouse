@@ -53,9 +53,10 @@ impl DaemonState {
                 match result.result {
                     Ok(ack) => {
                         let evidence_was_refused = self.heartbeat_transport.evidence_refused();
-                        let evidence_changed = self
-                            .heartbeat_transport
-                            .record_evidence_ack(ack.evidence_ack.as_deref());
+                        let evidence_changed = self.heartbeat_transport.record_evidence_ack(
+                            ack.evidence_ack.as_deref(),
+                            ack.evidence_refused.as_deref(),
+                        );
                         let evidence_refused = self.heartbeat_transport.evidence_refused();
                         let recovered = self
                             .heartbeat_transport

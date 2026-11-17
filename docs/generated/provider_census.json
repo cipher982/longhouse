@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 363,
+  "file_count": 362,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2466,18 +2466,6 @@
     },
     {
       "path": "server/zerg/cli/onboard.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
-      ]
-    },
-    {
-      "path": "server/zerg/machine_evidence.py",
       "providers": [
         "antigravity",
         "claude",

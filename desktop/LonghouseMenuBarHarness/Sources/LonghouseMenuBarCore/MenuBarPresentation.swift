@@ -117,6 +117,11 @@ extension HealthSnapshot {
                 .contains(heartbeatTransport?.evidenceState ?? "")
     }
 
+    /// Some facts were applied and some refused: served state is incomplete.
+    private var heartbeatEvidencePartial: Bool {
+        reasons.contains("heartbeat_evidence_partial") || heartbeatTransport?.evidenceState == "partial"
+    }
+
     private func hostLinkDisplay(
         relativeTo referenceDate: Date,
         hasValidUpdateClaim: Bool
@@ -210,6 +215,11 @@ extension HealthSnapshot {
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
             "managed_launch_recovery_exhausted", "parse_errors",
             "payload_rejected", "payload_too_large", "spool_dead", "spool_dead_letters",
+            // Live updates retained because the server refused or failed them
+            // for over a minute. Transcripts may still ship, so nothing else
+            // here says Longhouse is behind (2026-11-16: five hours of 503s
+            // under "Durable upload Clear").
+            "runtime_events_backlogged",
         ]).union(menuBarTransportAttentionReasons)
         let transportAttentionReason = reasons.first {
             menuBarTransportAttentionReasons.contains($0)
@@ -294,6 +304,7 @@ extension HealthSnapshot {
                     || sessionDiscoveryAttention
                     || heartbeatPostFailed
                     || heartbeatEvidenceRejected
+                    || heartbeatEvidencePartial
                     || !inspectReasons.isDisjoint(with: reasons) {
             systemPromotion = .inspect
         } else {
@@ -330,6 +341,10 @@ extension HealthSnapshot {
                 return "Machine heartbeat failed"
             case .inspect where heartbeatEvidenceRejected:
                 return "Machine evidence rejected"
+            case .inspect where heartbeatEvidencePartial:
+                return "Some machine evidence refused"
+            case .inspect where reasons.contains("runtime_events_backlogged"):
+                return "Longhouse server is behind on live updates"
             case .inspect where transportAttentionReason != nil:
                 return "Local upload needs attention"
             case .inspect where sessionDiscoveryAttention:
@@ -581,7 +596,13 @@ extension HealthSnapshot {
                 promotion = .inspect
             } else if heartbeatEvidenceRejected {
                 value = "Evidence refused"
-                detail = "Your Longhouse server is reachable, but session evidence was not applied."
+                detail = heartbeat.evidenceRefusalSummary
+                    ?? "Your Longhouse server is reachable, but session evidence was not applied."
+                promotion = .inspect
+            } else if heartbeatEvidencePartial {
+                value = "Some evidence refused"
+                detail = heartbeat.evidenceRefusalSummary
+                    ?? "Your Longhouse server applied this machine's evidence except for some facts it refused."
                 promotion = .inspect
             } else if heartbeat.evidenceState == "applied" {
                 value = "Accepted"

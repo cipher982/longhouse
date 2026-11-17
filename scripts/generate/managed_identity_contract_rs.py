@@ -29,6 +29,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT = ROOT / "engine" / "src" / "managed_identity_contract.rs"
+PY_OUTPUT = ROOT / "server" / "zerg" / "generated" / "run_exit_authority.py"
 
 # The one hand-written registry in this epic, and it is hand-written because
 # there is nothing to derive it from: no schema records which environment
@@ -84,12 +85,29 @@ def _providers() -> list[str]:
     return sorted(names)
 
 
+def _run_exit_authority() -> dict[str, tuple[str, str]]:
+    """Each launchable provider's (process_role, source) for exact process exit."""
+
+    payload = yaml.safe_load(SCHEMA.read_text(encoding="utf-8"))
+    authority: dict[str, tuple[str, str]] = {}
+    for row in payload["providers"]:
+        if not row.get("launch_local"):
+            continue
+        name = str(row["provider"])
+        entry = row.get("run_exit_authority")
+        if not isinstance(entry, dict) or not entry.get("process_role") or not entry.get("source"):
+            raise SystemExit(f"{SCHEMA}: provider {name} needs run_exit_authority.process_role and .source")
+        authority[name] = (str(entry["process_role"]), str(entry["source"]))
+    return authority
+
+
 def _variant(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_"))
 
 
 def render() -> str:
     providers = _providers()
+    exit_authority = _run_exit_authority()
     lines = [
         "//! Managed-identity vocabulary, generated from the provider schema.",
         "//!",
@@ -121,6 +139,19 @@ def render() -> str:
     lines += [
         "        }",
         "    }",
+        "",
+        "    /// The execution owner allowed to report this provider's process gone:",
+        "    /// `(process_role, source)` on an `exact_process_exit` run fact. The",
+        "    /// Runtime Host reads the same schema row and refuses any other pair.",
+        "    pub const fn run_exit_authority(self) -> (&'static str, &'static str) {",
+        "        match self {",
+    ]
+    for name in providers:
+        role, source = exit_authority[name]
+        lines.append(f'            ManagedProvider::{_variant(name)} => ("{role}", "{source}"),')
+    lines += [
+        "        }",
+        "    }",
         "}",
         "",
         "/// Every launchable provider, in schema order.",
@@ -147,24 +178,39 @@ def render() -> str:
     return "\n".join(lines)
 
 
+def render_python() -> str:
+    lines = [
+        "# @generated from schemas/managed_providers.yml by scripts/generate/managed_identity_contract_rs.py -- do not edit by hand.",
+        "# Run: make generate-managed-identity",
+        '"""Each provider\'s execution owner for exact process-exit run evidence.',
+        "",
+        "The engine stamps (process_role, source) from the same schema row, so the",
+        "Runtime Host and the engine cannot name different owners.",
+        '"""',
+        "",
+        "RUN_EXIT_AUTHORITY: dict[str, tuple[str, str]] = {",
+    ]
+    for name, (role, source) in sorted(_run_exit_authority().items()):
+        lines.append(f'    "{name}": ("{role}", "{source}"),')
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check", action="store_true", help="fail if the generated file is stale"
     )
     args = parser.parse_args()
-    rendered = render()
+    outputs = {OUTPUT: render(), PY_OUTPUT: render_python()}
     if args.check:
-        current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
-        if current != rendered:
-            print(
-                f"{OUTPUT} is stale. Run `make generate-managed-identity`.",
-                file=sys.stderr,
-            )
-            return 1
-        return 0
-    OUTPUT.write_text(rendered, encoding="utf-8")
-    print(f"Wrote {OUTPUT}")
+        stale = [path for path, rendered in outputs.items() if (path.read_text(encoding="utf-8") if path.exists() else "") != rendered]
+        for path in stale:
+            print(f"{path} is stale. Run `make generate-managed-identity`.", file=sys.stderr)
+        return 1 if stale else 0
+    for path, rendered in outputs.items():
+        path.write_text(rendered, encoding="utf-8")
+        print(f"Wrote {path}")
     return 0
 
 

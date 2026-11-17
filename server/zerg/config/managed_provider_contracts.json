@@ -94,6 +94,10 @@
       "managed_transport": "codex_app_server",
       "console_adapter": "codex_exec",
       "control_plane": "codex_bridge",
+      "run_exit_authority": {
+        "process_role": "app_server",
+        "source": "codex_bridge_scan"
+      },
       "control_plane_aliases": [
         "codex_app_server"
       ],
@@ -999,6 +1003,10 @@
       "managed_transport": "claude_channel_bridge",
       "console_adapter": "claude_print",
       "control_plane": "claude_channel_bridge",
+      "run_exit_authority": {
+        "process_role": "provider",
+        "source": "claude_channel_scan"
+      },
       "control_plane_aliases": [],
       "adapter_sources": [
         "engine/src/claude_channel_server.rs",
@@ -2099,6 +2107,10 @@
       "managed_transport": "opencode_server_bridge",
       "console_adapter": "opencode_run",
       "control_plane": "opencode_server_bridge",
+      "run_exit_authority": {
+        "process_role": "provider",
+        "source": "opencode_server_scan"
+      },
       "control_plane_aliases": [],
       "adapter_sources": [
         "engine/src/opencode_control.rs",
@@ -2874,6 +2886,10 @@
       "managed_transport": "antigravity_hook_inbox",
       "console_adapter": "antigravity_acp",
       "control_plane": "antigravity_hook_inbox",
+      "run_exit_authority": {
+        "process_role": "provider",
+        "source": "antigravity_hook_state"
+      },
       "control_plane_aliases": [],
       "adapter_sources": [
         "server/zerg/services/managed_local_control.py",
@@ -3623,6 +3639,10 @@
       "managed_transport": "cursor_helm",
       "console_adapter": "cursor_print",
       "control_plane": "cursor_helm",
+      "run_exit_authority": {
+        "process_role": "launcher",
+        "source": "cursor_helm_scan"
+      },
       "control_plane_aliases": [
         "cursor_acp",
         "cursor_exec"
@@ -4379,6 +4399,10 @@
       "managed_transport": "pi_helm_channel",
       "console_adapter": "pi_print",
       "control_plane": "pi_helm_channel",
+      "run_exit_authority": {
+        "process_role": "provider",
+        "source": "pi_helm_scan"
+      },
       "control_plane_aliases": [],
       "adapter_sources": [
         "engine/src/pi_helm_launcher.rs",
@@ -5222,6 +5246,10 @@
       "managed_transport": "omp_helm_channel",
       "console_adapter": "omp_print",
       "control_plane": "omp_helm_channel",
+      "run_exit_authority": {
+        "process_role": "provider",
+        "source": "omp_helm_scan"
+      },
       "control_plane_aliases": [],
       "adapter_sources": [
         "engine/src/omp_session.rs",

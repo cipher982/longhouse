@@ -303,6 +303,12 @@ print(f"  console_blocked_by: {control.get('console_blocked_by') or '-'}")
 print(f"  console_ready_providers: {render_list(control.get('console_ready_providers'))}")
 print(f"  launch_readiness.reasons: {render_list(launch.get('reasons'))}")
 print(f"  launch_readiness.warnings: {render_list(launch.get('warnings'))}")
+# Whether the Runtime Host applied this machine's evidence. A 204 heartbeat
+# with refused evidence looks healthy everywhere else (2026-11-17).
+heartbeat = snapshot.get("heartbeat_transport") or {}
+evidence = heartbeat.get("evidence_state") or "-"
+refusal = heartbeat.get("evidence_refusal_summary")
+print(f"  heartbeat.evidence_state: {evidence}" + (f" ({refusal})" if refusal else ""))
 PY
 }
 

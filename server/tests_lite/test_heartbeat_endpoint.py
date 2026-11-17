@@ -1556,6 +1556,113 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalo
     assert connections[0]["lease_generation"] == lease_generation
 
 
+def test_heartbeat_applies_good_facts_when_one_fact_is_refused(live_catalog, live_catalog_client):
+    """One fact the host will not accept costs that fact, not the envelope.
+
+    2026-11-17: the engine labelled Antigravity exit facts with a source the
+    host did not list, and the whole envelope -- every family, every provider
+    on the machine -- was dropped on every heartbeat for 12 hours.
+    """
+
+    session_id = str(uuid4())
+    _thread_id, run_id = _seed_open_run(session_id, provider="omp")
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    control = {
+        "authority_class": "provider_control",
+        "provider": "omp",
+        "session_id": session_id,
+        "run_id": run_id,
+        "provider_session_id": "omp-native",
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "ownership": "managed",
+        "state": "attached",
+        "terminal_attached": True,
+        "bridge_status": "ready",
+        "lease_ttl_ms": 900_000,
+        "granted_operations": ["interrupt", "send_input", "terminate"],
+        "source": "omp_helm_scan",
+        "observed_at": observed_at.isoformat(),
+    }
+    bad_exit = {
+        "authority_class": "exact_process_exit",
+        "provider": "antigravity",
+        "session_id": str(uuid4()),
+        "run_id": str(uuid4()),
+        "state": "ended",
+        "end_reason": "process_gone",
+        "process_role": "provider",
+        "pid": 4242,
+        "process_start_time": "Thu May  8 11:59:00 2026",
+        "boot_id": "macos:1777970400:0",
+        "source": "not_the_exit_authority",
+        "observed_at": observed_at.isoformat(),
+    }
+    evidence = {
+        "schema_version": 3,
+        "observed_at": observed_at.isoformat(),
+        "run": [bad_exit],
+        "control": [control],
+        "process_snapshot_scopes": [
+            {
+                "scope": "managed_state_files",
+                "complete": True,
+                "captured_at": observed_at.isoformat(),
+                "machine_boot_id": "macos:1777970400:0",
+                "source": "managed_provider_scan",
+            }
+        ],
+        "identities": [
+            {
+                "fact_family": "run",
+                "fact_index": 0,
+                "subject_key": f"run:{bad_exit['run_id']}",
+                "source": bad_exit["source"],
+                "source_epoch": None,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": "c" * 64,
+                "evidence_hash": canonical_evidence_hash(bad_exit),
+            },
+            {
+                "fact_family": "control",
+                "fact_index": 0,
+                "subject_key": f"connection:{connection_id}:{lease_generation}",
+                "source": control["source"],
+                "source_epoch": lease_generation,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": "a" * 64,
+                "evidence_hash": canonical_evidence_hash(control),
+            },
+        ],
+    }
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=_headers(live_catalog),
+        json={"version": "partial-evidence", "daemon_pid": 42, "machine_evidence": evidence},
+    )
+    assert response.status_code == 204, response.text
+    assert response.headers["x-longhouse-machine-evidence"] == "partial"
+    refused = json.loads(response.headers["x-longhouse-machine-evidence-refused"])
+    assert refused["refused"] == 1
+    assert refused["groups"] == [
+        {
+            "family": "run",
+            "provider": "antigravity",
+            "source": "not_the_exit_authority",
+            "reason": "machine evidence run source is not the provider execution-owner authority",
+            "count": 1,
+        }
+    ]
+    heads = [row for row in _catalog_rows(FactHead.__table__) if row["family"] == "control" and row["session_id"] == session_id]
+    assert len(heads) == 1
+    assert [row for row in _catalog_rows(FactHead.__table__) if row["family"] == "run"] == []
+
+
 def test_heartbeat_lands_and_drops_machine_evidence_it_cannot_use(live_catalog, live_catalog_client):
     """Unusable evidence costs evidence, never the machine's liveness.
 
@@ -1622,14 +1729,23 @@ def test_heartbeat_lands_and_drops_machine_evidence_it_cannot_use(live_catalog, 
     invalid_evidence.append([{"process": []}])
     invalid_evidence.append("not-a-document")
 
+    # A bad fact costs that fact (its siblings are admitted fact by fact); a bad
+    # envelope (unknown version, over the bounds, not a document) costs all of it.
+    envelope_defects = {id(unknown_schema), id(oversized), id(invalid_evidence[-2]), id(invalid_evidence[-1])}
     for index, evidence in enumerate(invalid_evidence):
         response = live_catalog_client.post(
             "/agents/heartbeat",
             headers=headers,
             json={"version": f"phase-2-{index}", "daemon_pid": 42, "machine_evidence": evidence},
         )
-        assert response.headers["x-longhouse-machine-evidence"] == "rejected"
         assert response.status_code == 204, response.text
+        if id(evidence) in envelope_defects:
+            assert response.headers["x-longhouse-machine-evidence"] == "rejected"
+        else:
+            assert response.headers["x-longhouse-machine-evidence"] != "applied"
+            refused = json.loads(response.headers["x-longhouse-machine-evidence-refused"])
+            assert refused["refused"] >= 1
+            assert refused["groups"][0]["reason"]
 
     # Every heartbeat landed, none retained the evidence it could not use, and
     # none of that evidence reached the catalog as authority.

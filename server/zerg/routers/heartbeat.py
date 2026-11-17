@@ -17,6 +17,8 @@ import random
 import re
 import time
 import zlib
+from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -45,6 +47,8 @@ from sqlalchemy.orm import Session
 from zerg.auth.caller import caller_principal
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.catalogd.fact_reducer import MAX_RAW_LOCATOR_BYTES as REDUCER_MAX_RAW_LOCATOR_BYTES
+from zerg.catalogd.fact_reducer import MAX_VALUE_JSON_BYTES as REDUCER_MAX_VALUE_JSON_BYTES
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
@@ -52,8 +56,11 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.generated.provider_brands import ManagedProviderId
 from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
+from zerg.machine_evidence import canonical_value_json
 from zerg.machine_evidence import machine_evidence_bytes
+from zerg.machine_evidence import validate_machine_evidence_fact
 from zerg.machine_evidence import validate_machine_evidence_identities
+from zerg.machine_evidence import validate_machine_evidence_identity
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_rejected_total
 from zerg.metrics import agents_heartbeat_requests_total
@@ -169,9 +176,15 @@ router = APIRouter(prefix="/agents", tags=["agents"], route_class=HeartbeatRoute
 # ``shadow_reducer.status`` values; ``rejected`` is reserved for evidence
 # refused before the catalog RPC (shape, typed validation, or a route budget).
 _MACHINE_EVIDENCE_ACK_HEADER = "X-Longhouse-Machine-Evidence"
+# Which facts the route refused, grouped, so the machine can say why without
+# anyone reading the tenant's logs. Compact JSON, bounded below.
+_MACHINE_EVIDENCE_REFUSED_HEADER = "X-Longhouse-Machine-Evidence-Refused"
+_MAX_REFUSAL_GROUPS = 8
+_MAX_REFUSAL_REASON_CHARS = 160
 _MACHINE_EVIDENCE_DISPOSITIONS = frozenset(
     {
         "applied",
+        "partial",
         "disabled",
         "failed",
         "no_evidence",
@@ -496,6 +509,17 @@ class MachineEvidenceIn(UTCBaseModel):
         return self
 
 
+_EVIDENCE_FAMILY_MODELS: dict[str, type[UTCBaseModel]] = {
+    "run": RunEvidenceIn,
+    "process": ProcessEvidenceIn,
+    "activity": ActivityEvidenceIn,
+    "control": ControlEvidenceIn,
+    "transcript": TranscriptEvidenceIn,
+    "readiness": ReadinessEvidenceIn,
+    "continuation": ContinuationEvidenceIn,
+}
+
+
 class ResolvedWorkspaceIn(UTCBaseModel):
     cwd: str | None = Field(None, max_length=1024)
     label: str | None = Field(None, max_length=255)
@@ -717,44 +741,209 @@ def _drop_oversized_machine_evidence(*, device_id: str, size: int) -> tuple[str,
     return "oversize_evidence", None
 
 
+@dataclass(frozen=True, slots=True)
+class _EvidenceRefusal:
+    family: str
+    provider: str | None
+    source: str | None
+    reason: str
+
+
+@dataclass(slots=True)
+class _EvidenceAdmission:
+    """What the route will hand catalogd, and what it refused on the way."""
+
+    disposition: str | None
+    evidence: dict | None
+    refusals: list[_EvidenceRefusal] = field(default_factory=list)
+
+
+_EVIDENCE_FAMILIES = ("run", "process", "activity", "control", "transcript", "readiness", "continuation")
+
+
+def _bounded_reason(reason: str) -> str:
+    return (reason.splitlines() or ["invalid"])[0][:_MAX_REFUSAL_REASON_CHARS]
+
+
+def _fact_refusal(family: str, row: object, reason: str) -> _EvidenceRefusal:
+    provider = row.get("provider") if isinstance(row, dict) else None
+    source = row.get("source") if isinstance(row, dict) else None
+    return _EvidenceRefusal(
+        family=family,
+        provider=provider[:64] if isinstance(provider, str) else None,
+        source=source[:64] if isinstance(source, str) else None,
+        reason=_bounded_reason(reason),
+    )
+
+
+def _admit_machine_evidence_facts(evidence: dict) -> tuple[dict, list[_EvidenceRefusal]]:
+    """Drop the facts and identities that fail validation; keep the rest.
+
+    The envelope (schema version, scopes, list bounds) is all-or-nothing and is
+    checked by the caller. Facts are independent observations, so one a newer
+    engine labels in a way this host does not accept costs only that fact: on
+    2026-11-17 one Antigravity exit fact discarded every family for every
+    provider on a machine for 12 hours. Surviving identities are re-pointed at
+    their facts' new positions; the evidence hash covers fact content, not
+    position, so re-indexing cannot change what an identity attests.
+    """
+
+    schema_version = evidence.get("schema_version")
+    refusals: list[_EvidenceRefusal] = []
+    admitted: dict = dict(evidence)
+    checked_families: dict[str, list | None] = {}
+    new_index: dict[tuple[str, int], int] = {}
+    for family in _EVIDENCE_FAMILIES:
+        rows = evidence.get(family)
+        if not isinstance(rows, list):
+            checked_families[family] = rows
+            continue
+        model = _EVIDENCE_FAMILY_MODELS[family]
+        kept_raw: list = []
+        # Position-preserving view for identity checks: a refused fact is None,
+        # so an identity pointing at it fails as "fact must be an object".
+        checked: list = []
+        for index, row in enumerate(rows):
+            try:
+                normalized = model.model_validate(row).model_dump(mode="json", exclude_none=True)
+                if schema_version == 3:
+                    validate_machine_evidence_fact(evidence, family, normalized)
+            except ValidationError as exc:
+                refusals.append(_fact_refusal(family, row, _validation_reason(exc)))
+                checked.append(None)
+                continue
+            except (TypeError, ValueError) as exc:
+                refusals.append(_fact_refusal(family, row, str(exc)))
+                checked.append(None)
+                continue
+            new_index[(family, index)] = len(kept_raw)
+            kept_raw.append(row)
+            checked.append(normalized)
+        admitted[family] = kept_raw
+        checked_families[family] = checked
+
+    identities = evidence.get("identities")
+    if schema_version in {2, 3} and isinstance(identities, list):
+        kept_identities: list = []
+        seen: set[tuple[str, int]] = set()
+        for identity in identities:
+            family = identity.get("fact_family") if isinstance(identity, dict) else None
+            fact_index = identity.get("fact_index") if isinstance(identity, dict) else None
+            target = None
+            if isinstance(family, str) and isinstance(checked_families.get(family), list) and type(fact_index) is int:
+                rows = checked_families[family]
+                if 0 <= fact_index < len(rows):
+                    target = rows[fact_index]
+                    if target is None:
+                        # Its fact was already refused and reported; the identity
+                        # goes with it without a second refusal.
+                        continue
+            try:
+                normalized_identity = EvidenceIdentityIn.model_validate(identity).model_dump(mode="json", exclude_none=True)
+                checked_identity = validate_machine_evidence_identity(normalized_identity, checked_families)
+                # catalogd's reducer bounds, checked here so an oversized fact
+                # costs itself instead of failing the whole reduced batch.
+                if len(canonical_value_json(checked_identity.value).encode()) > REDUCER_MAX_VALUE_JSON_BYTES:
+                    raise ValueError("fact value exceeds reducer bound")
+                raw_locator = checked_identity.value.get("raw_locator")
+                if isinstance(raw_locator, str) and len(raw_locator.encode()) > REDUCER_MAX_RAW_LOCATOR_BYTES:
+                    raise ValueError("fact raw_locator exceeds reducer bound")
+                key = (checked_identity.family, checked_identity.fact_index)
+                if key in seen:
+                    raise ValueError("machine evidence identity is duplicated")
+            except ValidationError as exc:
+                refusals.append(_fact_refusal(str(family or "identity"), target, _validation_reason(exc)))
+                continue
+            except (TypeError, ValueError) as exc:
+                refusals.append(_fact_refusal(str(family or "identity"), target, str(exc)))
+                continue
+            seen.add(key)
+            kept_identities.append({**identity, "fact_index": new_index[key]})
+        admitted["identities"] = kept_identities
+    return admitted, refusals
+
+
+def _refusal_header(refusals: list[_EvidenceRefusal]) -> str:
+    """Group refusals by (family, provider, source, reason); compact and bounded."""
+
+    groups: dict[tuple[str, str | None, str | None, str], int] = {}
+    for refusal in refusals:
+        key = (refusal.family, refusal.provider, refusal.source, refusal.reason)
+        groups[key] = groups.get(key, 0) + 1
+    ordered = sorted(groups.items(), key=lambda item: -item[1])
+    body = {
+        "refused": len(refusals),
+        "groups": [
+            {"family": family, "provider": provider, "source": source, "reason": reason, "count": count}
+            for (family, provider, source, reason), count in ordered[:_MAX_REFUSAL_GROUPS]
+        ],
+    }
+    # Header values must be latin-1; ensure_ascii escapes anything else.
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=True)
+
+
 def _accepted_machine_evidence(
     evidence: object,
     *,
     device_id: str,
-) -> tuple[str | None, dict | None]:
-    """Return the pre-catalog disposition and evidence that may be shipped.
+) -> _EvidenceAdmission:
+    """Return the pre-catalog disposition, the evidence to ship, and refusals.
 
-    ``None`` as the disposition means the document passed route validation and
-    catalogd is authoritative for its final disposition. A non-``None``
-    disposition is a refusal that happened before the RPC; the heartbeat still
-    proceeds, but the response must tell the engine why no evidence was
-    applied.
+    ``disposition is None`` means what remains passed route validation and
+    catalogd is authoritative for its final disposition (the route reports
+    ``partial`` when it also refused some facts). A non-``None`` disposition is
+    a refusal before the RPC; the heartbeat still proceeds.
     """
 
     if evidence is None:
-        return None, None
+        return _EvidenceAdmission(None, None)
     if not isinstance(evidence, dict):
         agents_machine_evidence_dropped_total.labels(reason="not_an_object").inc()
         logger.warning("Dropping machine evidence device=%s reason=not_an_object", device_id)
-        return "rejected", None
+        return _EvidenceAdmission("rejected", None)
     try:
-        parsed = MachineEvidenceIn.model_validate(evidence)
+        # The envelope is all-or-nothing: without a valid version, bounds and
+        # process scopes no fact in it can be trusted.
+        MachineEvidenceIn.model_validate({**evidence, **{family: [] for family in _EVIDENCE_FAMILIES}, "identities": []})
+        for family in _EVIDENCE_FAMILIES:
+            rows = evidence.get(family)
+            if rows is not None and (not isinstance(rows, list) or len(rows) > MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY):
+                raise ValueError(f"{family} must be a list of at most {MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY} facts")
+        identities = evidence.get("identities")
+        if identities is not None and (not isinstance(identities, list) or len(identities) > MAX_REDUCER_EVIDENCE_FACTS):
+            raise ValueError(f"identities must be a list of at most {MAX_REDUCER_EVIDENCE_FACTS} rows")
+        admitted, refusals = _admit_machine_evidence_facts(evidence)
+        parsed = MachineEvidenceIn.model_validate(admitted)
     except ValidationError as exc:
         agents_machine_evidence_dropped_total.labels(reason="invalid").inc()
+        reason = _validation_reason(exc)
+        logger.warning("Dropping invalid machine evidence device=%s reason=%s", device_id, reason)
+        return _EvidenceAdmission("rejected", None, [_EvidenceRefusal("envelope", None, None, _bounded_reason(reason))])
+    except (TypeError, ValueError) as exc:
+        agents_machine_evidence_dropped_total.labels(reason="invalid").inc()
+        logger.warning("Dropping invalid machine evidence device=%s reason=%s", device_id, exc)
+        return _EvidenceAdmission("rejected", None, [_EvidenceRefusal("envelope", None, None, _bounded_reason(str(exc)))])
+    for refusal in refusals:
+        agents_machine_evidence_dropped_total.labels(reason="invalid_fact").inc()
+    if refusals:
+        # One line per heartbeat, naming the largest group, so the log stays
+        # readable while a machine keeps sending the same bad fact.
         logger.warning(
-            "Dropping invalid machine evidence device=%s reason=%s",
+            "Refused machine evidence facts device=%s refused=%d summary=%s",
             device_id,
-            _validation_reason(exc),
+            len(refusals),
+            _refusal_header(refusals),
         )
-        return "rejected", None
+        if _machine_evidence_row_count(admitted) == 0:
+            return _EvidenceAdmission("rejected", None, refusals)
     # The budget is defined on the normalized serialization (what catalogd
-    # receives), so measure exactly that. One dump of an already-validated model
-    # is cheap; the whole-payload retention dump was the expensive part.
+    # receives), so measure exactly that.
     serialized = parsed.model_dump(mode="json", exclude_none=True)
     serialized_size = machine_evidence_bytes(serialized)
     if serialized_size > MAX_MACHINE_EVIDENCE_BYTES:
-        return _drop_oversized_machine_evidence(device_id=device_id, size=serialized_size)
-    return None, serialized
+        disposition, _ = _drop_oversized_machine_evidence(device_id=device_id, size=serialized_size)
+        return _EvidenceAdmission(disposition, None, refusals)
+    return _EvidenceAdmission(None, serialized, refusals)
 
 
 def _catalog_machine_evidence_disposition(result: object) -> str:
@@ -1194,10 +1383,12 @@ async def ingest_heartbeat(
 
         evidence_started = time.monotonic()
         timing["evidence_rows"] = _machine_evidence_row_count(payload.machine_evidence)
-        pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
+        evidence_admission = _accepted_machine_evidence(
             payload.machine_evidence,
             device_id=device_id,
         )
+        pre_catalog_evidence_disposition = evidence_admission.disposition
+        machine_evidence = evidence_admission.evidence
         timing["evidence_validation_ms"] = (time.monotonic() - evidence_started) * 1000
 
         retention_started = time.monotonic()
@@ -1421,9 +1612,16 @@ async def ingest_heartbeat(
         agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
 
         request_status_label = "ok"
+        response_headers = {_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition}
+        if evidence_admission.refusals:
+            if evidence_disposition == "applied":
+                # Catalogd applied what survived; the machine must still learn
+                # that some of what it sent was not.
+                response_headers[_MACHINE_EVIDENCE_ACK_HEADER] = "partial"
+            response_headers[_MACHINE_EVIDENCE_REFUSED_HEADER] = _refusal_header(evidence_admission.refusals)
         return Response(
             status_code=status.HTTP_204_NO_CONTENT,
-            headers={_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition},
+            headers=response_headers,
         )
     except RequestValidationError:
         request_status_label = "http_error"

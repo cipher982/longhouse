@@ -10,6 +10,8 @@ from datetime import UTC
 from datetime import datetime
 from typing import Any
 
+from zerg.generated.run_exit_authority import RUN_EXIT_AUTHORITY
+
 MAX_REDUCER_EVIDENCE_FACTS = 256
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
@@ -35,17 +37,8 @@ _AUTHORITY_CLASS = {
     "continuation": "retained_launch_contract",
 }
 _GRANTED_OPERATIONS = frozenset({"send_input", "interrupt", "terminate", "tail_output", "resume"})
-_RUN_EXIT_AUTHORITY = {
-    "codex": ("app_server", "codex_bridge_scan"),
-    "claude": ("provider", "claude_channel_scan"),
-    "opencode": ("provider", "opencode_server_scan"),
-    "cursor": ("launcher", "cursor_helm_scan"),
-    # Antigravity has no bridge process; the hook state file its scanner
-    # reads is the execution-owner record.
-    "antigravity": ("provider", "antigravity_hook_scan"),
-    "pi": ("provider", "pi_helm_scan"),
-    "omp": ("provider", "omp_helm_scan"),
-}
+# Generated from schemas/managed_providers.yml, the row the engine stamps from.
+_RUN_EXIT_AUTHORITY = RUN_EXIT_AUTHORITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,81 +95,96 @@ def machine_evidence_bytes(evidence: object) -> int:
 
 
 def validate_machine_evidence_identities(evidence: object) -> list[ValidatedEvidenceIdentity]:
-    """Validate every reducer identity against its typed fact and content."""
+    """Validate every reducer identity against its typed fact and content.
+
+    All-or-nothing: the first bad fact or identity raises. The heartbeat route
+    admits evidence fact by fact first (`admit_machine_evidence_facts`), so by
+    the time catalogd calls this every remaining row already passed.
+    """
 
     if not isinstance(evidence, dict) or evidence.get("schema_version") not in {2, 3}:
         return []
-    schema_version = evidence["schema_version"]
     identities = evidence.get("identities")
     if not isinstance(identities, list) or len(identities) > MAX_REDUCER_EVIDENCE_FACTS:
         raise ValueError(f"machine evidence identities must contain at most {MAX_REDUCER_EVIDENCE_FACTS} rows")
     families = {family: evidence.get(family) for family in _SUBJECT_PREFIX}
-    if schema_version == 3:
+    if evidence["schema_version"] == 3:
         for family, rows in families.items():
             if not isinstance(rows, list):
                 continue
             for value in rows:
-                if not isinstance(value, dict):
-                    raise ValueError("machine evidence fact must be an object")
-                _validate_v3_authority(family, value)
-                if family == "run":
-                    _validate_run_snapshot_scope(evidence, value)
+                validate_machine_evidence_fact(evidence, family, value)
     validated: list[ValidatedEvidenceIdentity] = []
     seen: set[tuple[str, int]] = set()
     for identity in identities:
-        if not isinstance(identity, dict):
-            raise ValueError("machine evidence identity must be an object")
-        family = identity.get("fact_family")
-        fact_index = identity.get("fact_index")
-        if family not in families or type(fact_index) is not int or fact_index < 0:
-            raise ValueError("machine evidence identity has an invalid fact reference")
-        key = (family, fact_index)
+        checked = validate_machine_evidence_identity(identity, families)
+        key = (checked.family, checked.fact_index)
         if key in seen:
             raise ValueError("machine evidence identity is duplicated")
         seen.add(key)
-        family_rows = families[family]
-        if not isinstance(family_rows, list) or fact_index >= len(family_rows):
-            raise ValueError("machine evidence identity references a missing fact")
-        value = family_rows[fact_index]
-        if not isinstance(value, dict):
-            raise ValueError("machine evidence fact must be an object")
-        source = identity.get("source")
-        if not isinstance(source, str) or source != value.get("source"):
-            raise ValueError("machine evidence identity source does not match its fact")
-        subject_key = identity.get("subject_key")
-        if not isinstance(subject_key, str) or not subject_key.startswith(_SUBJECT_PREFIX[family]):
-            raise ValueError(f"machine evidence {family} subject is not reducer-grade")
-        _validate_subject_key(family, subject_key, value)
-        source_epoch = identity.get("source_epoch")
-        if source_epoch is not None and (not isinstance(source_epoch, str) or len(source_epoch) > 255):
-            raise ValueError("machine evidence source_epoch must be a bounded string or null")
-        source_seq = identity.get("source_seq")
-        if source_seq is not None and (type(source_seq) is not int or source_seq < 0):
-            raise ValueError("machine evidence source_seq must be non-negative or null")
-        if identity.get("sequenced") is not (source_seq is not None):
-            raise ValueError("machine evidence sequence declaration is inconsistent")
-        dedupe_key = identity.get("dedupe_key")
-        evidence_hash = identity.get("evidence_hash")
-        if not isinstance(dedupe_key, str) or not _SHA256_RE.fullmatch(dedupe_key):
-            raise ValueError("machine evidence dedupe_key must be lowercase sha256")
-        if not isinstance(evidence_hash, str) or not _SHA256_RE.fullmatch(evidence_hash):
-            raise ValueError("machine evidence evidence_hash must be lowercase sha256")
-        if canonical_evidence_hash(value) != evidence_hash:
-            raise ValueError("machine evidence evidence_hash does not match canonical fact content")
-        validated.append(
-            ValidatedEvidenceIdentity(
-                family=family,
-                fact_index=fact_index,
-                subject_key=subject_key,
-                source=source,
-                source_epoch=source_epoch or "",
-                source_seq=source_seq,
-                dedupe_key=dedupe_key,
-                evidence_hash=evidence_hash,
-                value=value,
-            )
-        )
+        validated.append(checked)
     return validated
+
+
+def validate_machine_evidence_fact(evidence: dict[str, Any], family: str, value: object) -> None:
+    """Schema-v3 authority checks for one fact; raises ValueError naming the defect."""
+
+    if not isinstance(value, dict):
+        raise ValueError("machine evidence fact must be an object")
+    _validate_v3_authority(family, value)
+    if family == "run":
+        _validate_run_snapshot_scope(evidence, value)
+
+
+def validate_machine_evidence_identity(identity: object, families: dict[str, Any]) -> ValidatedEvidenceIdentity:
+    """Check one reducer identity against the fact it references."""
+
+    if not isinstance(identity, dict):
+        raise ValueError("machine evidence identity must be an object")
+    family = identity.get("fact_family")
+    fact_index = identity.get("fact_index")
+    if family not in families or type(fact_index) is not int or fact_index < 0:
+        raise ValueError("machine evidence identity has an invalid fact reference")
+    family_rows = families[family]
+    if not isinstance(family_rows, list) or fact_index >= len(family_rows):
+        raise ValueError("machine evidence identity references a missing fact")
+    value = family_rows[fact_index]
+    if not isinstance(value, dict):
+        raise ValueError("machine evidence fact must be an object")
+    source = identity.get("source")
+    if not isinstance(source, str) or source != value.get("source"):
+        raise ValueError("machine evidence identity source does not match its fact")
+    subject_key = identity.get("subject_key")
+    if not isinstance(subject_key, str) or not subject_key.startswith(_SUBJECT_PREFIX[family]):
+        raise ValueError(f"machine evidence {family} subject is not reducer-grade")
+    _validate_subject_key(family, subject_key, value)
+    source_epoch = identity.get("source_epoch")
+    if source_epoch is not None and (not isinstance(source_epoch, str) or len(source_epoch) > 255):
+        raise ValueError("machine evidence source_epoch must be a bounded string or null")
+    source_seq = identity.get("source_seq")
+    if source_seq is not None and (type(source_seq) is not int or source_seq < 0):
+        raise ValueError("machine evidence source_seq must be non-negative or null")
+    if identity.get("sequenced") is not (source_seq is not None):
+        raise ValueError("machine evidence sequence declaration is inconsistent")
+    dedupe_key = identity.get("dedupe_key")
+    evidence_hash = identity.get("evidence_hash")
+    if not isinstance(dedupe_key, str) or not _SHA256_RE.fullmatch(dedupe_key):
+        raise ValueError("machine evidence dedupe_key must be lowercase sha256")
+    if not isinstance(evidence_hash, str) or not _SHA256_RE.fullmatch(evidence_hash):
+        raise ValueError("machine evidence evidence_hash must be lowercase sha256")
+    if canonical_evidence_hash(value) != evidence_hash:
+        raise ValueError("machine evidence evidence_hash does not match canonical fact content")
+    return ValidatedEvidenceIdentity(
+        family=family,
+        fact_index=fact_index,
+        subject_key=subject_key,
+        source=source,
+        source_epoch=source_epoch or "",
+        source_seq=source_seq,
+        dedupe_key=dedupe_key,
+        evidence_hash=evidence_hash,
+        value=value,
+    )
 
 
 def _validate_v3_authority(family: str, value: dict[str, Any]) -> None:

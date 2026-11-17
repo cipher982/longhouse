@@ -184,6 +184,8 @@ struct NativeHeartbeatTransportStatus {
     last_failure_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_refusal_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2025,6 +2027,9 @@ fn native_health_from_parts(
     ) {
         reasons.push("heartbeat_evidence_rejected".to_string());
     }
+    if heartbeat_transport.evidence_state == "partial" {
+        reasons.push("heartbeat_evidence_partial".to_string());
+    }
     if let Some(refusal) = startup_refusal.as_deref() {
         reasons.push(format!("startup_refused: {refusal}"));
     }
@@ -2617,6 +2622,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             "reported_offline"
             | "heartbeat_post_failed"
             | "heartbeat_evidence_rejected"
+            | "heartbeat_evidence_partial"
             | "heartbeat_stale"
             | "engine_offline"
             | "transport_unavailable"
@@ -5260,6 +5266,7 @@ fn native_heartbeat_transport_status(
                     | "failed"
                     | "no_evidence"
                     | "oversize_evidence"
+                    | "partial"
                     | "rejected"
                     | "unsupported_schema"
                     | "unknown"
@@ -5276,6 +5283,7 @@ fn native_heartbeat_transport_status(
         last_success_at: optional_string("last_success_at"),
         last_failure_at: optional_string("last_failure_at"),
         last_error: optional_string("last_error"),
+        evidence_refusal_summary: optional_string("evidence_refusal_summary"),
     }
 }
 
