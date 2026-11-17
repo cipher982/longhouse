@@ -578,6 +578,8 @@ async def _build_managed_local_chat_response(
     db: Session,
     session_input_id: int | None = None,
     attachments: list[dict] | None = None,
+    wait_claimed_secs: float | None = None,
+    rpc_timeout_secs: int | None = None,
 ) -> JSONResponse:
     """Dispatch text to a managed-local session and return a fast ack.
 
@@ -594,6 +596,8 @@ async def _build_managed_local_chat_response(
         db=db,
         session_input_id=session_input_id,
         attachments=attachments,
+        wait_claimed_secs=wait_claimed_secs,
+        rpc_timeout_secs=rpc_timeout_secs,
     )
 
 
@@ -955,6 +959,8 @@ async def _dispatch_catalog_managed_text(
     lock_scope_id: str,
     db: Session,
     attachments: list[dict] | None,
+    wait_claimed_secs: float | None = None,
+    rpc_timeout_secs: int | None = None,
 ) -> JSONResponse:
     """Dispatch from live identity and return without archive turn/event ACKs."""
 
@@ -962,6 +968,8 @@ async def _dispatch_catalog_managed_text(
     from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 
     payload: dict[str, object] = {"text": message}
+    if wait_claimed_secs is not None:
+        payload["wait_claimed_secs"] = float(wait_claimed_secs)
     if attachments:
         from zerg.services.input_attachments_support import attachments_supported
 
@@ -974,7 +982,7 @@ async def _dispatch_catalog_managed_text(
         db=db,
         owner_id=owner_id,
         session=source_session,
-        timeout_secs=15,
+        timeout_secs=int(rpc_timeout_secs) if rpc_timeout_secs is not None else 15,
         command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
         payload=payload,
         request_id=request_id,
@@ -985,16 +993,19 @@ async def _dispatch_catalog_managed_text(
     if not result.ok or exit_code != 0:
         await session_lock_manager.release(lock_scope_id, request_id)
         detail = str(result.error or data.get("stderr") or data.get("stdout") or "Managed control dispatch failed")
-        if result.failure_reason == "turn_active":
-            # The adapter's turn is running and this path has no durable queue
-            # to hand the text back to: say so plainly instead of reporting a
-            # send failure. Nothing reached the model.
+        if result.failure_reason in {"turn_active", "input_not_claimed"}:
+            # Nothing reached the model: durable callers requeue on this code,
+            # while legacy `/send-live` reports an explicit 409.
             return JSONResponse(
                 status_code=status.HTTP_409_CONFLICT,
                 content={
                     "accepted": False,
-                    "error": "The session is mid-turn, so nothing was sent; send again when the turn ends or queue it.",
-                    "error_code": "turn_active",
+                    "error": (
+                        "The session is mid-turn, so nothing was sent; send again when the turn ends or queue it."
+                        if result.failure_reason == "turn_active"
+                        else detail
+                    ),
+                    "error_code": result.failure_reason,
                     "session_id": str(source_session.id),
                     "request_id": request_id,
                 },
@@ -1036,6 +1047,8 @@ async def _dispatch_managed_local_text(
     db: Session,
     session_input_id: int | None = None,
     attachments: list[dict] | None = None,
+    wait_claimed_secs: float | None = None,
+    rpc_timeout_secs: int | None = None,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
     from zerg.services.runtime_admission import runtime_admission
@@ -1066,6 +1079,8 @@ async def _dispatch_managed_local_text(
             lock_scope_id=lock_scope_id,
             db=db,
             attachments=attachments,
+            wait_claimed_secs=wait_claimed_secs,
+            rpc_timeout_secs=rpc_timeout_secs,
         )
     finally:
         await runtime_admission().release()

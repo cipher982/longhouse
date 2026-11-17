@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 import zerg.database as database_module
 from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.services.session_inputs import DELIVERING_STALE_AFTER_SECS
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
@@ -372,13 +373,94 @@ MAX_DELIVERY_AGE = timedelta(minutes=30)
 MAX_DELIVERY_ATTEMPTS = 200
 
 
+# Any delivering receipt older than this has outlived every server dispatch
+# budget (10s durable send RPC and 35s mid-turn steer RPC) and is settled by the
+# background sweeper so it cannot sit in delivering forever.
+DELIVERING_STALE_AFTER = timedelta(seconds=DELIVERING_STALE_AFTER_SECS)
+
+
+def count_stale_delivering_live_receipts(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    observed_at = now or datetime.now(timezone.utc)
+    cutoff = observed_at - DELIVERING_STALE_AFTER
+    return (
+        db.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERING,
+            LiveSessionInputReceipt.updated_at < cutoff,
+        )
+        .count()
+    )
+
+
+def _stale_delivering_error_payload(raw_error_json: str | None) -> dict[str, Any]:
+    parsed: dict[str, Any] | None = None
+    if isinstance(raw_error_json, str) and raw_error_json.strip():
+        try:
+            candidate = json.loads(raw_error_json)
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except ValueError:
+            parsed = None
+    if parsed is not None:
+        code = str(parsed.get("code") or parsed.get("error_code") or "").strip()
+        message = str(parsed.get("message") or parsed.get("error") or "").strip()
+        if code in {"runtime_draining", "runtime_restarting"}:
+            return {
+                "code": code,
+                "message": (message or "Runtime was restarting before dispatch completed.")[:500],
+                "reason": "delivering_expired",
+            }
+        if message:
+            return {
+                "code": "delivery_unknown",
+                "message": message[:500],
+                "reason": "delivering_expired",
+            }
+    return {
+        "code": "delivery_unknown",
+        "message": "Input dispatch did not complete before the server deadline; check the transcript before resending.",
+        "reason": "delivering_expired",
+    }
+
+
+def sweep_stale_delivering_live_receipts(
+    db: Session,
+    *,
+    session_id: UUID | str | None = None,
+    limit: int = 100,
+    now: datetime | None = None,
+) -> int:
+    """Settle delivering receipts that outlived all server dispatch budgets."""
+
+    observed_at = now or datetime.now(timezone.utc)
+    cutoff = observed_at - DELIVERING_STALE_AFTER
+    query = db.query(LiveSessionInputReceipt).filter(
+        LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERING,
+        LiveSessionInputReceipt.updated_at < cutoff,
+    )
+    if session_id is not None:
+        query = query.filter(LiveSessionInputReceipt.session_id == _session_key(session_id))
+    rows = query.order_by(LiveSessionInputReceipt.updated_at.asc(), LiveSessionInputReceipt.id.asc()).limit(max(1, int(limit))).all()
+    for row in rows:
+        row.status = INPUT_STATUS_FAILED
+        row.error_json = _json_or_none(_stale_delivering_error_payload(row.error_json))
+        row.updated_at = observed_at
+    if rows:
+        db.commit()
+    return len(rows)
+
+
 def expire_stale_live_receipts(
     db: Session,
     *,
     session_id: UUID | str,
     now: datetime | None = None,
 ) -> int:
-    """Fail queued receipts that can no longer be delivered on time.
+    """Fail queued or wedged delivering receipts that can no longer settle in time.
 
     Claimability checks may reject an offline or non-drainable session before
     ``claim_next_live_queued_receipt`` gets to its age predicate. Expire those
@@ -387,6 +469,11 @@ def expire_stale_live_receipts(
     """
 
     observed_at = now or datetime.now(timezone.utc)
+    swept_delivering = sweep_stale_delivering_live_receipts(
+        db,
+        session_id=session_id,
+        now=observed_at,
+    )
     cutoff = observed_at - MAX_DELIVERY_AGE
     rows = (
         db.query(LiveSessionInputReceipt)
@@ -410,7 +497,7 @@ def expire_stale_live_receipts(
         row.updated_at = observed_at
     if rows:
         db.commit()
-    return len(rows)
+    return len(rows) + swept_delivering
 
 
 def requeue_live_receipt(

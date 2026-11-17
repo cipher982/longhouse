@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import uuid
+from contextlib import suppress
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -50,6 +51,8 @@ from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.input_attachments_support import attachments_supported
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_control_catalog import ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
+from zerg.services.live_control_catalog import ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS
 from zerg.services.live_control_catalog import RETRYABLE_SEND_PRECONDITIONS
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
@@ -110,6 +113,27 @@ router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 _MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
+# Route wait budget sits strictly inside RequestTimeoutMiddleware (15.0s) so an
+# accepted receipt never loses its HTTP response to a generic 504 timeout while
+# a shielded dispatch task finishes settling the receipt in the background.
+INPUT_ROUTE_WAIT_BUDGET_SECS = 10.0
+_INFLIGHT_INPUT_DISPATCH_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _track_inflight_input_dispatch(task: asyncio.Task[Any]) -> None:
+    _INFLIGHT_INPUT_DISPATCH_TASKS.add(task)
+
+    def _finalize(done: asyncio.Task[Any]) -> None:
+        _INFLIGHT_INPUT_DISPATCH_TASKS.discard(done)
+        if done.cancelled():
+            return
+        with suppress(BaseException):
+            # Retrieve any HTTPException or error when the route caller already
+            # returned outcome="unknown" or disconnected, avoiding noisy
+            # unhandled-task-exception warnings on GC.
+            _ = done.exception()
+
+    task.add_done_callback(_finalize)
 
 
 # Selected once while routes are registered so FastAPI's dependency override
@@ -2061,6 +2085,7 @@ async def _retry_runtime_draining_catalog_input(
                 ),
             )
     else:
+        is_antigravity = str(getattr(source_session, "provider", "") or "").strip().lower() == "antigravity"
         dispatch_response = await _build_managed_local_chat_response(
             source_session=source_session,
             owner_id=owner_id,
@@ -2069,6 +2094,8 @@ async def _retry_runtime_draining_catalog_input(
             lock_scope_id=lock_scope_id,
             db=db,
             attachments=attachments or None,
+            wait_claimed_secs=ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS if is_antigravity else None,
+            rpc_timeout_secs=ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS if is_antigravity else None,
         )
         if int(dispatch_response.status_code) >= 400:
             try:
@@ -2983,247 +3010,318 @@ async def _create_catalog_session_input_response(
         if attachments:
             await delete_input_uploads(owner_id=owner_id, session_id=source_session.id, receipt_id=receipt_id)
 
-    if body.intent == INPUT_INTENT_STEER:
-        from zerg.services.managed_local_control import steer_text_to_managed_local_session
-        from zerg.services.runtime_admission import runtime_admission
-
-        admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
-        if not admitted:
-            payload = {
-                "error_code": details.get("code", "runtime_draining"),
-                "error": details.get("message", "Runtime is restarting"),
-                "request_id": delivery_request_id,
-                "runtime_epoch": details.get("runtime_epoch"),
-            }
-            marked = await _set_catalog_live_receipt_error(
-                receipt_id=receipt_id,
-                source_session=source_session,
-                owner_id=owner_id,
-                text=body.text,
-                intent=body.intent,
-                client_request_id=client_request_id,
-                delivery_request_id=delivery_request_id,
-                error=payload,
-                payload_digest=payload_digest,
-            )
-            if not marked:
-                payload = {
-                    "error_code": "input_receipt_unknown",
-                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
-                }
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+    async def _dispatch_and_settle_input() -> SessionInputResponse:
+        lock_needs_cleanup = send_lock_held
+        receipt_settled = False
         try:
-            result = await steer_text_to_managed_local_session(
-                db=db,
-                owner_id=owner_id,
-                session=source_session,
-                text=body.text,
-                request_id=delivery_request_id,
-                attachments=attachments or None,
-            )
-        finally:
-            await runtime_admission().release()
-        if result.failure_reason == "indeterminate":
-            await _set_catalog_live_receipt_error(
-                receipt_id=receipt_id,
-                source_session=source_session,
-                owner_id=owner_id,
-                text=body.text,
-                intent=body.intent,
-                client_request_id=client_request_id,
-                delivery_request_id=delivery_request_id,
-                error={"code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
-                payload_digest=payload_digest,
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=_input_error_detail(
-                    "delivery_unknown",
-                    str(result.error or "steer outcome is unknown"),
-                    disposition="accepted",
-                    delivery_status="unknown",
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                ),
-            )
-        if not result.ok:
+            if body.intent == INPUT_INTENT_STEER:
+                from zerg.services.managed_local_control import steer_text_to_managed_local_session
+                from zerg.services.runtime_admission import runtime_admission
+
+                admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
+                if not admitted:
+                    payload = {
+                        "error_code": details.get("code", "runtime_draining"),
+                        "error": details.get("message", "Runtime is restarting"),
+                        "request_id": delivery_request_id,
+                        "runtime_epoch": details.get("runtime_epoch"),
+                    }
+                    marked = await _set_catalog_live_receipt_error(
+                        receipt_id=receipt_id,
+                        source_session=source_session,
+                        owner_id=owner_id,
+                        text=body.text,
+                        intent=body.intent,
+                        client_request_id=client_request_id,
+                        delivery_request_id=delivery_request_id,
+                        error=payload,
+                        payload_digest=payload_digest,
+                    )
+                    receipt_settled = True
+                    if not marked:
+                        payload = {
+                            "error_code": "input_receipt_unknown",
+                            "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                        }
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+                try:
+                    result = await steer_text_to_managed_local_session(
+                        db=db,
+                        owner_id=owner_id,
+                        session=source_session,
+                        text=body.text,
+                        request_id=delivery_request_id,
+                        attachments=attachments or None,
+                    )
+                finally:
+                    await runtime_admission().release()
+                if result.failure_reason == "indeterminate":
+                    await _set_catalog_live_receipt_error(
+                        receipt_id=receipt_id,
+                        source_session=source_session,
+                        owner_id=owner_id,
+                        text=body.text,
+                        intent=body.intent,
+                        client_request_id=client_request_id,
+                        delivery_request_id=delivery_request_id,
+                        error={"code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
+                        payload_digest=payload_digest,
+                    )
+                    receipt_settled = True
+                    raise HTTPException(
+                        status_code=502,
+                        detail=_input_error_detail(
+                            "delivery_unknown",
+                            str(result.error or "steer outcome is unknown"),
+                            disposition="accepted",
+                            delivery_status="unknown",
+                            client_request_id=client_request_id,
+                            live_input_id=receipt_id,
+                        ),
+                    )
+                if not result.ok:
+                    await _finish_catalog_input_receipt(
+                        receipt_id=receipt_id,
+                        delivery_request_id=delivery_request_id,
+                        error=str(result.error or "steer failed"),
+                    )
+                    receipt_settled = True
+                    await discard_images()
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_input_error_detail(
+                            str(result.error or "steer_failed"),
+                            str(result.error or "steer failed"),
+                            disposition="accepted",
+                            delivery_status="failed",
+                            client_request_id=client_request_id,
+                            live_input_id=receipt_id,
+                        ),
+                    )
+            else:
+                is_antigravity = str(getattr(source_session, "provider", "") or "").strip().lower() == "antigravity"
+                try:
+                    dispatch_response = await _build_managed_local_chat_response(
+                        source_session=source_session,
+                        owner_id=owner_id,
+                        message=body.text,
+                        request_id=delivery_request_id,
+                        lock_scope_id=lock_scope_id,
+                        db=db,
+                        attachments=attachments or None,
+                        wait_claimed_secs=ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS if is_antigravity else None,
+                        rpc_timeout_secs=ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS if is_antigravity else None,
+                    )
+                except HTTPException as exc:
+                    # Refused before the provider was reached: a definite failure.
+                    await session_lock_manager.release(lock_scope_id, delivery_request_id)
+                    lock_needs_cleanup = False
+                    await _finish_catalog_input_receipt(
+                        receipt_id=receipt_id, delivery_request_id=delivery_request_id, error="dispatch rejected"
+                    )
+                    receipt_settled = True
+                    await discard_images()
+                    raise HTTPException(
+                        status_code=exc.status_code,
+                        detail=_augment_receipt_error(
+                            exc.detail,
+                            client_request_id=client_request_id,
+                            live_input_id=receipt_id,
+                            disposition="accepted",
+                            delivery_status="failed",
+                        ),
+                    ) from exc
+                except Exception as exc:
+                    # The provider may have taken it: keep the receipt (and its images)
+                    # in delivering with an unknown outcome, so a replay cannot redispatch.
+                    await session_lock_manager.release(lock_scope_id, delivery_request_id)
+                    lock_needs_cleanup = False
+                    unknown_error = f"Provider dispatch outcome is unknown: {exc}"[:500]
+                    marked = await _set_catalog_live_receipt_error(
+                        receipt_id=receipt_id,
+                        source_session=source_session,
+                        owner_id=owner_id,
+                        text=body.text,
+                        intent=body.intent,
+                        client_request_id=client_request_id,
+                        delivery_request_id=delivery_request_id,
+                        error={"code": "delivery_unknown", "message": unknown_error},
+                        payload_digest=payload_digest,
+                    )
+                    receipt_settled = True
+                    logger.exception("input dispatch outcome unknown for session %s", source_session.id)
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=_augment_receipt_error(
+                            {"error_code": "delivery_unknown", "message": unknown_error},
+                            client_request_id=client_request_id,
+                            live_input_id=receipt_id,
+                            disposition="accepted" if marked else "unknown",
+                            delivery_status="unknown",
+                        ),
+                    ) from exc
+                # _build_managed_local_chat_response either released the lock on
+                # error or handed ownership to _schedule_catalog_lock_release.
+                lock_needs_cleanup = False
+                if int(dispatch_response.status_code) >= 400:
+                    try:
+                        payload = json.loads(dispatch_response.body or b"{}")
+                    except Exception:
+                        payload = {}
+                    error = str(payload.get("error") or payload.get("message") or "send failed")
+                    if payload.get("error_code") in {"runtime_draining", "runtime_restarting"}:
+                        marked = await _set_catalog_live_receipt_error(
+                            receipt_id=receipt_id,
+                            source_session=source_session,
+                            owner_id=owner_id,
+                            text=body.text,
+                            intent=body.intent,
+                            client_request_id=client_request_id,
+                            delivery_request_id=delivery_request_id,
+                            error=payload,
+                            payload_digest=payload_digest,
+                        )
+                        receipt_settled = True
+                        if not marked:
+                            payload = _input_error_detail(
+                                "input_receipt_unknown",
+                                "The server could not confirm this operation; retry with the same client_request_id.",
+                                disposition="unknown",
+                                client_request_id=client_request_id,
+                            )
+                        else:
+                            payload = _augment_receipt_error(
+                                payload,
+                                client_request_id=client_request_id,
+                                live_input_id=receipt_id,
+                                disposition="accepted",
+                                delivery_status="delivering",
+                            )
+                        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+                    if _delivery_unknown_error(json.dumps(payload)):
+                        # Keep the receipt in delivering: the provider may have
+                        # accepted the command, so replay must remain visibly unknown.
+                        await _set_catalog_live_receipt_error(
+                            receipt_id=receipt_id,
+                            source_session=source_session,
+                            owner_id=owner_id,
+                            text=body.text,
+                            intent=body.intent,
+                            client_request_id=client_request_id,
+                            delivery_request_id=delivery_request_id,
+                            error={"code": "delivery_unknown", "message": error},
+                            payload_digest=payload_digest,
+                        )
+                        receipt_settled = True
+                        raise HTTPException(
+                            status_code=dispatch_response.status_code,
+                            detail=_augment_receipt_error(
+                                payload,
+                                client_request_id=client_request_id,
+                                live_input_id=receipt_id,
+                                disposition="accepted",
+                                delivery_status="unknown",
+                            ),
+                        )
+                    from zerg.services.session_input_queue import managed_control_momentarily_unavailable
+
+                    if (
+                        managed_control_momentarily_unavailable(error)
+                        or str(payload.get("error_code") or "") in RETRYABLE_SEND_PRECONDITIONS
+                    ):
+                        # The channel dropped or withdrew an unclaimed inbox file.
+                        # Park the input for the drain, which retries queued
+                        # receipts and delivers once the machine is ready: late,
+                        # never lost, and the sender is told it is queued.
+                        await _finish_catalog_input_receipt(
+                            receipt_id=receipt_id,
+                            delivery_request_id=delivery_request_id,
+                            status_value="queued",
+                            error=error,
+                        )
+                        receipt_settled = True
+                        return await _queued_input_response(
+                            source_session=source_session,
+                            receipt_id=receipt_id,
+                            client_request_id=client_request_id,
+                            body=body,
+                            source="managed_control_momentarily_unavailable",
+                        )
+                    await _finish_catalog_input_receipt(
+                        receipt_id=receipt_id,
+                        delivery_request_id=delivery_request_id,
+                        error=error,
+                    )
+                    receipt_settled = True
+                    await discard_images()
+                    raise HTTPException(
+                        status_code=dispatch_response.status_code,
+                        detail=_augment_receipt_error(
+                            payload,
+                            client_request_id=client_request_id,
+                            live_input_id=receipt_id,
+                            disposition="accepted",
+                            delivery_status="failed",
+                        ),
+                    )
+
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
-                error=str(result.error or "steer failed"),
             )
-            await discard_images()
-            raise HTTPException(
-                status_code=409,
-                detail=_input_error_detail(
-                    str(result.error or "steer_failed"),
-                    str(result.error or "steer failed"),
-                    disposition="accepted",
-                    delivery_status="failed",
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                ),
-            )
-    else:
-        try:
-            dispatch_response = await _build_managed_local_chat_response(
-                source_session=source_session,
-                owner_id=owner_id,
-                message=body.text,
-                request_id=delivery_request_id,
-                lock_scope_id=lock_scope_id,
-                db=db,
-                attachments=attachments or None,
-            )
-        except HTTPException as exc:
-            # Refused before the provider was reached: a definite failure.
-            await session_lock_manager.release(lock_scope_id, delivery_request_id)
-            await _finish_catalog_input_receipt(receipt_id=receipt_id, delivery_request_id=delivery_request_id, error="dispatch rejected")
-            await discard_images()
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail=_augment_receipt_error(
-                    exc.detail,
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                    disposition="accepted",
-                    delivery_status="failed",
-                ),
-            ) from exc
-        except Exception as exc:
-            # The provider may have taken it: keep the receipt (and its images)
-            # in delivering with an unknown outcome, so a replay cannot redispatch.
-            await session_lock_manager.release(lock_scope_id, delivery_request_id)
-            unknown_error = f"Provider dispatch outcome is unknown: {exc}"[:500]
-            marked = await _set_catalog_live_receipt_error(
-                receipt_id=receipt_id,
-                source_session=source_session,
-                owner_id=owner_id,
-                text=body.text,
-                intent=body.intent,
+            receipt_settled = True
+            return SessionInputResponse(
+                outcome="sent",
+                input_id=None,
+                live_input_id=receipt_id,
                 client_request_id=client_request_id,
-                delivery_request_id=delivery_request_id,
-                error={"code": "delivery_unknown", "message": unknown_error},
-                payload_digest=payload_digest,
+                intent=body.intent,
+                queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
             )
-            logger.exception("input dispatch outcome unknown for session %s", source_session.id)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=_augment_receipt_error(
-                    {"error_code": "delivery_unknown", "message": unknown_error},
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                    disposition="accepted" if marked else "unknown",
-                    delivery_status="unknown",
-                ),
-            ) from exc
-        if int(dispatch_response.status_code) >= 400:
-            try:
-                payload = json.loads(dispatch_response.body or b"{}")
-            except Exception:
-                payload = {}
-            error = str(payload.get("error") or payload.get("message") or "send failed")
-            if payload.get("error_code") in {"runtime_draining", "runtime_restarting"}:
-                marked = await _set_catalog_live_receipt_error(
-                    receipt_id=receipt_id,
-                    source_session=source_session,
-                    owner_id=owner_id,
-                    text=body.text,
-                    intent=body.intent,
-                    client_request_id=client_request_id,
-                    delivery_request_id=delivery_request_id,
-                    error=payload,
-                    payload_digest=payload_digest,
-                )
-                if not marked:
-                    payload = _input_error_detail(
-                        "input_receipt_unknown",
-                        "The server could not confirm this operation; retry with the same client_request_id.",
-                        disposition="unknown",
-                        client_request_id=client_request_id,
+        except asyncio.CancelledError:
+            if lock_needs_cleanup:
+                with suppress(Exception):
+                    await asyncio.shield(session_lock_manager.release(lock_scope_id, delivery_request_id))
+            if not receipt_settled:
+                with suppress(Exception):
+                    await asyncio.shield(
+                        _set_catalog_live_receipt_error(
+                            receipt_id=receipt_id,
+                            source_session=source_session,
+                            owner_id=owner_id,
+                            text=body.text,
+                            intent=body.intent,
+                            client_request_id=client_request_id,
+                            delivery_request_id=delivery_request_id,
+                            error={
+                                "code": "delivery_unknown",
+                                "message": "Server dispatch task was cancelled while in flight; check the transcript before resending.",
+                            },
+                            payload_digest=payload_digest,
+                        )
                     )
-                else:
-                    payload = _augment_receipt_error(
-                        payload,
-                        client_request_id=client_request_id,
-                        live_input_id=receipt_id,
-                        disposition="accepted",
-                        delivery_status="delivering",
-                    )
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
-            if _delivery_unknown_error(json.dumps(payload)):
-                # Keep the receipt in delivering: the provider may have
-                # accepted the command, so replay must remain visibly unknown.
-                await _set_catalog_live_receipt_error(
-                    receipt_id=receipt_id,
-                    source_session=source_session,
-                    owner_id=owner_id,
-                    text=body.text,
-                    intent=body.intent,
-                    client_request_id=client_request_id,
-                    delivery_request_id=delivery_request_id,
-                    error={"code": "delivery_unknown", "message": error},
-                    payload_digest=payload_digest,
-                )
-                raise HTTPException(
-                    status_code=dispatch_response.status_code,
-                    detail=_augment_receipt_error(
-                        payload,
-                        client_request_id=client_request_id,
-                        live_input_id=receipt_id,
-                        disposition="accepted",
-                        delivery_status="unknown",
-                    ),
-                )
-            from zerg.services.session_input_queue import managed_control_momentarily_unavailable
+            raise
 
-            if managed_control_momentarily_unavailable(error) or str(payload.get("error_code") or "") in RETRYABLE_SEND_PRECONDITIONS:
-                # The channel dropped between the capability check and the
-                # dispatch. Park the input for the drain, which retries queued
-                # receipts and delivers once the machine reconnects: late,
-                # never lost, and the sender is told it is queued.
-                await _finish_catalog_input_receipt(
-                    receipt_id=receipt_id,
-                    delivery_request_id=delivery_request_id,
-                    status_value="queued",
-                    error=error,
-                )
-                return await _queued_input_response(
-                    source_session=source_session,
-                    receipt_id=receipt_id,
-                    client_request_id=client_request_id,
-                    body=body,
-                    source="managed_control_momentarily_unavailable",
-                )
-            await _finish_catalog_input_receipt(
-                receipt_id=receipt_id,
-                delivery_request_id=delivery_request_id,
-                error=error,
-            )
-            await discard_images()
-            raise HTTPException(
-                status_code=dispatch_response.status_code,
-                detail=_augment_receipt_error(
-                    payload,
-                    client_request_id=client_request_id,
-                    live_input_id=receipt_id,
-                    disposition="accepted",
-                    delivery_status="failed",
-                ),
-            )
-
-    await _finish_catalog_input_receipt(
-        receipt_id=receipt_id,
-        delivery_request_id=delivery_request_id,
-    )
-    return SessionInputResponse(
-        outcome="sent",
-        input_id=None,
-        live_input_id=receipt_id,
-        client_request_id=client_request_id,
-        intent=body.intent,
-        queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
-    )
+    dispatch_task = asyncio.create_task(_dispatch_and_settle_input())
+    _track_inflight_input_dispatch(dispatch_task)
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(dispatch_task),
+            timeout=INPUT_ROUTE_WAIT_BUDGET_SECS,
+        )
+    except TimeoutError:
+        if dispatch_task.done():
+            return dispatch_task.result()
+        recent_state = await _catalog_recent_input_summaries(source_session.id)
+        return SessionInputResponse(
+            outcome="unknown",
+            disposition="accepted",
+            input_id=None,
+            live_input_id=receipt_id,
+            client_request_id=client_request_id,
+            intent=body.intent,
+            queued=recent_state[0] if recent_state is not None else [],
+        )
 
 
 def _input_conflict(existing: SessionInput, *, reason: InputConflictReason) -> HTTPException:

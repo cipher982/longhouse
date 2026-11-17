@@ -43,6 +43,7 @@ import { useComposerAttachments } from "./useComposerAttachments";
 import { Button } from "@/shared/ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { isSessionClosed } from "@/shared/session/sessionRuntime";
+import { copyToClipboard } from "@/shared/lib/clipboard";
 import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
 import { Nixie } from "@/shared/instruments/Nixie";
@@ -769,6 +770,10 @@ export function SessionChat({
   const [pendingManagedLocalInputs, setPendingManagedLocalInputs] = useState<
     PendingManagedLocalInput[]
   >([]);
+  const ownsManagedInputs =
+    isManagedLocal ||
+    session.session_state?.control?.ownership === "owned" ||
+    pendingManagedLocalInputs.length > 0;
   const pendingOutboxSessionRef = useRef<string | null>(null);
   useEffect(() => {
     let mounted = true;
@@ -1056,7 +1061,7 @@ export function SessionChat({
         return [];
       }
     },
-    enabled: Boolean(session.id) && isManagedLocal,
+    enabled: Boolean(session.id) && ownsManagedInputs,
     retry: false,
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
@@ -1096,7 +1101,7 @@ export function SessionChat({
       queryFn: () => fetchSessionInput(session.id, pending.clientRequestId),
       enabled:
         Boolean(session.id) &&
-        isManagedLocal &&
+        ownsManagedInputs &&
         pending.phase !== "failed" &&
         !postsInFlightRef.current.has(pending.clientRequestId) &&
         // Delivered, and the POST answer already listed its receipt.
@@ -2410,9 +2415,14 @@ export function SessionChat({
     return () => clearTimeout(timer);
   }, [bridgeClock, receiptRows]);
   const outboxEntries = useMemo<OutboxEntry[]>(() => {
-    if (!isManagedLocal) return [];
+    if (!ownsManagedInputs) return [];
     const rows = receiptRows;
     const now = Date.now();
+    const canEditInComposer = isManagedLocal && !isComposerDisabled;
+    const copyAction = (text: string) => ({
+      label: "Copy",
+      onClick: () => void copyToClipboard(text),
+    });
     const receiptFor = (clientRequestId: string) =>
       rows.find((row) => row.client_request_id === clientRequestId);
     const pendingIds = new Set(
@@ -2468,6 +2478,18 @@ export function SessionChat({
         continue;
       }
       if (hasUnknownDeliveryError(row.last_error)) {
+        const unconfirmedActions = [
+          ...(row.text.trim().length > 0 ? [copyAction(row.text)] : []),
+          ...(row.status === "failed" && clientRequestId
+            ? [
+                {
+                  label: "Dismiss",
+                  onClick: () =>
+                    outboxActionsRef.current.discard(clientRequestId),
+                },
+              ]
+            : []),
+        ];
         inFlight.push({
           key,
           clientRequestId,
@@ -2478,6 +2500,8 @@ export function SessionChat({
           detail: hasRuntimeDrainingError(row.last_error)
             ? "runtime restarting"
             : row.last_error,
+          actions:
+            unconfirmedActions.length > 0 ? unconfirmedActions : undefined,
         });
       } else if (
         turnState &&
@@ -2550,6 +2574,20 @@ export function SessionChat({
         row.status === "failed" ||
         (row.status === "cancelled" && row.last_error)
       ) {
+        const failedReceiptActions = [
+          ...(!canEditInComposer && row.text.trim().length > 0
+            ? [copyAction(row.text)]
+            : []),
+          ...(clientRequestId
+            ? [
+                {
+                  label: "Dismiss",
+                  onClick: () =>
+                    outboxActionsRef.current.discard(clientRequestId),
+                },
+              ]
+            : []),
+        ];
         failed.push({
           key,
           clientRequestId,
@@ -2558,15 +2596,8 @@ export function SessionChat({
           attachments,
           state: "failed",
           detail: row.last_error || "Input was cancelled before completion.",
-          actions: clientRequestId
-            ? [
-                {
-                  label: "Dismiss",
-                  onClick: () =>
-                    outboxActionsRef.current.discard(clientRequestId),
-                },
-              ]
-            : undefined,
+          actions:
+            failedReceiptActions.length > 0 ? failedReceiptActions : undefined,
         });
       }
     }
@@ -2593,27 +2624,35 @@ export function SessionChat({
       ) {
         inFlight.push({ ...base, state: "sent", detail: pending.detail });
       } else if (pending.phase === "unknown") {
+        const unknownActions = [
+          ...(pending.attachmentsLost
+            ? []
+            : [
+                {
+                  label: "Retry",
+                  disabled: isSubmitting,
+                  onClick: () =>
+                    void outboxActionsRef.current.retry(
+                      pending.text,
+                      pending.intent,
+                      pending.attachments,
+                      {
+                        existingClientRequestId: pending.clientRequestId,
+                        model: pending.model,
+                        legacyModelMissing: pending.legacyModelMissing,
+                      },
+                    ),
+                },
+              ]),
+          ...(!canEditInComposer && pending.text.trim().length > 0
+            ? [copyAction(pending.text)]
+            : []),
+        ];
         inFlight.push({
           ...base,
           state: "unconfirmed",
           detail: pending.detail || UNCONFIRMED_DELIVERY_ERROR,
-          actions: pending.attachmentsLost ? [] : [
-            {
-              label: "Retry",
-              disabled: isSubmitting,
-              onClick: () =>
-                void outboxActionsRef.current.retry(
-                  pending.text,
-                  pending.intent,
-                  pending.attachments,
-                  {
-                    existingClientRequestId: pending.clientRequestId,
-                    model: pending.model,
-                    legacyModelMissing: pending.legacyModelMissing,
-                  },
-                ),
-            },
-          ],
+          actions: unknownActions,
         });
       } else if (pending.phase === "failed") {
         if (turnEndedDraft?.clientRequestId === pending.clientRequestId) {
@@ -2624,10 +2663,16 @@ export function SessionChat({
           state: "failed",
           detail: pending.detail || "Input delivery failed.",
           actions: [
-            {
-              label: "Edit",
-              onClick: () => outboxActionsRef.current.edit(pending),
-            },
+            ...(canEditInComposer
+              ? [
+                  {
+                    label: "Edit",
+                    onClick: () => outboxActionsRef.current.edit(pending),
+                  },
+                ]
+              : pending.text.trim().length > 0
+                ? [copyAction(pending.text)]
+                : []),
             {
               label: "Discard",
               onClick: () =>
@@ -2675,8 +2720,10 @@ export function SessionChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bridgeClock,
+    isComposerDisabled,
     isManagedLocal,
     isSubmitting,
+    ownsManagedInputs,
     pendingManagedLocalInputs,
     receiptRows,
     receiptsShownInTranscript,
@@ -2867,7 +2914,7 @@ export function SessionChat({
   // input (see below) — one framed object, not a separate block floating
   // above it.
   const queuedBanner =
-    isManagedLocal && !outboxInTranscript && activeQueuedInputs.length > 0 ? (
+    ownsManagedInputs && !outboxInTranscript && activeQueuedInputs.length > 0 ? (
       <div className="session-chat-queued" data-testid="session-chat-queued">
         <div className="session-chat-queued__label">
           {activeQueuedInputs.some((row) =>
@@ -3109,7 +3156,7 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isManagedLocal && !outboxInTranscript && failedInputs.length > 0 ? (
+      {ownsManagedInputs && !outboxInTranscript && failedInputs.length > 0 ? (
         <div
           className="session-chat-queued session-chat-queued--failed"
           data-testid="session-chat-queued-failed"
@@ -3247,6 +3294,107 @@ export function SessionChat({
           editedFilesTitle={editedFilesTitle}
         />
         {queuedBanner}
+        {ownsManagedInputs && !outboxInTranscript
+          ? pendingManagedLocalInputs
+              .filter((pendingInput) => pendingInput.phase !== "delivered")
+              .map((pendingInput) => (
+                <div
+                  className="session-chat-pending-message"
+                  key={pendingInput.clientRequestId}
+                >
+                  <span className="session-chat-pending-message__text">
+                    {pendingInput.text}
+                  </span>
+                  <span className="session-chat-pending-message__status">
+                    {pendingInput.phase === "unknown"
+                      ? pendingInput.attachmentsLost
+                        ? ATTACHMENTS_LOST_ERROR
+                        : "Not confirmed — retry with the same request"
+                      : pendingInput.phase === "failed"
+                        ? pendingInput.detail || "Not delivered"
+                        : pendingInput.phase === "queued"
+                          ? "Queued — server has this request"
+                          : pendingInput.phase === "active"
+                            ? "Console turn active"
+                            : "Delivering..."}
+                  </span>
+                  {pendingInput.legacyModelMissing ? (
+                    <span className="session-chat-pending-message__warning">
+                      {LEGACY_MODEL_WARNING}
+                    </span>
+                  ) : null}
+                  {pendingInput.attachments.length > 0 ? (
+                    <span className="session-chat-pending-message__attachments">
+                      {pendingInput.attachments
+                        .map((attachment) => attachment.filename)
+                        .join(", ")}
+                    </span>
+                  ) : null}
+                  {pendingInput.phase === "unknown" &&
+                  !pendingInput.attachmentsLost ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={isSubmitting}
+                      onClick={() =>
+                        void handleManagedLocalSend(
+                          pendingInput.text,
+                          pendingInput.intent,
+                          pendingInput.attachments,
+                          {
+                            existingClientRequestId:
+                              pendingInput.clientRequestId,
+                            model: pendingInput.model,
+                            legacyModelMissing:
+                              pendingInput.legacyModelMissing,
+                          },
+                        )
+                      }
+                    >
+                      Retry
+                    </Button>
+                  ) : null}
+                  {(pendingInput.phase === "unknown" ||
+                    pendingInput.phase === "failed") &&
+                  (!isManagedLocal || isComposerDisabled) &&
+                  pendingInput.text.trim().length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void copyToClipboard(pendingInput.text)}
+                    >
+                      Copy
+                    </Button>
+                  ) : null}
+                  {pendingInput.phase === "failed" ? (
+                    <>
+                      {isManagedLocal && !isComposerDisabled ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleEditPending(pendingInput)}
+                        >
+                          Edit
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          handleDiscardPending(pendingInput.clientRequestId)
+                        }
+                      >
+                        Discard
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              ))
+          : null}
         {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
@@ -3281,92 +3429,6 @@ export function SessionChat({
                 {keyboardHintText || `Click "${submitLabel}" to confirm.`}
               </div>
             ) : null}
-            {isManagedLocal && !outboxInTranscript
-              ? pendingManagedLocalInputs
-                  .filter((pendingInput) => pendingInput.phase !== "delivered")
-                  .map((pendingInput) => (
-                    <div
-                      className="session-chat-pending-message"
-                      key={pendingInput.clientRequestId}
-                    >
-                      <span className="session-chat-pending-message__text">
-                        {pendingInput.text}
-                      </span>
-                      <span className="session-chat-pending-message__status">
-                        {pendingInput.phase === "unknown"
-                          ? pendingInput.attachmentsLost
-                            ? ATTACHMENTS_LOST_ERROR
-                            : "Not confirmed — retry with the same request"
-                          : pendingInput.phase === "failed"
-                            ? pendingInput.detail || "Not delivered"
-                            : pendingInput.phase === "queued"
-                              ? "Queued — server has this request"
-                              : pendingInput.phase === "active"
-                                ? "Console turn active"
-                                : "Delivering..."}
-                      </span>
-                      {pendingInput.legacyModelMissing ? (
-                        <span className="session-chat-pending-message__warning">
-                          {LEGACY_MODEL_WARNING}
-                        </span>
-                      ) : null}
-                      {pendingInput.attachments.length > 0 ? (
-                        <span className="session-chat-pending-message__attachments">
-                          {pendingInput.attachments
-                            .map((attachment) => attachment.filename)
-                            .join(", ")}
-                        </span>
-                      ) : null}
-                      {pendingInput.phase === "unknown" &&
-                      !pendingInput.attachmentsLost ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          disabled={isSubmitting}
-                          onClick={() =>
-                            void handleManagedLocalSend(
-                              pendingInput.text,
-                              pendingInput.intent,
-                              pendingInput.attachments,
-                              {
-                                existingClientRequestId:
-                                  pendingInput.clientRequestId,
-                                model: pendingInput.model,
-                                legacyModelMissing:
-                                  pendingInput.legacyModelMissing,
-                              },
-                            )
-                          }
-                        >
-                          Retry
-                        </Button>
-                      ) : null}
-                      {pendingInput.phase === "failed" ? (
-                        <>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleEditPending(pendingInput)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              handleDiscardPending(pendingInput.clientRequestId)
-                            }
-                          >
-                            Discard
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  ))
-              : null}
             {attachImagesEnabled &&
             (composerAttachments.attachments.length > 0 ||
               composerAttachments.error) ? (

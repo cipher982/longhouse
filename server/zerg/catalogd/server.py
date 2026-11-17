@@ -882,6 +882,9 @@ class CatalogDaemon:
         "session.input.queued.list.v2": _Route(
             "_list_queued_input_sessions", frozenset({"limit"}), "session.input.queued.list.v2 requires limit"
         ),
+        "session.input.sweep_stale.v2": _Route(
+            "_sweep_stale_delivering_inputs", frozenset({"limit"}), "session.input.sweep_stale.v2 requires limit"
+        ),
         "session.input.claim.v2": _Route(
             "_claim_queued_input", frozenset({"delivery_request_id", "session_id"}), "session.input.claim.v2 has invalid parameters"
         ),
@@ -2457,6 +2460,14 @@ class CatalogDaemon:
         # Recovery polling is background maintenance. Keep it off the scarce
         # interactive lane so a stuck recovery pass cannot reject user reads.
         result = await self._run_projector_read_store(self._store.list_queued_input_sessions, limit=limit)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _sweep_stale_delivering_inputs(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 500:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 500")
+        assert self._store is not None
+        result = await self._run_store(self._store.sweep_stale_delivering_inputs, limit=limit)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

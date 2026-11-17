@@ -66,6 +66,7 @@ _SAFE_RETRY_METHODS = {
     "interaction.resolve.v2",
     "interaction.decision.read.v2",
     "session.input.queued.list.v2",
+    "session.input.sweep_stale.v2",
     "session.input.claim.v2",
     "session.input.finish.v2",
     "session.input.attachment.create.v2",

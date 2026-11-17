@@ -1676,7 +1676,7 @@ pub(crate) fn leases_from_antigravity_observations(
                 .lease_generation
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
-        if obs.session_id.trim().is_empty() || !owned || !antigravity_hook_is_live(obs, now) {
+        if obs.session_id.trim().is_empty() || !owned || !antigravity_control_is_live(obs, now) {
             continue;
         }
         leases.push(ManagedSessionLease {
@@ -1687,12 +1687,15 @@ pub(crate) fn leases_from_antigravity_observations(
             state: "attached".to_string(),
             phase: obs.state.clone(),
             tool_name: None,
-            // The hook is the control path, so its liveness is the bridge
-            // status. Readiness evidence carries the detail; this only says a
-            // control path exists to be reconciled.
+            // PTY-owned sessions stay ready while the verified provider process
+            // lives; legacy process-less state files fall back to hook freshness.
             bridge_status: Some("ready".to_string()),
             thread_subscription_status: None,
-            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
+            observed_at: if obs.provider_alive {
+                observed_at.clone()
+            } else {
+                obs.updated_at.clone().if_empty(observed_at.clone())
+            },
             lease_ttl_ms: 15 * 60 * 1000,
         });
     }
@@ -2139,13 +2142,17 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
         ) else {
             continue;
         };
-        let attached = antigravity_hook_is_live(observation, now);
+        let attached = antigravity_control_is_live(observation, now);
         control.push(ControlEvidence {
             authority_class: "provider_control".to_string(),
             provider: "antigravity".to_string(),
-            // A hook is not a terminal, so Longhouse cannot observe whether one
-            // is attached. None says that; false would claim otherwise.
-            terminal_attached: None,
+            // PTY-launched sessions record `provider_pid` and own the terminal;
+            // legacy hook-only records have no process identity, so report None.
+            terminal_attached: if observation.provider_pid.is_some() {
+                Some(observation.provider_alive)
+            } else {
+                None
+            },
             session_id: observation.session_id.clone(),
             provider_session_id: observation.provider_session_id.clone(),
             connection_id: Some(connection_id.to_string()),
@@ -2888,23 +2895,58 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
 
     for obs in antigravity_observations {
         let at = observed_at(&obs.updated_at);
-        // Hook state proves a provider session was observed, but does not own
-        // a provider process. Emit that limitation honestly instead of
-        // manufacturing liveness from hook readiness.
-        process.push(ProcessEvidence {
-            authority_class: "exact_process_identity".to_string(),
-            provider: "antigravity".to_string(),
-            session_id: Some(obs.session_id.clone()),
-            provider_session_id: obs.provider_session_id.clone(),
-            role: "provider".to_string(),
-            pid: None,
-            process_start_time: None,
-            boot_id: boot_id.clone(),
-            cwd: obs.cwd.clone(),
-            alive: false,
-            source: "antigravity_hook_state".to_string(),
-            observed_at: at.clone(),
-        });
+        if obs.provider_pid.is_some() {
+            if let Some(terminal) = exact_process_exit_evidence(
+                "antigravity",
+                &obs.session_id,
+                obs.run_id.as_deref(),
+                "provider",
+                obs.provider_pid,
+                obs.provider_process_start_time.as_deref(),
+                boot_id.as_deref(),
+                managed_snapshot_complete,
+                obs.provider_alive,
+                "antigravity_hook_state",
+                &at,
+            ) {
+                run.push(terminal);
+            }
+            process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
+                provider: "antigravity".to_string(),
+                session_id: Some(obs.session_id.clone()),
+                provider_session_id: obs.provider_session_id.clone(),
+                role: "provider".to_string(),
+                pid: obs.provider_pid,
+                process_start_time: obs.provider_process_start_time.clone(),
+                boot_id: boot_id.clone(),
+                cwd: obs.cwd.clone(),
+                alive: obs.provider_alive,
+                source: "antigravity_hook_state".to_string(),
+                observed_at: if obs.provider_alive {
+                    envelope_observed_at.clone()
+                } else {
+                    at.clone()
+                },
+            });
+        } else {
+            // Legacy/Shadow hook state without a recorded PTY child pid does not
+            // own a provider process.
+            process.push(ProcessEvidence {
+                authority_class: "exact_process_identity".to_string(),
+                provider: "antigravity".to_string(),
+                session_id: Some(obs.session_id.clone()),
+                provider_session_id: obs.provider_session_id.clone(),
+                role: "provider".to_string(),
+                pid: None,
+                process_start_time: None,
+                boot_id: boot_id.clone(),
+                cwd: obs.cwd.clone(),
+                alive: false,
+                source: "antigravity_hook_state".to_string(),
+                observed_at: at.clone(),
+            });
+        }
         if let Some(provider_session_id) = obs
             .provider_session_id
             .as_deref()
@@ -3683,12 +3725,7 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-/// Whether the hook has been seen firing recently enough to own control.
-///
-/// This is the whole liveness question for Antigravity: there is no bridge
-/// process to be up or down, only a hook that either runs or silently does not
-/// -- which is what happens under `GEMINI_API_KEY` auth. Readiness evidence and
-/// the control fact must agree, so they share this definition.
+/// Whether the hook has been seen firing within the short observation TTL.
 pub(crate) fn antigravity_hook_is_live(
     observation: &AntigravityHookObservation,
     now: DateTime<Utc>,
@@ -3696,6 +3733,23 @@ pub(crate) fn antigravity_hook_is_live(
     parse_utc(observation.last_hook_observed_at.as_deref()).is_some_and(|at| {
         now >= at && now - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
     })
+}
+
+/// Whether a Helm-launched Antigravity session currently holds a live control
+/// path. Sessions launched under `antigravity_helm_pty` record `provider_pid` +
+/// `provider_process_start_time`: while that exact process lives, the launcher
+/// owns its PTY (`IdleWake` send) and process group (`terminate`), and `agy`
+/// dispatches hooks on model calls (`steer`, `interrupt`). Legacy state files
+/// without a recorded PID fall back to hook freshness.
+pub(crate) fn antigravity_control_is_live(
+    observation: &AntigravityHookObservation,
+    now: DateTime<Utc>,
+) -> bool {
+    if observation.provider_pid.is_some() {
+        observation.provider_alive
+    } else {
+        antigravity_hook_is_live(observation, now)
+    }
 }
 
 fn antigravity_readiness_evidence(
@@ -7187,6 +7241,10 @@ mod tests {
             connection_id: None,
             lease_generation: None,
             run_id: None,
+            provider_pid: None,
+            provider_process_group_id: None,
+            provider_process_start_time: None,
+            provider_alive: false,
             provider_session_id: Some("antigravity-provider-session".to_string()),
             cwd: Some("/tmp/antigravity".to_string()),
             transcript_path: Some("/tmp/antigravity.jsonl".to_string()),
@@ -7728,6 +7786,10 @@ mod tests {
             connection_id: owned.then(|| "conn-agy".to_string()),
             lease_generation: owned.then(|| "gen-agy".to_string()),
             run_id: owned.then(|| "run-agy".to_string()),
+            provider_pid: None,
+            provider_process_group_id: None,
+            provider_process_start_time: None,
+            provider_alive: false,
             provider_session_id: Some("agy-conversation".to_string()),
             cwd: Some("/tmp/agy".to_string()),
             transcript_path: Some("/tmp/agy.jsonl".to_string()),
@@ -7800,6 +7862,83 @@ mod tests {
         assert_eq!(control.len(), 1);
         assert_eq!(control[0].state, "detached");
         assert!(control[0].granted_operations.is_empty());
+    }
+
+    #[test]
+    fn pty_owned_antigravity_session_stays_attached_across_long_idle_and_emits_exit_when_dead() {
+        let now = parse_utc(Some("2026-05-08T15:00:00Z")).unwrap();
+        // Hook last fired 3 hours ago, well past the 120 s hook TTL, while the
+        // PTY-owned provider process is still alive.
+        let mut live_idle = antigravity_observation(Some("2026-05-08T12:00:08Z"), true);
+        live_idle.session_id = "pty-idle-3h".to_string();
+        live_idle.updated_at = "2026-05-08T12:00:08Z".to_string();
+        live_idle.provider_pid = Some(80908);
+        live_idle.provider_process_group_id = Some(80908);
+        live_idle.provider_process_start_time = Some("Mon May  8 09:00:00 2026".to_string());
+        live_idle.provider_alive = true;
+
+        let leases =
+            leases_from_antigravity_observations("devbox", std::slice::from_ref(&live_idle), now);
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].session_id, "pty-idle-3h");
+        assert_eq!(leases[0].state, "attached");
+        assert_eq!(leases[0].observed_at, now.to_rfc3339());
+
+        let live_evidence = machine_evidence_from_observations(
+            "devbox",
+            &[],
+            std::slice::from_ref(&live_idle),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+        assert_eq!(live_evidence.control.len(), 1);
+        assert_eq!(live_evidence.control[0].state, "attached");
+        assert_eq!(live_evidence.control[0].terminal_attached, Some(true));
+        assert!(live_evidence.control[0]
+            .granted_operations
+            .contains(&"send_input".to_string()));
+        assert_eq!(live_evidence.process.len(), 1);
+        assert_eq!(live_evidence.process[0].pid, Some(80908));
+        assert!(live_evidence.process[0].alive);
+        assert!(live_evidence.run.is_empty());
+
+        // Once the provider process exits, control detaches immediately and
+        // run exit evidence is emitted anchored at `updated_at`.
+        let mut exited = live_idle;
+        exited.provider_alive = false;
+        let dead_evidence = machine_evidence_from_observations(
+            "devbox",
+            &[],
+            &[exited],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+        assert_eq!(dead_evidence.control[0].state, "detached");
+        assert_eq!(dead_evidence.control[0].terminal_attached, Some(false));
+        assert!(dead_evidence.control[0].granted_operations.is_empty());
+        assert!(!dead_evidence.process[0].alive);
+        assert_eq!(dead_evidence.run.len(), 1);
+        assert_eq!(dead_evidence.run[0].state, "ended");
+        assert_eq!(dead_evidence.run[0].end_reason, "process_gone");
+        assert_eq!(dead_evidence.run[0].observed_at, "2026-05-08T12:00:08Z");
     }
 
     #[test]
@@ -8418,6 +8557,10 @@ mod tests {
             connection_id: None,
             lease_generation: None,
             run_id: None,
+            provider_pid: None,
+            provider_process_group_id: None,
+            provider_process_start_time: None,
+            provider_alive: false,
             provider_session_id: None,
             cwd: None,
             transcript_path: None,
@@ -8724,6 +8867,10 @@ mod tests {
             connection_id: run_id.map(|_| "connection".to_string()),
             lease_generation: None,
             run_id: run_id.map(str::to_string),
+            provider_pid: None,
+            provider_process_group_id: None,
+            provider_process_start_time: None,
+            provider_alive: false,
             provider_session_id: Some(format!("{session_id}-provider")),
             cwd: None,
             transcript_path: None,

@@ -534,10 +534,17 @@ pub(super) async fn execute_command(
             if provider == "antigravity" {
                 // Images arrive as staged file paths inside the injected
                 // message (the model opens them with read_file).
-                let outcome =
-                    crate::antigravity_channel_control::send_text(&session_id, &path_text)
-                        .await
-                        .map_err(CommandError::command_failed)?;
+                let wait_claimed_secs = payload.get("wait_claimed_secs").and_then(Value::as_f64);
+                let outcome = crate::antigravity_channel_control::send_text_with_wait(
+                    &session_id,
+                    &path_text,
+                    wait_claimed_secs,
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message(),
+                })?;
                 return Ok(json!({
                     "exit_code": 0,
                     "stdout": "",
@@ -985,10 +992,17 @@ pub(super) async fn execute_command(
                 );
             }
             if provider == "antigravity" {
-                let outcome =
-                    crate::antigravity_channel_control::steer_text(&session_id, &path_text)
-                        .await
-                        .map_err(CommandError::command_failed)?;
+                let wait_claimed_secs = payload.get("wait_claimed_secs").and_then(Value::as_f64);
+                let outcome = crate::antigravity_channel_control::steer_text_with_wait(
+                    &session_id,
+                    &path_text,
+                    wait_claimed_secs,
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message(),
+                })?;
                 return Ok(json!({
                     "exit_code": 0,
                     "stdout": "",

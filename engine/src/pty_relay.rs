@@ -214,21 +214,31 @@ struct PtyWriterInner {
     draft: Mutex<DraftState>,
 }
 
-/// An estimate of the user's unsubmitted line, from the bytes they type.
+/// Maximum time an unsubmitted local keystroke may hold off a remote write.
 ///
-/// It counts characters, not cursor positions: printable bytes (UTF-8
-/// continuation bytes excluded) add one, backspace or delete removes one,
-/// and Enter, ^C or ^U empty it. Escape sequences (arrows, focus reports,
-/// bracketed-paste delimiters) are skipped whole, so moving the cursor or
-/// focusing the window never reads as typing. Text pasted by the user counts
-/// like typed text. Editing in the middle of a line can leave the count
-/// wrong in either direction until the next submit; a remote write waits
-/// only while the count is above zero.
+/// Tracking a modern TUI's exact line buffer from raw stdin bytes is unsound in
+/// general (history recall, readline kills, vim mode, slash menus, IME). Even
+/// if a sequence leaves `chars > 0`, the hold always expires after this window
+/// so a remote send can never wedge permanently.
+pub const LOCAL_DRAFT_MAX_IDLE: Duration = Duration::from_secs(3);
+
+/// An estimate of whether the user is actively typing an unsubmitted line.
+///
+/// Printable input increments `chars` and stamps `last_typing_at`; Enter, ^C,
+/// ^U (including their Kitty `CSI u` forms) or backspacing to zero clears it
+/// immediately; and any non-cleared state expires after `LOCAL_DRAFT_MAX_IDLE`.
+/// ECMA-48 control strings (`OSC`, `DCS`, `APC`, `SOS`, `PM`), `CSI` cursor/
+/// focus/device-attribute/mouse reports, and `SS3` sequences are skipped whole
+/// so terminal probe replies never look like user typing.
 #[derive(Default)]
 struct DraftState {
     chars: usize,
+    last_typing_at: Option<Instant>,
     escape: EscapeState,
 }
+
+const CSI_BUF_CAP: usize = 24;
+const CONTROL_STRING_CAP: u16 = 4096;
 
 #[derive(Default, Clone, Copy, PartialEq)]
 enum EscapeState {
@@ -239,15 +249,86 @@ enum EscapeState {
     /// Just after `ESC [`: `M` starts an X10 mouse report.
     CsiFirst,
     /// Inside CSI (`ESC [` ...), ended by a byte in 0x40..=0x7e.
-    Csi,
+    Csi { buf: [u8; CSI_BUF_CAP], len: u8 },
     /// An X10 mouse report: three raw bytes follow `ESC [ M`.
     Mouse(u8),
     /// Inside SS3 (`ESC O` x): one more byte.
     Ss3,
+    /// Inside an ECMA-48 control string (`OSC` `]`, `DCS` `P`, `APC` `_`,
+    /// `SOS` `X`, `PM` `^`), ended by BEL (`0x07`) or ST (`ESC \` / `0x9c`).
+    ControlString { prev_esc: bool, seen: u16 },
 }
 
 impl DraftState {
-    fn note(&mut self, byte: u8) {
+    fn clear(&mut self) {
+        self.chars = 0;
+        self.last_typing_at = None;
+    }
+
+    fn record_printable(&mut self, now: Instant) {
+        self.chars += 1;
+        self.last_typing_at = Some(now);
+    }
+
+    fn record_backspace(&mut self) {
+        self.chars = self.chars.saturating_sub(1);
+        if self.chars == 0 {
+            self.last_typing_at = None;
+        }
+    }
+
+    fn handle_kitty_csi_u(&mut self, params: &[u8], now: Instant) {
+        // Capability replies (`CSI ? flags u`) and mode changes (`CSI > flags u`,
+        // `CSI < u`, `CSI = ... u`) are terminal protocol traffic, not keys.
+        if matches!(params.first(), Some(b'?' | b'>' | b'<' | b'=')) {
+            return;
+        }
+        let Ok(text) = std::str::from_utf8(params) else {
+            return;
+        };
+        let mut fields = text.split(';');
+        let Some(key_field) = fields.next() else {
+            return;
+        };
+        let key_code: u32 = match key_field.split(':').next().unwrap_or("").parse() {
+            Ok(code) => code,
+            Err(_) => return,
+        };
+        let (mods, event_type) = match fields.next() {
+            Some(mod_field) => {
+                let mut sub = mod_field.split(':');
+                let mods = sub.next().unwrap_or("1").parse::<u32>().unwrap_or(1);
+                let event = sub.next().unwrap_or("1").parse::<u32>().unwrap_or(1);
+                (mods, event)
+            }
+            None => (1, 1),
+        };
+        // Event type 3 is key release in Kitty's progressive enhancement mode.
+        if event_type == 3 {
+            return;
+        }
+        let mod_bits = mods.saturating_sub(1);
+        let ctrl = (mod_bits & 4) != 0;
+        let alt_or_super = (mod_bits & (2 | 8)) != 0;
+        if (key_code == 13 || key_code == 57414) && mod_bits == 0 {
+            // Plain Enter / Keypad Enter submits. (Shift+Enter inserts a newline.)
+            self.clear();
+        } else if ctrl && matches!(key_code, 99 | 67 | 117 | 85) {
+            // Ctrl+C or Ctrl+U clears the active line.
+            self.clear();
+        } else if key_code == 127 || key_code == 8 {
+            self.record_backspace();
+        } else if key_code >= 0x20
+            && key_code != 127
+            && !(57344..=63743).contains(&key_code)
+            && !ctrl
+            && !alt_or_super
+        {
+            self.record_printable(now);
+        }
+    }
+
+    fn note(&mut self, byte: u8, now: Instant) {
         match self.escape {
             EscapeState::Start => match byte {
                 b'[' => {
@@ -258,24 +339,34 @@ impl DraftState {
                     self.escape = EscapeState::Ss3;
                     return;
                 }
+                // OSC (`]`), DCS (`P`), APC (`_`, Kitty graphics), SOS (`X`), PM (`^`).
+                b']' | b'P' | b'_' | b'X' | b'^' => {
+                    self.escape = EscapeState::ControlString {
+                        prev_esc: false,
+                        seen: 0,
+                    };
+                    return;
+                }
                 // A bare Escape key followed by a control byte or another
                 // ESC: the Escape was its own key, so the next byte is read
                 // normally (an Enter right after Escape still submits).
                 0x00..=0x1f | 0x7f => self.escape = EscapeState::None,
-                // ESC then a printable byte is Alt+key: consumed.
+                // ESC then a printable byte is Alt+key (or `ESC \`): consumed.
                 _ => {
                     self.escape = EscapeState::None;
                     return;
                 }
             },
             EscapeState::CsiFirst => {
-                self.escape = if byte == b'M' {
-                    EscapeState::Mouse(3)
+                if byte == b'M' {
+                    self.escape = EscapeState::Mouse(3);
                 } else if (0x40..=0x7e).contains(&byte) {
-                    EscapeState::None
+                    self.escape = EscapeState::None;
                 } else {
-                    EscapeState::Csi
-                };
+                    let mut buf = [0u8; CSI_BUF_CAP];
+                    buf[0] = byte;
+                    self.escape = EscapeState::Csi { buf, len: 1 };
+                }
                 return;
             }
             EscapeState::Mouse(left) => {
@@ -286,9 +377,19 @@ impl DraftState {
                 };
                 return;
             }
-            EscapeState::Csi => {
+            EscapeState::Csi { mut buf, mut len } => {
                 if (0x40..=0x7e).contains(&byte) {
+                    let slice_len = usize::from(len).min(CSI_BUF_CAP);
                     self.escape = EscapeState::None;
+                    if byte == b'u' {
+                        self.handle_kitty_csi_u(&buf[..slice_len], now);
+                    }
+                } else if usize::from(len) < CSI_BUF_CAP {
+                    buf[usize::from(len)] = byte;
+                    len += 1;
+                    self.escape = EscapeState::Csi { buf, len };
+                } else {
+                    self.escape = EscapeState::Csi { buf, len };
                 }
                 return;
             }
@@ -296,21 +397,43 @@ impl DraftState {
                 self.escape = EscapeState::None;
                 return;
             }
+            EscapeState::ControlString { prev_esc, seen } => {
+                if prev_esc && byte == b'\\' {
+                    self.escape = EscapeState::None;
+                } else if matches!(byte, 0x07 | 0x9c | 0x18 | 0x1a | b'\r' | b'\n')
+                    || seen >= CONTROL_STRING_CAP
+                {
+                    self.escape = EscapeState::None;
+                } else {
+                    self.escape = EscapeState::ControlString {
+                        prev_esc: byte == 0x1b,
+                        seen: seen.saturating_add(1),
+                    };
+                }
+                return;
+            }
             EscapeState::None => {}
         }
         match byte {
             0x1b => self.escape = EscapeState::Start,
             // Enter submits; ^C interrupts; ^U kills the line.
-            b'\r' | b'\n' | 0x03 | 0x15 => self.chars = 0,
+            b'\r' | b'\n' | 0x03 | 0x15 => self.clear(),
             // Backspace and DEL remove a character.
-            0x08 | 0x7f => self.chars = self.chars.saturating_sub(1),
+            0x08 | 0x7f => self.record_backspace(),
             // Other control bytes (tab completion, ^A, ^E ...) do not change
             // how much text is on the line.
             0x00..=0x1f => {}
             // UTF-8 continuation bytes belong to the character already counted.
             0x80..=0xbf => {}
-            _ => self.chars += 1,
+            _ => self.record_printable(now),
         }
+    }
+
+    fn is_pending_at(&self, now: Instant) -> bool {
+        self.chars > 0
+            && self
+                .last_typing_at
+                .is_some_and(|at| now.saturating_duration_since(at) < LOCAL_DRAFT_MAX_IDLE)
     }
 }
 
@@ -346,27 +469,31 @@ impl PtyWriter {
     }
 
     fn note_local_input(&self, bytes: &[u8]) {
+        self.note_local_input_at(bytes, Instant::now());
+    }
+
+    pub(crate) fn note_local_input_at(&self, bytes: &[u8], now: Instant) {
         let mut draft = self
             .inner
             .draft
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         for byte in bytes {
-            draft.note(*byte);
+            draft.note(*byte, now);
         }
     }
 
-    // Claude Helm's owner input is the first caller (step 2 of the
-    // claude-owner-input-delivery spec).
-    #[allow(dead_code)]
-    /// Whether the user has typed something not yet submitted.
+    /// Whether the user has typed something recently and not yet submitted.
     pub fn local_draft_pending(&self) -> bool {
+        self.local_draft_pending_at(Instant::now())
+    }
+
+    pub(crate) fn local_draft_pending_at(&self, now: Instant) -> bool {
         self.inner
             .draft
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .chars
-            > 0
+            .is_pending_at(now)
     }
 
     // Claude Helm's owner input is the first caller (step 2 of the
@@ -745,6 +872,87 @@ mod tests {
                 "{clear:?} should clear the draft"
             );
         }
+        unsafe {
+            libc::close(read);
+            libc::close(write);
+        }
+    }
+
+    #[test]
+    fn terminal_query_replies_and_kitty_keyboard_protocol_never_wedge_local_draft() {
+        let (read, write) = pipe();
+        let writer = PtyWriter::new(write);
+        let t0 = Instant::now();
+
+        // Real Bubbletea / terminal startup corpus: OSC 10/11 foreground &
+        // background replies (ST and BEL), XTVERSION DCS, Kitty graphics APC,
+        // DA1/DA2, CPR, Kitty keyboard capability reply, and focus reports.
+        let startup_corpus = concat!(
+            "\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+            "\x1b]11;rgb:1a1a/1b1b/2626\x07",
+            "\x1bP>|xterm-kitty(0.36.0)\x1b\\",
+            "\x1b_Gi=31;OK\x1b\\",
+            "\x1b[?62;4c",
+            "\x1b[>1;388;0c",
+            "\x1b[1;1R",
+            "\x1b[?1u",
+            "\x1b[I\x1b[O",
+        );
+        writer.note_local_input_at(startup_corpus.as_bytes(), t0);
+        assert!(
+            !writer.local_draft_pending_at(t0),
+            "terminal query replies must never count as user typing"
+        );
+
+        // Kitty keyboard protocol typing (`CSI 104 u` = 'h', `CSI 105 u` = 'i')
+        // followed by Kitty Enter (`CSI 13 u`) clears immediately.
+        writer.note_local_input_at(b"\x1b[104u\x1b[105u", t0);
+        assert!(writer.local_draft_pending_at(t0));
+        // Key release (`:3`) is ignored.
+        writer.note_local_input_at(b"\x1b[13;1:3u", t0);
+        assert!(writer.local_draft_pending_at(t0));
+        // Key press (`CSI 13 u`) submits and clears.
+        writer.note_local_input_at(b"\x1b[13u", t0);
+        assert!(!writer.local_draft_pending_at(t0));
+
+        // Kitty Backspace (`CSI 127 u`), Ctrl+C (`CSI 99;5 u`), Ctrl+U (`CSI 117;5 u`).
+        writer.note_local_input_at(b"a\x1b[127u", t0);
+        assert!(!writer.local_draft_pending_at(t0));
+        writer.note_local_input_at(b"draft\x1b[99;5u", t0);
+        assert!(!writer.local_draft_pending_at(t0));
+        writer.note_local_input_at(b"draft\x1b[117;5u", t0);
+        assert!(!writer.local_draft_pending_at(t0));
+
+        unsafe {
+            libc::close(read);
+            libc::close(write);
+        }
+    }
+
+    #[test]
+    fn arbitrary_byte_streams_always_expire_within_the_max_idle_window() {
+        let (read, write) = pipe();
+        let writer = PtyWriter::new(write);
+        let t0 = Instant::now();
+
+        // Deterministic PRNG over 512 adversarial byte sequences (truncated
+        // escapes, random UTF-8, partial CSI/OSC, unsubmitted text).
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        for _ in 0..512 {
+            let mut stream = [0u8; 64];
+            for slot in &mut stream {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                *slot = (seed & 0xff) as u8;
+            }
+            writer.note_local_input_at(&stream, t0);
+            assert!(
+                !writer.local_draft_pending_at(t0 + LOCAL_DRAFT_MAX_IDLE),
+                "wake gate must always open once LOCAL_DRAFT_MAX_IDLE has elapsed"
+            );
+        }
+
         unsafe {
             libc::close(read);
             libc::close(write);

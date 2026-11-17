@@ -4715,4 +4715,104 @@ describe("SessionChat composer status", () => {
     expect(rowButton).toHaveAttribute("aria-expanded", "true");
     expect(firstRow).toHaveClass("is-detail-open");
   });
+
+  it("keeps unconfirmed and failed receipts mounted with Copy when live control disconnects", async () => {
+    const onOutboxChange = vi.fn();
+    writeTextMock.mockResolvedValue(undefined);
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs")) {
+        return Promise.resolve([
+          {
+            id: null,
+            live_input_id: "swept-receipt-1",
+            client_request_id: "web-swept-1",
+            text: "sure lets do it. review the plan before running it",
+            intent: "auto",
+            status: "failed",
+            disposition: "accepted",
+            delivery_status: "failed",
+            last_error:
+              "delivery_unknown: Input dispatch did not complete before the server deadline; check the transcript before resending.",
+            created_at: "2026-11-16T22:50:49Z",
+            attachments: [],
+          },
+          {
+            id: null,
+            live_input_id: "failed-receipt-2",
+            client_request_id: "web-failed-2",
+            text: "follow-up after disconnect",
+            intent: "auto",
+            status: "failed",
+            disposition: "accepted",
+            delivery_status: "failed",
+            last_error: "control channel disconnected",
+            created_at: "2026-11-16T22:51:10Z",
+            attachments: [],
+          },
+        ]);
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const disconnectedFacts = makeSessionStateFacts({
+      access: "reattach",
+      activity: "unknown",
+    });
+    disconnectedFacts.control.connection = "disconnected";
+    disconnectedFacts.control.ownership = "owned";
+
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      timelineItems: [],
+      onOutboxChange,
+    });
+
+    await waitFor(() => {
+      const entries = (onOutboxChange.mock.calls.at(-1)?.[0] ?? []) as OutboxEntry[];
+      expect(entries).toHaveLength(2);
+    });
+
+    // Drop chatMode when the session's live control path disconnects: owned
+    // receipts must stay visible in the transcript outbox and offer Copy.
+    view.rerenderSessionChat({
+      chatMode: undefined,
+      composerDisabledTitle: "Control unavailable",
+      composerDisabledReason: "Longhouse's control path to this session is closed.",
+      timelineItems: [],
+      onOutboxChange,
+      session: makeSession({
+        provider: "antigravity",
+        session_state: disconnectedFacts,
+      }),
+    });
+
+    await waitFor(() => {
+      const entries = (onOutboxChange.mock.calls.at(-1)?.[0] ?? []) as OutboxEntry[];
+      expect(entries).toHaveLength(2);
+      const unconfirmed = entries.find((entry) => entry.clientRequestId === "web-swept-1");
+      const failed = entries.find((entry) => entry.clientRequestId === "web-failed-2");
+      expect(unconfirmed).toMatchObject({
+        state: "unconfirmed",
+        text: "sure lets do it. review the plan before running it",
+      });
+      expect(unconfirmed?.actions?.map((a) => a.label)).toEqual(["Copy", "Dismiss"]);
+      expect(failed).toMatchObject({
+        state: "failed",
+        text: "follow-up after disconnect",
+      });
+      expect(failed?.actions?.map((a) => a.label)).toEqual(["Copy", "Dismiss"]);
+    });
+
+    const latestEntries = (onOutboxChange.mock.calls.at(-1)?.[0] ?? []) as OutboxEntry[];
+    const unconfirmed = latestEntries.find((entry) => entry.clientRequestId === "web-swept-1");
+    await act(async () => {
+      unconfirmed?.actions?.find((action) => action.label === "Copy")?.onClick();
+    });
+    expect(writeTextMock).toHaveBeenCalledWith(
+      "sure lets do it. review the plan before running it",
+    );
+  });
 });

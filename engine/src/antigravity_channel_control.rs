@@ -40,10 +40,58 @@ pub const ANTIGRAVITY_HOOK_INBOX_TRANSPORT: &str = "antigravity_hook_inbox";
 const MESSAGE_TTL_SECS: i64 = 5 * 60;
 /// Matches `_MAX_MESSAGE_BYTES` in `antigravity_hook_inbox.py`.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
-/// Matches the retired CLI's `--wait-claimed-secs` default.
+/// Matches the retired CLI's `--wait-claimed-secs` default for legacy callers.
 const DEFAULT_WAIT_CLAIMED_SECS: f64 = 15.0;
+/// Default wait budget for mid-turn steers (bounded by the server's shielded task).
+const DEFAULT_STEER_WAIT_CLAIMED_SECS: f64 = 30.0;
+/// Grace window after losing a withdraw rename race for the claimer to finish
+/// writing `claimed_at` into `claimed/claimed-msg-<id>.json`.
+const CLAIM_FINALIZE_GRACE_SECS: f64 = 0.5;
 /// Matches the hook script's claim-poll interval.
 const CLAIM_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Debug)]
+pub enum AntigravityControlError {
+    /// The message was atomically withdrawn before any hook or launcher claimed
+    /// it, so nothing reached the provider and the durable queue may retry.
+    InputNotClaimed(String),
+    /// A claimer moved the inbox file before withdraw, so the message may have
+    /// been injected even though no finalized claim receipt appeared in time.
+    DeliveryUnknown(String),
+    /// Definite failure or non-retryable control error.
+    CommandFailed(anyhow::Error),
+}
+
+impl AntigravityControlError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InputNotClaimed(_) => "input_not_claimed",
+            Self::DeliveryUnknown(_) => "delivery_unknown",
+            Self::CommandFailed(_) => "command_failed",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::InputNotClaimed(message) | Self::DeliveryUnknown(message) => message.clone(),
+            Self::CommandFailed(err) => err.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for AntigravityControlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for AntigravityControlError {}
+
+impl From<anyhow::Error> for AntigravityControlError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::CommandFailed(error)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AntigravitySendOutcome {
@@ -53,6 +101,7 @@ pub struct AntigravitySendOutcome {
 
 struct EnqueuedMessage {
     message_id: String,
+    inbox_dir: PathBuf,
     message_path: PathBuf,
     claim_path: PathBuf,
 }
@@ -160,6 +209,7 @@ fn enqueue(session_id: &str, text: &str, intent: &str) -> Result<EnqueuedMessage
         .join(format!("claimed-msg-{message_id}.json"));
     Ok(EnqueuedMessage {
         message_id,
+        inbox_dir,
         message_path,
         claim_path,
     })
@@ -183,19 +233,56 @@ async fn wait_for_claim(claim_path: &Path, wait_claimed_secs: f64) -> Option<Str
 }
 
 /// Enqueue `text` into the Antigravity hook inbox for `session_id` and wait
-/// up to `wait_claimed_secs` for the shipped hook to claim it. Deletes the
-/// message and fails if no claim shows up in time, matching the retired
-/// `longhouse antigravity-channel send` CLI's behavior.
-pub async fn send_text(session_id: &str, text: &str) -> Result<AntigravitySendOutcome> {
-    deliver(session_id, text, "send").await
+/// up to `wait_claimed_secs` for the shipped hook or PTY launcher to claim it.
+/// Withdraws the message atomically via `rename` when unclaimed.
+#[allow(dead_code)]
+pub async fn send_text(
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
+    send_text_with_wait(session_id, text, None).await
+}
+
+pub async fn send_text_with_wait(
+    session_id: &str,
+    text: &str,
+    wait_claimed_secs: Option<f64>,
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
+    deliver(
+        session_id,
+        text,
+        "send",
+        wait_claimed_secs,
+        DEFAULT_WAIT_CLAIMED_SECS,
+    )
+    .await
 }
 
 /// Steer a running turn. Same inbox and same claim as `send_text`: agy's
 /// PreInvocation hook returns the message as `injectSteps`, so it lands after
 /// the tool call in flight and before the next model call. That is bounded,
 /// not immediate: one long tool call delays it.
-pub async fn steer_text(session_id: &str, text: &str) -> Result<AntigravitySendOutcome> {
-    deliver(session_id, text, "steer").await
+#[allow(dead_code)]
+pub async fn steer_text(
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
+    steer_text_with_wait(session_id, text, None).await
+}
+
+pub async fn steer_text_with_wait(
+    session_id: &str,
+    text: &str,
+    wait_claimed_secs: Option<f64>,
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
+    deliver(
+        session_id,
+        text,
+        "steer",
+        wait_claimed_secs,
+        DEFAULT_STEER_WAIT_CLAIMED_SECS,
+    )
+    .await
 }
 
 /// Text of an interrupt message. The hook never injects it: it only needs a
@@ -210,7 +297,15 @@ const INTERRUPT_TEXT: &str = "Longhouse interrupt";
 /// user's own terminal, so kill-and-resume is not an option here (it would
 /// close their terminal session).
 pub async fn interrupt(session_id: &str) -> Result<AntigravitySendOutcome> {
-    deliver(session_id, INTERRUPT_TEXT, "interrupt").await
+    deliver(
+        session_id,
+        INTERRUPT_TEXT,
+        "interrupt",
+        None,
+        DEFAULT_WAIT_CLAIMED_SECS,
+    )
+    .await
+    .map_err(|err| anyhow!("{}", err.message()))
 }
 
 /// Where the Helm launcher records the provider process it spawned.
@@ -285,9 +380,43 @@ pub async fn terminate(session_id: &str) -> Result<AntigravityTerminateOutcome> 
     })
 }
 
-async fn deliver(session_id: &str, text: &str, intent: &str) -> Result<AntigravitySendOutcome> {
-    let wait =
-        crate::control_wait::control_wait(Duration::from_secs_f64(DEFAULT_WAIT_CLAIMED_SECS));
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WithdrawOutcome {
+    /// `rename` moved `msg-<id>.json` to `.withdrawn-<id>` and unlinked it,
+    /// proving no claimer ever took the message.
+    Withdrawn,
+    /// `msg-<id>.json` was already gone: a claimer won the atomic rename.
+    ClaimedByPeer,
+}
+
+fn withdraw_unclaimed(enqueued: &EnqueuedMessage) -> std::io::Result<WithdrawOutcome> {
+    let withdrawn_path = enqueued
+        .inbox_dir
+        .join(format!(".withdrawn-{}", enqueued.message_id));
+    match std::fs::rename(&enqueued.message_path, &withdrawn_path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&withdrawn_path);
+            Ok(WithdrawOutcome::Withdrawn)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(WithdrawOutcome::ClaimedByPeer)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn deliver(
+    session_id: &str,
+    text: &str,
+    intent: &str,
+    requested_wait_secs: Option<f64>,
+    default_wait_secs: f64,
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
+    let base_secs = requested_wait_secs
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+        .map(|secs| secs.clamp(0.05, 60.0))
+        .unwrap_or(default_wait_secs);
+    let wait = crate::control_wait::control_wait(Duration::from_secs_f64(base_secs));
     send_text_with_timeout(session_id, text, intent, wait.as_secs_f64()).await
 }
 
@@ -296,7 +425,7 @@ async fn send_text_with_timeout(
     text: &str,
     intent: &str,
     wait_claimed_secs: f64,
-) -> Result<AntigravitySendOutcome> {
+) -> std::result::Result<AntigravitySendOutcome, AntigravityControlError> {
     let enqueued = enqueue(session_id, text, intent)?;
     if let Some(claimed_at) = wait_for_claim(&enqueued.claim_path, wait_claimed_secs).await {
         return Ok(AntigravitySendOutcome {
@@ -304,10 +433,40 @@ async fn send_text_with_timeout(
             claimed_at,
         });
     }
-    let _ = std::fs::remove_file(&enqueued.message_path);
-    Err(anyhow!(
-        "Antigravity hook did not claim queued input before timeout ({wait_claimed_secs}s)"
-    ))
+    match withdraw_unclaimed(&enqueued) {
+        Ok(WithdrawOutcome::Withdrawn) => {
+            let detail = format!(
+                "Antigravity hook did not claim queued input before timeout ({wait_claimed_secs}s)"
+            );
+            if intent == "send" {
+                Err(AntigravityControlError::InputNotClaimed(detail))
+            } else {
+                Err(AntigravityControlError::CommandFailed(anyhow!("{detail}")))
+            }
+        }
+        Ok(WithdrawOutcome::ClaimedByPeer) => {
+            // A claimer won the rename just as our wait expired and may still be
+            // writing `claimed_at`. Give it a short grace window before reporting
+            // an indeterminate handoff (never `input_not_claimed`, which would
+            // requeue and double-deliver).
+            if let Some(claimed_at) =
+                wait_for_claim(&enqueued.claim_path, CLAIM_FINALIZE_GRACE_SECS).await
+            {
+                return Ok(AntigravitySendOutcome {
+                    message_id: enqueued.message_id,
+                    claimed_at,
+                });
+            }
+            Err(AntigravityControlError::DeliveryUnknown(format!(
+                "Antigravity inbox message {} was claimed before withdrawal, but no claim receipt was finalized",
+                enqueued.message_id
+            )))
+        }
+        Err(err) => Err(AntigravityControlError::DeliveryUnknown(format!(
+            "Could not withdraw unclaimed Antigravity inbox message {}: {err}",
+            enqueued.message_id
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -568,15 +727,16 @@ mod tests {
     }
 
     #[test]
-    fn send_text_deletes_the_message_and_fails_when_never_claimed() {
+    fn send_text_withdraws_atomically_with_input_not_claimed_code() {
         let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let rt = runtime();
         temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
             rt.block_on(async {
-                let result =
-                    send_text_with_timeout("session-timeout", "never claimed", "send", 0.05).await;
-                assert!(result.is_err(), "{result:?}");
+                let err = send_text_with_timeout("session-timeout", "never claimed", "send", 0.05)
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.code(), "input_not_claimed");
 
                 let inbox_dir = temp
                     .path()
@@ -587,13 +747,70 @@ mod tests {
                 let remaining: Vec<_> = std::fs::read_dir(&inbox_dir)
                     .unwrap()
                     .filter_map(|entry| entry.ok())
-                    .filter(|entry| entry.file_name().to_string_lossy().starts_with("msg-"))
                     .collect();
                 assert!(
                     remaining.is_empty(),
-                    "unclaimed message must be deleted: {remaining:?}"
+                    "unclaimed message and withdrawn scratch file must be gone: {remaining:?}"
                 );
             });
+        });
+    }
+
+    #[test]
+    fn send_text_reports_delivery_unknown_when_peer_claims_without_finalizing_receipt() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let rt = runtime();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            rt.block_on(async {
+                let enqueued = enqueue("session-half-claimed", "ambiguous", "send").unwrap();
+                std::fs::create_dir_all(enqueued.claim_path.parent().unwrap()).unwrap();
+                // Simulate a claimer renaming `msg-<id>.json` -> `claimed/` and
+                // crashing before writing `claimed_at`.
+                std::fs::rename(&enqueued.message_path, &enqueued.claim_path).unwrap();
+
+                let outcome = withdraw_unclaimed(&enqueued).unwrap();
+                assert_eq!(outcome, WithdrawOutcome::ClaimedByPeer);
+                assert!(wait_for_claim(&enqueued.claim_path, 0.02).await.is_none());
+            });
+        });
+    }
+
+    #[test]
+    fn claim_and_withdraw_race_1000_iterations_has_exact_exclusive_winner() {
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            for i in 0..1000 {
+                let session = format!("race-{i}");
+                let enqueued = enqueue(&session, "race payload", "send").unwrap();
+                let claim_dir = enqueued.claim_path.parent().unwrap().to_path_buf();
+                ensure_private_dir(&claim_dir).unwrap();
+
+                let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+                let msg_for_claimer = enqueued.message_path.clone();
+                let claim_for_claimer = enqueued.claim_path.clone();
+                let b_claim = barrier.clone();
+                let claimer = std::thread::spawn(move || {
+                    b_claim.wait();
+                    std::fs::rename(&msg_for_claimer, &claim_for_claimer).is_ok()
+                });
+                barrier.wait();
+                let withdrawn = withdraw_unclaimed(&enqueued).unwrap();
+                let claimer_won = claimer.join().unwrap();
+
+                match (claimer_won, withdrawn) {
+                    (true, WithdrawOutcome::ClaimedByPeer) => {
+                        assert!(enqueued.claim_path.exists());
+                        assert!(!enqueued.message_path.exists());
+                    }
+                    (false, WithdrawOutcome::Withdrawn) => {
+                        assert!(!enqueued.claim_path.exists());
+                        assert!(!enqueued.message_path.exists());
+                    }
+                    other => panic!("iteration {i} broke mutual exclusion: {other:?}"),
+                }
+            }
         });
     }
 

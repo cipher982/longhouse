@@ -3541,3 +3541,359 @@ def test_idle_send_parks_when_the_control_channel_drops_at_dispatch(live_catalog
         assert receipt and receipt[0]["status"] == "queued", receipt
     finally:
         asyncio.run(_clear_machine_control_registry())
+
+
+def test_input_custody_timeout_budget_hierarchy():
+    """Engine claim wait, RPC timeout, HTTP route wait, ASGI middleware, and stale sweeper must nest strictly."""
+
+    from zerg.middleware.request_timeout import DEFAULT_TIMEOUT_SECONDS
+    from zerg.routers.session_chat import INPUT_ROUTE_WAIT_BUDGET_SECS
+    from zerg.services.live_control_catalog import ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
+    from zerg.services.live_control_catalog import ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS
+    from zerg.services.live_control_catalog import ANTIGRAVITY_STEER_CLAIM_WAIT_SECS
+    from zerg.services.live_control_catalog import ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS
+    from zerg.services.session_inputs import DELIVERING_STALE_AFTER_SECS
+
+    assert 0.0 < ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS < ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS
+    assert ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS <= INPUT_ROUTE_WAIT_BUDGET_SECS < DEFAULT_TIMEOUT_SECONDS
+    assert INPUT_ROUTE_WAIT_BUDGET_SECS < ANTIGRAVITY_STEER_CLAIM_WAIT_SECS < ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS
+    assert ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS < DELIVERING_STALE_AFTER_SECS
+
+
+def test_antigravity_unclaimed_send_parks_in_queue_and_drains_on_retry(live_catalog, live_catalog_client):  # noqa: F811
+    """Withdrawn unclaimed Antigravity sends return input_not_claimed, park as queued, and drain cleanly later."""
+
+    from zerg.services.live_control_catalog import ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
+    from zerg.services.live_control_catalog import wake_next_live_catalog_input
+
+    class _UnclaimedThenClaimedWebSocket:
+        def __init__(self):
+            self.sent: list[dict[str, object]] = []
+
+        async def send_json(self, message):
+            self.sent.append(message)
+            if len(self.sent) == 1:
+                await get_machine_control_channel_registry().complete_command(
+                    {
+                        "type": "command_result",
+                        "command_id": message["command_id"],
+                        "ok": False,
+                        "error": {
+                            "code": "input_not_claimed",
+                            "message": "Timed out waiting for Antigravity hook inbox claim",
+                        },
+                    }
+                )
+                return
+            await get_machine_control_channel_registry().complete_command(
+                {
+                    "type": "command_result",
+                    "command_id": message["command_id"],
+                    "ok": True,
+                    "result": {"exit_code": 0, "stdout": "", "stderr": ""},
+                }
+            )
+
+    email = "antigravity-unclaimed-park@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    device_id = "antigravity-test-host"
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="antigravity",
+        device_id=device_id,
+        launch_surface="test",
+    )
+    websocket = _UnclaimedThenClaimedWebSocket()
+    asyncio.run(
+        get_machine_control_channel_registry().register(
+            owner_id=owner_id,
+            device_id=device_id,
+            machine_name=device_id,
+            engine_build="test-engine",
+            supports=["antigravity.send"],
+            websocket=websocket,
+        )
+    )
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "wake idle antigravity", "intent": "auto", "client_request_id": "ag-park-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["disposition"] == "accepted"
+        assert body["outcome"] == "queued"
+        assert len(websocket.sent) == 1
+        assert websocket.sent[0]["payload"]["wait_claimed_secs"] == ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
+
+        parked = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="ag-park-1",
+        )
+        assert parked["status"] == INPUT_STATUS_QUEUED
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
+
+        drained = asyncio.run(wake_next_live_catalog_input(session_id))
+        assert drained is True
+        assert len(websocket.sent) == 2
+        assert websocket.sent[1]["payload"]["wait_claimed_secs"] == ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
+        assert websocket.sent[1]["command_id"] != websocket.sent[0]["command_id"]
+
+        settled = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="ag-park-1",
+        )
+        assert settled["status"] == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_slow_dispatch_returns_accepted_unknown_and_settles_in_shielded_task(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
+    """When dispatch outlives the HTTP route wait budget, the caller gets 200 outcome=unknown and the shielded task settles."""
+
+    from fastapi.responses import JSONResponse
+
+    import zerg.routers.session_chat as route
+
+    email = "shielded-route-budget@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    monkeypatch.setattr(route, "INPUT_ROUTE_WAIT_BUDGET_SECS", 0.05)
+
+    async def slow_dispatch(*, source_session, request_id, lock_scope_id, **_kwargs):
+        await asyncio.sleep(0.2)
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return JSONResponse(
+            content={
+                "accepted": True,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+            }
+        )
+
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", slow_dispatch)
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "slow steer or send", "intent": "auto", "client_request_id": "slow-route-1"},
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["disposition"] == "accepted"
+        assert body["outcome"] == "unknown"
+        assert body["client_request_id"] == "slow-route-1"
+
+        async def _wait_settled():
+            for _ in range(40):
+                row = _live_catalog_receipt(
+                    live_catalog,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    client_request_id="slow-route-1",
+                )
+                if row and row["status"] == INPUT_STATUS_DELIVERED:
+                    return row
+                await asyncio.sleep(0.025)
+            return None
+
+        settled = asyncio.run(_wait_settled())
+        assert settled is not None
+        assert settled["status"] == INPUT_STATUS_DELIVERED
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_request_cancellation_mid_dispatch_still_settles_receipt_and_releases_lock(live_catalog, monkeypatch):  # noqa: F811
+    """Cancelling the route coroutine (e.g. client disconnect or middleware timeout) cannot orphan a delivering receipt or session lock."""
+
+    from fastapi.responses import JSONResponse
+
+    import zerg.routers.session_chat as route
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_catalog_session_input_response
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    email = "cancelled-mid-dispatch@test.local"
+    owner_id = live_catalog.create_user(email)
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
+    async def _exercise():
+        dispatch_started = asyncio.Event()
+        allow_finish = asyncio.Event()
+
+        async def park_then_fail(*, lock_scope_id, request_id, **_kwargs):
+            dispatch_started.set()
+            await allow_finish.wait()
+            await session_lock_manager.release(lock_scope_id, request_id)
+            return JSONResponse(
+                status_code=409,
+                content={"accepted": False, "error": "Timed out waiting for inbox claim", "error_code": "input_not_claimed"},
+            )
+
+        monkeypatch.setattr(route, "_build_managed_local_chat_response", park_then_fail)
+        source_session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
+        assert source_session is not None
+        route_task = asyncio.create_task(
+            _create_catalog_session_input_response(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=SessionInputRequest(
+                    text="do not orphan me",
+                    intent="auto",
+                    client_request_id="cancel-mid-1",
+                ),
+                db=None,  # type: ignore[arg-type]
+            )
+        )
+        await dispatch_started.wait()
+        assert await session_lock_manager.is_locked(str(session_id)) is True
+
+        route_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await route_task
+
+        allow_finish.set()
+        for _ in range(40):
+            row = _live_catalog_receipt(
+                live_catalog,
+                owner_id=owner_id,
+                session_id=session_id,
+                client_request_id="cancel-mid-1",
+            )
+            if row and row["status"] == INPUT_STATUS_QUEUED:
+                break
+            await asyncio.sleep(0.02)
+        return _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="cancel-mid-1",
+        )
+
+    try:
+        settled = asyncio.run(_exercise())
+        assert settled is not None
+        assert settled["status"] == INPUT_STATUS_QUEUED
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_stale_delivering_sweeper_settles_abandoned_receipts_with_delivery_unknown(live_catalog, live_catalog_client):  # noqa: F811
+    """Crashed or abandoned delivering rows older than 60s are swept to failed with code=delivery_unknown while fresh rows stay untouched."""
+
+    import json
+    import sqlite3
+
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    email = "stale-delivering-sweep@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+
+    stale_created = live_catalog.rpc(
+        "session.input.receipt.upsert.v2",
+        {
+            "receipt": {
+                "owner_id": owner_id,
+                "session_id": session_id,
+                "provider": "antigravity",
+                "text": "orphaned delivering send",
+                "intent": "auto",
+                "status": INPUT_STATUS_DELIVERING,
+                "client_request_id": "stale-delivering-1",
+                "device_id": LIVE_CATALOG_DEVICE_ID,
+                "thread_id": None,
+                "archive_session_input_id": None,
+                "control_command_id": None,
+                "delivery_request_id": "stale-req-1",
+                "enqueue_archive_projection": False,
+                "error": None,
+                "expires_at": None,
+            }
+        },
+    )["receipt"]["id"]
+
+    fresh_created = live_catalog.rpc(
+        "session.input.receipt.upsert.v2",
+        {
+            "receipt": {
+                "owner_id": owner_id,
+                "session_id": session_id,
+                "provider": "antigravity",
+                "text": "still actively delivering",
+                "intent": "steer",
+                "status": INPUT_STATUS_DELIVERING,
+                "client_request_id": "fresh-delivering-1",
+                "device_id": LIVE_CATALOG_DEVICE_ID,
+                "thread_id": None,
+                "archive_session_input_id": None,
+                "control_command_id": None,
+                "delivery_request_id": "fresh-req-1",
+                "enqueue_archive_projection": False,
+                "error": None,
+                "expires_at": None,
+            }
+        },
+    )["receipt"]["id"]
+
+    stale_iso = (datetime.now(timezone.utc) - timedelta(seconds=120)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    live_database_path, _ = catalogd_paths()
+    with sqlite3.connect(live_database_path) as conn:
+        conn.execute(
+            "UPDATE live_session_input_receipts SET created_at = ?, updated_at = ? WHERE id = ?",
+            (stale_iso, stale_iso, stale_created),
+        )
+        conn.commit()
+
+    listed = live_catalog.rpc("session.input.queued.list.v2", {"limit": 100})
+    assert listed["stale_delivering_count"] == 1
+
+    swept = live_catalog.rpc("session.input.sweep_stale.v2", {"limit": 100})
+    assert swept["swept"] == 1
+
+    after_list = live_catalog.rpc("session.input.queued.list.v2", {"limit": 100})
+    assert after_list["stale_delivering_count"] == 0
+
+    stale_row = _live_catalog_receipt(
+        live_catalog,
+        owner_id=owner_id,
+        session_id=session_id,
+        client_request_id="stale-delivering-1",
+    )
+    assert stale_row["status"] == INPUT_STATUS_FAILED
+    error_payload = json.loads(stale_row["error_json"])
+    assert error_payload["code"] == "delivery_unknown"
+    assert error_payload["reason"] == "delivering_expired"
+
+    fresh_row = _live_catalog_receipt(
+        live_catalog,
+        owner_id=owner_id,
+        session_id=session_id,
+        client_request_id="fresh-delivering-1",
+    )
+    assert fresh_row["id"] == fresh_created
+    assert fresh_row["status"] == INPUT_STATUS_DELIVERING
+
+    visible = live_catalog_client.get(f"/sessions/{session_id}/inputs", cookies=cookies).json()
+    by_req = {row["client_request_id"]: row for row in visible}
+    assert by_req["stale-delivering-1"]["status"] == "failed"
+    assert "delivery_unknown" in (by_req["stale-delivering-1"]["last_error"] or "")
+    assert by_req["fresh-delivering-1"]["status"] == "delivering"

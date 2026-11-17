@@ -477,7 +477,10 @@ pub(super) fn maybe_start_managed_observation_scan(
         let (mut antigravity_observations, unresolved) =
             match managed_antigravity_scan::default_antigravity_state_dir() {
                 Some(state_dir) => (
-                    managed_antigravity_scan::collect_observations_from(&state_dir),
+                    managed_antigravity_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    ),
                     false,
                 ),
                 None => (Vec::new(), true),

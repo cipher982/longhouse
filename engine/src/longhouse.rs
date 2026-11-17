@@ -1968,9 +1968,34 @@ fn record_antigravity_provider_process(session_id: &str) {
     if let Some(started) = started {
         state.insert("provider_process_start_time".into(), json!(started));
     }
+    if !state.contains_key("state") {
+        state.insert("state".into(), json!("idle"));
+    }
+    let cwd = state
+        .get("cwd")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
     if let Err(error) = write_private_json(&path, &serde_json::Value::Object(state)) {
         eprintln!(
             "Longhouse warning: could not record the Antigravity process for terminate: {error:#}"
+        );
+    }
+    if let Ok(home) = longhouse_home() {
+        let outbox = home.join("agent").join("outbox");
+        let presence_path = outbox.join(format!("prs.launch-{}.json", Uuid::new_v4().simple()));
+        let _ = write_private_json(
+            &presence_path,
+            &json!({
+                "session_id": session_id,
+                "state": "idle",
+                "tool_name": "",
+                "cwd": cwd,
+                "provider": "antigravity",
+                "transcript_path": "",
+                "step_index": "",
+                "control_path": "managed",
+            }),
         );
     }
 }
@@ -2001,6 +2026,9 @@ fn seed_antigravity_control_identity(
     state.insert("provider".into(), json!("antigravity"));
     state.insert("control_plane".into(), json!("antigravity_hook_inbox"));
     state.insert("cwd".into(), json!(cwd.to_string_lossy()));
+    if !state.contains_key("state") {
+        state.insert("state".into(), json!("idle"));
+    }
     state.insert("updated_at".into(), json!(now));
     write_private_json(&path, &serde_json::Value::Object(state))?;
     Ok((connection_id, lease_generation))

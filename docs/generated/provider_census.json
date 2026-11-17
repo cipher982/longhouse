@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 361,
+  "file_count": 362,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -217,6 +217,7 @@
     {
       "path": "engine/src/daemon/status_slots.rs",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -2795,6 +2796,7 @@
     {
       "path": "server/zerg/routers/session_chat.py",
       "providers": [
+        "antigravity",
         "claude",
         "omp",
         "pi"
@@ -2917,6 +2919,13 @@
         "antigravity",
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/services/managed_local_control.py",
+      "providers": [
+        "antigravity",
+        "codex"
       ]
     },
     {
@@ -3116,6 +3125,7 @@
     {
       "path": "web/src/features/session/chat/__tests__/SessionChat.test.tsx",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

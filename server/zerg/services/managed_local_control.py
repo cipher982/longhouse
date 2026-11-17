@@ -830,7 +830,7 @@ async def steer_text_to_managed_local_session(
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
     try:
-        payload = {
+        payload: dict[str, object] = {
             "text": text,
             "intent": "steer",
             **_codex_attachments_payload(session=session, attachments=attachments),
@@ -838,11 +838,20 @@ async def steer_text_to_managed_local_session(
     except ValueError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
 
+    effective_timeout_secs = timeout_secs
+    if _provider_name(session) == "antigravity":
+        from zerg.services.live_control_catalog import ANTIGRAVITY_STEER_CLAIM_WAIT_SECS
+        from zerg.services.live_control_catalog import ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS
+
+        payload.setdefault("wait_claimed_secs", ANTIGRAVITY_STEER_CLAIM_WAIT_SECS)
+        if timeout_secs == 15:
+            effective_timeout_secs = ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS
+
     result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
         session=session,
-        timeout_secs=timeout_secs,
+        timeout_secs=effective_timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
         payload=payload,
         request_id=request_id,

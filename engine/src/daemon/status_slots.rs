@@ -138,6 +138,7 @@ pub(super) fn managed_status_state_file(slot: &crate::status_slot::StatusSlot) -
         "cursor" => managed_cursor_helm_scan::default_cursor_helm_state_dir(),
         "pi" => managed_pi_helm_scan::default_pi_helm_state_dir(),
         "omp" => managed_omp_helm_scan::default_omp_helm_state_dir(),
+        "antigravity" => crate::managed_antigravity_scan::default_antigravity_state_dir(),
         _ => None,
     }?;
     Some(state_dir.join(format!("{}.json", slot.session_id)))
@@ -237,6 +238,21 @@ pub(super) fn managed_status_observations_for_slots(
                         )
                     }),
             ),
+            "antigravity" => scan.antigravity_observations.extend(
+                crate::managed_antigravity_scan::collect_observations_from_paths_with_processes(
+                    &paths,
+                    &no_processes,
+                )
+                .into_iter()
+                .filter(|observation| {
+                    managed_status_observation_matches_slot(
+                        slot,
+                        "antigravity",
+                        &observation.session_id,
+                        observation.run_id.as_deref(),
+                    )
+                }),
+            ),
             _ => {}
         }
     }
@@ -266,6 +282,9 @@ pub(super) fn managed_status_owner_pids(scan: &ManagedObservationScanResult) -> 
     }
     for observation in &scan.omp_observations {
         pids.extend(observation.launcher_pid);
+        pids.extend(observation.provider_pid);
+    }
+    for observation in &scan.antigravity_observations {
         pids.extend(observation.provider_pid);
     }
     pids.retain(|pid| *pid > 1);
@@ -968,6 +987,31 @@ pub(super) fn status_owner_evidence_from_scan(
             observation.run_id.as_deref(),
             state,
             ended,
+            scan.process_inventory_valid,
+        );
+    }
+    for observation in &scan.antigravity_observations {
+        if observation.provider_pid.is_none() {
+            continue;
+        }
+        let state = if scan.process_inventory_valid {
+            recorded_process_owner_state(
+                process_facts,
+                &[(
+                    observation.provider_pid,
+                    observation.provider_process_start_time.as_deref(),
+                )],
+            )
+        } else {
+            ProcessOwnerState::Unknown
+        };
+        add_status_owner(
+            &mut evidence,
+            "antigravity",
+            &observation.session_id,
+            observation.run_id.as_deref(),
+            state,
+            false,
             scan.process_inventory_valid,
         );
     }

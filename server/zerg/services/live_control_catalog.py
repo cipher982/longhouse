@@ -542,6 +542,16 @@ def _is_transient_delivery_failure(result: "ManagedControlDispatchResult") -> bo
 # (a retry can never satisfy them), and unsupported, session_closed, run_ended,
 # identity_diverged, control_head_rejected, not_granted, grant_revoked — all
 # decisions about this session that waiting will not change.
+# Engine claim budgets for durable Antigravity input dispatches.
+# SEND (`6.0s`) sits inside the engine RPC budget (`10s`), the HTTP route wait
+# budget (`10.0s`), and `RequestTimeoutMiddleware` (`15.0s`).
+# STEER (`30.0s`) runs inside a shielded background task (`35s` RPC < `60s`
+# `delivering` sweeper), allowing mid-turn steers across 15-30s tool calls.
+ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS = 6.0
+ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS = 10
+ANTIGRAVITY_STEER_CLAIM_WAIT_SECS = 30.0
+ANTIGRAVITY_STEER_RPC_TIMEOUT_SECS = 35
+
 RETRYABLE_SEND_PRECONDITIONS = frozenset(
     {
         "control_unavailable",
@@ -549,9 +559,10 @@ RETRYABLE_SEND_PRECONDITIONS = frozenset(
         "control_head_missing",
         "lease_expired",
         "identity_unbound",
-        # The adapter saw its turn running and refused the SEND; the boundary
-        # the drain waits for has simply not arrived yet.
+        # The adapter saw its turn running or atomically withdrew an unclaimed
+        # inbox file before any hook/launcher took it; nothing reached the model.
         "turn_active",
+        "input_not_claimed",
     }
 )
 
@@ -626,14 +637,18 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
             command_family="live_control",
         )
 
+        is_antigravity = str(session.provider or "").strip().lower() == "antigravity"
+        drain_payload: dict[str, Any] = {"text": str(receipt.get("text") or "")}
+        if is_antigravity:
+            drain_payload["wait_claimed_secs"] = ANTIGRAVITY_DURABLE_SEND_CLAIM_WAIT_SECS
         dispatched_at = datetime.now(timezone.utc)
         result = await dispatch_managed_control_command(
             db=None,  # type: ignore[arg-type] -- catalog mode validates through catalogd.
             owner_id=int(receipt["owner_id"]),
             session=session,  # type: ignore[arg-type] -- bounded DTO matches the dispatcher contract.
-            timeout_secs=15,
+            timeout_secs=ANTIGRAVITY_DURABLE_SEND_RPC_TIMEOUT_SECS if is_antigravity else 15,
             command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-            payload={"text": str(receipt.get("text") or "")},
+            payload=drain_payload,
             # Seed the engine command id from the durable receipt, not this
             # attempt's claim token, so the id is deterministic per attempt.
             # Only definite non-deliveries are ever requeued (an ambiguous
@@ -713,6 +728,12 @@ async def run_live_catalog_input_recovery_loop() -> None:
                 {"limit": 100},
                 timeout_seconds=_INPUT_RECOVERY_CATALOG_TIMEOUT_SECONDS,
             )
+            if int(queued.get("stale_delivering_count") or 0) > 0:
+                await catalogd.call(
+                    "session.input.sweep_stale.v2",
+                    {"limit": 100},
+                    timeout_seconds=_INPUT_RECOVERY_CATALOG_TIMEOUT_SECONDS,
+                )
             for session_id in queued.get("session_ids", []):
                 await wake_next_live_catalog_input(session_id)
         except asyncio.CancelledError:

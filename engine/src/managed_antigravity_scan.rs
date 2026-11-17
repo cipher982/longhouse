@@ -1,13 +1,16 @@
-//! Managed Antigravity hook observation scanner.
+//! Managed Antigravity Helm and hook observation scanner.
 //!
-//! Antigravity has no bridge process. Its durable session state records hook,
-//! claim, and response receipts; this scanner preserves those raw facts so the
-//! heartbeat can explain readiness without inventing a generic control lease.
+//! `longhouse antigravity` runs `agy` under a launcher-owned PTY, records
+//! `provider_pid` and `provider_process_start_time` in the session state file,
+//! and merges hook, claim, and response receipts into that same file.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AntigravityHookObservation {
@@ -22,6 +25,10 @@ pub struct AntigravityHookObservation {
     pub connection_id: Option<String>,
     pub lease_generation: Option<String>,
     pub run_id: Option<String>,
+    pub provider_pid: Option<u32>,
+    pub provider_process_group_id: Option<i32>,
+    pub provider_process_start_time: Option<String>,
+    pub provider_alive: bool,
     pub provider_session_id: Option<String>,
     pub cwd: Option<String>,
     pub transcript_path: Option<String>,
@@ -47,6 +54,12 @@ struct AntigravityStateFile {
     connection_id: Option<String>,
     lease_generation: Option<String>,
     run_id: Option<String>,
+    #[serde(default)]
+    provider_pid: Option<u32>,
+    #[serde(default)]
+    provider_process_group_id: Option<i32>,
+    #[serde(default)]
+    provider_process_start_time: Option<String>,
     provider_session_id: Option<String>,
     cwd: Option<String>,
     transcript_path: Option<String>,
@@ -78,8 +91,59 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<AntigravityHookObserva
     collect_observations_from_paths(&crate::managed_scan::state_file_paths(state_dir))
 }
 
+pub(crate) fn collect_observations_from_processes(
+    state_dir: &Path,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<AntigravityHookObservation> {
+    collect_observations_from_paths_with_processes(
+        &crate::managed_scan::state_file_paths(state_dir),
+        process_facts,
+    )
+}
+
 pub(crate) fn collect_observations_from_paths(
     paths: &[PathBuf],
+) -> Vec<AntigravityHookObservation> {
+    let mut raw = collect_observations_from_paths_with_processes(paths, &HashMap::new());
+    let pids: Vec<u32> = raw
+        .iter()
+        .filter_map(|obs| obs.provider_pid.filter(|pid| *pid > 1))
+        .collect();
+    if pids.is_empty() {
+        return raw;
+    }
+    let Some(facts) = crate::process_identity::try_collect_process_facts_for_pids(&pids) else {
+        return raw;
+    };
+    for obs in &mut raw {
+        obs.provider_alive = provider_pid_is_alive(
+            obs.provider_pid,
+            obs.provider_process_start_time.as_deref(),
+            &facts,
+        );
+    }
+    raw
+}
+
+fn provider_pid_is_alive(
+    provider_pid: Option<u32>,
+    recorded_start_time: Option<&str>,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> bool {
+    provider_pid
+        .filter(|pid| *pid > 1)
+        .and_then(|pid| process_facts.get(&pid))
+        .is_some_and(|fact| {
+            recorded_start_time
+                .map(str::trim)
+                .filter(|recorded| !recorded.is_empty())
+                .is_some_and(|recorded| lstart_matches_recorded(fact, recorded))
+        })
+}
+
+pub(crate) fn collect_observations_from_paths_with_processes(
+    paths: &[PathBuf],
+    process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<AntigravityHookObservation> {
     let mut observations = Vec::new();
     for path in paths {
@@ -96,6 +160,12 @@ pub(crate) fn collect_observations_from_paths(
         if session_id.is_empty() {
             continue;
         }
+        let provider_process_start_time = normalize(state.provider_process_start_time);
+        let provider_alive = provider_pid_is_alive(
+            state.provider_pid,
+            provider_process_start_time.as_deref(),
+            process_facts,
+        );
         observations.push(AntigravityHookObservation {
             state_file: path.clone(),
             schema_version: state.schema_version,
@@ -103,6 +173,10 @@ pub(crate) fn collect_observations_from_paths(
             connection_id: normalize(state.connection_id),
             lease_generation: normalize(state.lease_generation),
             run_id: normalize(state.run_id),
+            provider_pid: state.provider_pid,
+            provider_process_group_id: state.provider_process_group_id,
+            provider_process_start_time,
+            provider_alive,
             provider_session_id: normalize(state.provider_session_id),
             cwd: normalize(state.cwd),
             transcript_path: normalize(state.transcript_path),
@@ -249,6 +323,63 @@ mod tests {
         );
         assert_eq!(rows[0].last_response_status.as_deref(), Some("ok"));
         assert!(rows[0].last_continuation_requested);
+    }
+
+    #[test]
+    fn scanner_verifies_recorded_provider_process_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pty-owned.json");
+        fs::write(
+            &path,
+            r#"{
+                "schema_version":3,
+                "session_id":"pty-owned",
+                "connection_id":"conn-1",
+                "lease_generation":"gen-1",
+                "run_id":"run-1",
+                "provider_pid":4242,
+                "provider_process_group_id":4242,
+                "provider_process_start_time":"Mon Nov 16 14:56:00 2026",
+                "state":"idle",
+                "updated_at":"2026-11-16T22:49:18Z"
+            }"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let live_fact = ProcessFact {
+            pid: 4242,
+            tty: "ttys001".to_string(),
+            stat: "S+".to_string(),
+            lstart: "Mon Nov 16 14:56:00 2026".to_string(),
+            command: "agy --dangerously-skip-permissions".to_string(),
+            start_time: None,
+        };
+        let live = collect_observations_from_paths_with_processes(
+            std::slice::from_ref(&path),
+            &HashMap::from([(4242, live_fact)]),
+        );
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].provider_pid, Some(4242));
+        assert!(live[0].provider_alive);
+
+        let recycled_fact = ProcessFact {
+            pid: 4242,
+            tty: "ttys001".to_string(),
+            stat: "S+".to_string(),
+            lstart: "Mon Nov 16 18:00:00 2026".to_string(),
+            command: "other-binary".to_string(),
+            start_time: None,
+        };
+        let recycled = collect_observations_from_paths_with_processes(
+            std::slice::from_ref(&path),
+            &HashMap::from([(4242, recycled_fact)]),
+        );
+        assert!(!recycled[0].provider_alive);
     }
 
     #[test]

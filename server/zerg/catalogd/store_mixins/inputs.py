@@ -38,19 +38,49 @@ from zerg.models.live_store import LiveSessionInputReceipt
 
 class InputsMixin:
     def list_queued_input_sessions(self, *, limit: int) -> dict[str, Any]:
-        """Return a bounded set of sessions with queued hot input."""
+        """Return a bounded set of sessions with queued hot input plus stale delivering count."""
 
+        from zerg.services.live_session_inputs import count_stale_delivering_live_receipts
         from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
 
         with _read_snapshot(self.engine) as connection:
             orm = Session(bind=connection, expire_on_commit=False)
             try:
                 session_ids = list_session_ids_with_queued_live_receipts(orm, limit=limit)
+                stale_delivering_count = count_stale_delivering_live_receipts(orm)
             finally:
                 orm.close()
             return {
                 "session_ids": [str(session_id) for session_id in session_ids],
+                "stale_delivering_count": int(stale_delivering_count),
                 "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def sweep_stale_delivering_inputs(self, *, limit: int) -> dict[str, Any]:
+        """Settle stale delivering receipts that outlived every server dispatch budget."""
+
+        from zerg.services.live_session_inputs import sweep_stale_delivering_live_receipts
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                swept = sweep_stale_delivering_live_receipts(orm, limit=limit, now=observed_at)
+                if swept == 0:
+                    orm.rollback()
+                    return {
+                        "swept": 0,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "swept": int(swept),
+                "commit_seq": str(commit_seq),
             }
 
     def claim_queued_input(

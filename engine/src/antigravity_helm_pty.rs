@@ -43,6 +43,9 @@ use crate::pty_relay::{self, PtyCommand, PtyWriter};
 /// hook claims it at the next `PreInvocation`; this keeps the launcher from
 /// racing that continuation.
 const IDLE_SETTLE: Duration = Duration::from_millis(800);
+/// Settle window on a freshly spawned session before any hook has fired, giving
+/// `agy` time to draw its initial prompt before keystrokes are written.
+const FRESH_LAUNCH_SETTLE: Duration = Duration::from_millis(1500);
 /// After typing a message the launcher waits for the hook to report the turn
 /// starting (any new hook event) before it types another, up to this long.
 const TURN_START_PATIENCE: Duration = Duration::from_secs(20);
@@ -93,14 +96,29 @@ fn parse_utc(value: &str) -> Option<DateTime<Utc>> {
         .map(|parsed| parsed.with_timezone(&Utc))
 }
 
-/// Whether the hook state says agy is idle and has been for `IDLE_SETTLE`.
+/// Whether the session state says agy is idle and has settled.
 fn idle_mark(state: &Value, now: DateTime<Utc>) -> Option<String> {
     if state.get("state").and_then(Value::as_str) != Some("idle") {
         return None;
     }
-    let observed = state.get("last_hook_observed_at").and_then(Value::as_str)?;
-    let age = now.signed_duration_since(parse_utc(observed)?);
-    (age >= chrono::Duration::from_std(IDLE_SETTLE).ok()?).then(|| observed.to_string())
+    if let Some(observed) = state
+        .get("last_hook_observed_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        let age = now.signed_duration_since(parse_utc(observed)?);
+        return (age >= chrono::Duration::from_std(IDLE_SETTLE).ok()?)
+            .then(|| observed.to_string());
+    }
+    // A freshly launched Helm session seeds `state: "idle"` and `updated_at`
+    // before its first turn runs, when no hook has fired yet.
+    let seeded = state
+        .get("updated_at")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let age = now.signed_duration_since(parse_utc(seeded)?);
+    (age >= chrono::Duration::from_std(FRESH_LAUNCH_SETTLE).ok()?)
+        .then(|| format!("seeded:{seeded}"))
 }
 
 fn is_private_regular_file(path: &Path) -> bool {
@@ -110,12 +128,18 @@ fn is_private_regular_file(path: &Path) -> bool {
     })
 }
 
-/// Claim the oldest live `send` in the inbox, in the hook's receipt format.
-fn claim_oldest_send(
-    inbox: &Path,
-    session_id: &str,
-    now: DateTime<Utc>,
-) -> Option<(String, String, String)> {
+struct ReservedSend {
+    message_id: String,
+    text: String,
+    payload: Value,
+    original_path: PathBuf,
+    claim_path: PathBuf,
+}
+
+/// Reserve the oldest live `send` in the inbox by atomic rename into `claimed/`.
+/// `claimed_at` is written only after the PTY write succeeds, so a failed PTY
+/// write never produces a false delivery receipt.
+fn reserve_oldest_send(inbox: &Path, now: DateTime<Utc>) -> Option<ReservedSend> {
     let mut names: Vec<_> = std::fs::read_dir(inbox)
         .ok()?
         .filter_map(|entry| entry.ok())
@@ -128,7 +152,7 @@ fn claim_oldest_send(
         if !is_private_regular_file(&path) {
             continue;
         }
-        let Some(mut payload) = std::fs::read(&path)
+        let Some(payload) = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .filter(Value::is_object)
@@ -174,38 +198,48 @@ fn claim_oldest_send(
         if ensure_private_dir(&inbox.join("claimed")).is_err()
             || std::fs::rename(&path, &claim_path).is_err()
         {
-            // The hook took it first.
+            // The hook or engine withdrawal took it first.
             continue;
         }
-        let claimed_at = now_iso();
-        if let Some(object) = payload.as_object_mut() {
-            object.insert("id".into(), json!(message_id));
-            object.insert("session_id".into(), json!(session_id));
-            object.insert("claimed_at".into(), json!(claimed_at));
-            object.insert("claimed_by".into(), json!("longhouse-antigravity-launcher"));
-            object.insert("hook_event".into(), json!("IdleWake"));
-        }
-        let _ = crate::write_private_json(&claim_path, &payload);
-        return Some((message_id, claimed_at, text));
+        return Some(ReservedSend {
+            message_id,
+            text,
+            payload,
+            original_path: path,
+            claim_path,
+        });
     }
     None
 }
 
+enum TypeError {
+    NothingWritten(std::io::Error),
+    PartialWrite(std::io::Error),
+}
+
 /// Type `text` into the TUI as the user would: the text, then Enter. Multi-line
 /// text goes in as a bracketed paste so its newlines do not submit.
-fn type_message(writer: &PtyWriter, text: &str) -> std::io::Result<()> {
+fn type_message(writer: &PtyWriter, text: &str) -> Result<(), TypeError> {
     {
         let guard = writer.lock();
         if text.contains('\n') {
-            guard.write(pty_relay::PASTE_START)?;
-            guard.write(text.as_bytes())?;
-            guard.write(pty_relay::PASTE_END)?;
+            guard
+                .write(pty_relay::PASTE_START)
+                .map_err(TypeError::NothingWritten)?;
+            guard
+                .write(text.as_bytes())
+                .map_err(TypeError::PartialWrite)?;
+            guard
+                .write(pty_relay::PASTE_END)
+                .map_err(TypeError::PartialWrite)?;
         } else {
-            guard.write(text.as_bytes())?;
+            guard
+                .write(text.as_bytes())
+                .map_err(TypeError::NothingWritten)?;
         }
     }
     std::thread::sleep(SUBMIT_DELAY);
-    writer.lock().write(b"\r")
+    writer.lock().write(b"\r").map_err(TypeError::PartialWrite)
 }
 
 /// One poll: if agy is idle and a send is waiting, claim and type it.
@@ -224,20 +258,40 @@ pub fn wake_once(
             return None;
         }
     }
-    // The user is mid-sentence: leave the message for the next poll.
+    // The user is actively typing: leave the message for the next poll.
     if writer.local_draft_pending() {
         return None;
     }
     let inbox = antigravity_dir().ok()?.join("inbox").join(session_id);
-    let (message_id, claimed_at, text) = claim_oldest_send(&inbox, session_id, now)?;
-    gate.typed_at = Some((Instant::now(), mark));
-    if let Err(error) = type_message(writer, &text) {
-        tracing::warn!(session_id, %error, "could not type a claimed Antigravity send");
+    let mut reserved = reserve_oldest_send(&inbox, now)?;
+    match type_message(writer, &reserved.text) {
+        Ok(()) => {
+            let claimed_at = now_iso();
+            if let Some(object) = reserved.payload.as_object_mut() {
+                object.insert("id".into(), json!(reserved.message_id));
+                object.insert("session_id".into(), json!(session_id));
+                object.insert("claimed_at".into(), json!(claimed_at));
+                object.insert("claimed_by".into(), json!("longhouse-antigravity-launcher"));
+                object.insert("hook_event".into(), json!("IdleWake"));
+            }
+            let _ = crate::write_private_json(&reserved.claim_path, &reserved.payload);
+            gate.typed_at = Some((Instant::now(), mark));
+            Some(Typed {
+                message_id: reserved.message_id,
+                claimed_at,
+            })
+        }
+        Err(TypeError::NothingWritten(error)) => {
+            tracing::warn!(session_id, %error, "could not write Antigravity send to PTY; returning to inbox");
+            let _ = std::fs::rename(&reserved.claim_path, &reserved.original_path);
+            None
+        }
+        Err(TypeError::PartialWrite(error)) => {
+            tracing::warn!(session_id, %error, "partial PTY write on Antigravity send; leaving claim unfinalized");
+            gate.typed_at = Some((Instant::now(), mark));
+            None
+        }
     }
-    Some(Typed {
-        message_id,
-        claimed_at,
-    })
 }
 
 fn pump(session_id: String, writer: PtyWriter, stop: Arc<AtomicBool>) {
@@ -481,7 +535,7 @@ mod tests {
     #[test]
     fn multiline_text_goes_in_as_one_bracketed_paste() {
         let (read, write) = pipe();
-        type_message(&PtyWriter::new(write), "one\ntwo").unwrap();
+        assert!(type_message(&PtyWriter::new(write), "one\ntwo").is_ok());
         assert_eq!(
             read_available(read),
             b"\x1b[200~one\ntwo\x1b[201~\r".to_vec()
@@ -588,6 +642,49 @@ mod tests {
                     .message_id,
                 "m-2"
             );
+            unsafe {
+                libc::close(read);
+                libc::close(write);
+            }
+        });
+    }
+
+    #[test]
+    fn a_fresh_session_seeded_idle_before_any_hook_wakes_after_launch_settle() {
+        let _guard = HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            let path = temp
+                .path()
+                .join("managed-local/antigravity/sessions/fresh.json");
+            let seeded_at = Utc::now() - chrono::Duration::seconds(3);
+            crate::write_private_json(
+                &path,
+                &json!({
+                    "schema_version": 3,
+                    "session_id": "fresh",
+                    "state": "idle",
+                    "updated_at": seeded_at.to_rfc3339(),
+                }),
+            )
+            .unwrap();
+            let message = write_message(temp.path(), "fresh", "m-fresh", "first prompt", "send");
+            let (read, write) = pipe();
+            let writer = PtyWriter::new(write);
+            // Terminal startup probes arrive on stdin before any user keystroke.
+            writer
+                .relay_local_input(b"\x1b]11;rgb:0000/0000/0000\x1b\\\x1bP>|term\x1b\\\x1b[?1u")
+                .unwrap();
+            let _ = read_available(read);
+
+            let mut gate = WakeGate::default();
+            let typed =
+                wake_once(&mut gate, &writer, "fresh", Utc::now()).expect("woke fresh session");
+            assert_eq!(typed.message_id, "m-fresh");
+            assert!(!message.exists());
+            assert_eq!(read_available(read), b"first prompt\r".to_vec());
             unsafe {
                 libc::close(read);
                 libc::close(write);
