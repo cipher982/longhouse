@@ -245,6 +245,12 @@ class Harness {
   postedAt = 0;
   nextEventId = 990_000;
   log: Array<{ t: number; what: string }> = [];
+  requested: string[] = [];
+  dataRequested = (() => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => (resolve = r));
+    return { promise, resolve };
+  })();
 
   note(what: string) {
     this.log.push({ t: this.postedAt ? Date.now() - this.postedAt : -1, what });
@@ -274,6 +280,8 @@ class Harness {
       const url = new URL(route.request().url());
       const p = url.pathname;
       const method = route.request().method();
+      this.requested.push(`${method} ${p.replace(this.sessionId, ":id")}`);
+      if (p === `${base}/workspace` || p === `${base}/projection`) this.dataRequested.resolve();
       if (p === base) return this.json(route, this.fixture.session);
       if (p === `${base}/thread`) return this.json(route, this.fixture.thread);
       if (p === `${base}/workspace` || p === `${base}/projection`) {
@@ -318,8 +326,23 @@ class Harness {
     });
     this.page = await this.context.newPage();
     this.page.on("pageerror", (err) => console.error("[pageerror]", err.message));
-    await this.page.goto(`${BASE_URL}/timeline/${this.sessionId}`, { waitUntil: "domcontentloaded" });
-    await this.page.locator('[data-testid="session-timeline-row"]').first().waitFor({ state: "visible", timeout: 15_000 });
+    // Setup, not the measurement: wait on the page's own signals, in order, so a
+    // starved CI runner shows as a slow boot and a real render failure still fails.
+    // 1. The app's module graph loaded (Vite transforms on demand, and a loaded
+    //    runner can take longer than any fixed render budget to get here).
+    await this.page.goto(`${BASE_URL}/timeline/${this.sessionId}`, { waitUntil: "load", timeout: 90_000 });
+    // 2. The app asked for the session; only then is a missing row the app's fault.
+    const stalled = async (stage: string) =>
+      new Error(`${stage}; the app had requested: [${this.requested.join(", ")}]; page url ${this.page.url()}`);
+    await Promise.race([
+      this.dataRequested.promise,
+      sleep(90_000).then(() => Promise.reject(undefined)),
+    ]).catch(async () => {
+      throw await stalled("the app never requested the session (it did not boot)");
+    });
+    // 3. Rendering the answer is the app's own work and keeps a tight budget.
+    await this.page.locator('[data-testid="session-timeline-row"]').first().waitFor({ state: "visible", timeout: 15_000 })
+      .catch(async (e) => { throw await stalled(`the session was requested but no row rendered (${(e as Error).message.split("\n")[0]})`); });
     await this.page.locator(".session-chat-composer textarea").waitFor({ state: "visible", timeout: 15_000 });
     await sleep(500);
   }

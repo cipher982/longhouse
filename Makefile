@@ -1308,7 +1308,7 @@ validate-cohort-journey: ## @internal Validate cohort selection and artifact pri
 	@# element-timing.spec.ts below drives a real browser, so this target cannot
 	@# assume one is already installed -- `make validate` runs on clean runners.
 	@$(MAKE) ensure-playwright-browser
-	@cd e2e && bun test tests/live/cohort-journey-helpers.test.ts reporters/privacy-reporter.test.ts
+	@cd e2e && bun test tests/live/cohort-journey-helpers.test.ts reporters/privacy-reporter.test.ts tests/retryable-post.test.ts
 	@bash scripts/tests/cohort-journey.test.sh
 	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
 	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/cohort-journey.spec.ts --list
