@@ -51,7 +51,9 @@ from zerg.qa.provider_evidence_measurement import measure_evidence_package
 from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
 from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.repo_root import default_repo_root
-from zerg.services.tool_presentation import project_tool_presentation
+from zerg.qa.served_transcript import ingest_events
+from zerg.qa.served_transcript import read_events
+from zerg.qa.served_transcript import transcript_host
 from zerg.services.tool_translation_evaluator import evaluate_manifest
 
 _SUBPROCESS_RUNTIME_ENV_KEYS = {
@@ -740,6 +742,16 @@ def utc_now() -> str:
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _without_nulls(value: Any) -> Any:
+    """Drop null-valued keys: the served shape names optional fields the fixture omits."""
+
+    if isinstance(value, dict):
+        return {key: _without_nulls(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]
+    return value
 
 
 def _json_safe(value: Any) -> Any:
@@ -5525,16 +5537,23 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
     }
     projected_calls: list[dict[str, Any]] = []
     fixture_projection_matches = True
+    # The presentation under test is whatever a served Runtime Host returns for the
+    # fixture's events; the product's presentation code is never imported here.
+    with transcript_host() as host:
+        session_id = ingest_events(
+            host.api_url,
+            provider="codex",
+            events=[item.get("event", {}) for item in projection_items],
+        )
+        served_by_call_id = {
+            str(event.get("tool_call_id")): event for event in read_events(host.api_url, session_id) if event.get("role") == "assistant"
+        }
     for item in projection_items:
         event = item.get("event", {})
         if event.get("role") != "assistant" or not event.get("tool_name"):
             continue
-        projected = project_tool_presentation(
-            event.get("tool_name"),
-            event.get("tool_input_json"),
-            provider="codex",
-        )
-        fixture_projection_matches = fixture_projection_matches and projected == event.get("tool_presentation")
+        projected = _without_nulls(served_by_call_id.get(str(event.get("tool_call_id")), {}).get("tool_presentation"))
+        fixture_projection_matches = fixture_projection_matches and projected == _without_nulls(event.get("tool_presentation"))
         output = str(result_by_call_id.get(event.get("tool_call_id")) or "")
         failed = bool(re.search(r"(?:exit(?:ed)?|code)[^\n]*\b[1-9]\d*\b", output, re.IGNORECASE))
         projected_calls.append({"presentation": projected or {}, "failed": failed})

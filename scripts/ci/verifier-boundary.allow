@@ -30,7 +30,6 @@ server/zerg/qa/universal_agent_harness.py -> server/zerg/database.py  # drives s
 server/zerg/qa/universal_agent_harness.py -> server/zerg/models/live_store.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/agents/kernel_capabilities.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/agents/kernel_writes.py  # drives subject runtime internals in-process; replace with the served API or CLI
-server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_presentation.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/universal_agent_harness.py -> server/zerg/services/tool_translation_evaluator.py  # drives subject runtime internals in-process; replace with the served API or CLI
 server/zerg/qa/terminal_truth_mutations.py -> server/zerg/routers/heartbeat.py  # a mutation target: the mutant harness names the subject file it breaks on purpose; becomes a manifest the engine fault switches read (3.3 slice 3)
 server/zerg/qa/terminal_truth_mutations.py -> server/zerg/routers/runtime.py  # a mutation target: the mutant harness names the subject file it breaks on purpose; becomes a manifest the engine fault switches read (3.3 slice 3)
