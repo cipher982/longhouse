@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
 import os
-from datetime import UTC
-from datetime import datetime
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from typing import Mapping
 
+import httpx
+
 from zerg.provider_contract.managed_provider_contracts import contract_for_provider
 from zerg.qa.repo_root import default_repo_root
+from zerg.qa.served_control import PNG_1X1
+from zerg.qa.served_control import frame_without_grant
+from zerg.qa.served_control import grant_matches_lease
+from zerg.qa.served_control import served_control_session
 from zerg.qa.universal_agent_harness import STATUS_BLOCKED
 from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
@@ -21,9 +24,6 @@ from zerg.qa.universal_agent_harness import STATUS_UNSUPPORTED_GAP
 from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import _clean_optional_str
-from zerg.qa.universal_agent_harness import _initialize_managed_control_database
-from zerg.qa.universal_agent_harness import _project_managed_transport
-from zerg.qa.universal_agent_harness import _seed_managed_kernel_rows
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
 from zerg.qa.universal_agent_harness import register_adapter
 
@@ -336,112 +336,91 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         return payload
 
     def steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
-        os.environ.setdefault("TESTING", "1")
-        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+        """Steer a running Codex turn through the served input route.
 
-        from zerg.database import make_engine
-        from zerg.database import make_sessionmaker
-        from zerg.models.agents import AgentSession
-        from zerg.provider_contract.session_execution_home import ManagedSessionTransport
-        from zerg.services import managed_local_control as control
+        A Runtime Host child answers ``POST /api/sessions/{id}/input`` with
+        ``intent=steer`` (and the multipart form for an image). The turn is
+        marked running through the runtime events a provider reports, and a
+        fake machine on the control WebSocket receives the ``session.steer_text``
+        frames and acknowledges them like the engine does.
+        """
 
-        db_path = package.path("longhouse", "codex-steer-dispatch.sqlite")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = make_engine(f"sqlite:///{db_path}")
-        _initialize_managed_control_database(engine)
-        session_factory = make_sessionmaker(engine)
-        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        contract = contract_for_provider("codex")
         steer_text = "Longhouse universal Codex steer transport proof."
-        attachment_id = "11111111-1111-1111-1111-111111111111"
-        blob_url = f"/api/agents/sessions/codex-steer/inputs/1/attachments/{attachment_id}/blob"
-        attachments = [
-            {
-                "id": attachment_id,
-                "mime_type": "image/png",
-                "sha256": "a" * 64,
-                "blob_url": blob_url,
-            }
-        ]
-        calls: list[dict[str, Any]] = []
-        codex_transport = ManagedSessionTransport.CODEX_APP_SERVER.value
+        image_text = "Longhouse universal Codex steer image proof."
+        image_sha256 = hashlib.sha256(PNG_1X1).hexdigest()
 
-        async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
-            calls.append(
-                {
-                    "owner_id": kwargs.get("owner_id"),
-                    "timeout_secs": kwargs.get("timeout_secs"),
-                    "command_type": kwargs.get("command_type"),
-                    "payload": kwargs.get("payload"),
-                    "request_id": kwargs.get("request_id"),
-                    "run_id": kwargs.get("run_id"),
-                    "provider": getattr(kwargs.get("session"), "provider", None),
-                    "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
-                }
-            )
-            return SimpleNamespace(
-                ok=True,
-                transport="engine_channel",
-                data={"exit_code": 0, "stdout": "", "stderr": ""},
-                error=None,
-            )
+        def engine_ack(_frame: Mapping[str, Any]) -> Mapping[str, Any]:
+            return {"ok": True, "result": {"exit_code": 0, "stdout": "", "stderr": ""}}
 
-        original_dispatch = control.dispatch_managed_control_command
-        original_transport_error = control._managed_control_transport_error
-        control.dispatch_managed_control_command = fake_dispatch
-        control._managed_control_transport_error = lambda *_args, **_kwargs: None
-        try:
-            with session_factory() as db:
-                session = AgentSession(
-                    provider="codex",
-                    environment="test",
-                    project="universal-agent-harness",
-                    device_id="universal-harness",
-                    cwd=str(package.path("workspace")),
-                    started_at=now - timedelta(minutes=5),
-                    last_activity_at=now,
-                    user_messages=1,
-                    assistant_messages=1,
-                )
-                db.add(session)
-                db.flush()
-                contract = contract_for_provider("codex")
-                if contract is not None:
-                    _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
-                result = asyncio.run(
-                    control.steer_text_to_managed_local_session(
-                        db=db,
-                        owner_id=1,
-                        session=session,
-                        text=steer_text,
-                        request_id="universal-codex-steer",
-                        attachments=attachments,
-                    )
-                )
-        finally:
-            control.dispatch_managed_control_command = original_dispatch
-            control._managed_control_transport_error = original_transport_error
+        with served_control_session(
+            provider="codex",
+            workspace=package.path("workspace"),
+            command_types=("session.steer_text",),
+            responder=engine_ack,
+        ) as served:
+            activity_before = served.activity_state()
+            text_response = served.post_input(text=steer_text, intent="steer", client_request_id="universal-codex-steer")
+            image_response = served.post_input_with_image(text=image_text, intent="steer", client_request_id="universal-codex-steer-image")
+            frames = [dict(frame) for frame in served.commands]
+            lease_rows = served.lease_rows()
+            session_id = served.session_id
 
-        request = calls[0] if calls else {}
-        expected_payload = {"text": steer_text, "intent": "steer", "attachments": attachments}
+        def body_of(response: httpx.Response) -> dict[str, Any]:
+            try:
+                parsed = response.json()
+            except ValueError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        text_body, image_body = body_of(text_response), body_of(image_response)
+        text_frame = frames[0] if frames else {}
+        image_frame = frames[1] if len(frames) > 1 else {}
+        text_payload = frame_without_grant(text_frame)
+        image_payload = frame_without_grant(image_frame)
+        image_attachments = image_payload.pop("attachments", None) or []
+        attachment = image_attachments[0] if len(image_attachments) == 1 else {}
+        blob_url = f"/api/agents/sessions/{session_id}/inputs/{image_body.get('live_input_id')}/attachments/{attachment.get('id')}/blob"
+        steer_receipts = {str(item.get("client_request_id")): item for item in (image_body.get("queued") or []) if isinstance(item, dict)}
         assertions = {
-            "command_dispatched": bool(calls),
-            "command_type_matches": request.get("command_type") == "session.steer_text",
-            "payload_matches": request.get("payload") == expected_payload,
-            "provider_is_codex": request.get("provider") == "codex",
-            "transport_is_codex_app_server": request.get("managed_transport") == codex_transport,
-            "result_ok": result.ok is True,
-            "exit_code_zero": result.exit_code == 0,
+            "command_dispatched": len(frames) == 2,
+            "command_type_matches": bool(frames) and all(frame.get("command_type") == "session.steer_text" for frame in frames),
+            "payload_matches": (
+                text_payload == {"provider": "codex", "text": steer_text, "intent": "steer"}
+                and image_payload == {"provider": "codex", "text": image_text, "intent": "steer"}
+                and attachment.get("mime_type") == "image/png"
+                and attachment.get("sha256") == image_sha256
+                and attachment.get("blob_url") == blob_url
+                and grant_matches_lease(text_frame, lease_rows)
+                and grant_matches_lease(image_frame, lease_rows)
+            ),
+            "provider_is_codex": all((frame.get("payload") or {}).get("provider") == "codex" for frame in frames) and bool(frames),
+            "transport_is_codex_app_server": (
+                contract is not None
+                and contract.managed_transport is not None
+                and contract.managed_transport.value == "codex_app_server"
+                and {row[3] for row in lease_rows} == {contract.control_plane}
+            ),
+            "result_ok": text_response.status_code == 200
+            and image_response.status_code == 200
+            and text_body.get("outcome") == "sent"
+            and image_body.get("outcome") == "sent",
+            # The route reports a steer delivered only when the machine's reply carries exit code 0.
+            "exit_code_zero": all(
+                steer_receipts.get(request_id, {}).get("delivery_status") == "delivered"
+                for request_id in ("universal-codex-steer", "universal-codex-steer-image")
+            ),
+            "steer_entered_running_turn": activity_before in {"thinking", "executing"},
         }
         passed = all(assertions.values())
         raw_path = package.write_json(
             "raw/codex-steer-dispatch.json",
             {
-                "db_path": str(db_path),
-                "calls": calls,
-                "result": {
-                    "ok": result.ok,
-                    "exit_code": result.exit_code,
-                    "error": result.error,
+                "activity_state_before": activity_before,
+                "calls": frames,
+                "responses": {
+                    "text": {"http_status": text_response.status_code, "body": text_body},
+                    "image": {"http_status": image_response.status_code, "body": image_body},
                 },
                 "assertions": assertions,
             },
@@ -452,7 +431,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
                 "level": "hermetic",
                 "canary": "codex_managed_local_steer_dispatch",
                 "failure_code": None if passed else "codex_steer_dispatch_failed",
-                "source": "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+                "source": "POST /api/sessions/{id}/input and /inputs-multipart (intent=steer) on a served Runtime Host",
             }
         }
         payload = self._write_session_projection(
@@ -836,104 +815,52 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         canary_evidence_root: Path,
         source_artifact_kind: object,
     ) -> dict[str, Any]:
-        os.environ.setdefault("TESTING", "1")
-        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+        contract = contract_for_provider("codex")
 
-        from zerg.database import make_engine
-        from zerg.database import make_sessionmaker
-        from zerg.models.agents import AgentSession
-        from zerg.provider_contract.session_execution_home import ManagedSessionTransport
-        from zerg.services import managed_local_control as control
+        def engine_ack(_frame: Mapping[str, Any]) -> Mapping[str, Any]:
+            return {"ok": True, "result": {"exit_code": 0, "stdout": "interrupted", "stderr": ""}}
 
-        db_path = package.path("longhouse", "codex-interrupt-dispatch.sqlite")
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = make_engine(f"sqlite:///{db_path}")
-        _initialize_managed_control_database(engine)
-        session_factory = make_sessionmaker(engine)
-        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
-        calls: list[dict[str, Any]] = []
-        codex_transport = ManagedSessionTransport.CODEX_APP_SERVER.value
-
-        async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
-            calls.append(
-                {
-                    "owner_id": kwargs.get("owner_id"),
-                    "timeout_secs": kwargs.get("timeout_secs"),
-                    "command_type": kwargs.get("command_type"),
-                    "payload": kwargs.get("payload"),
-                    "request_id": kwargs.get("request_id"),
-                    "run_id": kwargs.get("run_id"),
-                    "provider": getattr(kwargs.get("session"), "provider", None),
-                    "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
-                }
-            )
-            return SimpleNamespace(
-                ok=True,
-                transport="engine_channel",
-                data={"exit_code": 0, "stdout": "interrupted", "stderr": ""},
-                error=None,
-            )
-
-        original_dispatch = control.dispatch_managed_control_command
-        original_transport_error = control._managed_control_transport_error
-        control.dispatch_managed_control_command = fake_dispatch
-        control._managed_control_transport_error = lambda *_args, **_kwargs: None
+        with served_control_session(
+            provider="codex",
+            workspace=package.path("workspace"),
+            command_types=("session.interrupt",),
+            responder=engine_ack,
+        ) as served:
+            activity_before = served.activity_state()
+            response = served.post_interrupt()
+            frames = [dict(frame) for frame in served.commands]
+            lease_rows = served.lease_rows()
         try:
-            with session_factory() as db:
-                session = AgentSession(
-                    provider="codex",
-                    environment="test",
-                    project="universal-agent-harness",
-                    device_id="universal-harness",
-                    cwd=str(package.path("workspace")),
-                    started_at=now - timedelta(minutes=5),
-                    last_activity_at=now,
-                    user_messages=1,
-                    assistant_messages=1,
-                )
-                db.add(session)
-                db.flush()
-                contract = contract_for_provider("codex")
-                if contract is not None:
-                    _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
-                result = asyncio.run(
-                    control.interrupt_managed_local_session(
-                        db=db,
-                        owner_id=1,
-                        session=session,
-                        request_id="universal-codex-interrupt",
-                    )
-                )
-        finally:
-            control.dispatch_managed_control_command = original_dispatch
-            control._managed_control_transport_error = original_transport_error
-
-        request = calls[0] if calls else {}
+            response_body = response.json()
+        except ValueError:
+            response_body = {}
+        request = frames[0] if frames else {}
+        sent_payload = frame_without_grant(request)
         assertions = {
-            "command_dispatched": bool(calls),
+            "command_dispatched": len(frames) == 1,
             "command_type_matches": request.get("command_type") == "session.interrupt",
-            "payload_empty": request.get("payload") == {},
-            "provider_is_codex": request.get("provider") == "codex",
-            "transport_is_codex_app_server": request.get("managed_transport") == codex_transport,
-            "result_ok": result.ok is True,
-            "exit_code_zero": result.exit_code == 0,
+            # The frame names the provider and carries the lease grant; nothing else.
+            "payload_empty": sent_payload == {"provider": "codex"} and grant_matches_lease(request, lease_rows),
+            "provider_is_codex": sent_payload.get("provider") == "codex",
+            "transport_is_codex_app_server": (
+                contract is not None
+                and contract.managed_transport is not None
+                and contract.managed_transport.value == "codex_app_server"
+                and {row[3] for row in lease_rows} == {contract.control_plane}
+            ),
+            "result_ok": response.status_code == 200 and response_body.get("interrupt_dispatched") is True,
+            "exit_code_zero": response_body.get("exit_code") == 0 and response_body.get("error") is None,
         }
         passed = all(assertions.values())
         raw_path = package.write_json(
             "raw/codex-interrupt-dispatch.json",
             {
-                "db_path": str(db_path),
                 "credentials_gap": credentials_gap,
                 "codex_canary_artifact_path": str(canary_artifact_path),
                 "codex_canary_evidence_root": str(canary_evidence_root),
-                "calls": calls,
-                "result": {
-                    "ok": result.ok,
-                    "exit_code": result.exit_code,
-                    "error": result.error,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                },
+                "activity_state_before": activity_before,
+                "calls": frames,
+                "result": {"http_status": response.status_code, "body": response_body},
                 "assertions": assertions,
             },
         )
@@ -943,7 +870,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
                 "level": "hermetic",
                 "canary": "codex_managed_local_interrupt_dispatch",
                 "failure_code": None if passed else "codex_interrupt_dispatch_failed",
-                "source": "zerg.services.managed_local_control.interrupt_managed_local_session",
+                "source": "POST /api/sessions/{id}/interrupt-live on a served Runtime Host",
             },
             "live_interrupt_canary": {
                 "status": STATUS_BLOCKED,

@@ -2517,7 +2517,9 @@ def test_codex_interrupt_cancel_falls_back_to_hermetic_dispatch_when_credentials
         "result_ok": True,
         "transport_is_codex_app_server": True,
     }
-    assert Path(result["data"]["raw_interrupt_dispatch_path"]).is_file()
+    raw = json.loads(Path(result["data"]["raw_interrupt_dispatch_path"]).read_text(encoding="utf-8"))
+    assert raw["result"]["http_status"] == 200
+    assert [call["command_type"] for call in raw["calls"]] == ["session.interrupt"]
 
 
 def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, monkeypatch) -> None:
@@ -2693,9 +2695,13 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
         "payload_matches": True,
         "provider_is_codex": True,
         "result_ok": True,
+        "steer_entered_running_turn": True,
         "transport_is_codex_app_server": True,
     }
-    assert Path(codex["data"]["raw_steer_dispatch_path"]).is_file()
+    raw = json.loads(Path(codex["data"]["raw_steer_dispatch_path"]).read_text(encoding="utf-8"))
+    assert raw["activity_state_before"] in {"thinking", "executing"}
+    assert [call["command_type"] for call in raw["calls"]] == ["session.steer_text", "session.steer_text"]
+    assert raw["calls"][1]["payload"]["attachments"][0]["mime_type"] == "image/png"
     # OpenCode steer is implemented and needs live_token proof this no-token
     # harness cannot produce (opencode_helm_lifecycle owns it). Antigravity
     # Helm steer is implemented too (hook inbox); its live proof is the bench
