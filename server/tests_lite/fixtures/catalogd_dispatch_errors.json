@@ -1848,6 +1848,29 @@
    "retryable": false
   }
  },
+ "session.input.sweep_stale.v2": {
+  "declared_nulls": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "limit must be an integer from 1 through 500",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "empty": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.sweep_stale.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  },
+  "extra": {
+   "code": "invalid_request",
+   "details": {},
+   "message": "session.input.sweep_stale.v2 requires limit",
+   "retry_after_ms": null,
+   "retryable": false
+  }
+ },
  "session.launch.local.create.v2": {
   "declared_nulls": {
    "code": "invalid_request",
