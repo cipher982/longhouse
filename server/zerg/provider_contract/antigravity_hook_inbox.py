@@ -329,7 +329,9 @@ inbox_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or default_antigra
 )
 
 state = ""
-if event == "PreInvocation":
+if event == "SessionStart":
+    state = "idle"
+elif event == "PreInvocation":
     state = "thinking"
 elif event == "PreToolUse":
     state = "running"

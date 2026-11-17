@@ -124,11 +124,14 @@ REGISTRATION = ProducerRegistration(
     observation_scope="scenario",
 )
 
-# (query agy writes, the reply a terminal gives): XTVERSION, secondary and primary device attributes.
+# (query agy writes, the reply a terminal gives): XTVERSION, device attributes, OSC 10/11 colors, Kitty keyboard flags.
 _TERMINAL_QUERIES: tuple[tuple[bytes, bytes], ...] = (
     (b"\x1b[>q", b"\x1bP>|xterm(388)\x1b\\"),
     (b"\x1b[>c", b"\x1b[>0;388;0c"),
     (b"\x1b[c", b"\x1b[?62;c"),
+    (b"\x1b]10;?", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+    (b"\x1b]11;?", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    (b"\x1b[?u", b"\x1b[?0u"),
 )
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>]")
 _wait = functools.partial(poll, interval=0.25)
@@ -566,21 +569,32 @@ def _reach(run: Run, args: argparse.Namespace) -> None:
         }
 
         # Idle send: nothing is running, so no hook fires; the launcher must claim the message and start a turn.
+        # Emit a terminal OSC 11 background-color reply without a trailing Enter first so pty_relay proves control
+        # replies never poison local_draft_pending before a durable /input send arrives.
+        terminal.write(b"\x1b]11;rgb:0000/0000/0000\x1b\\")
+        time.sleep(0.1)
         idle_marker = _marker("IDLE")
+        idle_request_id = uuid4().hex
         idle_at_send = hook_state().get("state") == "idle"
         idle_error: str | None = None
         try:
             idle_response = httpx.post(
-                f"{api_url}/api/agents/sessions/{session_id}/send-live",
+                f"{api_url}/api/agents/sessions/{session_id}/input",
                 headers=headers,
-                json={"message": f"Reply with exactly {idle_marker}"},
+                json={
+                    "text": f"Reply with exactly {idle_marker}",
+                    "intent": "auto",
+                    "client_request_id": idle_request_id,
+                },
                 timeout=40,
             )
             lifecycle["send_idle_dispatch"] = {"status_code": idle_response.status_code, "body": idle_response.text[:300]}
             if idle_response.is_error:
                 idle_error = f"HTTP {idle_response.status_code}: {idle_response.text[:500]}"
-            elif idle_response.json().get("accepted") is not True:
-                idle_error = f"not accepted: {idle_response.text[:500]}"
+            else:
+                idle_payload = idle_response.json()
+                if idle_payload.get("disposition") != "accepted" or idle_payload.get("outcome") != "sent":
+                    idle_error = f"unexpected /input outcome: {idle_response.text[:500]}"
         except httpx.HTTPError as exc:
             idle_error = f"{type(exc).__name__}: {exc}"
         idle_answered = idle_error is None and bool(poll(lambda: answered(idle_marker), timeout=timeout, interval=0.25))

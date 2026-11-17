@@ -266,3 +266,10 @@ def test_a_later_turns_request_carrying_the_finished_task_output_is_not_a_leak()
         later_marker=marker,
     )
     assert verdict["passed"] is True
+
+
+def test_terminal_queries_cover_osc_colors_and_kitty_keyboard_probe() -> None:
+    queries = dict(helm._TERMINAL_QUERIES)
+    assert queries[b"\x1b]10;?"] == b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"
+    assert queries[b"\x1b]11;?"] == b"\x1b]11;rgb:0000/0000/0000\x1b\\"
+    assert queries[b"\x1b[?u"] == b"\x1b[?0u"

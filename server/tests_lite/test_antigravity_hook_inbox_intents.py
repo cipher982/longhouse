@@ -85,3 +85,13 @@ def test_no_message_leaves_the_default_response(tmp_path: Path) -> None:
     response, receipt = _run_hook(tmp_path, "PreInvocation", None)
     assert response == {"injectSteps": []}
     assert receipt is None
+
+
+def test_session_start_records_idle_state_for_fresh_helm_session(tmp_path: Path) -> None:
+    response, receipt = _run_hook(tmp_path, "SessionStart", None)
+    assert response == {}
+    assert receipt is None
+    state_path = tmp_path / "managed-local" / "antigravity" / "sessions" / f"{SESSION_ID}.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["state"] == "idle"
+    assert state["last_hook_event"] == "SessionStart"
