@@ -6627,11 +6627,18 @@ def _apply_shadow_reducer(
         # heartbeat while its reduction rolled back leaves served state diverged
         # from the evidence that produced it, silently and durably.
         raise
-    except (RecursionError, TypeError, ValueError):
+    except (RecursionError, TypeError, ValueError) as exc:
         # Malformed external evidence is different in kind: the machine sent
         # something unusable, the database is fine, and refusing the whole
         # heartbeat would let one bad payload block a machine's liveness. Reject
-        # the evidence, keep the heartbeat.
+        # the evidence, keep the heartbeat. The route admits evidence fact by
+        # fact first, so reaching this means the two validators disagree: name
+        # why, or the next one is as invisible as 2026-11-17's.
+        logging.getLogger(__name__).warning(
+            "catalogd refused heartbeat evidence device=%s reason=%s",
+            heartbeat.get("device_id"),
+            str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__,
+        )
         return {"status": "failed", "reason": "invalid_evidence"}
 
 
@@ -7509,7 +7516,6 @@ class CatalogStore(
         self.engine = engine
         self._shadow_parity_delta_count: int | None = None
         # Lower bound of heartbeat stamps that may still carry raw_json; None sweeps all.
-        self._raw_json_prune_floor: datetime | None = None
         # Newest-first search claims resume their session walk below the
         # newest row the previous walk could claim; see SEARCH_CLAIM_WALK_RESTART.
         self._search_walk_floor: datetime | None = None

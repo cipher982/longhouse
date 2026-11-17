@@ -109,6 +109,9 @@ catalog_meta = Table(
     Column("render_state_generation", Text, nullable=True),
     # One-shot orphan-subagent adoption marker; additive like the one above.
     Column("subagent_parent_generation", Text, nullable=True),
+    # JSON {table: ISO time} of each table's last statistics refresh.
+    # Additive; startup refreshes only tables whose entry is old (server.py).
+    Column("planner_statistics_json", Text, nullable=True),
     CheckConstraint("singleton = 1", name="ck_catalog_meta_singleton"),
     CheckConstraint("schema_version > 0", name="ck_catalog_meta_schema_version_positive"),
     CheckConstraint("commit_seq >= 0", name="ck_catalog_meta_commit_seq_nonnegative"),

@@ -57,7 +57,7 @@ from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PA
 from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
 from zerg.services.workspace_suggestion_projection import rank_human_workspace_candidates
 
-HEARTBEAT_PRUNE_BATCH = 5000
+HEARTBEAT_PRUNE_BATCH = 500
 
 
 class MachinesMixin:
@@ -252,30 +252,37 @@ class MachinesMixin:
     def prune_heartbeat_stamps(self, *, now: datetime | None = None, batch_size: int = HEARTBEAT_PRUNE_BATCH) -> dict[str, int]:
         """Retention for heartbeat stamps, run from catalogd maintenance and never inside a heartbeat.
 
-        Inside the heartbeat transaction the raw_json sweep scanned every row a device
-        had in the last 30 days (about 260k at one heartbeat per 10 s) and held the
-        single writer for ~140 ms per heartbeat (measured on a synthetic catalog);
-        the 30-day delete is bounded per call instead of per heartbeat.
+        Both steps are bounded per call, and neither depends on process state:
 
-        raw_json is only ever set on a stamp at insert, and every pass clears all
-        rows older than an hour, so rows still carrying it are newer than the last
-        pass's cutoff minus a day of slack for skewed device clocks. The first pass
-        after a restart has no watermark and sweeps everything once.
+        - the 30-day delete takes at most ``batch_size`` rows;
+        - the raw_json clear looks only at the day before the one-hour cutoff.
+          raw_json is set only at insert and ``received_at`` is the host's own
+          clock, so a pass that ran in that day already cleared anything older.
+
+        It used to keep that floor in memory, so the first pass after each
+        restart had none and read all ~264k stamps under the writer: 11 s to
+        7 min on david010 after each of 18 restarts on 2026-11-16/17, while
+        every live write behind it timed out. Rows from a catalogd outage
+        longer than a day keep their raw_json until the 30-day delete, which
+        costs bytes, not correctness.
         """
 
         now = now or datetime.now(UTC)
         stamp = LiveHeartbeatStamp.__table__
         retention_cutoff = now - timedelta(days=30)
         raw_cutoff = now - timedelta(hours=1)
+        raw_floor = raw_cutoff - timedelta(days=1)
         with _write_transaction(self.engine) as connection:
             expired_ids = select(stamp.c.id).where(stamp.c.received_at < retention_cutoff).limit(batch_size)
             deleted = connection.execute(stamp.delete().where(stamp.c.id.in_(expired_ids))).rowcount or 0
-            raw_where = [stamp.c.received_at < raw_cutoff, stamp.c.raw_json.is_not(None)]
-            if self._raw_json_prune_floor is not None:
-                raw_where.append(stamp.c.received_at >= self._raw_json_prune_floor)
-            cleared = connection.execute(update(stamp).where(*raw_where).values(raw_json=None)).rowcount or 0
-        self._raw_json_prune_floor = raw_cutoff - timedelta(days=1)
-        return {"deleted": int(deleted), "raw_cleared": int(cleared), "backlog": int(deleted >= batch_size)}
+            raw_ids = (
+                select(stamp.c.id)
+                .where(stamp.c.received_at >= raw_floor, stamp.c.received_at < raw_cutoff, stamp.c.raw_json.is_not(None))
+                .limit(batch_size)
+            )
+            cleared = connection.execute(update(stamp).where(stamp.c.id.in_(raw_ids)).values(raw_json=None)).rowcount or 0
+        backlog = deleted >= batch_size or cleared >= batch_size
+        return {"deleted": int(deleted), "raw_cleared": int(cleared), "backlog": int(backlog)}
 
     def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
         """Atomically reduce one ordered runtime batch with bounded fact folds."""

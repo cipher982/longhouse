@@ -19,6 +19,7 @@ from contextlib import suppress
 from contextvars import ContextVar
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,8 @@ _WRITER_HISTOGRAM_WINDOW = 256
 # Recent executions across all labels, used to price the queue for Retry-After.
 _WRITER_RECENT_EXEC_WINDOW = 64
 _HEARTBEAT_PRUNE_MAX_BATCHES = 20
+# Startup refreshes planner statistics only when the last refresh is older.
+_PLANNER_STATISTICS_MAX_AGE = timedelta(hours=24)
 _WRITER_RETRY_AFTER_MIN_MS = 1_000
 _WRITER_RETRY_AFTER_MAX_MS = 15_000
 
@@ -4696,13 +4699,31 @@ class CatalogDaemon:
                 **ensured,
             )
             stage_started = time.perf_counter()
+            # Statistics describe table shape, which a restart does not change.
+            # Refreshing every table on every start held the single writer up
+            # to 146 s per table on david010 during a night of 18 restarts
+            # (2026-11-16/17), so only tables whose last refresh is old run.
             tables = await asyncio.to_thread(self._store.planner_statistics_tables)
+            refreshed = await asyncio.to_thread(self._store.planner_statistics_refreshed)
+            unanalyzed = await asyncio.to_thread(self._store.tables_with_unanalyzed_indexes)
+            now = datetime.now(UTC)
+            due = [
+                table
+                for table in tables
+                if table in unanalyzed or table not in refreshed or now - refreshed[table] >= _PLANNER_STATISTICS_MAX_AGE
+            ]
             slowest_ms = 0.0
-            for table in tables:
+            for table in due:
                 table_started = time.perf_counter()
                 await self._run_startup_write(self._store.refresh_table_statistics, table)
                 slowest_ms = max(slowest_ms, (time.perf_counter() - table_started) * 1000.0)
-            _log_startup_stage("refresh_planner_statistics", stage_started, tables=len(tables), slowest_table_ms=f"{slowest_ms:.0f}")
+            _log_startup_stage(
+                "refresh_planner_statistics",
+                stage_started,
+                tables=len(due),
+                skipped_recent=len(tables) - len(due),
+                slowest_table_ms=f"{slowest_ms:.0f}",
+            )
             _log_startup_stage("deferred_projector_repair", repair_started)
         except asyncio.CancelledError:
             raise
@@ -4715,18 +4736,27 @@ class CatalogDaemon:
         # only while admission is open: at runtime reopen on a cutover, at once
         # on a plain restart. A full queue is load to wait out, not a reason to
         # leave the ledger behind.
+        #
+        # Derived lane: startup repair and statistics can be recomputed and
+        # never outrank a heartbeat or an ingest. On the primary lane they
+        # queued ahead of live writes after every restart (2026-11-16/17).
         while True:
             try:
-                return await self._run_store(operation, *args)
+                return await self._run_store(operation, *args, lane=DERIVED)
             except CatalogWriterClosed:
                 await asyncio.sleep(0.25)
             except CatalogWriterBusy:
                 await asyncio.sleep(0.05)
 
     async def _run_maintenance_write(self, operation, *args, **kwargs):
-        """A periodic write that yields to a busy queue instead of failing the tick."""
+        """A periodic write that yields to a busy queue instead of failing the tick.
+
+        Derived lane: retention and expiry are housekeeping. Primary work
+        (heartbeats, runtime events, ingest) runs first, so a maintenance pass
+        can delay a live write by at most the one transaction already running.
+        """
         try:
-            return await self._run_store(operation, *args, **kwargs)
+            return await self._run_store(operation, *args, lane=DERIVED, **kwargs)
         except (CatalogWriterBusy, CatalogWriterClosed):
             return None
 

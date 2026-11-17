@@ -73,3 +73,45 @@ def test_table_statistics_refuse_a_name_that_is_not_a_plain_identifier(tmp_path)
         pass
     else:
         raise AssertionError("an unsafe table name was analyzed")
+
+
+def test_statistics_refresh_is_stamped_per_table(tmp_path) -> None:
+    """Startup refreshes only tables whose stamp is old; restarts do not change table shape."""
+
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    assert store.planner_statistics_refreshed() == {}
+    now = datetime.now(UTC).replace(microsecond=0)
+    store.refresh_table_statistics("sessions", now)
+    store.refresh_table_statistics("media_objects", now)
+    assert store.planner_statistics_refreshed() == {"sessions": now, "media_objects": now}
+    engine.dispose()
+
+
+def test_a_table_with_an_unanalyzed_index_is_always_due(tmp_path) -> None:
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            MediaObject.__table__.insert(),
+            [
+                {
+                    "media_hash": f"{index:064x}",
+                    "state": "present",
+                    "commit_seq": 1,
+                    "observed_at": now,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                for index in range(50)
+            ],
+        )
+    store.refresh_table_statistics("media_objects", now)
+    assert "media_objects" not in store.tables_with_unanalyzed_indexes()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE INDEX ix_test_media_updated ON media_objects(updated_at)")
+    assert "media_objects" in store.tables_with_unanalyzed_indexes()
+    engine.dispose()

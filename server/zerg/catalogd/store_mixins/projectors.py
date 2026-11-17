@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import UTC
@@ -68,7 +69,47 @@ class ProjectorsMixin:
                 ).scalars()
             ]
 
-    def refresh_table_statistics(self, table: str) -> dict[str, int]:
+    def planner_statistics_refreshed(self) -> dict[str, datetime]:
+        """Each table's last statistics refresh, as recorded by refresh_table_statistics."""
+
+        with _read_snapshot(self.engine) as connection:
+            raw = connection.exec_driver_sql("SELECT planner_statistics_json FROM catalog_meta WHERE singleton = 1").scalar()
+        try:
+            recorded = json.loads(raw) if isinstance(raw, str) else {}
+        except ValueError:
+            return {}
+        refreshed: dict[str, datetime] = {}
+        for table, value in recorded.items() if isinstance(recorded, dict) else ():
+            try:
+                refreshed[str(table)] = _as_aware_utc(datetime.fromisoformat(str(value)))
+            except ValueError:
+                continue
+        return refreshed
+
+    def tables_with_unanalyzed_indexes(self) -> set[str]:
+        """Tables with an index that has no sqlite_stat1 row.
+
+        A newly added index must not wait out the refresh interval: next to
+        analyzed siblings it would be priced from defaults. Empty tables have
+        no rows to analyze and come back here every time; that is free.
+        """
+
+        with _read_snapshot(self.engine) as connection:
+            has_stat = connection.exec_driver_sql("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'sqlite_stat1'").first()
+            if has_stat is None:
+                return {
+                    str(name)
+                    for name in connection.exec_driver_sql("SELECT DISTINCT tbl_name FROM sqlite_schema WHERE type = 'index'").scalars()
+                }
+            return {
+                str(name)
+                for name in connection.exec_driver_sql(
+                    "SELECT DISTINCT tbl_name FROM sqlite_schema WHERE type = 'index' "
+                    "AND name NOT IN (SELECT idx FROM sqlite_stat1 WHERE idx IS NOT NULL)"
+                ).scalars()
+            }
+
+    def refresh_table_statistics(self, table: str, now: datetime | None = None) -> dict[str, int]:
         """ANALYZE one table in its own short write transaction.
 
         One ANALYZE of the whole catalog held the single writer 1.7 s on a warm
@@ -91,6 +132,12 @@ class ProjectorsMixin:
             finally:
                 if sampled:
                     connection.exec_driver_sql("PRAGMA analysis_limit=0")
+            # Stamped in the same transaction, per table: a restart part way
+            # through the list keeps what finished and resumes with the rest.
+            connection.exec_driver_sql(
+                "UPDATE catalog_meta SET planner_statistics_json = json_set(COALESCE(planner_statistics_json, '{}'), ?, ?) WHERE singleton = 1",
+                (f'$."{table}"', (now or datetime.now(UTC)).isoformat()),
+            )
         return {"sampled": int(sampled)}
 
     def scan_projector_repairs(self) -> ProjectorRepairPlan:

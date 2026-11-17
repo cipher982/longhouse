@@ -1670,7 +1670,7 @@ async def test_heartbeat_retention_runs_in_maintenance_not_in_the_heartbeat(daem
     assert [row["raw_json"] is None for row in rows[:3]] == [True, False, False]
     assert rows[0]["catalog_result_json"] is not None
 
-    # Later passes sweep only above the watermark yet still catch newly aged rows.
+    # Later passes catch newly aged rows.
     second = store.prune_heartbeat_stamps(now=now + timedelta(hours=3))
     assert second["raw_cleared"] == 2
     third = store.prune_heartbeat_stamps(now=now + timedelta(days=40, minutes=1))
@@ -1697,4 +1697,42 @@ def test_heartbeat_retention_deletes_in_bounded_batches(tmp_path):
     assert store.prune_heartbeat_stamps(now=now, batch_size=10)["deleted"] == 10
     last = store.prune_heartbeat_stamps(now=now, batch_size=10)
     assert last["deleted"] == 5 and last["backlog"] == 0
+    engine.dispose()
+
+
+def test_raw_json_clear_is_bounded_without_process_state(tmp_path):
+    """A fresh store (a restart) reads only the day before the cutoff, by index.
+
+    The floor used to live in memory, so the first pass after each restart
+    read every stamp under the writer: 11 s to 7 min on david010 (2026-11-16/17).
+    """
+
+    engine = create_catalog_engine(tmp_path / "raw-json-bounded.db")
+    initialize_catalog_schema(engine)
+    stamp = LiveHeartbeatStamp.__table__
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            stamp.insert(),
+            [
+                {"device_id": "cinder", "received_at": now - timedelta(hours=2), "raw_json": "{}"},
+                {"device_id": "cinder", "received_at": now - timedelta(days=3), "raw_json": "{}"},
+            ],
+        )
+        plan = " ".join(
+            str(row[3])
+            for row in connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT id FROM live_heartbeat_stamps WHERE received_at >= ? AND received_at < ? AND raw_json IS NOT NULL LIMIT 500",
+                ("2026-11-16 11:00:00", "2026-11-17 11:00:00"),
+            )
+        )
+    assert "SCAN live_heartbeat_stamps" not in plan, plan
+
+    result = CatalogStore(engine).prune_heartbeat_stamps(now=now, batch_size=1)
+    assert result == {"deleted": 0, "raw_cleared": 1, "backlog": 1}
+    with engine.connect() as connection:
+        kept = {row["received_at"].replace(tzinfo=UTC): row["raw_json"] for row in connection.execute(stamp.select()).mappings()}
+    assert kept[now - timedelta(hours=2)] is None
+    # Older than the floor: left for the 30-day delete, never scanned for.
+    assert kept[now - timedelta(days=3)] == "{}"
     engine.dispose()
