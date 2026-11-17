@@ -54,7 +54,10 @@ from zerg.qa.repo_root import default_repo_root
 from zerg.qa.served_transcript import ingest_events
 from zerg.qa.served_transcript import read_events
 from zerg.qa.served_transcript import transcript_host
-from zerg.services.tool_translation_evaluator import evaluate_manifest
+from zerg.qa.tool_translation_replay import GOLDEN_NAME
+from zerg.qa.tool_translation_replay import compare_to_golden
+from zerg.qa.tool_translation_replay import replay_manifest
+from zerg.qa.tool_translation_replay import totals
 
 _SUBPROCESS_RUNTIME_ENV_KEYS = {
     "DYLD_LIBRARY_PATH",
@@ -5519,8 +5522,6 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
 
     adapter.prepare(package)
     corpus = default_repo_root() / "tests" / "fixtures" / "tool-translation" / "manifest.json"
-    report = evaluate_manifest(corpus, profile="hermetic")
-    provider_report = report.get("providers", {}).get(adapter.config.provider)
     generated_surfaces = (
         default_repo_root() / "web" / "src" / "shared" / "session" / "model" / "toolTiers.generated.ts",
         default_repo_root() / "ios" / "Sources" / "Shared" / "Generated" / "ToolTiers.generated.swift",
@@ -5540,6 +5541,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
     # The presentation under test is whatever a served Runtime Host returns for the
     # fixture's events; the product's presentation code is never imported here.
     with transcript_host() as host:
+        replay = replay_manifest(corpus, host)
         session_id = ingest_events(
             host.api_url,
             provider="codex",
@@ -5557,6 +5559,36 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         output = str(result_by_call_id.get(event.get("tool_call_id")) or "")
         failed = bool(re.search(r"(?:exit(?:ed)?|code)[^\n]*\b[1-9]\d*\b", output, re.IGNORECASE))
         projected_calls.append({"presentation": projected or {}, "failed": failed})
+    golden_mismatches = compare_to_golden(replay, corpus.parent / GOLDEN_NAME)
+    replay_totals = totals(replay)
+    provider_replay = replay["providers"].get(adapter.config.provider)
+    provider_report = (
+        {
+            "source_events": provider_replay["source_events"],
+            "served_events": provider_replay["served_events"],
+            "outer_calls": len(provider_replay["rows"]),
+            "results": provider_replay["results"],
+            "dispositions": {
+                disposition: sum(1 for row in provider_replay["rows"] if row["disposition"] == disposition)
+                for disposition in ("exact", "parsed", "generic", "unknown")
+            },
+        }
+        if provider_replay
+        else None
+    )
+    unknown_rows = [
+        {"provider": name, "tool_name": row["source_tool_name"]}
+        for name, entry in replay["providers"].items()
+        for row in entry["rows"]
+        if row["disposition"] == "unknown"
+    ]
+    verdicts = {
+        "control": {"verdict": "not_evaluated", "reason": "translation corpus has no live control scenario"},
+        "transcript": {"verdict": "yellow" if unknown_rows else "green", "reasons": ["unknown_shapes_present"] if unknown_rows else []},
+    }
+    conserved = replay_totals["paired"] == replay_totals["outer_calls"] == replay_totals["results"] and all(
+        entry["served_events"] == entry["source_events"] for entry in replay["providers"].values()
+    )
     rendered_tool_rows = 0
     active_aggregate: str | None = None
     for call in projected_calls:
@@ -5581,22 +5613,16 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
     parity_consumed_by_clients = all(
         path.is_file() and parity_fixture.name in path.read_text(encoding="utf-8") for path in (web_parity_test, ios_parity_test)
     )
-    shape_report = report["reports"]["shape_unknown"]
-    provider_has_fingerprint = any(
-        key.startswith(f"{adapter.config.provider}/") and bool(counts)
-        for key, counts in shape_report.get("schema_fingerprints", {}).items()
-    )
-    drift_canary_detected = any(
-        row.get("provider") == "cursor" and row.get("tool_name") == "CallDynamicTool" for row in shape_report.get("unknowns", [])
-    )
+    provider_has_fingerprint = bool(provider_replay and provider_replay["rows"])
+    drift_canary_detected = any(row["provider"] == "cursor" and row["tool_name"] == "CallDynamicTool" for row in unknown_rows)
     action_proofs = {
         "provider_shape_inventory": bool(provider_report and provider_report.get("source_events") and provider_has_fingerprint),
         "schema_drift_detect": bool(
             drift_canary_detected
-            and report["verdicts"]["transcript"]["verdict"] == "yellow"
-            and "unknown_shapes_present" in report["verdicts"]["transcript"]["reasons"]
+            and verdicts["transcript"]["verdict"] == "yellow"
+            and "unknown_shapes_present" in verdicts["transcript"]["reasons"]
         ),
-        "call_result_conservation": not bool(report["errors"]),
+        "call_result_conservation": conserved and not golden_mismatches,
         "presentation_projection": fixture_projection_matches and bool(projected_calls),
         "presentation_grouping": expected_tool_count == 4 and rendered_tool_rows == 2,
         "raw_disclosure_reachability": all(
@@ -5606,7 +5632,7 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
     }
     surface_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in generated_surfaces if path.is_file()}
     passed = bool(
-        report["passed"]
+        not golden_mismatches
         and provider_report
         and len(surface_hashes) == len(generated_surfaces)
         and parity_fixture.is_file()
@@ -5618,7 +5644,8 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         "failure_code": None if passed else "tool_presentation_projection_failed",
         "message": None if passed else "Golden translation replay or generated surface contract failed.",
         "provider_report": provider_report,
-        "verdicts": report["verdicts"],
+        "verdicts": verdicts,
+        "golden_mismatches": golden_mismatches,
         "surface_contract_hashes": surface_hashes,
         "cross_surface_fixture": {
             "path": str(parity_fixture.relative_to(default_repo_root())),
@@ -5637,10 +5664,10 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
             }
         },
     }
-    package.write_json("shape-inventory.json", report["reports"]["shape_unknown"])
-    package.write_json("conservation-report.json", report["reports"]["conservation"])
-    package.write_json("presentation-report.json", report["reports"]["presentation"])
-    package.write_json("verdict.json", report["verdicts"])
+    package.write_json("shape-inventory.json", {"unknowns": unknown_rows})
+    package.write_json("conservation-report.json", {**replay_totals, "conserved": conserved})
+    package.write_json("presentation-report.json", replay)
+    package.write_json("verdict.json", verdicts)
     package.write_json("assertions/tool-presentation-projection.json", payload)
     adapter.cleanup(package)
     return scenario_result(

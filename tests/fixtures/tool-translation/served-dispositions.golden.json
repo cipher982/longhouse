@@ -1,0 +1,213 @@
+{
+  "manifest_id": "tool-translation-golden-v1",
+  "providers": {
+    "antigravity": {
+      "results": 1,
+      "rows": [
+        {
+          "aggregate": "read",
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:view_file",
+          "source_tool_name": "view_file",
+          "tier": "context",
+          "tool_call_id": "call-antigravity",
+          "tool_name": "view_file",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 2,
+      "source_events": 2
+    },
+    "claude": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": "read",
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:read",
+          "source_tool_name": "Read",
+          "tier": "context",
+          "tool_call_id": "call-claude",
+          "tool_name": "Read",
+          "wrapper_recedes": false
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:edit",
+          "source_tool_name": "Edit",
+          "tier": "action",
+          "tool_call_id": "call-claude-edit",
+          "tool_name": "Edit",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    },
+    "codex": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": null,
+          "child_dispositions": [
+            "exact"
+          ],
+          "disposition": "parsed",
+          "paired_with_result": true,
+          "rule_id": "codex:exec:single-child:v1",
+          "source_tool_name": "exec",
+          "tier": "action",
+          "tool_call_id": "call-codex",
+          "tool_name": "exec_command",
+          "wrapper_recedes": true
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:request_user_input",
+          "source_tool_name": "request_user_input",
+          "tier": "action",
+          "tool_call_id": "call-codex-question",
+          "tool_name": "request_user_input",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    },
+    "cursor": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": "read",
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:readfile",
+          "source_tool_name": "ReadFile",
+          "tier": "context",
+          "tool_call_id": "call-cursor-read",
+          "tool_name": "ReadFile",
+          "wrapper_recedes": false
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "unknown",
+          "paired_with_result": true,
+          "rule_id": "tool:calldynamictool",
+          "source_tool_name": "CallDynamicTool",
+          "tier": "action",
+          "tool_call_id": "call-cursor-rare",
+          "tool_name": "CallDynamicTool",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    },
+    "omp": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:bash",
+          "source_tool_name": "bash",
+          "tier": "action",
+          "tool_call_id": "call-omp",
+          "tool_name": "bash",
+          "wrapper_recedes": false
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:bash",
+          "source_tool_name": "bash",
+          "tier": "action",
+          "tool_call_id": "call-omp-failed",
+          "tool_name": "bash",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    },
+    "opencode": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:bash",
+          "source_tool_name": "bash",
+          "tier": "action",
+          "tool_call_id": "call-opencode",
+          "tool_name": "bash",
+          "wrapper_recedes": false
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:bash",
+          "source_tool_name": "bash",
+          "tier": "action",
+          "tool_call_id": "call-opencode-failed",
+          "tool_name": "bash",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    },
+    "pi": {
+      "results": 2,
+      "rows": [
+        {
+          "aggregate": "read",
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:read",
+          "source_tool_name": "read",
+          "tier": "context",
+          "tool_call_id": "call-pi",
+          "tool_name": "read",
+          "wrapper_recedes": false
+        },
+        {
+          "aggregate": null,
+          "child_dispositions": [],
+          "disposition": "exact",
+          "paired_with_result": true,
+          "rule_id": "tool:edit",
+          "source_tool_name": "edit",
+          "tier": "action",
+          "tool_call_id": "call-pi-edit",
+          "tool_name": "edit",
+          "wrapper_recedes": false
+        }
+      ],
+      "served_events": 4,
+      "source_events": 4
+    }
+  },
+  "version": 1
+}
