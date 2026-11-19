@@ -84,27 +84,14 @@ A commit that spans lanes needs each lane run and verified on its own.
 1. Pick the task SHA: commit uncommitted work now, otherwise the latest commit
    that represents the task, even if already pushed.
 2. Before pushing: run the focused tests for the changed behavior (a CSS change
-   needs a web proof, not engine tests). `make ship` then runs the pre-push gate
-   itself; `make prepush-gate [HEAD=<sha>] [DRY=1]` runs or previews it by hand.
-   The gate (`scripts/ci/prepush_gate.py`) resolves the committed diff
-   `origin/main...HEAD` (never your working tree, never another session's dirty
-   files) to the lanes CI runs for those paths, checks the exact commit out in a
-   clean directory and runs them on the `ci` VM through `scripts/ops/remote.sh`:
-   `make validate`, provider contract, managed launch lifecycle, backend tests
-   selected by Python import graph (`scripts/ci/backend_select.py`; the full suite
-   for schemas, config, models and shared fixtures), engine and shipper tests, the
-   frontend lane, wheel packaging and the Terminal Truth harness selfcheck. rustfmt
-   runs locally in a second. It prints lane times and the log tail of every failed
-   lane, and exits 1 so the push does not happen. It cannot run the real-provider
-   Terminal Truth cells (no provider CLI runs on the laptop or the guest); the
-   post-push run and the repair bot cover those, and `make prove CELLS="claude/helm:tool"
-   SHA=<sha>` runs any of them against your commit on cube-bench in about a minute
-   (`zerg-testing` skill). `make affected-check GATE=1` shows
-   the plan without running it. Once per clone: `make install-precommit-autofix`
-   installs the pre-push hook for every worktree, so a plain `git push origin
-   HEAD:main` is gated too. `LONGHOUSE_PREPUSH_GATE=skip` (or `ARGS=--no-gate`)
-   bypasses it and says nothing was checked; use it only for a revert that must
-   land now.
+   needs a web proof, not engine tests), then push. Pushes are not gated: CI runs
+   every lane after the push, and a red main is fixed forward (the repair bot
+   helps). rustfmt runs at commit as a pre-commit autofix. The old pre-push gate
+   (`scripts/ci/prepush_gate.py`: the CI lanes for your diff on the `ci` VM) is
+   opt-in for when you want a pre-flight: `make prepush-gate [HEAD=<sha>] [DRY=1]`,
+   `make ship ARGS=--gate`, or `LONGHOUSE_PREPUSH_GATE=run git push`. Real-provider
+   Terminal Truth cells run on cube-bench with `make prove CELLS="claude/helm:tool"
+   SHA=<sha>` (`zerg-testing` skill).
 3. `make ship SHA=<full-sha>` pushes that exact SHA to main, registers a watch and
    returns in seconds. Move on. The Sauron job `longhouse-ship-watch` on clifford
    follows the SHA through CI, canary deploy and Terminal Truth and sends a message

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Pre-push gate: run the CI lanes a push would trigger, before the push, on the ci VM.
+"""Pre-push gate: run the CI lanes a push would trigger, before the push, on the ci VM. Opt-in.
+
+Pushes are not gated by default: CI runs these lanes after the push and a red main is fixed forward. The gate cost a
+median 5.3 minutes per push (17.6 hours over 174 pushes, 2026-11-15..19) for checks CI repeats. Run it when you want
+a pre-flight: ``make prepush-gate``, ``make ship ARGS=--gate``, or ``LONGHOUSE_PREPUSH_GATE=run git push``.
 
     prepush_gate.py [--base origin/main] [--head HEAD] [--dry-run] [--only lane,lane] [--json]
     prepush_gate.py --hook REMOTE URL            # as git's pre-push hook; ref updates arrive on stdin
@@ -13,7 +17,7 @@ What it does, in order:
    the ``ci`` VM, which has warm test images and never starts a provider CLI. Lanes share the guest's three slots.
 4. Prints one line per lane with its time, the log tail of every failed lane, and exits 1 if any failed.
 
-Only pushes to refs/heads/main are gated. ``LONGHOUSE_PREPUSH_GATE=skip`` bypasses it (a revert that must land now);
+As a hook it gates only pushes to refs/heads/main, and only with ``LONGHOUSE_PREPUSH_GATE=run``;
 ``LONGHOUSE_PREPUSH_GATE=done:<sha>`` says ship.sh already gated that exact commit. An unreachable ci VM fails the
 gate: a push that was not checked says so instead of looking checked.
 
@@ -262,10 +266,7 @@ def hook(argv: list[str]) -> int:
         if not separation_ok(base, local_sha):
             status = 1
             continue
-        if mode == "skip":
-            print(f"prepush-gate: SKIPPED for {local_sha[:10]} (LONGHOUSE_PREPUSH_GATE=skip); nothing was checked", file=sys.stderr)
-            continue
-        if mode == f"done:{local_sha}":
+        if mode != "run":  # opt-in: CI runs these lanes after the push
             continue
         status |= gate(base, local_sha, dry_run=False, only=None, as_json=False)
     return status

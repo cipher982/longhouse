@@ -93,26 +93,27 @@ def test_a_failing_gate_blocks_the_push() -> None:
     with tempfile.TemporaryDirectory() as raw:
         bare, work = make_repo(Path(raw))
         before = git(bare, "rev-parse", "main")
-        result = run_ship(work, "--sha", git(work, "rev-parse", "HEAD"), env_extra={"FAKE_GATE_EXIT": "1"})
+        result = run_ship(work, "--sha", git(work, "rev-parse", "HEAD"), "--gate", env_extra={"FAKE_GATE_EXIT": "1"})
         assert result.returncode == 4, result.stderr
         assert "GATE-RAN" in result.stderr and "nothing was pushed" in result.stderr
         assert git(bare, "rev-parse", "main") == before
         assert git(bare, "for-each-ref", "refs/ship/") == ""
 
 
-def test_a_passing_gate_runs_once_before_the_push_and_skip_bypasses_it() -> None:
+def test_the_gate_is_opt_in_and_runs_once_when_asked() -> None:
     with tempfile.TemporaryDirectory() as raw:
         bare, work = make_repo(Path(raw))
         sha = git(work, "rev-parse", "HEAD")
-        result = run_ship(work, "--sha", sha)
+        result = run_ship(work, "--sha", sha, "--gate")
         assert result.returncode == 0, result.stderr
         assert result.stderr.count("GATE-RAN") == 1
         assert git(bare, "rev-parse", "main") == sha
     with tempfile.TemporaryDirectory() as raw:
         bare, work = make_repo(Path(raw))
         sha = git(work, "rev-parse", "HEAD")
-        result = run_ship(work, "--sha", sha, env_extra={"LONGHOUSE_PREPUSH_GATE": "skip", "FAKE_GATE_EXIT": "1"})
+        result = run_ship(work, "--sha", sha, env_extra={"FAKE_GATE_EXIT": "1"})
         assert result.returncode == 0 and "GATE-RAN" not in result.stderr, result.stderr
+        assert git(bare, "rev-parse", "main") == sha
 
 
 def advance_origin(tmp: Path, bare: Path, files: dict[str, str], message: str = "someone else") -> str:

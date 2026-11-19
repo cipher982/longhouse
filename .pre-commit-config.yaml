@@ -97,6 +97,16 @@ repos:
         exclude: ^server/zerg/generated/
         require_serial: true
 
+      - id: rustfmt
+        name: rustfmt (self-staging)
+        # Was the pre-push gate's one local lane; the gate is now opt-in, so the
+        # formatter runs at commit like ruff format. CI's `cargo fmt --check` agrees.
+        entry: python3 scripts/qa/precommit_autofix.py fix --name "rustfmt" --cmd "rustfmt --edition 2021" --how "rustfmt --edition 2021 <file>"
+        language: system
+        types: [rust]
+        files: ^engine/
+        require_serial: true
+
       # -----------------------------------------------------------------------
       # Session-mode vocabulary must have one canonical definition
       # -----------------------------------------------------------------------
