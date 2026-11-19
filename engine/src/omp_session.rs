@@ -19,7 +19,7 @@ pub const OMP_SESSION_DIR_ENV: &str = "LONGHOUSE_OMP_SESSION_DIR";
 pub const OMP_SESSION_DIR_NAME: &str = "sessions";
 const OMP_DATA_DIR_NAME: &str = "omp";
 pub const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
-const AUTO_RESUME_OVERLAY_FILE_NAME: &str = "omp-helm-config.yml";
+const LAUNCH_CONFIG_OVERLAY_FILE_NAME: &str = "omp-helm-config.yml";
 const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
@@ -753,22 +753,28 @@ pub fn session_dir_flag_required(configured_session_dir: Option<&Path>) -> bool 
         || nonempty_env_path(OMP_CONFIG_DIR_ENV).is_some()
 }
 
-/// Both interactive Helm launches and headless Console (`--mode rpc`) runs omit
-/// `--session-dir` so OMP files the transcript in its canonical-cwd bucket.
-/// Without that flag or `--resume`, OMP's `autoResume` setting adopts the cwd's
-/// newest transcript instead of creating one. Passing this overlay via
-/// `--config` pins `autoResume: false` for the launched process only.
-pub const AUTO_RESUME_OVERLAY: &str = "autoResume: false\n";
+/// Settings every Longhouse OMP launch (Helm and Console) passes via `--config`,
+/// for the launched process only. An OMP setting env var such as
+/// `PI_INTENT_TRACING` still outranks this overlay.
+///
+/// - `autoResume: false`: both launch paths omit `--session-dir` so OMP files
+///   the transcript in its canonical-cwd bucket. Without that flag or
+///   `--resume`, `autoResume` adopts the cwd's newest transcript instead of
+///   creating one.
+/// - `tools.intentTracing: true`: OMP 19.0.0 turned the per-tool-call intent
+///   line off outside its interactive TUI. Console runs `--mode rpc`, and its
+///   timeline should narrate tool calls the way the terminal does.
+pub const LAUNCH_CONFIG_OVERLAY: &str = "autoResume: false\ntools:\n  intentTracing: true\n";
 
-pub fn write_auto_resume_overlay(dir: &Path) -> Result<PathBuf> {
+pub fn write_launch_config_overlay(dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
-    let path = dir.join(AUTO_RESUME_OVERLAY_FILE_NAME);
-    fs::write(&path, AUTO_RESUME_OVERLAY)?;
+    let path = dir.join(LAUNCH_CONFIG_OVERLAY_FILE_NAME);
+    fs::write(&path, LAUNCH_CONFIG_OVERLAY)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

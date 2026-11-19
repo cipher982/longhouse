@@ -3389,7 +3389,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     });
     let extension_root = state_root.join("extensions").join(&session_id);
     let extension = write_extension_file(&extension_root)?;
-    let config_overlay = crate::omp_session::write_auto_resume_overlay(&extension_root)?;
+    let config_overlay = crate::omp_session::write_launch_config_overlay(&extension_root)?;
     let mut command = Command::new(&binary);
     // A fresh launch lets OMP create its native session in this launch's
     // canonical-cwd bucket, with the overlay keeping a fresh launch fresh. A
@@ -6082,16 +6082,16 @@ mod tests {
     }
 
     #[test]
-    fn helm_args_leave_the_session_dir_to_omp_and_pin_auto_resume() {
+    fn helm_args_leave_the_session_dir_to_omp_and_pin_the_launch_overlay() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("sessions");
         let extension = temp.path().join("extension.ts");
         let overlay =
-            crate::omp_session::write_auto_resume_overlay(&temp.path().join("overlay")).unwrap();
+            crate::omp_session::write_launch_config_overlay(&temp.path().join("overlay")).unwrap();
         assert_eq!(
             fs::read_to_string(&overlay).unwrap(),
-            "autoResume: false\n",
-            "the overlay OMP parses must pin a fresh launch"
+            "autoResume: false\ntools:\n  intentTracing: true\n",
+            "the overlay OMP parses must pin a fresh launch and keep tool intent on"
         );
         let has = |args: &[std::ffi::OsString], flag: &str, value: &Path| {
             args.windows(2)
@@ -6286,7 +6286,7 @@ print(json.dumps({
         let native_id = "native-fresh";
         let extension = temp.path().join("extension.ts");
         let config_overlay =
-            crate::omp_session::write_auto_resume_overlay(&temp.path().join("overlay")).unwrap();
+            crate::omp_session::write_launch_config_overlay(&temp.path().join("overlay")).unwrap();
         let args = build_omp_helm_args(
             &storage.session_dir,
             storage.explicit_session_dir,

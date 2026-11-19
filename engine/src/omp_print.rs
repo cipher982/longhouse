@@ -276,7 +276,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
     let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
-    let config_overlay = crate::omp_session::write_auto_resume_overlay(&run_dir)?;
+    let config_overlay = crate::omp_session::write_launch_config_overlay(&run_dir)?;
     let args = build_omp_args(
         config.model.as_deref(),
         config.profile.as_deref(),
