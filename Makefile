@@ -1371,7 +1371,7 @@ deploy-status: ## Show deployed SHA + health for all surfaces
 launch-readiness: ## Verify launch-critical workflows, live surfaces, release, and PyPI all match SHA
 	@./scripts/ops/launch-readiness.py $(if $(SHA),--sha $(SHA),) $(ARGS)
 
-prepush-gate: ## Opt-in pre-flight: the CI lanes for your committed diff vs origin/main, on the ci VM (HEAD=<sha> BASE=<ref> ONLY=lane,lane DRY=1)
+prepush-gate: ## The CI lanes for your committed diff vs origin/main, on the ci VM (HEAD=<sha> BASE=<ref> ONLY=lane,lane DRY=1); also runs from the pre-push hook
 	@python3 scripts/ci/prepush_gate.py $(if $(BASE),--base "$(BASE)",) $(if $(HEAD),--head "$(HEAD)",) $(if $(ONLY),--only "$(ONLY)",) $(if $(filter 1 true yes,$(DRY)),--dry-run,)
 
 ship-watch: ## Wait for exact-SHA push workflows + live deploy verification (SHA defaults to HEAD)

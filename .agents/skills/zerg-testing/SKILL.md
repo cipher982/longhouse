@@ -29,7 +29,7 @@ identity, run `python3 scripts/build/generate_build_identity.py`.
 | `make test-runner` | runner |
 | `make test-e2e-core` (alias `make test-e2e`) | launch-surface E2E plus accessibility, retries=0 |
 | `make test-transcript-stability` | web and iOS frame-by-frame layout/scroll stability |
-| `make validate` | every contract and drift check |
+| `make validate` | every contract and drift check (pre-push gate) |
 | `make test-ci` / `make test-full` | broad cutover runs; CI or diagnosis only |
 
 Goals matching `ISOLATED_GOALS` (top of the `Makefile`: `test*`, `validate*`, `qa-*`,
@@ -49,8 +49,8 @@ laptop and never run a provider CLI there.
 named real-provider cells against any commit (default `HEAD`, pushed or not) on
 `cube-bench` (Linux, credential-free scripted model; never a provider CLI on
 this Mac) and prints one `PASS|FAIL <cell> <seconds> <evidence path>` line per
-cell, exit 1 on any failure. Use it for a real provider cell before pushing
-and before waiting on a factory tick or the Terminal
+cell, exit 1 on any failure. Use it for the check the pre-push gate does not run
+(a real provider cell) and before waiting on a factory tick or the Terminal
 Truth workflow.
 
 - Cells: a Terminal Truth cell `provider/mode[:scenario]` (`claude/helm`,

@@ -40,12 +40,8 @@ def test_only_pushes_to_main_are_gated() -> None:
     assert status == 0 and calls == []
 
 
-def test_a_push_to_main_is_not_gated_by_default() -> None:
-    assert run_hook(f"refs/heads/x {A} refs/heads/main {pg.ZERO}\n", result=1) == (0, [])
-
-
-def test_an_opted_in_push_to_main_is_gated_and_its_failure_blocks() -> None:
-    status, calls = run_hook(f"refs/heads/x {A} refs/heads/main {pg.ZERO}\n", {"LONGHOUSE_PREPUSH_GATE": "run"}, result=1)
+def test_a_push_to_main_is_gated_and_its_failure_blocks() -> None:
+    status, calls = run_hook(f"refs/heads/x {A} refs/heads/main {pg.ZERO}\n", result=1)
     assert status == 1 and calls == [("origin/main", A)]
 
 
@@ -53,10 +49,12 @@ def test_deleting_main_is_not_gated() -> None:
     assert run_hook(f"(delete) {pg.ZERO} refs/heads/main {B}\n") == (0, [])
 
 
-def test_only_run_opts_in() -> None:
+def test_skip_and_done_bypass_but_only_for_the_named_commit() -> None:
     line = f"refs/heads/x {A} refs/heads/main {pg.ZERO}\n"
-    for mode in ("skip", f"done:{A}", "1", "yes"):
-        assert run_hook(line, {"LONGHOUSE_PREPUSH_GATE": mode}, result=1) == (0, [])
+    assert run_hook(line, {"LONGHOUSE_PREPUSH_GATE": "skip"}, result=1) == (0, [])
+    assert run_hook(line, {"LONGHOUSE_PREPUSH_GATE": f"done:{A}"}, result=1) == (0, [])
+    status, calls = run_hook(line, {"LONGHOUSE_PREPUSH_GATE": f"done:{B}"}, result=1)
+    assert status == 1 and len(calls) == 1
 
 
 def test_a_separation_violation_blocks_even_with_skip() -> None:
