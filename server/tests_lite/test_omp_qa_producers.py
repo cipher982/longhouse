@@ -554,7 +554,10 @@ def test_omp_native_settlement_binds_native_evidence_to_first_turn_and_keeps_std
     tool_marker = "OMP_TOOL_OUTPUT"
     first_turn = [
         {"type": "session", "id": "native-1"},
-        {"type": "message", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "call-1"}]}},
+        {
+            "type": "message",
+            "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "call-1", "intent": "Reading the stored context"}]},
+        },
         {"type": "message", "message": {"role": "toolResult", "toolCallId": "call-1", "content": tool_marker}},
         {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]}},
     ]
@@ -575,7 +578,36 @@ def test_omp_native_settlement_binds_native_evidence_to_first_turn_and_keeps_std
     assert settlement["native_tool_call_ids"] == ["call-1"]
     assert settlement["native_tool_result_ids"] == ["call-1"]
     assert settlement["native_tool_evidence_complete"] is True
+    assert settlement["native_tool_intent_complete"] is True
+    assert settlement["native_tool_calls_without_intent"] == []
     assert settlement["malformed_source"] is False
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "complete"),
+    [
+        ({"type": "toolCall", "id": "call-1", "intent": "Reading the stored context"}, True),
+        ({"type": "toolCall", "id": "call-1", "arguments": {"path": "x", "i": "Reading the stored context"}}, True),
+        # OMP 19.0.0 print/RPC default: intent tracing off, so the call has neither field.
+        ({"type": "toolCall", "id": "call-1", "arguments": {"path": "x"}}, False),
+        ({"type": "toolCall", "id": "call-1", "intent": "   ", "arguments": {"i": ""}}, False),
+    ],
+)
+def test_omp_native_settlement_requires_tool_intent_like_the_tui(tmp_path, tool_call, complete) -> None:
+    marker, tool_marker = "OMP_FIRST_TURN_MARKER", "OMP_TOOL_OUTPUT"
+    first_turn = [
+        {"type": "session", "id": "native-1"},
+        {"type": "message", "message": {"role": "assistant", "content": [tool_call]}},
+        {"type": "message", "message": {"role": "toolResult", "toolCallId": "call-1", "content": tool_marker}},
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]}},
+    ]
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn)
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["native_tool_evidence_complete"] is True
+    assert settlement["native_tool_intent_complete"] is complete
+    assert settlement["native_tool_calls_without_intent"] == ([] if complete else ["call-1"])
 
 
 def _omp_console_first_turn(marker: str, tool_marker: str, *replies: tuple[str, object], narration: str | None = None) -> list[dict]:
@@ -586,7 +618,10 @@ def _omp_console_first_turn(marker: str, tool_marker: str, *replies: tuple[str, 
             "id": "tool-call",
             "message": {
                 "role": "assistant",
-                "content": [*([{"type": "text", "text": narration}] if narration else []), {"type": "toolCall", "id": "call-1"}],
+                "content": [
+                    *([{"type": "text", "text": narration}] if narration else []),
+                    {"type": "toolCall", "id": "call-1", "intent": "Reading the stored context"},
+                ],
             },
         },
         {"type": "message", "id": "tool-result", "message": {"role": "toolResult", "toolCallId": "call-1", "content": tool_marker}},
@@ -1709,6 +1744,7 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
             "native_marker_count": 1,
             "native_reply_count": 1,
             "native_tool_evidence_complete": True,
+            "native_tool_intent_complete": True,
             "malformed_source": False,
         },
         "no_orphan_provider_processes": True,
@@ -1732,6 +1768,10 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
     observation["omp_settlement"]["native_marker_count"] = 2
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is True
     observation["omp_settlement"]["native_reply_count"] = 0
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
+    observation["omp_settlement"]["native_reply_count"] = 1
+    # A Console tool call without OMP's intent line is a parity loss with the TUI.
+    observation["omp_settlement"]["native_tool_intent_complete"] = False
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
 
 

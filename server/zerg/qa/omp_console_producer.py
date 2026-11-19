@@ -475,6 +475,20 @@ def _first_turn_source_window_from_response_binding(
     return source_path, source_path.relative_to(root.resolve()).as_posix(), source_bytes, events, len(source_bytes)
 
 
+def _tool_call_intent(block: Mapping[str, Any]) -> str | None:
+    """The one-line intent OMP's intent tracing writes on a tool call (`intent`, or the `i` argument).
+
+    OMP turns intent tracing off by default outside its TUI (19.0.0). Longhouse turns it back on for every launch so
+    a Console session narrates its tool calls the same way the terminal does.
+    """
+
+    arguments = block.get("arguments")
+    for value in (block.get("intent"), arguments.get("i") if isinstance(arguments, Mapping) else None):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _native_settlement(root: Path) -> dict[str, object]:
     """Bind OMP's print terminal and native archive/tool evidence separately."""
 
@@ -497,6 +511,7 @@ def _native_settlement(root: Path) -> dict[str, object]:
     native_archive_bound = False
     native_session_id_bound = False
     tool_call_ids: set[str] = set()
+    tool_intent_ids: set[str] = set()
     tool_result_ids: set[str] = set()
     tool_output_marker_count = 0
     source_paths: list[str] = []
@@ -547,6 +562,8 @@ def _native_settlement(root: Path) -> dict[str, object]:
             for block in blocks:
                 if isinstance(block, Mapping) and block.get("type") == "toolCall" and block.get("id"):
                     tool_call_ids.add(str(block["id"]))
+                    if _tool_call_intent(block):
+                        tool_intent_ids.add(str(block["id"]))
         elif role == "toolResult":
             tool_call_id = message.get("toolCallId")
             if isinstance(tool_call_id, str) and tool_call_id:
@@ -587,6 +604,7 @@ def _native_settlement(root: Path) -> dict[str, object]:
         and flush.get("exit_code") == 0
     )
     linked_tool_call_ids = sorted(tool_call_ids & tool_result_ids)
+    linked_tool_calls_without_intent = sorted(set(linked_tool_call_ids) - tool_intent_ids)
     return {
         "status": (
             "pass" if provider_response_terminal and provider_response_source_bound and stream_drained and native_archive_bound else "fail"
@@ -614,12 +632,14 @@ def _native_settlement(root: Path) -> dict[str, object]:
         "native_linked_tool_call_ids": linked_tool_call_ids,
         "native_tool_output_marker_count": tool_output_marker_count,
         "native_tool_evidence_complete": (bool(linked_tool_call_ids) and tool_output_marker_count == 1),
+        "native_tool_calls_without_intent": linked_tool_calls_without_intent,
+        "native_tool_intent_complete": bool(linked_tool_call_ids) and not linked_tool_calls_without_intent,
         "malformed_source": malformed_source,
         "source_paths": source_paths,
     }
 
 
-JUDGE_REVISION = 1
+JUDGE_REVISION = 2
 JUDGE = "zerg.qa.omp_console_producer:judge"
 
 
@@ -663,6 +683,8 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
                 settlement.get("native_session_id_bound") is True,
                 settlement.get("native_reply_count") == 1,
                 settlement.get("native_tool_evidence_complete") is True,
+                # Every tool call the turn made carries OMP's intent line, as it does in the TUI.
+                settlement.get("native_tool_intent_complete") is True,
                 settlement.get("malformed_source") is False,
                 observation.get("omp_continuation_context_recalled") is True,
                 observation.get("interrupt_contract_preserved") is True,
