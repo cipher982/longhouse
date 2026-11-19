@@ -259,9 +259,9 @@ before touching deploys, health or epochs).
   of `server/zerg/`) except edges in `scripts/ci/verifier-boundary.allow`, a list
   that only shrinks (`make validate-verifier-boundary`).
 - Provider CLI versions have no single owner: cinder runs the vendors'
-  self-updating installers, cube-bench runs Nix pins
-  (`~/git/me/domains/mytech/workbench/nix/`), and the factory's release discovery
-  is not connected to either.
+  self-updating installers, David's workspace `cube-ws` runs Nix pins
+  (`~/git/me/domains/mytech/workspace/nix/`), `make prove` on `cube-proof` uses the
+  Terminal Truth CI pins, and the factory's release discovery is not connected to any of them.
 
 ## Fallbacks
 

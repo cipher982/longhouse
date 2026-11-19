@@ -90,7 +90,7 @@ A commit that spans lanes needs each lane run and verified on its own.
    (`scripts/ci/prepush_gate.py`: the CI lanes for your diff on the `ci` VM) is
    opt-in for when you want a pre-flight: `make prepush-gate [HEAD=<sha>] [DRY=1]`,
    `make ship ARGS=--gate`, or `LONGHOUSE_PREPUSH_GATE=run git push`. Real-provider
-   Terminal Truth cells run on cube-bench with `make prove CELLS="claude/helm:tool"
+   Terminal Truth cells run on `cube-proof` with `make prove CELLS="claude/helm:tool"
    SHA=<sha>` (`zerg-testing` skill).
 3. `make ship SHA=<full-sha>` pushes that exact SHA to main, registers a watch and
    returns in seconds. Move on. The Sauron job `longhouse-ship-watch` on clifford

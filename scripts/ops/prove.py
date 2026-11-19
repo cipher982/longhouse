@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run named live checks (cells) against any commit on the Linux bench and say pass or fail per cell.
+"""Run named live checks (cells) against any commit on the Linux proof host and say pass or fail per cell.
 
     make prove CELLS="claude/helm:tool pi_helm_steer_active" SHA=<commit>        (SHA defaults to HEAD)
     scripts/ops/prove.py --cells "claude/helm codex/console:thinking" --sha origin/main
@@ -15,9 +15,10 @@ A cell is one of:
 Output is one line per cell, ``PASS|FAIL <cell> <seconds> <evidence path or reason>``, then a summary line. The exit
 status is 1 when any cell fails, cannot be resolved or cannot run, 2 for a usage error.
 
-How it works. This file runs in two places: here (the orchestrator, standard library only) and on the bench
-(``--on-bench``, the same file copied over for that run, so an old SHA is judged by today's runner). The bench is
-``cube-bench`` (Linux); provider CLIs never run on this Mac. On the bench, per run:
+How it works. This file runs in two places: here (the orchestrator, standard library only) and on the proof host
+(``--on-host``, the same file copied over for that run, so an old SHA is judged by today's runner). The proof host is
+``cube-proof`` (Linux, ``PROVE_HOST`` overrides it), a disposable container that exists only for these runs; provider
+CLIs never run on this Mac, and never in David's workspace (``cube-ws``). On the proof host, per run:
 
   1. the commit comes from a bare repository there (fetched from origin, or pushed from this checkout when it is
      not on origin yet) and is checked out as a disposable worktree;
@@ -34,7 +35,7 @@ How it works. This file runs in two places: here (the orchestrator, standard lib
   6. teardown, on success, failure, timeout and signal: every process group the run started is killed, any process
      still carrying the run's marker or living in its scratch is killed, the scratch, venv and worktree are removed,
      and the result line says whether anything was left. Only ``out/`` (results, logs, producer evidence) stays, on
-     the bench for 24 hours and copied here under /tmp/agents/prove/<run>/.
+     the proof host for 24 hours and copied here under /tmp/agents/prove/<run>/.
 
 Not built: ``TARGET=factory`` (the factory checking a priority prove request between cells) and ``TARGET=wisp``
 (macOS-only cells; no provider cell needs macOS today). Both refuse by name instead of falling back.
@@ -61,8 +62,8 @@ import sys
 import time
 from pathlib import Path
 
-BENCH_HOST = os.environ.get("PROVE_BENCH_HOST", "cube-bench")
-BENCH_BASE = ".cache/longhouse-prove"  # relative to the bench user's home
+PROOF_HOST = os.environ.get("PROVE_HOST", "cube-proof")
+PROOF_BASE = ".cache/longhouse-prove"  # relative to the proof host user's home
 LOCAL_OUT = Path("/tmp/agents/prove")
 ORIGIN_URL = "https://github.com/cipher982/longhouse.git"
 
@@ -72,15 +73,15 @@ TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity")
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")
 ASSERTION_CELL = re.compile(r"^[a-z][a-z0-9_]+$")
 
-# Producers whose bench envelope has been run end to end against the scripted model. The factory builds each
+# Producers whose proof-host envelope has been run end to end against the scripted model. The factory builds each
 # producer's argv from its own plan; this is the part of that this runner restates, so a producer is added here only
 # after a real run (spec: "what remains"). producer_id -> (provider, model the scripted endpoint answers to).
-BENCH_PRODUCERS = {
+PROOF_PRODUCERS = {
     "pi.helm_lifecycle.v1": ("pi", "mock-model"),
     "omp.helm_lifecycle.v1": ("omp", "longhouse-mock/mock-model"),
 }
 
-CELL_TIMEOUT_S = 420  # one Terminal Truth cell is 20 to 75 s; a hung provider must not hold the bench
+CELL_TIMEOUT_S = 420  # one Terminal Truth cell is 20 to 75 s; a hung provider must not hold the proof host
 PRODUCER_TIMEOUT_S = 600  # a Pi Helm lifecycle is about 110 s
 DEFAULT_DEADLINE_S = 1500
 EVIDENCE_KEEP_S = 24 * 3600
@@ -138,15 +139,15 @@ def git(*args: str, cwd: Path | None = None, check: bool = True) -> str:
 
 def ssh(command: str, *, timeout: int | None = None, stdin=None, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=20", BENCH_HOST, command],
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=20", PROOF_HOST, command],
         capture_output=True, text=True, timeout=timeout, stdin=stdin, check=check,
     )  # fmt: skip
 
 
-def ensure_commit_on_bench(sha: str) -> None:
-    """Make the commit exist in the bench's bare repository: fetch it from origin, else push it from this checkout."""
+def ensure_commit_on_host(sha: str) -> None:
+    """Make the commit exist in the proof host's bare repository: fetch it from origin, else push it from this checkout."""
 
-    base = f"$HOME/{BENCH_BASE}"
+    base = f"$HOME/{PROOF_BASE}"
     probe = ssh(
         f"set -e; mkdir -p {base}; cd {base}; [ -d repo.git ] || git init -q --bare repo.git; "
         f"git -C repo.git remote get-url origin >/dev/null 2>&1 || git -C repo.git remote add origin {ORIGIN_URL}; "
@@ -160,18 +161,18 @@ def ensure_commit_on_bench(sha: str) -> None:
         return
     log(f"{sha[:12]} is not on origin; pushing it from this checkout")
     pushed = subprocess.run(
-        ["git", "push", "-q", f"{BENCH_HOST}:{BENCH_BASE}/repo.git", f"{sha}:refs/prove/{sha}"],
+        ["git", "push", "-q", f"{PROOF_HOST}:{PROOF_BASE}/repo.git", f"{sha}:refs/prove/{sha}"],
         cwd=repo_root(), capture_output=True, text=True, timeout=300, check=False,
     )  # fmt: skip
     if pushed.returncode != 0:
-        raise SystemExit(f"prove: cannot get {sha[:12]} to {BENCH_HOST}: fetch said {fetched.stderr.strip()!r}, push said {pushed.stderr.strip()!r}")
+        raise SystemExit(f"prove: cannot get {sha[:12]} to {PROOF_HOST}: fetch said {fetched.stderr.strip()!r}, push said {pushed.stderr.strip()!r}")
 
 
 def fetch_results(run_id: str) -> Path:
     dest = LOCAL_OUT / run_id
     dest.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["rsync", "-a", "--exclude", "scratch-copy/**/node_modules", f"{BENCH_HOST}:{BENCH_BASE}/runs/{run_id}/out/", f"{dest}/"],
+        ["rsync", "-a", "--exclude", "scratch-copy/**/node_modules", f"{PROOF_HOST}:{PROOF_BASE}/runs/{run_id}/out/", f"{dest}/"],
         capture_output=True, text=True, timeout=300, check=False,
     )  # fmt: skip
     return dest
@@ -183,10 +184,10 @@ def orchestrate(args: argparse.Namespace) -> int:
     if not cells:
         print("prove: no cells (CELLS=\"claude/helm pi_helm_steer_active\")", file=sys.stderr)
         return 2
-    if args.target != "bench":
+    if args.target != "proof":
         print(
-            f"prove: TARGET={args.target} is not built. `bench` runs on {BENCH_HOST} (Linux, scripted model); the factory "
-            "priority request and a macOS bench target are recorded as next in control-plane/docs/specs/multi-agent-dev-loop-speed.md.",
+            f"prove: TARGET={args.target} is not built. `proof` runs on {PROOF_HOST} (Linux, scripted model); the factory "
+            "priority request and a macOS target are recorded as next in control-plane/docs/specs/multi-agent-dev-loop-speed.md.",
             file=sys.stderr,
         )
         return 2
@@ -203,14 +204,14 @@ def orchestrate(args: argparse.Namespace) -> int:
         print(f"prove: {args.sha!r} is not a commit in this checkout (git fetch first)", file=sys.stderr)
         return 2
     run_id = f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%S}-{sha[:8]}-{secrets.token_hex(2)}"
-    log(f"run {run_id}: {len(cells)} cell(s) at {sha} on {BENCH_HOST}")
-    tools = f"{BENCH_BASE}/tools/prove-{run_id}.py"
+    log(f"run {run_id}: {len(cells)} cell(s) at {sha} on {PROOF_HOST}")
+    tools = f"{PROOF_BASE}/tools/prove-{run_id}.py"
     child: subprocess.Popen | None = None
 
     def stop_remote(*_: object) -> None:
-        log("interrupted; telling the bench to tear the run down")
+        log("interrupted; telling the proof host to tear the run down")
         subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", BENCH_HOST, f"pkill -TERM -f 'prove-{run_id}.py --on-bench' || true"],
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", PROOF_HOST, f"pkill -TERM -f 'prove-{run_id}.py --on-host' || true"],
             capture_output=True, timeout=30, check=False,
         )  # fmt: skip
         if child is not None:
@@ -221,19 +222,19 @@ def orchestrate(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, stop_remote)
     signal.signal(signal.SIGTERM, stop_remote)
     try:
-        ensure_commit_on_bench(sha)
-        shipped = ssh(f"mkdir -p $HOME/{BENCH_BASE}/tools && cat > $HOME/{tools}", stdin=open(Path(__file__), "rb"), timeout=60)
+        ensure_commit_on_host(sha)
+        shipped = ssh(f"mkdir -p $HOME/{PROOF_BASE}/tools && cat > $HOME/{tools}", stdin=open(Path(__file__), "rb"), timeout=60)
         if shipped.returncode != 0:
-            raise SystemExit(f"prove: cannot copy the runner to {BENCH_HOST}: {shipped.stderr.strip()}")
+            raise SystemExit(f"prove: cannot copy the runner to {PROOF_HOST}: {shipped.stderr.strip()}")
         remote = (
-            f"timeout -k 30 {int(args.deadline)} python3 $HOME/{tools} --on-bench --run-id {run_id} --sha {sha} "
+            f"timeout -k 30 {int(args.deadline)} python3 $HOME/{tools} --on-host --run-id {run_id} --sha {sha} "
             f"--cells {shlex.quote(' '.join(cells))} --deadline {int(args.deadline)}"
             + (" --keep" if args.keep else "")
             + (f" --fault {shlex.quote(args.fault)}" if args.fault else "")
             + (f" --cell-timeout {int(args.cell_timeout)}" if args.cell_timeout else "")
         )
         child = subprocess.Popen(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=20", BENCH_HOST, remote],
+            ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=20", PROOF_HOST, remote],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=sys.stderr, text=True,
         )  # fmt: skip
         assert child.stdout is not None
@@ -245,7 +246,7 @@ def orchestrate(args: argparse.Namespace) -> int:
         local = fetch_results(run_id)
         if not verdict_json:
             for cell in cells:
-                print(f"FAIL {cell}  no verdict: the bench run died (exit {status}); log {local}/run.log")
+                print(f"FAIL {cell}  no verdict: the proof host run died (exit {status}); log {local}/run.log")
             return 1
         report = json.loads(verdict_json)
     finally:
@@ -261,7 +262,7 @@ def orchestrate(args: argparse.Namespace) -> int:
     phases = " ".join(f"{k}={v:.0f}s" for k, v in report.get("phases", {}).items())
     print(
         f"prove: {len(report['cells']) - failed} pass, {failed} fail; sha {sha[:12]}; engine {report.get('engine', '?')}; "
-        f"total {time.monotonic() - started:.0f}s ({phases}); cleanup {cleanup.get('state', '?')}; bench evidence {BENCH_HOST}:{BENCH_BASE}/runs/{run_id}/out"
+        f"total {time.monotonic() - started:.0f}s ({phases}); cleanup {cleanup.get('state', '?')}; proof-host evidence {PROOF_HOST}:{PROOF_BASE}/runs/{run_id}/out"
     )  # fmt: skip
     if cleanup.get("state") != "clean":
         failed += 1
@@ -270,7 +271,7 @@ def orchestrate(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# Bench side
+# Proof-host side
 # --------------------------------------------------------------------------------------------------------------------
 
 
@@ -279,7 +280,7 @@ def fault_wrapper(argv: list[str], env: dict[str, str], fault: str, receipts: Pa
 
     This is the factory's engine-only channel (provider_factory/sandbox.py binds the same path): the QA engine reads
     /run/longhouse-qa/fault.json, the producer's argv and environment are exactly an honest run's, and the namespace
-    keeps another agent's QA engine on this bench from reading the selection. Receipts are copied out before exit.
+    keeps another agent's QA engine on this proof host from reading the selection. Receipts are copied out before exit.
     The inner `timeout` is the cap: the sudo parent is root's and a plain group kill cannot reach it.
     """
 
@@ -325,11 +326,11 @@ def control_verdict(result: dict, receipts: Path, target: str, fault: str, secon
     return {"verdict": verdict, "reason": reason, "seconds": seconds, "evidence": evidence}
 
 
-class Bench:
+class ProofRun:
     def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0, fault: str = "") -> None:
         self.run_id, self.sha, self.keep = run_id, sha, keep
         self.fault = fault
-        self.base = Path.home() / BENCH_BASE
+        self.base = Path.home() / PROOF_BASE
         self.repo = self.base / "repo.git"
         self.run_dir = self.base / "runs" / run_id
         self.out = self.run_dir / "out"
@@ -578,7 +579,7 @@ class Bench:
                 continue
 
     def run_producer(self, producer_id: str, module: str, info: dict, cells: list[dict], engine: Path, cli: Path, pins: dict, verdicts: dict[str, dict]) -> None:
-        provider, model = BENCH_PRODUCERS[producer_id]
+        provider, model = PROOF_PRODUCERS[producer_id]
         evidence = self.out / "producers" / producer_id / "ev"
         driver_log = self.out / "producers" / producer_id / "run.log"
         argv = [
@@ -657,7 +658,7 @@ class Bench:
         if remaining:
             detail += "processes alive: " + "; ".join(f"{p} {c[:80]}" for p, c in remaining) + ". "
         if not gone:
-            detail += f"left on the bench: {[str(p) for p in (self.scratch, self.venv, self.tree) if p.exists()]}"
+            detail += f"left on the proof host: {[str(p) for p in (self.scratch, self.venv, self.tree) if p.exists()]}"
         if leftovers:
             detail += f" (killed {len(leftovers)} stray process(es): {leftovers[:3]})"
         return {"state": state, "detail": detail.strip(), "killed_strays": len(leftovers)}
@@ -805,10 +806,10 @@ def sweep_old_runs(base: Path, keep_id: str) -> None:
                 shutil.rmtree(scratch, ignore_errors=True)
 
 
-def on_bench(args: argparse.Namespace) -> int:
-    bench = Bench(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout, args.fault)
-    bench.run_dir.mkdir(parents=True, exist_ok=True)
-    sweep_old_runs(bench.base, args.run_id)
+def on_host(args: argparse.Namespace) -> int:
+    run = ProofRun(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout, args.fault)
+    run.run_dir.mkdir(parents=True, exist_ok=True)
+    sweep_old_runs(run.base, args.run_id)
 
     def interrupted(signum, _frame):
         raise KeyboardInterrupt(f"signal {signum}")
@@ -820,10 +821,10 @@ def on_bench(args: argparse.Namespace) -> int:
     cleanup = {"state": "unknown", "detail": "teardown did not run"}
     try:
         try:
-            with bench.phase("tree"):
-                bench.prepare_tree()
-            with bench.phase("venv"):
-                bench.sync_venv()
+            with run.phase("tree"):
+                run.prepare_tree()
+            with run.phase("venv"):
+                run.sync_venv()
             tt, producer_cells = [], []
             for name in order:
                 kind, info = classify(name)
@@ -833,43 +834,43 @@ def on_bench(args: argparse.Namespace) -> int:
                     producer_cells.append({"name": name, "assertion": info["assertion"]})
             resolved = {}
             if producer_cells:
-                with bench.phase("resolve"):
-                    resolved = bench.resolve_producers([c["assertion"] for c in producer_cells])
+                with run.phase("resolve"):
+                    resolved = run.resolve_producers([c["assertion"] for c in producer_cells])
             runnable_producers: dict[str, list[dict]] = {}
             for cell in producer_cells:
                 info = resolved.get(cell["assertion"])
                 if info is None:
                     verdicts[cell["name"]] = {"verdict": "FAIL", "reason": "unknown cell: no producer of this commit has this assertion id", "seconds": 0, "evidence": ""}
-                elif info["producer_id"] not in BENCH_PRODUCERS or "scripted_model" not in info["evidence_classes"]:
+                elif info["producer_id"] not in PROOF_PRODUCERS or "scripted_model" not in info["evidence_classes"]:
                     verdicts[cell["name"]] = {
                         "verdict": "FAIL", "seconds": 0, "evidence": "",
-                        "reason": f"cannot run on the bench: producer {info['producer_id']} has no verified scripted-model envelope here (supported: {', '.join(BENCH_PRODUCERS)})",
+                        "reason": f"cannot run on the proof host: producer {info['producer_id']} has no verified scripted-model envelope here (supported: {', '.join(PROOF_PRODUCERS)})",
                     }  # fmt: skip
                 else:
                     runnable_producers.setdefault(info["producer_id"], []).append({**cell, **info})
             if tt or runnable_producers:
-                providers = {c["provider"] for c in tt} | {BENCH_PRODUCERS[p][0] for p in runnable_producers}
-                with bench.phase("providers"):
-                    pins = bench.provider_bins(providers)
-                with bench.phase("engine"):
-                    engine, cli = bench.engine()
-                with bench.phase("cells"):
+                providers = {c["provider"] for c in tt} | {PROOF_PRODUCERS[p][0] for p in runnable_producers}
+                with run.phase("providers"):
+                    pins = run.provider_bins(providers)
+                with run.phase("engine"):
+                    engine, cli = run.engine()
+                with run.phase("cells"):
                     groups: dict[tuple[str, bool], list[dict]] = {}
                     for cell in tt:
                         warm = cell["scenario"] in KIND_SCENARIOS and cell["mode"] == "helm"
                         groups.setdefault((cell["scenario"], warm), []).append(cell)
                     for (scenario, warm), cells in groups.items():
-                        if bench.remaining() < 30:
+                        if run.remaining() < 30:
                             for cell in cells:
                                 verdicts[cell["name"]] = {"verdict": "FAIL", "reason": "run deadline reached before this cell started", "seconds": 0, "evidence": ""}
                             continue
-                        bench.run_tt_group(scenario, warm, cells, engine, cli, verdicts)
+                        run.run_tt_group(scenario, warm, cells, engine, cli, verdicts)
                     for producer_id, cells in runnable_producers.items():
-                        if bench.remaining() < 30:
+                        if run.remaining() < 30:
                             for cell in cells:
                                 verdicts[cell["name"]] = {"verdict": "FAIL", "reason": "run deadline reached before this cell started", "seconds": 0, "evidence": ""}
                             continue
-                        bench.run_producer(producer_id, cells[0]["module"], cells[0], cells, engine, cli, pins, verdicts)
+                        run.run_producer(producer_id, cells[0]["module"], cells[0], cells, engine, cli, pins, verdicts)
         except StepFailed as exc:
             for name in order:
                 verdicts.setdefault(name, {"verdict": "FAIL", "reason": f"setup failed: {exc}", "seconds": 0, "evidence": "run.log"})
@@ -877,14 +878,14 @@ def on_bench(args: argparse.Namespace) -> int:
             for name in order:
                 verdicts.setdefault(name, {"verdict": "FAIL", "reason": f"run interrupted ({exc})", "seconds": 0, "evidence": "run.log"})
     finally:
-        cleanup = bench.teardown()
+        cleanup = run.teardown()
         report = {
             "cells": [{"cell": name, **verdicts.get(name, {"verdict": "FAIL", "reason": "no verdict", "seconds": 0, "evidence": ""})} for name in order],
             "cleanup": cleanup,
-            "phases": bench.phases,
-            "engine": bench.engine_note,
+            "phases": run.phases,
+            "engine": run.engine_note,
         }
-        (bench.out / "verdicts.json").write_text(json.dumps(report, indent=2) + "\n")
+        (run.out / "verdicts.json").write_text(json.dumps(report, indent=2) + "\n")
         try:
             print("VERDICTS " + json.dumps(report), flush=True)
         except BrokenPipeError:
@@ -893,7 +894,7 @@ def on_bench(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# Producer driver: runs under the commit's venv python on the bench
+# Producer driver: runs under the commit's venv python on the proof host
 # --------------------------------------------------------------------------------------------------------------------
 
 
@@ -924,12 +925,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cells", default=os.environ.get("CELLS", ""))
     parser.add_argument("--sha", default=os.environ.get("SHA") or "HEAD")
-    parser.add_argument("--target", default=os.environ.get("TARGET") or "bench", help="bench (default); factory and wisp are not built")
+    parser.add_argument("--target", default=os.environ.get("TARGET") or "proof", help="proof (default: the proof host); factory and wisp are not built")
     parser.add_argument("--deadline", type=int, default=DEFAULT_DEADLINE_S, help="seconds the whole run may take, teardown included")
     parser.add_argument("--cell-timeout", type=int, default=0, help="seconds one cell (or producer run) may take; default %d for a Terminal Truth cell, %d for a producer" % (CELL_TIMEOUT_S, PRODUCER_TIMEOUT_S))
     parser.add_argument("--fault", default=os.environ.get("FAULT") or "", help="run ONE producer cell as a negative control: the QA engine is told this fault through the engine-only channel (the producer is not), and PASS means the oracle caught it")
-    parser.add_argument("--keep", action="store_true", help="leave the bench's scratch, venv and worktree for debugging (swept after 6 h)")
-    parser.add_argument("--on-bench", action="store_true", help="internal: the bench half")
+    parser.add_argument("--keep", action="store_true", help="leave the proof host's scratch, venv and worktree for debugging (swept after 6 h)")
+    parser.add_argument("--on-host", action="store_true", help="internal: the proof host half")
     parser.add_argument("--run-id")
     parser.add_argument("--producer-driver", action="store_true", help="internal")
     for name in ("scratch", "evidence-root", "module", "variant", "repo-root", "engine", "longhouse-cli", "provider-bin", "provider-version", "model"):
@@ -937,8 +938,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.producer_driver:
         return producer_driver(args)
-    if args.on_bench:
-        return on_bench(args)
+    if args.on_host:
+        return on_host(args)
     return orchestrate(args)
 
 

@@ -1380,7 +1380,7 @@ ship-watch: ## Wait for exact-SHA push workflows + live deploy verification (SHA
 ship: ## Push the SHA and return; a watcher messages this session only on failure or a missed deadline (WAIT=1 blocks on the verdict, DEADLINE_MIN=N)
 	@./scripts/ops/ship.sh $(if $(SHA),--sha $(SHA),) $(if $(filter 1 true yes,$(WAIT)),--wait,) $(if $(DEADLINE_MIN),--deadline-min $(DEADLINE_MIN),) $(ARGS)
 
-prove: ## Run named live cells against any commit on the Linux bench: make prove CELLS="claude/helm:tool pi_helm_steer_active" [SHA=<commit>] [FAULT=pi_send_noop: run one producer cell as a blind negative control] (one PASS/FAIL line per cell, exit 1 on any failure)
+prove: ## Run named live cells against any commit on the Linux proof host (cube-proof): make prove CELLS="claude/helm:tool pi_helm_steer_active" [SHA=<commit>] [FAULT=pi_send_noop: run one producer cell as a blind negative control] (one PASS/FAIL line per cell, exit 1 on any failure)
 	@python3 scripts/ops/prove.py --cells "$(CELLS)" --sha "$(or $(SHA),HEAD)" $(if $(TARGET),--target $(TARGET),) $(ARGS)
 
 release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
