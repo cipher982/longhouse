@@ -961,7 +961,7 @@
 .timeline-pane__rail-anchor {
   display: none;
   position: sticky;
-  bottom: var(--space-2);
+  bottom: var(--space-4);
   align-self: flex-end;
   /* Short or empty transcripts: the auto margin takes the free space above
      the anchor, so it rests at the bottom of the pane instead of under the
@@ -988,7 +988,7 @@
 .timeline-pane--with-dock .timeline-pane__list {
   flex: 1;
   min-height: 0;
-  padding-bottom: var(--space-2);
+  padding-bottom: var(--space-4);
 }
 
 /* The rows themselves, as a plain (non-scrolling) block inside the

@@ -1380,6 +1380,90 @@ describe("TimelinePane scroll mutation ownership", () => {
     expect(list.scrollTop).toBe(200);
     expect(screen.queryByTestId("timeline-unread-pill")).not.toBeInTheDocument();
   });
+
+  it("stays pinned to the bottom when the scroller shrinks or rows grow while pinned", () => {
+    const first = makeTimelineMessage(301, "first");
+    const second = makeTimelineMessage(302, "second");
+    const tail = makeTimelineMessage(303, "tail");
+    const callbacks = new Map<Element, ResizeObserverCallback>();
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    class MockResizeObserver {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe(target: Element) {
+        callbacks.set(target, this.cb);
+      }
+      unobserve(target: Element) {
+        callbacks.delete(target);
+      }
+      disconnect() {
+        for (const [target, cb] of callbacks) {
+          if (cb === this.cb) callbacks.delete(target);
+        }
+      }
+    }
+    globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+    try {
+      const view = render(timelinePaneForMutation([]));
+      const list = screen.getByTestId("session-timeline-list");
+      setTimelineScrollMetrics(list, 1000, 400);
+      view.rerender(timelinePaneForMutation([first, second], 2));
+      list.scrollTop = 600;
+      fireEvent.scroll(list);
+
+      // Dock grows (e.g. Thinking bar appears), shrinking the scroller by 40px (> STICK_THRESHOLD).
+      setTimelineScrollMetrics(list, 1000, 360);
+      callbacks.get(list)?.([], {} as ResizeObserver);
+      expect(list.scrollTop).toBe(1000);
+
+      // Rows grow asynchronously (e.g. image decode / outbox detail) without items changing.
+      const rows = list.querySelector(".timeline-pane__rows");
+      expect(rows).not.toBeNull();
+      list.scrollTop = 640;
+      setTimelineScrollMetrics(list, 1080, 360);
+      callbacks.get(rows!)?.([], {} as ResizeObserver);
+      expect(list.scrollTop).toBe(1080);
+
+      // Subsequent append still follows because dock/content resize did not unpin.
+      setTimelineScrollMetrics(list, 1140, 360);
+      view.rerender(timelinePaneForMutation([first, second, tail], 3));
+      expect(list.scrollTop).toBe(1140);
+
+      // Once the reader deliberately scrolls up, resizes must not yank them back down.
+      list.scrollTop = 200;
+      fireEvent.scroll(list);
+      setTimelineScrollMetrics(list, 1140, 320);
+      callbacks.get(list)?.([], {} as ResizeObserver);
+      expect(list.scrollTop).toBe(200);
+    } finally {
+      globalThis.ResizeObserver = OriginalResizeObserver;
+    }
+  });
+
+  it("does not unpin when a scroll event fires after layout shrinks clientHeight before ResizeObserver", () => {
+    const first = makeTimelineMessage(401, "first");
+    const second = makeTimelineMessage(402, "second");
+    const tail = makeTimelineMessage(403, "tail");
+    const view = render(timelinePaneForMutation([]));
+    const list = screen.getByTestId("session-timeline-list");
+
+    setTimelineScrollMetrics(list, 1000, 400);
+    view.rerender(timelinePaneForMutation([first, second], 2));
+    list.scrollTop = 600;
+    fireEvent.scroll(list);
+
+    // Dock grows by 40px (> 24px STICK_THRESHOLD) and a scroll event fires with unchanged scrollTop.
+    setTimelineScrollMetrics(list, 1000, 360);
+    fireEvent.scroll(list);
+    expect(list.scrollTop).toBe(1000);
+
+    // Still pinned for the next message.
+    setTimelineScrollMetrics(list, 1060, 360);
+    view.rerender(timelinePaneForMutation([first, second, tail], 3));
+    expect(list.scrollTop).toBe(1060);
+  });
 });
 
 describe("TimelinePane turn footers", () => {

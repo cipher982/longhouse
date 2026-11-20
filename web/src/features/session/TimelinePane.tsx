@@ -1476,6 +1476,7 @@ export const TimelinePane = memo(function TimelinePane({
 
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [rowsElement, setRowsElement] = useState<HTMLDivElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
   const dockRef = useRef<HTMLDivElement | null>(null);
   const hasDock = Boolean(dock);
@@ -1515,13 +1516,61 @@ export const TimelinePane = memo(function TimelinePane({
   const prevLastItemKeyRef = useRef<string | null>(null);
   const prevFirstRowIdRef = useRef<string | null>(null);
   const prevFirstRowTopRef = useRef<number | null>(null);
-  // Remember whether the user was "at the bottom" *before* items mutated.
-  // If they were, new entries should scroll into view; if not, viewport
-  // stays put so the user doesn't get yanked mid-read.
+  // Remember whether the user was "at the bottom" *before* items or layout mutated.
+  // If they were, new entries and dock/content resizes stay glued to the bottom;
+  // if not, viewport stays put so the user doesn't get yanked mid-read.
   // Threshold is tight (24px) so scrolling up even a couple lines disengages
   // auto-follow immediately instead of yanking the user back down.
   const wasAtBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const lastScrollHeightRef = useRef(0);
+  const lastClientHeightRef = useRef(0);
+  const scrollingToBottomRef = useRef(false);
   const STICK_THRESHOLD = 24;
+
+  // Unread counter — increments while user is scrolled up and new items append.
+  // Resets to 0 when the user is back at the bottom.
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isScrolledAway, setIsScrolledAway] = useState(false);
+
+  const recordScrollGeometry = useCallback((container: HTMLDivElement) => {
+    lastScrollTopRef.current = container.scrollTop;
+    lastScrollHeightRef.current = container.scrollHeight;
+    lastClientHeightRef.current = container.clientHeight;
+  }, []);
+
+  const pinToBottom = useCallback(
+    (container: HTMLDivElement) => {
+      scrollingToBottomRef.current = false;
+      container.scrollTop = container.scrollHeight;
+      wasAtBottomRef.current = true;
+      recordScrollGeometry(container);
+    },
+    [recordScrollGeometry],
+  );
+
+  const jumpToBottomSmooth = useCallback(
+    (container: HTMLDivElement) => {
+      const reducedMotion =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      wasAtBottomRef.current = true;
+      setUnreadCount(0);
+      setIsScrolledAway(false);
+      if (reducedMotion || typeof container.scrollTo !== "function") {
+        pinToBottom(container);
+        return;
+      }
+      scrollingToBottomRef.current = true;
+      recordScrollGeometry(container);
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: "smooth",
+      });
+    },
+    [pinToBottom, recordScrollGeometry],
+  );
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -1570,8 +1619,7 @@ export const TimelinePane = memo(function TimelinePane({
     if (previousCount === 0 && items.length > 0) {
       // Initial load — scroll to bottom so the most recent activity is
       // visible out of the box.
-      container.scrollTop = container.scrollHeight;
-      wasAtBottomRef.current = true;
+      pinToBottom(container);
     } else {
       if (prependedCount > 0) {
         const heightDelta = newScrollHeight - prevScrollHeightRef.current;
@@ -1591,45 +1639,100 @@ export const TimelinePane = memo(function TimelinePane({
       ) {
         // A growing reply, tool group, or shrinking preview promotion updates
         // height at the tail without necessarily adding a row.
-        container.scrollTop = container.scrollHeight;
+        pinToBottom(container);
       } else if (appendedCount > 0) {
         setUnreadCount((prev) => prev + appendedCount);
       }
     }
 
+    recordScrollGeometry(container);
     prevScrollHeightRef.current = newScrollHeight;
     prevItemCountRef.current = items.length;
     prevFirstItemKeyRef.current = currentFirstKey;
     prevLastItemKeyRef.current = currentLastKey;
     prevFirstRowIdRef.current = items.length > 0 ? timelineItemRowId(items[0]) : null;
     prevFirstRowTopRef.current = timelineRowTop(prevFirstRowIdRef.current);
-  }, [items, loadedEntries]);
+  }, [items, loadedEntries, pinToBottom, recordScrollGeometry]);
 
-  // Unread counter — increments while user is scrolled up and new items append.
-  // Resets to 0 when the user is back at the bottom.
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [isScrolledAway, setIsScrolledAway] = useState(false);
+  // Keep the viewport glued to the bottom whenever the scroller shrinks (e.g.
+  // dock grows when Thinking/composer/attachments appear, or window resizes)
+  // or content grows (streaming deltas, image decode, outbox state changes)
+  // while pinned. ResizeObserver runs after layout and before paint, so the
+  // adjustment lands in the same frame with zero clipping or jump.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    recordScrollGeometry(container);
+    const onResize = () => {
+      if (!wasAtBottomRef.current) {
+        recordScrollGeometry(container);
+        return;
+      }
+      if (scrollingToBottomRef.current) {
+        if (typeof container.scrollTo === "function") {
+          container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+        }
+        recordScrollGeometry(container);
+        return;
+      }
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distance > 0) {
+        pinToBottom(container);
+      } else {
+        recordScrollGeometry(container);
+      }
+    };
+    const observer = new ResizeObserver(onResize);
+    observer.observe(container);
+    if (rowsElement) observer.observe(rowsElement);
+    return () => observer.disconnect();
+  }, [rowsElement, pinToBottom, recordScrollGeometry]);
 
-  // Track "at bottom" continuously so the next append knows whether to
-  // stick. We read scrollTop on every scroll, not only on mutation, so the
-  // user's intent (scrolled up = don't follow) is always current.
+  // Track "at bottom" continuously so the next append or resize knows whether
+  // to stick. Separate user upward scrolling from layout-induced gaps (dock
+  // growth, content growth) so layout shifts never silently unpin the reader.
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    recordScrollGeometry(container);
     const onScroll = () => {
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      const distance = scrollHeight - scrollTop - clientHeight;
       const atBottom = distance < STICK_THRESHOLD;
-      wasAtBottomRef.current = atBottom;
-      setIsScrolledAway(!atBottom && distance > 240);
+      const scrolledUp = scrollTop < lastScrollTopRef.current - 1;
+      const layoutExpandedGap =
+        scrollHeight > lastScrollHeightRef.current ||
+        clientHeight < lastClientHeightRef.current;
+
+      if (scrollingToBottomRef.current) {
+        if (scrolledUp) {
+          scrollingToBottomRef.current = false;
+          wasAtBottomRef.current = false;
+        } else if (atBottom) {
+          scrollingToBottomRef.current = false;
+          wasAtBottomRef.current = true;
+        } else {
+          recordScrollGeometry(container);
+          return;
+        }
+      } else if (wasAtBottomRef.current && !atBottom && !scrolledUp && layoutExpandedGap) {
+        pinToBottom(container);
+        return;
+      } else {
+        wasAtBottomRef.current = atBottom;
+      }
+
+      recordScrollGeometry(container);
+      setIsScrolledAway(!wasAtBottomRef.current && distance > 240);
       const anchorTop = timelineRowTop(prevFirstRowIdRef.current);
       if (anchorTop !== null) prevFirstRowTopRef.current = anchorTop;
-      if (atBottom) {
+      if (wasAtBottomRef.current) {
         setUnreadCount((prev) => (prev === 0 ? prev : 0));
       }
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [pinToBottom, recordScrollGeometry]);
 
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
@@ -1839,11 +1942,11 @@ export const TimelinePane = memo(function TimelinePane({
     const prevCount = prevOutboxCountRef.current;
     prevOutboxCountRef.current = tailOutboxCount;
     if (!container || !outboxVisible || tailOutboxCount <= prevCount) return;
-    container.scrollTop = container.scrollHeight;
-    wasAtBottomRef.current = true;
+    pinToBottom(container);
     setUnreadCount(0);
+    setIsScrolledAway(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a send, not a visibility change, scrolls
-  }, [tailOutboxCount]);
+  }, [tailOutboxCount, pinToBottom]);
 
   // The live preview is the provider answering now, so a send the Runtime
   // Host already delivered came before it: render those above the preview
@@ -2378,7 +2481,7 @@ export const TimelinePane = memo(function TimelinePane({
           // once the view auto-scrolled to the bottom. This wrapper is a
           // normal (non-scrolling) block, so its height is the true content
           // height and the line spans the whole transcript.
-          <div className="timeline-pane__rows">
+          <div ref={setRowsElement} className="timeline-pane__rows">
           {renderRows()}
           </div>
         )}
@@ -2394,13 +2497,7 @@ export const TimelinePane = memo(function TimelinePane({
           onClick={() => {
             const container = scrollContainerRef.current;
             if (!container) return;
-            container.scrollTo({
-              top: container.scrollHeight,
-              behavior: "smooth",
-            });
-            wasAtBottomRef.current = true;
-            setUnreadCount(0);
-            setIsScrolledAway(false);
+            jumpToBottomSmooth(container);
           }}
         >
           ↓ {unreadCount} new
@@ -2413,12 +2510,7 @@ export const TimelinePane = memo(function TimelinePane({
           onClick={() => {
             const container = scrollContainerRef.current;
             if (!container) return;
-            container.scrollTo({
-              top: container.scrollHeight,
-              behavior: "smooth",
-            });
-            wasAtBottomRef.current = true;
-            setIsScrolledAway(false);
+            jumpToBottomSmooth(container);
           }}
         >
           ↓ Jump to live
