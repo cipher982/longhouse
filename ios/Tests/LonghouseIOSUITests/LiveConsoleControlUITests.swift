@@ -76,7 +76,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         // native empty state; WebKit mounts only after the first event exists.
         // Assert the real composer first, then require the WKWebView after the
         // served idle reply below.
-        let composer = app.textViews["session-chat-composer"]
+        let composer = app.textFields["session-chat-composer"]
         let send = app.buttons["session-chat-send"]
         XCTAssertTrue(composer.waitForExistence(timeout: Self.uiTimeout), "real composer did not load")
         XCTAssertTrue(send.waitForExistence(timeout: Self.uiTimeout), "real send control did not load")

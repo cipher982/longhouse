@@ -152,7 +152,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
         app.launch()
 
-        let composer = app.textViews["session-chat-composer"]
+        let composer = app.textFields["session-chat-composer"]
         let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         XCTAssertTrue(latestMessage.waitForExistence(timeout: 10))
@@ -415,7 +415,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         let submit = app.buttons["launch-submit"]
         XCTAssertTrue(submit.isEnabled, "Live Console launch was not enabled.")
         submit.tap()
-        let composer = app.textViews["session-chat-composer"]
+        let composer = app.textFields["session-chat-composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "Console composer did not appear.")
         let consoleToComposerMs = elapsedMs(since: consoleLaunchStartedAt)
 

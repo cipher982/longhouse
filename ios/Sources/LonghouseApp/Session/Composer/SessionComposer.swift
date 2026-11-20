@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// The capability-derived decisions used by both the live composer and its
 /// preview. Keeping these decisions next to the controls prevents previews
@@ -100,9 +99,11 @@ enum SessionComposerControlState {
     }
 }
 
-/// What the composer hands its action menu. The menu owns the attachment
-/// and Stop entry points, but the composer owns the gates behind them.
+/// What the composer hands its action menu. The menu owns the attachment,
+/// model and Stop entry points, but the composer owns the gates behind them.
 struct SessionComposerMenuContext {
+    let model: String?
+    let onModelTap: (() -> Void)?
     let stopLabel: String?
     /// Arms the two-step Stop in the send slot; it never stops on its own.
     let armStop: () -> Void
@@ -117,6 +118,11 @@ struct SessionComposerActionMenu: View {
     let isProcessing: Bool
     let isSending: Bool
     let onAttach: () -> Void
+    /// Set when the clipboard holds an image. The composer's text field only
+    /// pastes text, so a copied screenshot is attached from here instead.
+    var onPasteImage: (() -> Void)? = nil
+    var model: String? = nil
+    var onModelTap: (() -> Void)? = nil
     var stopLabel: String? = nil
     var onArmStop: (() -> Void)? = nil
 
@@ -146,6 +152,21 @@ struct SessionComposerActionMenu: View {
             }
             .disabled(!canAttachImages)
             .accessibilityIdentifier(canAttachImages ? "session-chat-attach" : "session-chat-attach-unavailable")
+
+            if let onPasteImage {
+                Button(action: onPasteImage) {
+                    Label("Paste image", systemImage: "doc.on.clipboard")
+                }
+                .disabled(!canAttachImages)
+                .accessibilityIdentifier("session-chat-paste-image")
+            }
+
+            if let onModelTap {
+                Button(action: onModelTap) {
+                    Label("Model \(model ?? "Default")", systemImage: "cpu")
+                }
+                .accessibilityIdentifier("session-chat-model-picker")
+            }
 
             if let stopLabel, let onArmStop {
                 Button(role: .destructive, action: onArmStop) {
@@ -179,10 +200,10 @@ struct SessionComposerActionMenu: View {
 /// the same visibility and capability decisions in every surface.
 struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     let detail: SessionDetail
+    let model: String?
+    let onModelTap: () -> Void
     @Binding var text: String
-    @Binding var focused: Bool
-    /// Images pasted into the text box; nil when images cannot be attached.
-    let onPasteImages: (([UIImage]) -> Void)?
+    @FocusState.Binding var focused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -224,8 +245,9 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     init(
         detail: SessionDetail,
         text: Binding<String>,
-        focused: Binding<Bool>,
-        onPasteImages: (([UIImage]) -> Void)? = nil,
+        focused: FocusState<Bool>.Binding,
+        model: String? = nil,
+        onModelTap: @escaping () -> Void = {},
         failedInputCount: Int = 0,
         queuedInputCount: Int = 0,
         queuedElsewhereCount: Int = 0,
@@ -253,9 +275,10 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         @ViewBuilder attachmentTray: () -> AttachmentTray
     ) {
         self.detail = detail
+        self.model = model
+        self.onModelTap = onModelTap
         _text = text
         _focused = focused
-        self.onPasteImages = onPasteImages
         self.failedInputCount = failedInputCount
         self.queuedInputCount = queuedInputCount
         self.queuedElsewhereCount = queuedElsewhereCount
@@ -329,6 +352,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     && !attachmentIsProcessing
                     && !isLoadingPickerItems
                 let menu = SessionComposerMenuContext(
+                    model: model,
+                    onModelTap: detail.stateFacts.mode == "console" ? onModelTap : nil,
                     stopLabel: stopLabel,
                     armStop: armStop
                 )
@@ -447,34 +472,31 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     }
 
     private var draftEditor: some View {
-        ComposerTextView(
-            text: $text,
-            isFocused: $focused,
-            placeholder: SessionComposerControlState.placeholder(for: detail, asOf: evidenceNow),
-            maxLines: typeSize.isAccessibilitySize ? 3 : 6,
-            onPasteImages: onPasteImages,
+        TextField(SessionComposerControlState.placeholder(for: detail, asOf: evidenceNow), text: $text, axis: .vertical)
+            .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
+            .focused($focused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Ember.well, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Ember.hairline, lineWidth: 0.75)
+            }
+            .accessibilityIdentifier("session-chat-composer")
             // Hardware keyboard only: Return sends (Shift-Return keeps the
             // newline), Tab queues behind a running turn.
-            onReturn: {
-                guard detail.canSendLive, detail.activePauseRequest == nil else { return false }
+            .onKeyPress(keys: [.return], phases: .down) { press in
+                guard !press.modifiers.contains(.shift), detail.canSendLive, detail.activePauseRequest == nil else { return .ignored }
                 Task { await onSend(nil) }
-                return true
-            },
-            onTab: {
-                guard detail.activePauseRequest == nil,
-                      SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) else { return false }
-                Task { await onSend("queue") }
-                return true
+                return .handled
             }
-        )
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(Ember.well, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Ember.hairline, lineWidth: 0.75)
-        }
+            .onKeyPress(keys: [.tab], phases: .down) { _ in
+                guard detail.activePauseRequest == nil,
+                      SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) else { return .ignored }
+                Task { await onSend("queue") }
+                return .handled
+            }
     }
 
     @ViewBuilder
