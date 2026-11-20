@@ -57,7 +57,7 @@ final class TranscriptRendererBenchmarkUITests: XCTestCase {
         }
 
         let transcript = app.descendants(matching: .any)["session-chat-transcript"]
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let status = app.staticTexts["transcript-benchmark-status"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 30), "Benchmark transcript did not appear.")
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "Benchmark composer did not appear.")

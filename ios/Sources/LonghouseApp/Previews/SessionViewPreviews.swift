@@ -258,7 +258,7 @@ private struct SessionScreenPreview: View {
     var queuedInputCount: Int = 0
     var queuedElsewhereCount: Int = 0
     @State private var text: String
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused: Bool = false
 
     init(
         detail: SessionDetail,
@@ -346,8 +346,6 @@ private struct SessionScreenPreview: View {
                                         isProcessing: false,
                                         isSending: isSending,
                                         onAttach: {},
-                                        model: menu.model,
-                                        onModelTap: menu.onModelTap,
                                         stopLabel: menu.stopLabel,
                                         onArmStop: menu.armStop
                                     )

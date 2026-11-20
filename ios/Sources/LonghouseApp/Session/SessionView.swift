@@ -25,7 +25,7 @@ struct SessionView: View {
     @State private var recentComposerModels: [RecentModel] = []
     @State private var loadingComposerModels = false
     @State private var composerModelError: String?
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused: Bool = false
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
@@ -42,9 +42,6 @@ struct SessionView: View {
     @State private var isLoadingPickerItems: Bool = false
     /// The tray image open full screen, if any.
     @State private var previewingAttachment: ComposerAttachment?
-    /// Whether the system clipboard holds an image. Checking does not trigger
-    /// the paste-permission prompt; only reading the image does.
-    @State private var clipboardHasImages: Bool = UIPasteboard.general.hasImages
     @State private var dismissedRecapKey: String?
     init(
         sessionId: String,
@@ -86,11 +83,13 @@ struct SessionView: View {
                     .background(.bar)
                     Divider()
                 }
-            } else if viewModel.detail?.usageLatest != nil || hasTopHudDetails {
+            } else if viewModel.detail?.usageLatest != nil || hasTopHudDetails || modelIsPickable {
                 VStack(spacing: 0) {
                     SessionUsageChip(
                         usage: viewModel.detail?.usageLatest,
-                        detail: viewModel.detail
+                        detail: viewModel.detail,
+                        modelPill: modelPillText,
+                        onModelTap: modelIsPickable ? { openModelPicker() } : nil
                     )
                     .padding(.vertical, 5)
                     .background(.bar)
@@ -461,6 +460,27 @@ struct SessionView: View {
         return dismissedRecapKey == recapKey(for: recap) ? nil : recap
     }
 
+    /// Console sessions choose the model per turn; the header's model chip
+    /// opens the picker. Helm sessions run whatever the terminal runs.
+    private var modelIsPickable: Bool {
+        viewModel.detail?.stateFacts.mode == "console"
+    }
+
+    /// The header's model pill: the model a fresh session will use, or the
+    /// one picked for the next turn when it was chosen here. The usage
+    /// capsule already names the model the last turn ran.
+    private var modelPillText: String? {
+        guard modelIsPickable else { return nil }
+        if viewModel.detail?.usageLatest == nil { return "Model: \(composerModel ?? "default")" }
+        return composerModelWasChosen ? "Next turn: \(composerModel ?? "default")" : nil
+    }
+
+    private func openModelPicker() {
+        recentComposerModels = []
+        composerModelError = nil
+        isShowingModelPicker = true
+    }
+
     private var hasTopHudDetails: Bool {
         guard let detail = viewModel.detail else { return false }
         let mode = detail.permissionMode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -686,15 +706,14 @@ struct SessionView: View {
         }
     }
 
-    /// Attaches the clipboard's images through the same compression path as
-    /// the photo picker. Reading them shows the system paste prompt.
-    private func pasteClipboardImages() {
+    /// Attaches images pasted into the text box through the same compression
+    /// path as the photo picker.
+    private func attachPastedImages(_ images: [UIImage]) {
         let slots = attachmentStore.slotsLeft
         guard slots > 0 else {
             attachmentStore.errorMessage = "Max \(ComposerAttachmentLimits.maxAttachments) attachments."
             return
         }
-        let images = UIPasteboard.general.images ?? []
         let raw = images.prefix(slots).compactMap { image -> (filename: String, data: Data)? in
             guard let data = image.pngData() else { return nil }
             return (filename: "pasted-\(UUID().uuidString).png", data: data)
@@ -712,12 +731,9 @@ struct SessionView: View {
             detail: detail,
             text: $composerText,
             focused: $composerFocused,
-            model: composerModel,
-            onModelTap: {
-                recentComposerModels = []
-                composerModelError = nil
-                isShowingModelPicker = true
-            },
+            onPasteImages: detail.attachImagesEnabled && !attachmentStore.isProcessing
+                ? { images in attachPastedImages(images) }
+                : nil,
             failedInputCount: viewModel.failedInputCount,
             queuedInputCount: viewModel.queuedInputCount,
             queuedElsewhereCount: viewModel.queuedElsewhereCount,
@@ -766,22 +782,12 @@ struct SessionView: View {
                     isProcessing: attachmentStore.isProcessing || isLoadingPickerItems,
                     isSending: viewModel.isSending,
                     onAttach: { isShowingPhotoPicker = true },
-                    onPasteImage: clipboardHasImages ? { pasteClipboardImages() } : nil,
-                    model: menu.model,
-                    onModelTap: menu.onModelTap,
                     stopLabel: menu.stopLabel,
                     onArmStop: menu.armStop
                 )
             },
             attachmentTray: { attachmentTray }
         )
-        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
-            clipboardHasImages = UIPasteboard.general.hasImages
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // Copying a screenshot in another app does not post changedNotification here.
-            clipboardHasImages = UIPasteboard.general.hasImages
-        }
         .fullScreenCover(item: $previewingAttachment) { item in
             if let image = item.thumbnail {
                 AttachmentPreview(image: image) { attachmentStore.remove(item.id) }
@@ -1152,15 +1158,38 @@ struct SessionRecapBanner: View {
 struct SessionUsageChip: View {
     let usage: SessionUsageLatest?
     var detail: SessionDetail? = nil
+    /// A tappable model pill beside the usage capsule, when set.
+    var modelPill: String? = nil
+    /// Set where the session's model can be changed (Console); the usage
+    /// capsule then opens the model picker.
+    var onModelTap: (() -> Void)? = nil
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 if let usage {
-                    usageCapsule(usage)
+                    if let onModelTap {
+                        Button(action: onModelTap) { usageCapsule(usage) }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("session-chat-model-picker")
+                            .accessibilityHint("Choose the model for the next turn")
+                    } else {
+                        usageCapsule(usage)
+                    }
                     ForEach(highRateLimits(for: usage), id: \.kind) { limit in
                         rateLimitPill(limit)
                     }
+                }
+                if let onModelTap, let modelPill {
+                    Button(action: onModelTap) {
+                        hudPill(
+                            text: modelPill,
+                            systemImage: "cpu",
+                            tint: Ember.textSecondary
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(usage == nil ? "session-chat-model-picker" : "session-chat-next-model")
                 }
                 if let modeLabel = nonDefaultPermissionLabel {
                     hudPill(

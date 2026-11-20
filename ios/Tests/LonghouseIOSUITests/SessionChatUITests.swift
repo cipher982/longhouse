@@ -212,7 +212,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testSendShowsOptimisticMessageImmediatelyAndClearsComposer() {
         let app = launchChatFixture(eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         let message = "ui harness immediate reveal"
 
@@ -227,7 +227,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testConsoleReplyReplacesOptimisticBubbleWithoutDuplicateWorkingRow() {
         let app = launchChatFixture(name: "console-reconcile", eventCount: 0)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         let message = "console reconciliation probe"
 
@@ -247,7 +247,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testCompletedConsoleSentInputRemainsUntilTranscriptEcho() {
         let app = launchChatFixture(name: "console-sent-unlinked", eventCount: 0)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         let message = "completed Console input without an echo"
 
@@ -269,7 +269,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testRunningTurnComposerShowsSendToThisTurn() {
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
@@ -284,7 +284,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         let message = "Keep the current diagnostics and inspect the changed hose."
 
@@ -410,7 +410,7 @@ final class SessionChatUITests: XCTestCase {
 
         let resume = app.buttons["session-resume-button"]
         XCTAssertTrue(resume.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        XCTAssertFalse(app.textViews["session-chat-composer"].exists)
         let footerShot = XCTAttachment(screenshot: app.screenshot())
         footerShot.name = "ended-codex-helm-footer"
         footerShot.lifetime = .keepAlways
@@ -425,7 +425,7 @@ final class SessionChatUITests: XCTestCase {
         add(handoffShot)
 
         app.buttons["Done"].tap()
-        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        XCTAssertFalse(app.textViews["session-chat-composer"].exists)
         let branchInput = app.textFields["session-branch-input"]
         XCTAssertTrue(branchInput.waitForExistence(timeout: Self.webTranscriptTimeout))
         branchInput.tap()
@@ -433,7 +433,7 @@ final class SessionChatUITests: XCTestCase {
         app.buttons["session-branch-button"].tap()
 
         XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.textFields["session-chat-composer"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.textViews["session-chat-composer"].waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
         let childShot = XCTAttachment(screenshot: app.screenshot())
         childShot.name = "ended-codex-helm-child"
@@ -520,7 +520,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
         let app = launchChatFixture(eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
@@ -561,7 +561,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
         let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
 
         focusComposer(composer, in: app)
@@ -574,7 +574,7 @@ final class SessionChatUITests: XCTestCase {
 
     func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
         let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
+        let composer = app.textViews["session-chat-composer"]
         let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
 
         focusComposer(composer, in: app)
