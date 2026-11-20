@@ -1555,10 +1555,11 @@ export const TimelinePane = memo(function TimelinePane({
         typeof window !== "undefined" &&
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       wasAtBottomRef.current = true;
       setUnreadCount(0);
       setIsScrolledAway(false);
-      if (reducedMotion || typeof container.scrollTo !== "function") {
+      if (distance <= 0 || reducedMotion || typeof container.scrollTo !== "function") {
         pinToBottom(container);
         return;
       }
@@ -1669,9 +1670,8 @@ export const TimelinePane = memo(function TimelinePane({
         return;
       }
       if (scrollingToBottomRef.current) {
-        if (typeof container.scrollTo === "function") {
-          container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-        }
+        // Avoid restarting smooth scroll on every streaming tick; let the
+        // active scroll finish (or scrollend settle) and pin once it lands.
         recordScrollGeometry(container);
         return;
       }
@@ -1730,8 +1730,19 @@ export const TimelinePane = memo(function TimelinePane({
         setUnreadCount((prev) => (prev === 0 ? prev : 0));
       }
     };
+    const onScrollEnd = () => {
+      if (!scrollingToBottomRef.current) return;
+      scrollingToBottomRef.current = false;
+      if (wasAtBottomRef.current) {
+        pinToBottom(container);
+      }
+    };
     container.addEventListener("scroll", onScroll, { passive: true });
-    return () => container.removeEventListener("scroll", onScroll);
+    container.addEventListener("scrollend", onScrollEnd, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      container.removeEventListener("scrollend", onScrollEnd);
+    };
   }, [pinToBottom, recordScrollGeometry]);
 
   const debouncedSearch = useDebouncedValue(searchQuery, 300);

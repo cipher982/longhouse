@@ -1464,6 +1464,42 @@ describe("TimelinePane scroll mutation ownership", () => {
     view.rerender(timelinePaneForMutation([first, second, tail], 3));
     expect(list.scrollTop).toBe(1060);
   });
+
+  it("cancels an in-flight smooth jump when the reader scrolls up and settles on scrollend", () => {
+    const first = makeTimelineMessage(501, "first");
+    const second = makeTimelineMessage(502, "second");
+    const tail = makeTimelineMessage(503, "tail");
+    const tailTwo = makeTimelineMessage(504, "tail two");
+    const view = render(timelinePaneForMutation([]));
+    const list = screen.getByTestId("session-timeline-list");
+    const scrollToMock = vi.fn();
+    list.scrollTo = scrollToMock as unknown as typeof list.scrollTo;
+
+    setTimelineScrollMetrics(list, 1000, 400);
+    view.rerender(timelinePaneForMutation([first, second], 2));
+
+    // Scroll up far enough to show the unread pill after a new message arrives.
+    list.scrollTop = 100;
+    fireEvent.scroll(list);
+    setTimelineScrollMetrics(list, 1080, 400);
+    view.rerender(timelinePaneForMutation([first, second, tail], 3));
+    const pill = screen.getByTestId("timeline-unread-pill");
+
+    fireEvent.click(pill);
+    expect(scrollToMock).toHaveBeenCalledWith({ top: 1080, behavior: "smooth" });
+
+    // Reader scrolls up mid-jump: cancels auto-follow.
+    list.scrollTop = 50;
+    fireEvent.scroll(list);
+    setTimelineScrollMetrics(list, 1140, 400);
+    view.rerender(timelinePaneForMutation([first, second, tail, tailTwo], 4));
+    expect(list.scrollTop).toBe(50);
+
+    // Click unread pill again, then let scrollend finish: pins cleanly to bottom.
+    fireEvent.click(screen.getByTestId("timeline-unread-pill"));
+    fireEvent(list, new Event("scrollend"));
+    expect(list.scrollTop).toBe(1140);
+  });
 });
 
 describe("TimelinePane turn footers", () => {
