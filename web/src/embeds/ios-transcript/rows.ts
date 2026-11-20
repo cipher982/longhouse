@@ -79,15 +79,25 @@ export function message(item: TranscriptItem, index: number, recovered = false):
       `;
 }
 
+const DATA_IMAGE_URL = /^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
 export function submitted(item: TranscriptItem): string {
-  const attachments = item.attachments?.length
-    ? `<div class="submitted-attachments" data-testid="session-submitted-attachments">${escapeHtml(
-        "Attachments · " +
-          item.attachments
-            .map((attachment) => `${attachment.filename || "image"} (${attachment.mimeType || "file"}, ${attachment.byteSize || 0} bytes)`)
-            .join(" · "),
-      )}</div>`
-    : "";
+  // The picture the phone is sending, drawn the way the transcript echo will
+  // draw it, so the row does not change shape when the echo lands.
+  const list = item.attachments || [];
+  const thumbs = list
+    .map((attachment) => attachment.thumbDataUrl)
+    .filter((url): url is string => typeof url === "string" && DATA_IMAGE_URL.test(url))
+    .map((url) => `<span class="attached-thumb"><img src="${escapeHtml(url)}" alt="Attached image"></span>`)
+    .join("");
+  const unshown = list.length - (thumbs.match(/<img /g) || []).length;
+  const chip =
+    unshown > 0
+      ? `<div class="attached-chip" data-testid="session-submitted-attachments">${unshown === 1 ? "1 image attached" : `${unshown} images attached`}</div>`
+      : "";
+  const attachments = thumbs
+    ? `<div class="attached-thumbs" data-testid="session-submitted-thumbs">${thumbs}</div>${chip}`
+    : chip;
   const id = escapeHtml(item.id);
   const actions =
     item.status === "couldNotConfirm"

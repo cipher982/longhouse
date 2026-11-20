@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 enum SubmittedInputPhase: String, Sendable, Hashable {
     case submitting
@@ -17,19 +18,55 @@ struct SubmittedInputAttachmentSummary: Encodable, Equatable, Sendable {
     let filename: String
     let mimeType: String
     let byteSize: Int
+    /// A small JPEG data URL of the image, so the pending row shows the
+    /// picture before the transcript echoes it. Nil when the bytes are gone
+    /// (a restored summary) or do not decode.
+    let thumbDataUrl: String?
 
-    init(filename: String, mimeType: String, byteSize: Int) {
+    init(filename: String, mimeType: String, byteSize: Int, thumbDataUrl: String? = nil) {
         self.filename = String(filename.prefix(128))
         self.mimeType = String(mimeType.prefix(80))
         self.byteSize = max(0, byteSize)
+        self.thumbDataUrl = thumbDataUrl
     }
 
     init(_ attachment: ComposerAttachment) {
-        self.init(filename: attachment.filename, mimeType: attachment.mimeType, byteSize: attachment.byteSize)
+        self.init(
+            filename: attachment.filename,
+            mimeType: attachment.mimeType,
+            byteSize: attachment.byteSize,
+            thumbDataUrl: Self.thumbDataURL(attachment.thumbnail ?? UIImage(data: attachment.data))
+        )
     }
 
     init(_ attachment: PendingInputIntent.Attachment) {
-        self.init(filename: attachment.filename, mimeType: attachment.mimeType, byteSize: attachment.data.count)
+        self.init(
+            filename: attachment.filename,
+            mimeType: attachment.mimeType,
+            byteSize: attachment.data.count,
+            thumbDataUrl: Self.thumbDataURL(UIImage(data: attachment.data))
+        )
+    }
+
+    /// Longest side 360 px: sharp at the row's 140 pt thumb on a 3x screen
+    /// is not needed, and this keeps the data URL near 20 KB per image.
+    static let thumbMaxPixels: CGFloat = 360
+
+    static func thumbDataURL(_ image: UIImage?) -> String? {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return nil }
+        let scale = min(1, thumbMaxPixels / max(image.size.width * image.scale, image.size.height * image.scale))
+        let size = CGSize(
+            width: max(1, (image.size.width * image.scale * scale).rounded()),
+            height: max(1, (image.size.height * image.scale * scale).rounded())
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        guard let jpeg = small.jpegData(compressionQuality: 0.7) else { return nil }
+        return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
 
     init(_ summary: PendingInputIntent.AttachmentSummary) {

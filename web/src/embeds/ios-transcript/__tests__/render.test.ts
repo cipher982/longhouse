@@ -420,6 +420,28 @@ describe("subagents and the native bridge", () => {
     expect(() => root().querySelector<HTMLButtonElement>(".subagent-link")!.click()).not.toThrow();
   });
 
+  it("draws a submitted row's image from the phone's preview before the echo lands", () => {
+    const thumb = "data:image/jpeg;base64,/9j/AAAA";
+    render({
+      items: [
+        {
+          id: "ios-sending",
+          kind: "submitted",
+          body: "look",
+          status: "submitting",
+          subtitle: "Sending",
+          attachments: [
+            { filename: "a.jpg", mimeType: "image/jpeg", byteSize: 4, thumbDataUrl: thumb },
+            { filename: "b.jpg", mimeType: "image/jpeg", byteSize: 4, thumbDataUrl: "javascript:alert(1)" },
+          ],
+        },
+      ],
+    });
+    const imgs = Array.from(root().querySelectorAll<HTMLImageElement>('[data-testid="session-submitted-thumbs"] img'));
+    expect(imgs.map((img) => img.getAttribute("src"))).toEqual([thumb]);
+    expect(root().querySelector('[data-testid="session-submitted-attachments"]')?.textContent).toBe("1 image attached");
+  });
+
   it("shows a submitted row's attachment summary and routes its actions to the app", () => {
     const postMessage = vi.fn();
     (window as unknown as { webkit: unknown }).webkit = { messageHandlers: { longhouse: { postMessage } } };
@@ -437,9 +459,7 @@ describe("subagents and the native bridge", () => {
         { id: "ios-sent", kind: "submitted", body: "done", status: "sent", subtitle: "Sent" },
       ],
     });
-    expect(root().querySelector('[data-testid="session-submitted-attachments"]')?.textContent).toBe(
-      "Attachments · shot.jpg (image/jpeg, 4 bytes)",
-    );
+    expect(root().querySelector('[data-testid="session-submitted-attachments"]')?.textContent).toBe("1 image attached");
     const actions = Array.from(root().querySelectorAll<HTMLButtonElement>("[data-submitted-action]"));
     expect(actions.map((b) => b.textContent)).toEqual(["Edit", "Discard", "Retry send"]);
     actions[0].click();

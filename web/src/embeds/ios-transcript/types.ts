@@ -55,6 +55,8 @@ export interface AttachmentSummary {
   filename?: string | null;
   mimeType?: string | null;
   byteSize?: number | null;
+  /** A small data: URL the phone made from the bytes it is sending. */
+  thumbDataUrl?: string | null;
 }
 
 export interface TranscriptItem {

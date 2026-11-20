@@ -40,6 +40,8 @@ struct SessionView: View {
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false
+    /// The tray image open full screen, if any.
+    @State private var previewingAttachment: ComposerAttachment?
     /// Whether the system clipboard holds an image. Checking does not trigger
     /// the paste-permission prompt; only reading the image does.
     @State private var clipboardHasImages: Bool = UIPasteboard.general.hasImages
@@ -780,6 +782,11 @@ struct SessionView: View {
             // Copying a screenshot in another app does not post changedNotification here.
             clipboardHasImages = UIPasteboard.general.hasImages
         }
+        .fullScreenCover(item: $previewingAttachment) { item in
+            if let image = item.thumbnail {
+                AttachmentPreview(image: image) { attachmentStore.remove(item.id) }
+            }
+        }
         .photosPicker(
             isPresented: $isShowingPhotoPicker,
             selection: $pickerSelection,
@@ -841,11 +848,18 @@ struct SessionView: View {
                             ForEach(attachmentStore.attachments) { item in
                                 ZStack(alignment: .topTrailing) {
                                     if let thumb = item.thumbnail {
-                                        Image(uiImage: thumb)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 56, height: 56)
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        Button {
+                                            previewingAttachment = item
+                                        } label: {
+                                            Image(uiImage: thumb)
+                                                .resizable()
+                                                .scaledToFill()
+                                                .frame(width: 56, height: 56)
+                                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Preview \(item.filename)")
+                                        .accessibilityIdentifier("session-chat-attachment-thumb")
                                     } else {
                                         RoundedRectangle(cornerRadius: 6)
                                             .fill(Color.secondary.opacity(0.2))
