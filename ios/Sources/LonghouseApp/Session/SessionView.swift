@@ -40,6 +40,9 @@ struct SessionView: View {
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var editingClientRequestId: String?
     @State private var isLoadingPickerItems: Bool = false
+    /// Whether the system clipboard holds an image. Checking does not trigger
+    /// the paste-permission prompt; only reading the image does.
+    @State private var clipboardHasImages: Bool = UIPasteboard.general.hasImages
     @State private var dismissedRecapKey: String?
     init(
         sessionId: String,
@@ -681,6 +684,26 @@ struct SessionView: View {
         }
     }
 
+    /// Attaches the clipboard's images through the same compression path as
+    /// the photo picker. Reading them shows the system paste prompt.
+    private func pasteClipboardImages() {
+        let slots = attachmentStore.slotsLeft
+        guard slots > 0 else {
+            attachmentStore.errorMessage = "Max \(ComposerAttachmentLimits.maxAttachments) attachments."
+            return
+        }
+        let images = UIPasteboard.general.images ?? []
+        let raw = images.prefix(slots).compactMap { image -> (filename: String, data: Data)? in
+            guard let data = image.pngData() else { return nil }
+            return (filename: "pasted-\(UUID().uuidString).png", data: data)
+        }
+        guard !raw.isEmpty else {
+            attachmentStore.errorMessage = "Could not read the image on the clipboard."
+            return
+        }
+        Task { await attachmentStore.ingest(rawImages: raw) }
+    }
+
     private func composerField(detail: SessionDetail) -> some View {
         let pauseRequest = detail.activePauseRequest
         return SessionComposer(
@@ -741,6 +764,7 @@ struct SessionView: View {
                     isProcessing: attachmentStore.isProcessing || isLoadingPickerItems,
                     isSending: viewModel.isSending,
                     onAttach: { isShowingPhotoPicker = true },
+                    onPasteImage: clipboardHasImages ? { pasteClipboardImages() } : nil,
                     model: menu.model,
                     onModelTap: menu.onModelTap,
                     stopLabel: menu.stopLabel,
@@ -749,6 +773,13 @@ struct SessionView: View {
             },
             attachmentTray: { attachmentTray }
         )
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            clipboardHasImages = UIPasteboard.general.hasImages
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Copying a screenshot in another app does not post changedNotification here.
+            clipboardHasImages = UIPasteboard.general.hasImages
+        }
         .photosPicker(
             isPresented: $isShowingPhotoPicker,
             selection: $pickerSelection,

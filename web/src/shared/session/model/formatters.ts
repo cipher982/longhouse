@@ -77,6 +77,18 @@ export function splitAttachmentsBlock(text: string): { text: string; imageCount:
   return match ? { text: text.slice(0, match.index), imageCount: Number(match[1]) } : { text, imageCount: 0 };
 }
 
+// Placeholders a provider transcript leaves where an image sat in a prompt:
+// Claude Code's "[Image #1]" (sometimes "[Image #1, 906×1500]") and the
+// engine's "[image attached]" / "[image attached: image/png]". Once the image
+// itself renders, a line holding only those tokens says nothing.
+const IMAGE_TOKEN_LINE_RE =
+  /^[ \t]*(?:(?:\[Image\s*#\d+[^\]\n]*\]|\[image attached(?:: [^\]\r\n]+)?\])[ \t]*)+$\n?/gim;
+
+/** Drops lines that hold only image placeholders. Call only when the images render. */
+export function withoutImageTokenLines(text: string): string {
+  return text.replace(IMAGE_TOKEN_LINE_RE, "").trim();
+}
+
 /** "2m 9s", "58s", "1h 2m": the terminal's own compaction of a turn duration. */
 export function formatTurnDuration(durationMs: number): string {
   const total = Math.max(0, Math.floor(durationMs / 1000));

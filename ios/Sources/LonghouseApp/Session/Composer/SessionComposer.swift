@@ -118,6 +118,9 @@ struct SessionComposerActionMenu: View {
     let isProcessing: Bool
     let isSending: Bool
     let onAttach: () -> Void
+    /// Set when the clipboard holds an image. The composer's text field only
+    /// pastes text, so a copied screenshot is attached from here instead.
+    var onPasteImage: (() -> Void)? = nil
     var model: String? = nil
     var onModelTap: (() -> Void)? = nil
     var stopLabel: String? = nil
@@ -149,6 +152,14 @@ struct SessionComposerActionMenu: View {
             }
             .disabled(!canAttachImages)
             .accessibilityIdentifier(canAttachImages ? "session-chat-attach" : "session-chat-attach-unavailable")
+
+            if let onPasteImage {
+                Button(action: onPasteImage) {
+                    Label("Paste image", systemImage: "doc.on.clipboard")
+                }
+                .disabled(!canAttachImages)
+                .accessibilityIdentifier("session-chat-paste-image")
+            }
 
             if let onModelTap {
                 Button(action: onModelTap) {

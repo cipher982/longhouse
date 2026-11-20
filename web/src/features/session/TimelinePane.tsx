@@ -35,6 +35,7 @@ import {
   getFailurePreview,
   getTimelineMessagePreview,
   splitAttachmentsBlock,
+  withoutImageTokenLines,
   getInteractionDisplayInfo,
   getToolDuration,
   getToolExitCode,
@@ -549,15 +550,6 @@ function AttachedImages({ urls, count }: { urls: string[]; count: number }) {
   );
 }
 
-// Claude Code writes "[Image #1]" (sometimes "[Image #1, 906×1500]") into the
-// prompt where an image was pasted. Once the images themselves render below,
-// a line that holds only those tokens says nothing, so it is dropped.
-const IMAGE_TOKEN_LINE_RE = /^[ \t]*(?:\[Image\s*#\d+[^\]\n]*\][ \t]*)+$\n?/gim;
-
-function withoutImageTokenLines(text: string): string {
-  return text.replace(IMAGE_TOKEN_LINE_RE, "").trim();
-}
-
 /**
  * A transcript message. A user's send in flight renders through this same
  * component (`send` set, a stand-in event built from the outbox entry) under
@@ -583,8 +575,12 @@ const MessageRow = memo(function MessageRow({
 }) {
   const isUser = event.role === "user";
   const split = isUser ? splitAttachmentsBlock(getTimelineMessagePreview(event)) : null;
-  const attachmentUrls = (isUser && event.input_origin?.attachment_urls) || [];
   const mediaRefs = renderMedia ? mediaRefsForEvents(event) : [];
+  // A provider that records the image in its own transcript (OMP, Codex)
+  // gives the row a durable media copy; Longhouse's upload link is then the
+  // same image a second time, so it is drawn only when no media copy exists.
+  const hasMediaCopy = mediaRefs.some((ref) => ref.media_state === "present");
+  const attachmentUrls = (isUser && !hasMediaCopy && event.input_origin?.attachment_urls) || [];
   const basePreview = split && split.imageCount > 0 ? split.text.trim() : getTimelineMessagePreview(event);
   const showsImages = mediaRefs.length > 0 || attachmentUrls.length > 0;
   const preview = isUser && showsImages ? withoutImageTokenLines(basePreview) : basePreview;
@@ -678,7 +674,7 @@ const MessageRow = memo(function MessageRow({
         ) : (
           <div className="tl-msg__plain">{visible}</div>
         )}
-        {isUser && (attachmentUrls.length > 0 || (split?.imageCount ?? 0) > 0) ? (
+        {isUser && !hasMediaCopy && (attachmentUrls.length > 0 || (split?.imageCount ?? 0) > 0) ? (
           <AttachedImages urls={attachmentUrls} count={Math.max(split?.imageCount ?? 0, attachmentUrls.length)} />
         ) : null}
         {send?.attachments && send.attachments.length > 0 ? (

@@ -233,3 +233,39 @@ describe("presentTranscript lite pages", () => {
     expect(outputs).toContain(whole);
   });
 });
+
+describe("presentTranscript user images", () => {
+  const sent = {
+    authored_via: "longhouse",
+    client_request_id: "r1",
+    attachment_urls: ["/api/sessions/s/input-attachments/r1/0"],
+  } as AgentEvent["input_origin"];
+  const recorded = [
+    {
+      sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+      media_state: "present",
+      mime_type: "image/webp",
+      blob_url: "/api/media/abc/blob",
+      thumb_url: "/api/media/abc/thumb",
+    },
+  ] as AgentEvent["media_refs"];
+
+  it("shows a Longhouse-sent image once when the provider transcript also recorded it", () => {
+    const [row] = presentTranscript({
+      items: [ev({ id: 1, role: "user", content_text: "look\n\n[image attached: image/webp]", input_origin: sent, media_refs: recorded })],
+      serverUrl: "https://h",
+    });
+    expect(row.media?.map((ref) => ref.url)).toEqual(["https://h/api/media/abc/thumb"]);
+    expect(row.attachmentThumbs).toBeUndefined();
+    expect(row.body).toBe("look");
+  });
+
+  it("keeps the upload thumb when the transcript has no copy of the image", () => {
+    const [row] = presentTranscript({
+      items: [ev({ id: 1, role: "user", content_text: "look", input_origin: sent })],
+      serverUrl: "https://h",
+    });
+    expect(row.media).toBeUndefined();
+    expect(row.attachmentThumbs).toEqual(["https://h/api/sessions/s/input-attachments/r1/0"]);
+  });
+});

@@ -788,6 +788,42 @@ describe("TimelinePane", () => {
     expect(screen.queryByText(/Longhouse attachments/)).toBeNull();
   });
 
+  it("draws a Longhouse-sent image once when the provider transcript also recorded it", () => {
+    const item: TimelineItem = {
+      kind: "message",
+      event: {
+        ...mediaMessageItem.event,
+        role: "user",
+        content_text: "look at this\n\n[image attached: image/webp]",
+        input_origin: {
+          authored_via: "longhouse",
+          client_request_id: "r1",
+          attachment_urls: ["/api/sessions/s/input-attachments/r1/0"],
+        },
+      },
+    };
+    render(
+      <TimelinePane
+        items={[item]}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("session-attached-thumbs")).toBeNull();
+    expect(screen.queryByTestId("session-attached-images")).toBeNull();
+    expect(screen.getByAltText("Session media abc123def456")).toBeInTheDocument();
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveTextContent("look at this");
+    expect(row).not.toHaveTextContent("[image attached");
+  });
+
   it("renders present media refs on message rows", () => {
     render(
       <TimelinePane

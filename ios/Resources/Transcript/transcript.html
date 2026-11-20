@@ -2718,6 +2718,11 @@ details.trail .tool-meta {
 			imageCount: 0
 		};
 	}
+	var IMAGE_TOKEN_LINE_RE = /^[ \t]*(?:(?:\[Image\s*#\d+[^\]\n]*\]|\[image attached(?:: [^\]\r\n]+)?\])[ \t]*)+$\n?/gim;
+	/** Drops lines that hold only image placeholders. Call only when the images render. */
+	function withoutImageTokenLines(text) {
+		return text.replace(IMAGE_TOKEN_LINE_RE, "").trim();
+	}
 	/** "2m 9s", "58s", "1h 2m": the terminal's own compaction of a turn duration. */
 	function formatTurnDuration(durationMs) {
 		const total = Math.max(0, Math.floor(durationMs / 1e3));
@@ -4651,17 +4656,21 @@ details.trail .tool-meta {
 			text,
 			imageCount: 0
 		};
-		const { body, collapsed } = visibleMessage(split.text);
+		const media = mediaRefs(event.media_refs ?? [], serverUrl);
+		const hasMediaCopy = Boolean(media?.some((ref) => ref.url));
+		const thumbs = role === "user" && !hasMediaCopy ? (event.input_origin?.attachment_urls ?? []).map((url) => absoluteMediaUrl(url, serverUrl)).filter((url) => url !== void 0) : [];
+		const showsImages = Boolean(media) || thumbs.length > 0;
+		const messageText = role === "user" && showsImages ? withoutImageTokenLines(split.text) : split.text;
+		const { body, collapsed } = visibleMessage(messageText);
 		const row = baseRow(id, "message");
 		row.role = role;
 		row.body = body;
-		if (collapsed) row.fullBody = split.text;
+		if (collapsed) row.fullBody = messageText;
 		row.collapsed = collapsed;
 		if (role === "user") setIf(row, "origin", event.input_origin?.authored_via);
-		setIf(row, "media", mediaRefs(event.media_refs ?? [], serverUrl));
+		setIf(row, "media", media);
 		if (role === "user") {
-			if (split.imageCount > 0) row.attachedImages = split.imageCount;
-			const thumbs = (event.input_origin?.attachment_urls ?? []).map((url) => absoluteMediaUrl(url, serverUrl)).filter((url) => url !== void 0);
+			if (split.imageCount > 0 && !hasMediaCopy) row.attachedImages = split.imageCount;
 			if (thumbs.length > 0) row.attachmentThumbs = thumbs;
 		} else {
 			setIf(row, "phase", trimmed(messagePhase(event)));

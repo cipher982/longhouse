@@ -34,7 +34,7 @@ import type {
 import { collapseUnchanged, lineDiff } from "./diff";
 import { stripLegacyReasoningPrefix } from "./thoughtProse";
 import { getEditStat, formatEditStat } from "./editSummary";
-import { formatTurnDuration, splitAttachmentsBlock } from "./formatters";
+import { formatTurnDuration, splitAttachmentsBlock, withoutImageTokenLines } from "./formatters";
 import { flattenSubagentTree, subagentLabel, summarizeSubagents } from "./subagents";
 import {
   buildTimelineModel,
@@ -365,19 +365,29 @@ function messageRow(
 ): PresentedTranscriptItem {
   const text = event.content_text ?? "";
   const split = role === "user" ? splitAttachmentsBlock(text) : { text, imageCount: 0 };
-  const { body, collapsed } = visibleMessage(split.text);
+  const media = mediaRefs(event.media_refs ?? [], serverUrl);
+  // A provider that records the image in its own transcript (OMP, Codex)
+  // gives the row a durable media copy; Longhouse's upload link is then the
+  // same image a second time, so thumbs show only when no media copy exists.
+  const hasMediaCopy = Boolean(media?.some((ref) => ref.url));
+  const thumbs =
+    role === "user" && !hasMediaCopy
+      ? (event.input_origin?.attachment_urls ?? [])
+          .map((url) => absoluteMediaUrl(url, serverUrl))
+          .filter((url): url is string => url !== undefined)
+      : [];
+  const showsImages = Boolean(media) || thumbs.length > 0;
+  const messageText = role === "user" && showsImages ? withoutImageTokenLines(split.text) : split.text;
+  const { body, collapsed } = visibleMessage(messageText);
   const row = baseRow(id, "message");
   row.role = role;
   row.body = body;
-  if (collapsed) row.fullBody = split.text;
+  if (collapsed) row.fullBody = messageText;
   row.collapsed = collapsed;
   if (role === "user") setIf(row, "origin", event.input_origin?.authored_via);
-  setIf(row, "media", mediaRefs(event.media_refs ?? [], serverUrl));
+  setIf(row, "media", media);
   if (role === "user") {
-    if (split.imageCount > 0) row.attachedImages = split.imageCount;
-    const thumbs = (event.input_origin?.attachment_urls ?? [])
-      .map((url) => absoluteMediaUrl(url, serverUrl))
-      .filter((url): url is string => url !== undefined);
+    if (split.imageCount > 0 && !hasMediaCopy) row.attachedImages = split.imageCount;
     if (thumbs.length > 0) row.attachmentThumbs = thumbs;
   } else {
     setIf(row, "phase", trimmed(messagePhase(event)));
