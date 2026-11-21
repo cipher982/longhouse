@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 359,
+  "file_count": 360,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2988,6 +2988,15 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/services/shape_canary.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

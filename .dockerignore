@@ -38,6 +38,14 @@ config/*
 !schemas/
 schemas/*
 !schemas/managed_providers.yml
+# The live shape canary (zerg/services/shape_canary.py) classifies transcript
+# records with the census and its catalog.
+!schemas/transcript_shapes/
+!scripts/
+scripts/*
+!scripts/qa/
+scripts/qa/*
+!scripts/qa/transcript_census.py
 
 # The provider-factory image uses a named Longhouse context to verify the
 # exact native control-path sources. Never send the Rust target directory.

@@ -53,6 +53,7 @@ from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
+from zerg.services.shape_canary import canary as shape_canary
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
@@ -1173,6 +1174,7 @@ async def _commit_admitted_envelope(
                 lane=lane,
             )
             timer.mark("parse")
+            shape_canary.record(spec.provider, str(spec.session_id), parsed.get("shape_canary"))
         catalogd = get_catalogd_client()
         if catalogd is None:
             raise CatalogUnavailable("catalogd is not supervised")

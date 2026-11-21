@@ -4954,6 +4954,16 @@ export interface components {
              * @default 0
              */
             media_repair_bytes: number;
+            /**
+             * Shape Canary
+             * @default unavailable
+             */
+            shape_canary: string;
+            /**
+             * Unrecognized Shapes
+             * @default []
+             */
+            unrecognized_shapes: components["schemas"]["UnrecognizedShape"][];
         };
         /**
          * InputOriginResponse
@@ -10446,6 +10456,30 @@ export interface components {
              * @description Signal source that closed the turn (e.g. turn_duration, stop_hook_summary)
              */
             source?: string | null;
+        };
+        /**
+         * UnrecognizedShape
+         * @description A transcript record shape the catalog does not classify. Names only, never content.
+         */
+        UnrecognizedShape: {
+            /** Provider */
+            provider: string;
+            /** Cli Version */
+            cli_version: string;
+            /** Shape */
+            shape: string;
+            /** Count */
+            count: number;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
         };
         /**
          * UsageLatestResponse

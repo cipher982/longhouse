@@ -2631,3 +2631,42 @@ async def test_storage_v2_render_reader_pages_the_manifest_only_as_far_as_it_rea
     assert calls[0]["limit"] == 32 and "object_cursor" not in calls[0]
     if expected_calls == 2:
         assert json.loads(calls[1]["object_cursor"])[-1] == "object-08"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_ingest_counts_unrecognized_transcript_shapes(monkeypatch):
+    from zerg.services.shape_canary import canary
+
+    canary.__init__()
+    unknown = b'{"type":"zz-future-event","secret":"never stored","version":"9.9.9"}\n'
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-shape-canary-") as stack:
+        payload = _payload(
+            tenant_id=get_settings().archive_primary_tenant_id,
+            machine_id="cinder",
+            epoch=uuid4(),
+            data=unknown,
+            provider="claude",
+        )
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+        assert response.status_code == 200, response.text
+
+    rows = canary.snapshot()
+    assert [(r["provider"], r["cli_version"], r["shape"], r["count"]) for r in rows] == [("claude", "9.9.9", "zz-future-event", 1)]
+    assert "never stored" not in repr(rows)
+
+
+def test_shape_canary_ignores_classified_shapes_and_flags_garbage():
+    from zerg.services.shape_canary import observe_records
+    from zerg.storage_v2.raw_objects import RawRecord
+
+    lines = [
+        b'{"type":"ai-title","aiTitle":"t","sessionId":"s","version":"2.1.325"}',
+        b"not json",
+    ]
+    seen = observe_records("claude", "byte_offset", [RawRecord(i, line) for i, line in enumerate(lines)])
+    assert seen == {"version": "2.1.325", "unclassified": {"<unparseable>": 1}}
+    assert observe_records("cursor", "byte_offset", []) is None

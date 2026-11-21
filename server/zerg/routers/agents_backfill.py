@@ -13,6 +13,8 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_views import IngestHealthResponse
+from zerg.services.shape_canary import available as shape_canary_available
+from zerg.services.shape_canary import canary as shape_canary
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -39,4 +41,7 @@ async def get_ingest_health(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
         ) from exc
-    return IngestHealthResponse(**compute_ingest_health_from_catalog_facts(facts))
+    health = compute_ingest_health_from_catalog_facts(facts)
+    health["shape_canary"] = "on" if shape_canary_available() else "unavailable"
+    health["unrecognized_shapes"] = shape_canary.snapshot()
+    return IngestHealthResponse(**health)

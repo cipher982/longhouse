@@ -255,6 +255,8 @@ COPY --link --chown=1000:1000 --from=dependencies /app/.venv /app/.venv
 #    was never part of the runtime image at all.
 COPY --link --chown=1000:1000 config/models.json config/tool-tiers.json /config/
 COPY --link --chown=1000:1000 schemas/managed_providers.yml /schemas/managed_providers.yml
+COPY --link --chown=1000:1000 schemas/transcript_shapes /schemas/transcript_shapes
+COPY --link --chown=1000:1000 scripts/qa/transcript_census.py /schemas/transcript_census.py
 # 4. The code. build-identity.json is already staged into server/zerg/ by
 #    scripts/build/generate_build_identity.py before the Docker build context
 #    is sent, so importlib.resources.files("zerg") / "build_identity.json"

@@ -90,6 +90,10 @@ exclude = [
 # checkout above it nor the image's /schemas, so without this the endpoint
 # 500s for every self-hoster.
 "../schemas/managed_providers.yml" = "zerg/_config/managed_providers.yml"
+# The shape census and its catalog; zerg/services/shape_canary.py classifies
+# live transcript records with them.
+"../scripts/qa/transcript_census.py" = "zerg/_config/transcript_census.py"
+"../schemas/transcript_shapes" = "zerg/_config/transcript_shapes"
 # Which `longhouse <provider>` commands exist. `longhouse-server onboard` reads this
 # to avoid suggesting an excluded entrypoint, and it runs from the wheel.
 "../config/native_device_entrypoints.json" = "zerg/_config/native_device_entrypoints.json"
@@ -113,6 +117,10 @@ exclude = [
 [tool.hatch.build.targets.sdist.force-include]
 # Also include frontend in sdist so building from source works
 "../schemas/managed_providers.yml" = "zerg/_config/managed_providers.yml"
+# The shape census and its catalog; zerg/services/shape_canary.py classifies
+# live transcript records with them.
+"../scripts/qa/transcript_census.py" = "zerg/_config/transcript_census.py"
+"../schemas/transcript_shapes" = "zerg/_config/transcript_shapes"
 "../web/dist" = "zerg/_frontend_dist"
 "../desktop/LonghouseMenuBarHarness/Package.swift" = "zerg/_desktop/LonghouseMenuBarHarness/Package.swift"
 "../desktop/LonghouseMenuBarHarness/Sources" = "zerg/_desktop/LonghouseMenuBarHarness/Sources"

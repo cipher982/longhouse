@@ -1762,6 +1762,17 @@ class CursorRoleBackfillResponse(BaseModel):
     message: str = ""
 
 
+class UnrecognizedShape(UTCBaseModel):
+    """A transcript record shape the catalog does not classify. Names only, never content."""
+
+    provider: str
+    cli_version: str
+    shape: str
+    count: int
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
 class IngestHealthResponse(UTCBaseModel):
     status: str  # "ok" | "stale" | "unknown"
     last_session_at: Optional[datetime] = None
@@ -1770,6 +1781,9 @@ class IngestHealthResponse(UTCBaseModel):
     session_count: int
     media_repair_refs: int = 0
     media_repair_bytes: int = 0
+    # "unavailable" means this install cannot classify shapes, so an empty list proves nothing.
+    shape_canary: str = "unavailable"
+    unrecognized_shapes: List[UnrecognizedShape] = []
 
 
 class UsageStatsByProvider(BaseModel):

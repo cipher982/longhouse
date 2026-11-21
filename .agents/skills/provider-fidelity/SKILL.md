@@ -18,6 +18,7 @@ before building a census, a feature matrix or a coverage report.
 | Which transcript signals does each provider give us, which do we ingest, which are served? | `make provider-parity`; contract in `control-plane/docs/specs/provider-signal-parity.md` |
 | Does provider X support operation Y (launch, steer, resume, a signal)? What is its disposition and canary? | `schemas/managed_providers.yml` (`transcript_signals`, `transcript_signal_surfaces`, per-operation `disposition`) |
 | Did a provider update start writing a record shape nobody classified? | `scripts/qa/transcript_census.py` and the append-only catalog `schemas/transcript_shapes/` (one JSON per provider) |
+| Is real usage on a host writing a shape the catalog does not classify? | `unrecognized_shapes` in `GET /api/agents/ingest-health` (`server/zerg/services/shape_canary.py`); the private Sauron job `longhouse-shape-canary` pages on it |
 | How much of a provider's transcript content reaches the served timeline? | `make provider-fidelity-coverage` (`ARGS="--all-live"`), `make fidelity-coverage-gate`; design in `control-plane/docs/specs/provider-fidelity-harness.md` |
 | Where does the engine keep or drop a transcript record (thinking, commentary, tool calls, turn end)? | `engine/src/pipeline/parser.rs` (`extract_assistant_events` and the per-provider extractors); signal definitions in `control-plane/docs/specs/provider-transcript-signals.md` |
 | Where does the live reply text stop compared with the terminal? | `make terminal-truth`; `control-plane/docs/specs/terminal-truth-baseline.md` |

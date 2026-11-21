@@ -79,9 +79,16 @@ def _seal_in_worker(root: str, spec: RawObjectSpec) -> SealedRawObject:
 
 
 def _parse_envelope_in_worker(payload: dict[str, Any], tenant_id: str, machine_id: str, lane: str) -> tuple[RawObjectSpec, dict[str, Any]]:
+    from zerg.services.shape_canary import observe_records
     from zerg.storage_v2.envelope_wire import parse_envelope
 
-    return parse_envelope(payload, tenant_id=tenant_id, machine_id=machine_id, lane=lane)
+    spec, parsed = parse_envelope(payload, tenant_id=tenant_id, machine_id=machine_id, lane=lane)
+    # Shape names only; see zerg/services/shape_canary.py. Never fails ingest.
+    try:
+        parsed["shape_canary"] = observe_records(spec.provider, spec.range_kind, spec.records)
+    except Exception:  # noqa: BLE001
+        parsed["shape_canary"] = None
+    return spec, parsed
 
 
 def _read_in_worker(root: str, object_path: str, expected_object_hash: str, tenant_id: str) -> DecodedRawObject:

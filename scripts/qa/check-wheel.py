@@ -24,7 +24,12 @@ FORBIDDEN_PREFIXES = (
 # pip-installed wheel has neither a repo checkout above it nor the runtime
 # image's /schemas — so if this is missing, /api/agents/provider-capabilities
 # 500s for every self-hoster.
-REQUIRED_MEMBERS = ("zerg/_config/managed_providers.yml",)
+REQUIRED_MEMBERS = (
+    "zerg/_config/managed_providers.yml",
+    # The live shape canary reads these; without them it reports "unavailable".
+    "zerg/_config/transcript_census.py",
+    "zerg/_config/transcript_shapes/claude.json",
+)
 
 
 def parse_args() -> argparse.Namespace:
