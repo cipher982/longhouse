@@ -237,7 +237,7 @@ jobs:
           if [[ "$TT_MUTATIONS" != 1 || "${TT_KEEP_TRANSCRIPTS:-}" == 1 ]]; then checks+=" --no-mutations"; fi
           for name in $TT_MUTATION_NAMES; do checks+=" --only $name"; done
           rerun=""
-          if [[ "$TT_RERUN" != 1 ]]; then rerun=" --no-rerun"; fi
+          if [[ "$TT_RERUN" != 1 && "${TT_KEEP_TRANSCRIPTS:-}" != 1 ]]; then rerun=" --no-rerun"; fi
           # The commit status means "the whole gate passed on this commit". A push always is that; a dispatch only
           # when asked, on main, with nothing narrowed, one pass and reruns on.
           publish=0
@@ -432,7 +432,7 @@ jobs:
         run: |
           set +e
           rc=0
-          declare -A home=([claude]=.claude [codex]=.codex [pi]=.pi [omp]=.omp [opencode]=.local/share/opencode [antigravity]=.gemini)
+          declare -A home=([claude]=.claude/projects [codex]=.codex/sessions [pi]=.pi [omp]=.omp [opencode]=.local/share/opencode [antigravity]=.gemini)
           for p in ${TT_PROVIDERS//,/ }; do
             mapfile -t roots < <(find "$TT_SCRATCH_ROOT" -type d -path "*/h/${home[$p]}" 2>/dev/null)
             echo "census $p: ${#roots[@]} provider homes"
