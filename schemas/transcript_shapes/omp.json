@@ -855,6 +855,8 @@
     "activeLeafId",
     "api",
     "cacheRefresh",
+    "completion",
+    "duration",
     "errorMessage",
     "id",
     "model",
@@ -865,6 +867,7 @@
     "runtime",
     "stopReason",
     "timestamp",
+    "ttft",
     "type",
     "usage"
    ],
