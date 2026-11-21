@@ -859,15 +859,6 @@ def main():
             cwd, scratch_dir = seed_demo_repo()
         env, home, argv, mock_proc, mock_url, auth_mode = build_sandbox(
             args.provider, prov, cols, rows, demo_repo=cwd, fixture_path=args.fixture)
-        if args.no_srt and args.provider == "cursor":
-            # The manual Cursor fallback retains only the isolated HOME, shim
-            # PATH, task terminal, API key, and local trust/credential inputs.
-            keep = (
-                "HOME", "PATH", "TERM", "COLUMNS", "LINES", "BROWSER",
-                "CURSOR_API_KEY", "AGENT_CLI_CREDENTIAL_STORE",
-                "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
-            )
-            env = {key: env[key] for key in keep if key in env}
         run_setup(prov, env, cwd)
         binary_label = f"{prov['source'].get('package', prov['source'].get('url'))}@{prov['source']['version']}"
         preflight_domains = (prov.get("auth") or {}).get("preflight_domains", [])

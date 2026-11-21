@@ -29,15 +29,6 @@
     "bin": "opencode/1.18.15/node_modules/.bin/opencode",
     "fetched_at": "2026-08-08T18:07:12.638323+00:00"
   },
-  "cursor": {
-    "kind": "release",
-    "url": "https://downloads.cursor.com/lab/2026.08.04-aaa8809/darwin/arm64/agent-cli-package.tar.gz",
-    "requested_version": "2026.08.04-aaa8809",
-    "resolved_version": "2026.08.04-aaa8809",
-    "archive_sha256": "fc1d267622ff806a33dbf516148b9fd3957807f4d931c763118c269f92b535fc",
-    "bin": "cursor/2026.08.04-aaa8809/cursor-agent",
-    "fetched_at": "2026-08-08T18:07:33.758026+00:00"
-  },
   "srt": {
     "kind": "npm",
     "package": "@anthropic-ai/sandbox-runtime",

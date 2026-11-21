@@ -20,8 +20,9 @@
 #   scripts/terminal/record-all.sh claude     # one provider (fetches only it + srt)
 #
 # Providers: claude (mock+srt), codex (mock+srt) are proven and produce assets.
-# opencode/cursor are NOT run here (see REPORT.md: opencode mock-routing
-# unresolved; cursor blocked). Pass them explicitly to attempt a raw take.
+# opencode is NOT run here (see REPORT.md: mock-routing unresolved). Pass it
+# explicitly to attempt a raw take. Cursor has no recorder entry: live Cursor
+# calls were stopped 2026-11-20 and its backend has no mock lane.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

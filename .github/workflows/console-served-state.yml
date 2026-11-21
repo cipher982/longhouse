@@ -35,8 +35,11 @@ name: Console Served State
 # - Antigravity: GOOGLE_GEMINI_BASE_URL; the fake serves Gemini generateContent SSE
 #   https://www.antigravity.google/docs/cli/install
 # Gemini wire protocol: https://ai.google.dev/api/generate-content
-# Cursor is excluded: cursor-agent has no supported custom model base-URL setting.
-# Mock mode exposes no provider secrets; live mode retains all seven providers.
+# Cursor is excluded from both modes. cursor-agent has no supported custom model
+# base-URL setting, so mock is impossible, and live Cursor calls were stopped on
+# 2026-11-20: the only API key was an employer work credential, and a personal
+# free Cursor account cannot create one. Cursor stays covered by fixture tests.
+# Mock mode exposes no provider secrets; live mode retains the other six providers.
 # Claude Code's unauthenticated startup checks are public health probes, not
 # model requests (https://github.com/anthropics/claude-code/issues/81611).
 # Its Messages/count_tokens model API requests use the loopback base URL.
@@ -86,12 +89,10 @@ jobs:
       CONSOLE_QA_PROVIDER: ${{ inputs.provider || 'all' }}
       CODEX_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_OPENAI_API_KEY || '' }}
       ANTHROPIC_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY || '' }}
-      CURSOR_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_CURSOR_API_KEY || '' }}
       GEMINI_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_GEMINI_API_KEY || '' }}
       OPENROUTER_API_KEY: ${{ inputs.mode == 'live' && secrets.LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY || '' }}
       CODEX_MODEL: ${{ vars.CONSOLE_QA_CODEX_MODEL }}
       ANTHROPIC_MODEL: ${{ vars.CONSOLE_QA_ANTHROPIC_MODEL }}
-      CURSOR_MODEL: ${{ vars.CONSOLE_QA_CURSOR_MODEL }}
       LONGHOUSE_OPENCODE_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_OPENCODE_MODEL }}
       LONGHOUSE_PI_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_PI_MODEL }}
       LONGHOUSE_OMP_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_OMP_MODEL }}
@@ -117,7 +118,7 @@ jobs:
             *) echo "::error::Unsupported Console mode: $CONSOLE_QA_MODE" >&2; exit 1 ;;
           esac
           if [[ "$CONSOLE_QA_MODE" == live ]]; then
-            for required_credential in CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY; do
+            for required_credential in CODEX_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY; do
               if [[ -z "${!required_credential:-}" ]]; then
                 echo "::error::Missing scoped CI provider credential: $required_credential" >&2
                 exit 1
@@ -128,18 +129,18 @@ jobs:
             echo "::error::Console provider input contains unsafe characters." >&2
             exit 1
           fi
-          if [[ "$CONSOLE_QA_MODE" == mock && "$CONSOLE_QA_PROVIDER" != all ]]; then
+          if [[ "$CONSOLE_QA_PROVIDER" != all ]]; then
             mock_providers=",codex,claude,opencode,pi,omp,antigravity,"
             IFS=',' read -r -a requested_providers <<< "$CONSOLE_QA_PROVIDER"
             for provider in "${requested_providers[@]}"; do
               if [[ -z "$provider" || "$mock_providers" != *",$provider,"* ]]; then
-                echo "::error::Mock mode supports only codex, claude, opencode, pi, omp, and antigravity; cursor requires live mode." >&2
+                echo "::error::Console served-state proves only codex, claude, opencode, pi, omp, and antigravity; live Cursor calls are stopped." >&2
                 exit 1
               fi
             done
           fi
           if [[ "$CONSOLE_QA_MODE" == live ]]; then
-            for required_model in CODEX_MODEL ANTHROPIC_MODEL CURSOR_MODEL \
+            for required_model in CODEX_MODEL ANTHROPIC_MODEL \
               LONGHOUSE_OPENCODE_QUALIFICATION_MODEL LONGHOUSE_PI_QUALIFICATION_MODEL \
               LONGHOUSE_OMP_QUALIFICATION_MODEL; do
               if [[ -z "${!required_model:-}" ]]; then
@@ -232,8 +233,6 @@ jobs:
             opencode-ai \
             @earendil-works/pi-coding-agent
           curl -fsSL https://omp.sh/install | sh -s -- --binary
-          curl -fsSL https://cursor.com/install -o "$fixture_root/cursor-install.sh"
-          bash "$fixture_root/cursor-install.sh"
           curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
           bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
           # Keep the disposable home explicit across steps. Live mode logs in
@@ -252,7 +251,6 @@ jobs:
             "LONGHOUSE_OPENCODE_BIN=$provider_root/node_modules/.bin/opencode" \
             "LONGHOUSE_PI_BIN=$provider_root/node_modules/.bin/pi" \
             "LONGHOUSE_OMP_BIN=$home/.local/bin/omp" \
-            "LONGHOUSE_CURSOR_BIN=$home/.local/bin/cursor-agent" \
             "LONGHOUSE_ANTIGRAVITY_BIN=$home/.local/bin/agy"; do
             name="${pair%%=*}"
             path="${pair#*=}"
@@ -429,7 +427,7 @@ jobs:
               PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY
           fi
           provider_arg="$CONSOLE_QA_PROVIDER"
-          if [[ "$CONSOLE_QA_MODE" == mock && "$provider_arg" == all ]]; then
+          if [[ "$provider_arg" == all ]]; then
             provider_arg="codex,claude,opencode,pi,omp,antigravity"
           fi
           mkdir -p artifacts
