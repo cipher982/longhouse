@@ -10,7 +10,6 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Navigate,
@@ -63,13 +62,14 @@ import { TimelinePane } from "./TimelinePane";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import { useSessionWorkspace } from "./useSessionWorkspace";
 import { useHeaderSlot } from "@/app/headerSlot";
+import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useStoredState } from "@/shared/hooks/useStoredState";
 import { GaugeIcon } from "@/shared/ui/icons";
 import { SessionRailFrame } from "./rail/SessionRail";
 import { DisplaySettingsPopover } from "./display/DisplaySettingsPopover";
 import { displaySettingsStyle } from "./display/displaySettings";
 import { useDisplaySettings } from "./display/useDisplaySettings";
-import { useReportActiveSession, useSessionRail } from "./rail/sessionRailContext";
+import { useReportActiveSession } from "./rail/sessionRailContext";
 import { config } from "@/shared/lib/config";
 import { useReadinessFlag } from "@/shared/lib/readiness-contract";
 import { getSessionCardText } from "@/shared/session/sessionLabels";
@@ -115,7 +115,12 @@ function SessionDetailWorkspaceRoute({
 }) {
   const navigate = useNavigate();
   const headerSlot = useHeaderSlot();
-  const sessionRail = useSessionRail();
+  const canPinTurns = useMediaQuery("(min-width: 1024px)");
+  const [turnsPinned, setTurnsPinned] = useStoredState<boolean>(
+    "longhouse.session.turnOutlinePinned",
+    false,
+    (raw) => (typeof raw === "boolean" ? raw : null),
+  );
   // The readout panel (turn clock, context, tool calls, activity) is opt-in:
   // the header already carries the counts and state it used to repeat.
   const [readoutsOpen, setReadoutsOpen] = useStoredState<boolean>(
@@ -632,16 +637,31 @@ function SessionDetailWorkspaceRoute({
   // turn's real duration, never a fabricated "since idle" value.
   const turnSeconds = turnElapsedSeconds ?? lastTurnSeconds;
 
-  // With the rail, the turns list is an accordion under this session's rail
-  // row; without it (shared views, tests) it keeps its own column.
-  const turnOutline = (
+  // Right-edge turn ticks + hover card by default, or docked right drawer when
+  // pinned on desktop viewports. Keeps the left session rail spatially stable.
+  const showPinnedTurns = turnsPinned && canPinTurns && turns.length >= 2;
+  const pinnedTurnOutline = showPinnedTurns ? (
     <TurnOutline
+      mode="pinned"
       turns={turns}
       runningTurnKey={runningTurnKey}
       currentTurnKey={currentTurnKey}
       onSelectTurn={handleSelectTurn}
+      onPinnedChange={setTurnsPinned}
     />
-  );
+  ) : undefined;
+  const floatingTurnTicks = !showPinnedTurns ? (
+    <TurnOutline
+      mode="ticks"
+      turns={turns}
+      runningTurnKey={runningTurnKey}
+      currentTurnKey={currentTurnKey}
+      onSelectTurn={handleSelectTurn}
+      canPin={canPinTurns}
+      onPinnedChange={setTurnsPinned}
+      scrollContainer={timelineList}
+    />
+  ) : undefined;
 
   const workspaceClassName = [
     "session-workspace-route",
@@ -992,7 +1012,6 @@ function SessionDetailWorkspaceRoute({
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
-      {sessionRail?.turnsTarget ? createPortal(turnOutline, sessionRail.turnsTarget) : null}
       <div className="session-workspace-body">
         <div className="session-workspace-shell">
           <TimelinePane
@@ -1164,7 +1183,8 @@ function SessionDetailWorkspaceRoute({
             ) : null
           }
           headerRight={headerRight}
-          outline={sessionRail ? undefined : turnOutline}
+          outline={pinnedTurnOutline}
+          turnOverlay={floatingTurnTicks}
           rail={
             readoutsOpen ? (
             <ReadoutRail

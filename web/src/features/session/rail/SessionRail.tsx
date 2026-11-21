@@ -1,8 +1,10 @@
 /**
- * Session rail (session-view-terminal-parity C8, flavor A): recent sessions
- * down the left of the session view, each one keystroke away, with the open
- * session expanded into its turns. It lives outside the per-session route,
- * so switching sessions swaps the transcript without remounting the rail.
+ * Session rail (session-view-terminal-parity C8): recent sessions down the
+ * left of the session view, each one keystroke away. Rows stay fixed in place
+ * when switching sessions; within-session turn navigation lives on the
+ * transcript's right edge (`TurnOutline`). The rail lives outside the
+ * per-session route, so switching sessions swaps the transcript without
+ * remounting the rail.
  *
  * Rows come from the timeline's default first page (the same query and cache
  * entry the unfiltered timeline uses), so the rail adds no endpoint, and no
@@ -258,14 +260,12 @@ function SessionRail({
   activeSessionId,
   activeSession,
   returnTo,
-  onTurnsTarget,
   layout,
   onExpandedChange,
 }: {
   activeSessionId: string | null;
   activeSession: RailActiveSession | null;
   returnTo: string;
-  onTurnsTarget: (node: HTMLDivElement | null) => void;
   /** docked: beside the page. strip: a narrow column of glyphs that opens
    * over the page (laptop widths). drawer: inside the phone menu. */
   layout: "docked" | "strip" | "overlay" | "drawer";
@@ -419,7 +419,6 @@ function SessionRail({
             </>
           )}
         </button>
-        {active && !strip ? <div className="session-rail__turns" ref={onTurnsTarget} /> : null}
       </li>
     );
   };
@@ -565,7 +564,6 @@ export function SessionRailFrame({
   const compact = useMediaQuery("(max-width: 1199px)");
   const docked = !narrow && !compact;
   const mobileSlot = useMobileNavSlot();
-  const [turnsTarget, setTurnsTarget] = useState<HTMLElement | null>(null);
   const [activeSession, setActiveSession] = useState<RailActiveSession | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [storedWidth, setStoredWidth] = useStoredState<number | null>(
@@ -700,8 +698,8 @@ export function SessionRailFrame({
   }, [docked, setStoredWidth]);
 
   const context = useMemo<SessionRailContextValue>(
-    () => ({ turnsTarget, reportActiveSession }),
-    [turnsTarget, reportActiveSession],
+    () => ({ reportActiveSession }),
+    [reportActiveSession],
   );
 
   const railFor = (layout: "docked" | "strip" | "overlay" | "drawer") => (
@@ -709,7 +707,6 @@ export function SessionRailFrame({
       activeSessionId={activeSessionId}
       activeSession={activeSession?.id === activeSessionId ? activeSession : null}
       returnTo={returnTo}
-      onTurnsTarget={setTurnsTarget}
       layout={layout}
       onExpandedChange={setExpanded}
     />

@@ -208,6 +208,7 @@ describe("SessionRailFrame", () => {
     expect(rows.map((row) => row.getAttribute("data-session-id"))).toEqual(["a", "b", "c"]);
     expect(rows[0]).toHaveAttribute("aria-current", "page");
     expect(rows[1]).toHaveAttribute("aria-keyshortcuts", "Control+2");
+    expect(document.querySelector(".session-rail__turns")).toBeNull();
 
     fireEvent.keyDown(window, { code: "Digit3", ctrlKey: true });
     expect(navigateMock).toHaveBeenCalledWith("/timeline/c", { state: { from: "/timeline" } });

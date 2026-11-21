@@ -928,6 +928,7 @@
    (see .timeline-pane__rail-anchor), not a sibling, so every pixel of the
    body is inside one scroll container. */
 .timeline-pane__body {
+  position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -1379,39 +1380,180 @@
   }
 }
 
-/* --- Turn outline: a left sidebar listing the session's turns (item 7).
-   One component (session-workspace/TurnOutline.tsx) + this block —
-   deletable together in one commit. Hidden below 1600px. --- */
+/* --- Right-edge turn ticks + hover card + optional pinned drawer --- */
 .timeline-pane-shell {
   display: flex;
   min-height: 0;
 }
 
-.session-turn-outline {
-  display: none;
+.turn-ticks-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 24;
 }
 
-@media (min-width: 1600px) {
-  .timeline-pane-shell {
-    gap: var(--space-4);
+.turn-ticks__rail {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 12px 4px 12px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.turn-ticks__rail:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: 2px;
+}
+
+.turn-ticks__mark {
+  display: block;
+  height: 2px;
+  width: 10px;
+  border-radius: 2px;
+  background: rgba(196, 176, 150, 0.3);
+  transition: width 120ms ease, background-color 120ms ease;
+}
+
+.turn-ticks__mark.is-past {
+  background: rgba(196, 176, 150, 0.5);
+}
+
+.turn-ticks__mark.is-running {
+  background: rgba(240, 138, 36, 0.85);
+}
+
+.turn-ticks__mark.is-current {
+  width: 16px;
+  height: 2.5px;
+  background: var(--color-brand-primary);
+  box-shadow: 0 0 8px rgba(233, 185, 73, 0.55);
+}
+
+.turn-ticks__rail:hover .turn-ticks__mark,
+.turn-ticks__rail.is-open .turn-ticks__mark {
+  background: rgba(196, 176, 150, 0.62);
+}
+
+.turn-ticks__rail:hover .turn-ticks__mark.is-running,
+.turn-ticks__rail.is-open .turn-ticks__mark.is-running {
+  background: var(--color-intent-warning);
+}
+
+.turn-ticks__rail:hover .turn-ticks__mark.is-current,
+.turn-ticks__rail.is-open .turn-ticks__mark.is-current {
+  background: var(--color-brand-primary);
+}
+
+.turn-ticks__card {
+  position: absolute;
+  top: 50%;
+  right: 34px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  width: min(340px, calc(100% - 52px));
+  max-height: min(440px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-surface-overlay);
+  box-shadow: var(--shadow-xl);
+  z-index: 26;
+}
+
+/* Invisible hover bridge between the right-edge ticks and the card so sliding
+   the pointer horizontally never drops hover. */
+.turn-ticks__card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -18px;
+  width: 18px;
+}
+
+/* Reserve a minimal right gutter on desktop when the tick strip is present so
+   the ticks never collide with right-aligned timestamps or running-call cards. */
+@media (min-width: 768px) {
+  .timeline-pane__body:has(> .turn-ticks-layer) .timeline-pane__list.timeline-events {
+    padding-inline-end: max(
+      calc(var(--tl-side) + var(--tl-rail-space, 0px) + var(--space-4)),
+      34px
+    );
   }
-  .session-turn-outline {
-    display: block;
-    flex: 0 0 240px;
-    width: 240px;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--space-4) var(--space-2) var(--space-4) var(--space-4);
-    border-right: 1px solid rgba(70, 54, 41, 0.7);
-  }
+}
+
+.session-turn-drawer {
+  flex: 0 0 268px;
+  width: 268px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-border-subtle);
+  background: rgba(7, 6, 5, 0.42);
+}
+
+.session-turn-outline__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.session-turn-outline__heading {
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-turn-outline__pin-btn {
+  border: 1px solid var(--color-border-primary);
+  border-radius: 5px;
+  background: var(--color-surface-card);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.session-turn-outline__pin-btn:hover {
+  color: var(--color-brand-primary);
+  border-color: rgba(233, 185, 73, 0.45);
+}
+
+.session-turn-outline__pin-btn:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: 1px;
 }
 
 .session-turn-outline__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin: 0;
-  padding: 0;
+  padding: 6px;
   list-style: none;
 }
 
@@ -1422,7 +1564,7 @@
   width: 100%;
   padding: 6px 8px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   text-align: left;
@@ -1432,11 +1574,15 @@
   line-height: 1.4;
 }
 .session-turn-outline__item:hover {
-  background: rgba(246, 235, 214, 0.035);
+  background: rgba(246, 235, 214, 0.045);
+}
+.session-turn-outline__item:focus-visible {
+  outline: 1px solid var(--color-brand-primary-hover);
+  outline-offset: -1px;
 }
 .session-turn-outline__item.is-current {
-  background: rgba(212, 184, 122, 0.09);
-  box-shadow: inset 2px 0 0 rgba(233, 185, 73, 0.7);
+  background: rgba(233, 185, 73, 0.11);
+  box-shadow: inset 2px 0 0 var(--color-brand-primary);
 }
 .session-turn-outline__ember {
   flex-shrink: 0;
@@ -1451,14 +1597,24 @@
   flex-shrink: 0;
   font-family: var(--font-family-mono);
   font-size: 11px;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
 }
 .session-turn-outline__ask {
   min-width: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.session-turn-outline__item.is-current .session-turn-outline__ask,
+.session-turn-outline__item:hover .session-turn-outline__ask {
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 767px) {
+  .turn-ticks-layer {
+    display: none;
+  }
 }
 
 .tl-chip {

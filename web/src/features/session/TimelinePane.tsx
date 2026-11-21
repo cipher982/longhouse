@@ -121,12 +121,11 @@ interface TimelinePaneProps {
    *  scroller (so wheel input over it scrolls the transcript) and pinned to
    *  its bottom-right on wide viewports; CSS hides it below 1180px. */
   rail?: ReactNode;
-  /** Turn outline column (item 7, web-restyle-signal): a fixed-width sidebar
-   * to the left of the whole pane (header, transcript, and dock), shown only
-   * at wide viewports — CSS hides it below 1600px. Rendered outside the
-   * transcript+rail group the composer spans, so the dock's own width is
-   * unaffected by whether this is present. */
+  /** Pinned right-hand turns drawer, rendered beside the pane when pinned. */
   outline?: ReactNode;
+  /** Floating right-edge turn ticks and hover card, anchored to the transcript
+   *  body viewport when turns are not pinned. */
+  turnOverlay?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
   renderMedia?: boolean;
@@ -1428,6 +1427,7 @@ export const TimelinePane = memo(function TimelinePane({
   headerTarget = null,
   rail = null,
   outline = null,
+  turnOverlay = null,
   dock = null,
   listRef,
   renderMedia = true,
@@ -2498,6 +2498,7 @@ export const TimelinePane = memo(function TimelinePane({
         )}
         {rail ? <div className="timeline-pane__rail-anchor">{rail}</div> : null}
         </div>
+        {turnOverlay}
       </div>
 
       {unreadCount > 0 ? (
@@ -2537,8 +2538,8 @@ export const TimelinePane = memo(function TimelinePane({
 
   return (
     <div className="timeline-pane-shell" data-testid="session-timeline-shell">
-      {outline}
       {livePane}
+      {outline}
     </div>
   );
 });

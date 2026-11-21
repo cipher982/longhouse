@@ -1,11 +1,12 @@
 /**
- * Item 7 (web-restyle-signal.md polish pass): a left-hand column listing the
- * session's turns, shown only on wide viewports (see the
- * `.session-turn-outline*` CSS block in session-workspace.css, deletable together
- * with this file in one commit). Turns come from the server's turn index merged
- * with the loaded thread (`mergeTurnOutline`).
+ * Right-edge turn minimap (tick marks) with hover/click popover and optional
+ * pinned right drawer. Keeps the left session rail free of expanding accordions
+ * while preserving one-click jumping across all turns in the session.
+ *
+ * Turns come from the server's turn index merged with the loaded thread
+ * (`mergeTurnOutline`).
  */
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
 import { parseUTC } from "@/shared/lib/dateUtils";
@@ -36,8 +37,17 @@ export function formatTurnTime(dateStr: string): string {
   return hour && minute ? `${hour}:${minute}` : formatTime(dateStr);
 }
 
-/** How much of the user's ask shows on one outline row. */
-const ASK_PREVIEW_LENGTH = 48;
+/** How much of the user's ask is kept for outline rows (CSS ellipsis trims to fit). */
+const ASK_PREVIEW_LENGTH = 96;
+
+/** Upper bound on visible tick marks along the right margin so 100+ turn
+ * sessions never overflow the transcript height. The popover/drawer always
+ * lists every turn. */
+export const MAX_TICK_MARKS = 36;
+
+/** Hover grace window so moving diagonally from the tick rail to the card does
+ * not flicker closed. */
+const HOVER_CLOSE_DELAY_MS = 180;
 
 export interface TurnOutlineTurn {
   /** Stable per-turn key — also usable as the React list key. */
@@ -45,8 +55,42 @@ export interface TurnOutlineTurn {
   /** The originating user message's event id — turns rowId `event-<id>`. */
   eventId: AgentEventId;
   timestamp: string;
-  /** First 48 characters of the user's ask, as a one-line preview. */
+  /** First 96 characters of the user's ask, as a one-line preview. */
   askPreview: string;
+}
+
+export interface TurnTickMark {
+  index: number;
+  isPast: boolean;
+  isCurrent: boolean;
+  isRunning: boolean;
+}
+
+/**
+ * Map `turns` onto at most `MAX_TICK_MARKS` visual ticks while preserving
+ * exact active and running positions.
+ */
+export function buildTickMarks(
+  turnCount: number,
+  activeIndex: number,
+  runningIndex: number,
+  maxTicks: number = MAX_TICK_MARKS,
+): TurnTickMark[] {
+  if (turnCount <= 0) return [];
+  const count = Math.min(turnCount, Math.max(1, maxTicks));
+  const mapIndex = (idx: number): number => {
+    if (idx < 0 || idx >= turnCount) return -1;
+    if (count === turnCount || turnCount <= 1) return idx;
+    return Math.round((idx / (turnCount - 1)) * (count - 1));
+  };
+  const activeTick = mapIndex(activeIndex);
+  const runningTick = mapIndex(runningIndex);
+  return Array.from({ length: count }, (_, index) => ({
+    index,
+    isCurrent: index === activeTick,
+    isPast: activeTick >= 0 && index < activeTick,
+    isRunning: index === runningTick,
+  }));
 }
 
 /**
@@ -117,6 +161,65 @@ export function mergeTurnOutline(
   return [...older, ...inWindow];
 }
 
+function TurnList({
+  turns,
+  runningTurnKey,
+  currentTurnKey,
+  onSelectTurn,
+}: {
+  turns: TurnOutlineTurn[];
+  runningTurnKey: string | null;
+  currentTurnKey: string | null;
+  onSelectTurn: (turn: TurnOutlineTurn) => void;
+}) {
+  const listRef = useRef<HTMLOListElement | null>(null);
+
+  // Keep the current row inside the list's scroll viewport as the transcript
+  // scrolls or when the popover opens.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const reveal = () => {
+      const row = list.querySelector<HTMLElement>('[aria-current="true"]');
+      if (!row) return;
+      const listBox = list.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
+      else if (rowBox.bottom > listBox.bottom) list.scrollTop += rowBox.bottom - listBox.bottom;
+    };
+    reveal();
+    if (typeof ResizeObserver === "undefined") return;
+    const resizes = new ResizeObserver(reveal);
+    resizes.observe(list);
+    return () => resizes.disconnect();
+  }, [currentTurnKey, turns.length]);
+
+  return (
+    <ol ref={listRef} className="session-turn-outline__list">
+      {turns.map((turn) => {
+        const isRunning = turn.key === runningTurnKey;
+        const isCurrent = turn.key === currentTurnKey;
+        return (
+          <li key={turn.key}>
+            <button
+              type="button"
+              className={`session-turn-outline__item${isCurrent ? " is-current" : ""}${isRunning ? " is-running" : ""}`}
+              data-testid="session-turn-outline-item"
+              aria-current={isCurrent ? "true" : undefined}
+              onClick={() => onSelectTurn(turn)}
+              title={`${formatTime(turn.timestamp)} · ${turn.askPreview || "(empty message)"}`}
+            >
+              {isRunning ? <span className="session-turn-outline__ember" aria-hidden="true" /> : null}
+              <span className="session-turn-outline__time">{formatTurnTime(turn.timestamp)}</span>
+              <span className="session-turn-outline__ask">{turn.askPreview || "(empty message)"}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export interface TurnOutlineProps {
   turns: TurnOutlineTurn[];
   /** The live/running turn's key, when the session has one; marked with the
@@ -127,64 +230,216 @@ export interface TurnOutlineProps {
   /** Scrolls the transcript to this turn's user-message row — the caller
    * owns the actual scroll (SessionDetailPage: `event-<eventId>`). */
   onSelectTurn: (turn: TurnOutlineTurn) => void;
+  /** `ticks` (default): quiet right-edge tick strip with hover/click popover.
+   * `pinned`: docked right-hand turns drawer. */
+  mode?: "ticks" | "pinned";
+  /** Whether the Pin button is shown in the hover card (disabled on narrow
+   * viewports where a docked right column would squeeze the transcript). */
+  canPin?: boolean;
+  onPinnedChange?: (pinned: boolean) => void;
+  /** Transcript scroll container for seamless wheel passthrough over the tick strip. */
+  scrollContainer?: HTMLElement | null;
 }
+
+type CardOpenSource = null | "hover" | "click";
 
 export function TurnOutline({
   turns,
   runningTurnKey = null,
   currentTurnKey = null,
   onSelectTurn,
+  mode = "ticks",
+  canPin = true,
+  onPinnedChange,
+  scrollContainer = null,
 }: TurnOutlineProps) {
-  const navRef = useRef<HTMLElement | null>(null);
+  const [openSource, setOpenSource] = useState<CardOpenSource>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const layerRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep the current row inside the outline's own scroll viewport as the
-  // transcript scrolls (long sessions have more turns than the column fits).
+  const cardOpen = openSource !== null;
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const closeCard = useCallback(() => {
+    clearCloseTimer();
+    setOpenSource(null);
+  }, [clearCloseTimer]);
+
+  const scheduleHoverClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setOpenSource((current) => (current === "hover" ? null : current));
+    }, HOVER_CLOSE_DELAY_MS);
+  }, [clearCloseTimer]);
+
+  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+
+  // Reset popover when switching into pinned mode or dropping below 2 turns.
   useEffect(() => {
-    const nav = navRef.current;
-    if (!nav) return;
-    const reveal = () => {
-      const row = nav.querySelector<HTMLElement>('[aria-current="true"]');
-      if (!row) return;
-      const navBox = nav.getBoundingClientRect();
-      const rowBox = row.getBoundingClientRect();
-      if (rowBox.top < navBox.top) nav.scrollTop -= navBox.top - rowBox.top;
-      else if (rowBox.bottom > navBox.bottom) nav.scrollTop += rowBox.bottom - navBox.bottom;
-    };
-    reveal();
-    // The column is hidden below 1600px and resizes with the window: reveal
-    // again when it gains a height.
-    if (typeof ResizeObserver === "undefined") return;
-    const resizes = new ResizeObserver(reveal);
-    resizes.observe(nav);
-    return () => resizes.disconnect();
-  }, [currentTurnKey, turns.length]);
+    if (mode === "pinned" || turns.length < 2) {
+      closeCard();
+    }
+  }, [mode, turns.length, closeCard]);
 
-  if (turns.length === 0) return null;
+  // Escape and outside pointer clicks dismiss the hover/click card.
+  useEffect(() => {
+    if (!cardOpen || mode !== "ticks") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeCard();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && layerRef.current?.contains(target)) return;
+      closeCard();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [cardOpen, mode, closeCard]);
+
+  const activeIndex = useMemo(() => {
+    if (!currentTurnKey) return turns.length - 1;
+    const found = turns.findIndex((turn) => turn.key === currentTurnKey);
+    return found >= 0 ? found : turns.length - 1;
+  }, [turns, currentTurnKey]);
+
+  const runningIndex = useMemo(
+    () => (runningTurnKey ? turns.findIndex((turn) => turn.key === runningTurnKey) : -1),
+    [turns, runningTurnKey],
+  );
+
+  const ticks = useMemo(
+    () => buildTickMarks(turns.length, activeIndex, runningIndex),
+    [turns.length, activeIndex, runningIndex],
+  );
+
+  const handleRailWheel = useCallback(
+    (event: ReactWheelEvent<HTMLButtonElement>) => {
+      if (!scrollContainer) return;
+      if (typeof scrollContainer.scrollBy === "function") {
+        scrollContainer.scrollBy({ top: event.deltaY, left: event.deltaX });
+      } else {
+        scrollContainer.scrollTop += event.deltaY;
+      }
+    },
+    [scrollContainer],
+  );
+
+  // A 0- or 1-turn session has nowhere to jump: stay out of the way.
+  if (turns.length < 2) return null;
+
+  const headingLabel = `${turns.length} turns`;
+
+  if (mode === "pinned") {
+    return (
+      <aside
+        className="session-turn-drawer"
+        data-testid="session-turn-outline"
+        aria-label="Session turns"
+      >
+        <div className="session-turn-outline__head">
+          <span className="session-turn-outline__heading">{headingLabel}</span>
+          {onPinnedChange ? (
+            <button
+              type="button"
+              className="session-turn-outline__pin-btn"
+              data-testid="turn-outline-unpin"
+              onClick={() => onPinnedChange(false)}
+              title="Collapse to right-edge ticks"
+            >
+              Unpin
+            </button>
+          ) : null}
+        </div>
+        <TurnList
+          turns={turns}
+          runningTurnKey={runningTurnKey}
+          currentTurnKey={currentTurnKey}
+          onSelectTurn={onSelectTurn}
+        />
+      </aside>
+    );
+  }
 
   return (
-    <nav ref={navRef} className="session-turn-outline" data-testid="session-turn-outline" aria-label="Turns">
-      <ol className="session-turn-outline__list">
-        {turns.map((turn) => {
-          const isRunning = turn.key === runningTurnKey;
-          const isCurrent = turn.key === currentTurnKey;
-          return (
-            <li key={turn.key}>
+    <div ref={layerRef} className="turn-ticks-layer" data-testid="turn-ticks-layer">
+      <button
+        type="button"
+        className={`turn-ticks__rail${cardOpen ? " is-open" : ""}`}
+        data-testid="turn-ticks-trigger"
+        aria-label={`Session turns (${activeIndex + 1} of ${turns.length})`}
+        aria-haspopup="dialog"
+        aria-expanded={cardOpen}
+        onMouseEnter={() => {
+          clearCloseTimer();
+          setOpenSource((current) => current ?? "hover");
+        }}
+        onMouseLeave={scheduleHoverClose}
+        onClick={() => {
+          clearCloseTimer();
+          // Hovering then clicking promotes the hover preview to click-open
+          // instead of flickering it shut; a second click closes it.
+          setOpenSource((current) => (current === "click" ? null : "click"));
+        }}
+        onWheel={handleRailWheel}
+        title={`${headingLabel} · hover or click to jump`}
+      >
+        {ticks.map((tick) => (
+          <span
+            key={tick.index}
+            className={`turn-ticks__mark${tick.isCurrent ? " is-current" : tick.isPast ? " is-past" : ""}${tick.isRunning ? " is-running" : ""}`}
+            aria-hidden="true"
+          />
+        ))}
+      </button>
+
+      {cardOpen ? (
+        <nav
+          className="turn-ticks__card"
+          role="dialog"
+          aria-label="Session turns"
+          data-testid="session-turn-outline"
+          onMouseEnter={clearCloseTimer}
+          onMouseLeave={scheduleHoverClose}
+        >
+          <div className="session-turn-outline__head">
+            <span className="session-turn-outline__heading">{headingLabel}</span>
+            {canPin && onPinnedChange ? (
               <button
                 type="button"
-                className={`session-turn-outline__item${isCurrent ? " is-current" : ""}${isRunning ? " is-running" : ""}`}
-                data-testid="session-turn-outline-item"
-                aria-current={isCurrent ? "true" : undefined}
-                onClick={() => onSelectTurn(turn)}
-                title={`${formatTime(turn.timestamp)} · ${turn.askPreview || "(empty message)"}`}
+                className="session-turn-outline__pin-btn"
+                data-testid="turn-outline-pin"
+                onClick={() => {
+                  closeCard();
+                  onPinnedChange(true);
+                }}
+                title="Pin turns panel on the right"
               >
-                {isRunning ? <span className="session-turn-outline__ember" aria-hidden="true" /> : null}
-                <span className="session-turn-outline__time">{formatTurnTime(turn.timestamp)}</span>
-                <span className="session-turn-outline__ask">{turn.askPreview || "(empty message)"}</span>
+                Pin
               </button>
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
+            ) : null}
+          </div>
+          <TurnList
+            turns={turns}
+            runningTurnKey={runningTurnKey}
+            currentTurnKey={currentTurnKey}
+            onSelectTurn={(turn) => {
+              onSelectTurn(turn);
+              closeCard();
+            }}
+          />
+        </nav>
+      ) : null}
+    </div>
   );
 }

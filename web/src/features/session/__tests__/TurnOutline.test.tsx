@@ -1,8 +1,16 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { TimelineItem } from "@/shared/session/model";
-import { deriveTurnOutline, formatTurnTime, mergeTurnOutline, TurnOutline, type TurnOutlineTurn } from "../TurnOutline";
+import {
+  buildTickMarks,
+  deriveTurnOutline,
+  formatTurnTime,
+  MAX_TICK_MARKS,
+  mergeTurnOutline,
+  TurnOutline,
+  type TurnOutlineTurn,
+} from "../TurnOutline";
 
 function userMessageItem(id: number, timestamp: string, text: string): TimelineItem {
   return {
@@ -59,12 +67,12 @@ describe("deriveTurnOutline", () => {
     expect(turns[1]).toMatchObject({ eventId: 3, timestamp: "2026-04-15T16:00:00Z" });
   });
 
-  it("clips the ask preview to 48 characters", () => {
+  it("clips the ask preview to 96 characters", () => {
     const longAsk =
-      "Investigate and fix the archive upload stall — it has been failing silently for a week now";
+      "Investigate and fix the archive upload stall because it has been failing silently for more than a full week across every machine";
     const turns = deriveTurnOutline([userMessageItem(1, "2026-04-15T15:22:00Z", longAsk)]);
-    expect(turns[0].askPreview).toBe(longAsk.slice(0, 48));
-    expect(turns[0].askPreview.length).toBe(48);
+    expect(turns[0].askPreview).toBe(longAsk.slice(0, 96));
+    expect(turns[0].askPreview.length).toBe(96);
   });
 
   it("returns an empty list when no user message has loaded", () => {
@@ -121,50 +129,120 @@ describe("mergeTurnOutline", () => {
   });
 });
 
+describe("buildTickMarks", () => {
+  it("keeps 1:1 ticks up to MAX_TICK_MARKS and marks past/current/running accurately", () => {
+    const ticks = buildTickMarks(4, 2, 3);
+    expect(ticks).toHaveLength(4);
+    expect(ticks.map((t) => t.isPast)).toEqual([true, true, false, false]);
+    expect(ticks.map((t) => t.isCurrent)).toEqual([false, false, true, false]);
+    expect(ticks.map((t) => t.isRunning)).toEqual([false, false, false, true]);
+  });
+
+  it("bins sessions longer than MAX_TICK_MARKS cleanly without overflowing", () => {
+    const ticks = buildTickMarks(120, 60, 119);
+    expect(ticks).toHaveLength(MAX_TICK_MARKS);
+    expect(ticks.filter((t) => t.isCurrent)).toHaveLength(1);
+    expect(ticks[MAX_TICK_MARKS - 1].isRunning).toBe(true);
+  });
+});
+
 describe("TurnOutline", () => {
   const turns: TurnOutlineTurn[] = [
     { key: "turn-1", eventId: 1, timestamp: "2026-04-15T15:22:00Z", askPreview: "Investigate the stall" },
     { key: "turn-3", eventId: 3, timestamp: "2026-04-15T16:00:00Z", askPreview: "Check the monitor too" },
   ];
 
-  it("renders nothing when there are no turns", () => {
+  it("renders nothing when there are fewer than 2 turns", () => {
     const onSelectTurn = vi.fn();
-    const { container } = render(<TurnOutline turns={[]} onSelectTurn={onSelectTurn} />);
-    expect(container).toBeEmptyDOMElement();
+    const empty = render(<TurnOutline turns={[]} onSelectTurn={onSelectTurn} />);
+    expect(empty.container).toBeEmptyDOMElement();
+
+    const single = render(<TurnOutline turns={[turns[0]]} onSelectTurn={onSelectTurn} />);
+    expect(single.container).toBeEmptyDOMElement();
   });
 
-  it("calls the scroll handler with the clicked turn", async () => {
+  it("renders right-edge ticks by default, opens the popover on hover or click, and jumps on turn select", async () => {
     const onSelectTurn = vi.fn();
+    const onPinnedChange = vi.fn();
     render(
       <TurnOutline
         turns={turns}
         runningTurnKey="turn-3"
         currentTurnKey="turn-3"
         onSelectTurn={onSelectTurn}
+        onPinnedChange={onPinnedChange}
+      />,
+    );
+
+    const trigger = screen.getByTestId("turn-ticks-trigger");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+
+    // Hovering then clicking keeps the popover open (does not flicker shut).
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    const items = screen.getAllByTestId("session-turn-outline-item");
+    expect(items).toHaveLength(2);
+    expect(items[0].querySelector(".session-turn-outline__ember")).toBeNull();
+    expect(items[1].querySelector(".session-turn-outline__ember")).not.toBeNull();
+    expect(items[1]).toHaveClass("is-current");
+    expect(items[1]).toHaveAttribute("aria-current", "true");
+
+    await userEvent.click(items[0]);
+    expect(onSelectTurn).toHaveBeenCalledTimes(1);
+    expect(onSelectTurn).toHaveBeenCalledWith(turns[0]);
+    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+  });
+
+  it("dismisses the popover on Escape and allows pinning from the card", async () => {
+    const onPinnedChange = vi.fn();
+    render(
+      <TurnOutline
+        turns={turns}
+        currentTurnKey="turn-1"
+        onSelectTurn={vi.fn()}
+        onPinnedChange={onPinnedChange}
+      />,
+    );
+
+    const trigger = screen.getByTestId("turn-ticks-trigger");
+    await userEvent.click(trigger);
+    expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByTestId("turn-outline-pin"));
+    expect(onPinnedChange).toHaveBeenCalledWith(true);
+    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+  });
+
+  it("renders a docked drawer in pinned mode and lets the user unpin it", async () => {
+    const onSelectTurn = vi.fn();
+    const onPinnedChange = vi.fn();
+    render(
+      <TurnOutline
+        mode="pinned"
+        turns={turns}
+        runningTurnKey="turn-3"
+        currentTurnKey="turn-3"
+        onSelectTurn={onSelectTurn}
+        onPinnedChange={onPinnedChange}
       />,
     );
 
     const items = screen.getAllByTestId("session-turn-outline-item");
     expect(items).toHaveLength(2);
+    expect(items[1]).toHaveClass("is-current");
 
     await userEvent.click(items[0]);
-    expect(onSelectTurn).toHaveBeenCalledTimes(1);
     expect(onSelectTurn).toHaveBeenCalledWith(turns[0]);
-  });
+    // Pinned drawer stays open after jumping.
+    expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
 
-  it("marks the running turn with the ember and the current turn as highlighted", () => {
-    render(
-      <TurnOutline
-        turns={turns}
-        runningTurnKey="turn-3"
-        currentTurnKey="turn-3"
-        onSelectTurn={vi.fn()}
-      />,
-    );
-    const items = screen.getAllByTestId("session-turn-outline-item");
-    expect(items[0].querySelector(".session-turn-outline__ember")).toBeNull();
-    expect(items[1].querySelector(".session-turn-outline__ember")).not.toBeNull();
-    expect(items[1]).toHaveClass("is-current");
-    expect(items[1]).toHaveAttribute("aria-current", "true");
+    await userEvent.click(screen.getByTestId("turn-outline-unpin"));
+    expect(onPinnedChange).toHaveBeenCalledWith(false);
   });
 });
