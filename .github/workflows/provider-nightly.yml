@@ -1,7 +1,10 @@
-# ROLE: tell us within a day when a provider CLI release breaks Longhouse. Finds each provider's latest release,
-# runs Terminal Truth (scripted model, no keys) and the transcript census against it, and opens a pin-bump PR
-# when both pass. A red run is the alert (Sauron's ci-scheduled-red pages on repeated red scheduled runs).
-# Live model turns are not run: the repo has no provider API key secrets meant for them.
+# ROLE: tell us within a day when a provider CLI release or a Longhouse commit breaks something. Finds each provider's
+# latest release, runs Terminal Truth (scripted model, no keys) and the transcript census against it, and runs one
+# real-model turn per provider (cheapest model, one forced tool call) with the census on those transcripts. When a version
+# changed and all of that passes, it commits the new pins to main. A red run is the alert (Sauron's ci-scheduled-red pages
+# on repeated red scheduled runs).
+# Real turns: Claude on LONGHOUSE_CI_ANTHROPIC_API_KEY; Codex, OpenCode, Pi and OMP through OpenRouter on
+# LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY. Models are the CONSOLE_QA_*_MODEL repo variables. Antigravity stays scripted-only.
 name: Provider Nightly
 on:
   schedule:
@@ -30,8 +33,38 @@ jobs:
           if cmp -s "$RUNNER_TEMP/candidate.toml" scripts/ci/terminal-truth-providers.toml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            { echo "changed=true"; echo "pins<<EOF_PINS"; cat "$RUNNER_TEMP/candidate.toml"; echo "EOF_PINS"; } >> "$GITHUB_OUTPUT"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+          { echo "pins<<EOF_PINS"; cat "$RUNNER_TEMP/candidate.toml"; echo "EOF_PINS"; } >> "$GITHUB_OUTPUT"
+  live:
+    needs: detect
+    runs-on: ci-browser
+    timeout-minutes: 40
+    env:
+      PINS: ${{ needs.detect.outputs.pins }}
+      ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY }}
+      CONSOLE_QA_ANTHROPIC_MODEL: ${{ vars.CONSOLE_QA_ANTHROPIC_MODEL }}
+      CONSOLE_QA_OPENCODE_MODEL: ${{ vars.CONSOLE_QA_OPENCODE_MODEL }}
+      CONSOLE_QA_PI_MODEL: ${{ vars.CONSOLE_QA_PI_MODEL }}
+      CONSOLE_QA_OMP_MODEL: ${{ vars.CONSOLE_QA_OMP_MODEL }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - name: Install the candidate providers and run one real turn each
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PINS" > scripts/ci/terminal-truth-providers.toml
+          root="$RUNNER_TEMP/live-turns"
+          mkdir -p "$root"
+          trap 'rm -rf -- "$root"' EXIT
+          providers=codex,claude,opencode,pi,omp
+          python3 scripts/ci/terminal_truth_providers.py install --providers "$providers" --root "$root/providers" --home "$root/home"
+          export PATH="$root/providers/node_modules/.bin:$root/home/.local/bin:$PATH"
+          python3 scripts/ci/terminal_truth_providers.py verify --providers "$providers"
+          python3 scripts/ci/provider_live_turns.py "$root/runs" --providers "$providers"
   suite:
     needs: detect
     if: needs.detect.outputs.changed == 'true'
@@ -39,29 +72,37 @@ jobs:
     with:
       pins: ${{ needs.detect.outputs.pins }}
     secrets: inherit
-  bump-pr:
-    needs: [detect, suite]
+  bump:
+    # A branch run (a test of this workflow) must never push to main.
+    needs: [detect, suite, live]
+    if: needs.detect.outputs.changed == 'true' && github.ref == 'refs/heads/main'
     runs-on: ci-browser
     permissions:
       contents: write
-      pull-requests: write
       actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       PINS: ${{ needs.detect.outputs.pins }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Open the pin-bump PR and run Terminal Truth on it
+      - name: Commit the new pins to main and start what a push would have started
         run: |
           set -euo pipefail
-          branch="provider-bump/$(date -u +%F)-$GITHUB_RUN_ID"
-          printf '%s\n' "$PINS" > scripts/ci/terminal-truth-providers.toml
+          file=scripts/ci/terminal-truth-providers.toml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git commit -am "ci: bump provider pins to latest releases"
-          git push origin "$branch"
-          gh pr create --base main --head "$branch" --title "ci: bump provider pins ($(date -u +%F))" \
-            --body "Nightly found newer provider releases. The scripted Terminal Truth suite and transcript census passed on them: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          # a push made with GITHUB_TOKEN triggers no workflows, so start the full gate by hand
-          gh workflow run terminal-truth.yml --ref "$branch"
+          for attempt in 1 2 3; do
+            printf '%s\n' "$PINS" > "$file"
+            git commit -q -m "ci: bump provider pins to latest releases" -- "$file"
+            git push origin HEAD:main && break
+            [[ "$attempt" != 3 ]] || { echo "::error::main kept moving; pins not pushed"; exit 1; }
+            # main moved during the run: put the pins change on its new tip, unless the pins file moved too
+            git fetch -q --depth=1 origin main
+            git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- "$file" || { echo "::error::$file changed on main during the run"; exit 1; }
+            git reset -q --hard FETCH_HEAD
+          done
+          # a push made with GITHUB_TOKEN triggers no workflows. Dispatch the ones a push would have run that gate
+          # promotion: Terminal Truth with its commit status (live-preview path), and CI. Runtime image and deploy
+          # do not watch this file.
+          gh workflow run terminal-truth.yml --ref main -f publish_status=true
+          gh workflow run contract-first-ci.yml --ref main

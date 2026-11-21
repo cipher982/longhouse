@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 360,
+  "file_count": 361,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -761,6 +761,16 @@
         "codex",
         "omp",
         "opencode"
+      ]
+    },
+    {
+      "path": "scripts/ci/provider_live_turns.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
