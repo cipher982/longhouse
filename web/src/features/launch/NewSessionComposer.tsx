@@ -136,7 +136,7 @@ export default function NewSessionComposer({
                 }
               }}
               rows={3}
-              placeholder="Describe the task. Enter starts it; Shift+Enter adds a line. Leave it empty to start an idle session."
+              placeholder="Describe a task…"
               aria-label="First message"
               data-testid="launch-prompt"
             />
