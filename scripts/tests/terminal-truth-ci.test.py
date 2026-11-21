@@ -156,7 +156,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(
             "TT_RERUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rerun)) && '0' || '1' }}", text
         )
-        self.assertIn('if [[ "$TT_RERUN" != 1 ]]; then rerun=" --no-rerun"; fi', text)
+        self.assertIn('if [[ "$TT_RERUN" != 1 && "${TT_KEEP_TRANSCRIPTS:-}" != 1 ]]; then rerun=" --no-rerun"; fi', text)  # candidate runs rerun
 
     def test_one_queue_a_short_limit_and_scratch_on_the_ram_backed_work_volume(self):
         text = WORKFLOW.read_text()
