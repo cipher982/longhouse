@@ -6,7 +6,7 @@
  * A Console session is created empty, so a prompt typed here is sent as the
  * session's first input right after the create returns.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -28,6 +28,26 @@ export interface LastLaunch {
   provider: string;
   model: string;
   cwd: string;
+  modelByProvider?: Record<string, string>;
+}
+
+function normalizeGitRepo(gitRepo: string | null | undefined): string | null {
+  let raw = (gitRepo ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  for (const prefix of ["https://", "http://", "ssh://"]) {
+    if (raw.startsWith(prefix)) {
+      raw = raw.slice(prefix.length);
+      break;
+    }
+  }
+  if (raw.startsWith("git@")) {
+    raw = raw.slice(4);
+    const colon = raw.indexOf(":");
+    if (colon !== -1) raw = `${raw.slice(0, colon)}/${raw.slice(colon + 1)}`;
+  }
+  raw = raw.replace(/\/+$/, "");
+  if (raw.endsWith(".git")) raw = raw.slice(0, -4);
+  return raw || null;
 }
 
 export function readLastLaunch(): LastLaunch | null {
@@ -36,11 +56,23 @@ export function readLastLaunch(): LastLaunch | null {
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<LastLaunch>;
     if (typeof value.deviceId !== "string" || !value.deviceId) return null;
+    const provider = typeof value.provider === "string" ? value.provider : "";
+    const model = typeof value.model === "string" ? value.model : "";
+    const modelByProvider: Record<string, string> = {};
+    if (value.modelByProvider && typeof value.modelByProvider === "object") {
+      for (const [k, v] of Object.entries(value.modelByProvider)) {
+        if (typeof v === "string") modelByProvider[k] = v;
+      }
+    }
+    if (provider && !(provider in modelByProvider)) {
+      modelByProvider[provider] = model;
+    }
     return {
       deviceId: value.deviceId,
-      provider: typeof value.provider === "string" ? value.provider : "",
-      model: typeof value.model === "string" ? value.model : "",
+      provider,
+      model,
       cwd: typeof value.cwd === "string" ? value.cwd : "",
+      modelByProvider,
     };
   } catch {
     return null;
@@ -66,6 +98,14 @@ export function launchProvidersForMachine(m: MachineDirectoryEntry): string[] {
 function defaultProvider(m: MachineDirectoryEntry | undefined): string {
   if (!m) return "";
   return m.launch.default_provider ?? "";
+}
+
+function pickProvider(m: MachineDirectoryEntry, ...preferred: Array<string | undefined>): string {
+  const available = launchProvidersForMachine(m);
+  for (const candidate of preferred) {
+    if (candidate && available.includes(candidate)) return candidate;
+  }
+  return defaultProvider(m);
 }
 
 function newClientRequestId(): string {
@@ -97,7 +137,10 @@ export function useLaunchForm({
   const [last] = useState(readLastLaunch);
   const [deviceId, setDeviceId] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
-  const [model, setModel] = useState<string>("");
+  const [model, setModelState] = useState<string>("");
+  const [modelByProvider, setModelByProvider] = useState<Record<string, string>>(
+    () => last?.modelByProvider ?? {},
+  );
   const [cwd, setCwd] = useState<string>("");
   const [prompt, setPrompt] = useState<string>("");
   const [workspaceSearch, setWorkspaceSearch] = useState<string>("");
@@ -105,6 +148,18 @@ export function useLaunchForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [firstInputFailure, setFirstInputFailure] = useState<FirstInputFailure | null>(null);
+  const autoSelectedDeviceRef = useRef<string | null>(null);
+  const preferredRepoRef = useRef<string | null>(null);
+
+  const setModel = useCallback(
+    (next: string) => {
+      setModelState(next);
+      if (provider) {
+        setModelByProvider((prev) => ({ ...prev, [provider]: next }));
+      }
+    },
+    [provider],
+  );
 
   const machines = useMemo(() => machinesQuery.data?.machines ?? [], [machinesQuery.data]);
   const launchable = useMemo(() => machines.filter(machineCanLaunch), [machines]);
@@ -134,37 +189,46 @@ export function useLaunchForm({
   }, [workspaces, workspaceSearch]);
 
   // Start on the machine the caller named, else the last one used, else the
-  // first launchable machine. On the last-used machine, its last provider,
-  // model and folder come back too.
+  // first launchable machine. Keep the last-used agent and its remembered model
+  // on whichever machine starts; restore the folder only on the same machine.
   useEffect(() => {
     if (!launchable.length || deviceId) return;
     const find = (id: string | undefined) => (id ? launchable.find((m) => m.device_id === id) : undefined);
     const machine = find(initialDeviceId) ?? find(last?.deviceId) ?? launchable[0];
     setDeviceId(machine.device_id);
-    if (last && last.deviceId === machine.device_id) {
-      if (launchProvidersForMachine(machine).includes(last.provider)) {
-        setProvider(last.provider);
-        setModel(last.model);
-      }
-      if (last.cwd) setCwd(last.cwd);
+    const chosenProvider = pickProvider(machine, last?.provider);
+    setProvider(chosenProvider);
+    setModelState(last?.modelByProvider?.[chosenProvider] ?? "");
+    if (last && last.deviceId === machine.device_id && last.cwd) {
+      setCwd(last.cwd);
+      autoSelectedDeviceRef.current = machine.device_id;
     }
   }, [launchable, deviceId, initialDeviceId, last]);
 
-  // Keep the provider valid for the selected machine.
+  // Fill only an empty agent; never overwrite a chosen agent on a background
+  // machine-list poll (canSubmit disables Start and ProviderSignInList explains why).
   useEffect(() => {
-    if (!selectedMachine) return;
-    const providers = launchProvidersForMachine(selectedMachine);
-    if (!provider || !providers.includes(provider)) {
-      setProvider(defaultProvider(selectedMachine));
-      setModel("");
+    if (!selectedMachine || provider) return;
+    const nextProvider = defaultProvider(selectedMachine);
+    if (nextProvider) {
+      setProvider(nextProvider);
+      setModelState(modelByProvider[nextProvider] ?? "");
     }
-  }, [selectedMachine, provider]);
+  }, [selectedMachine, provider, modelByProvider]);
 
-  // Start with the top-ranked workspace the user has actually used on this machine.
+  // Auto-select a workspace once per machine when suggestions arrive (preferring
+  // the same git_repo across a machine switch). Never fight the user clearing "Other path".
   useEffect(() => {
-    if (cwd.trim() || workspaces.length === 0) return;
-    setCwd(workspaces[0].path);
-  }, [cwd, workspaces]);
+    if (!deviceId || workspaces.length === 0) return;
+    if (autoSelectedDeviceRef.current === deviceId) return;
+    autoSelectedDeviceRef.current = deviceId;
+    if (cwd.trim()) return;
+    const targetRepo = preferredRepoRef.current;
+    const matched = targetRepo
+      ? workspaces.find((w) => normalizeGitRepo(w.git_repo) === targetRepo)
+      : undefined;
+    setCwd((matched ?? workspaces[0]).path);
+  }, [deviceId, cwd, workspaces]);
 
   // After a first message failed, changing anything the launch sends means a
   // new launch: the started session stays reachable from the error's link.
@@ -172,20 +236,35 @@ export function useLaunchForm({
     setFirstInputFailure(null);
   }, [prompt, deviceId, provider, model, cwd, displayName]);
 
-  const chooseMachine = useCallback((machine: MachineDirectoryEntry) => {
-    setDeviceId(machine.device_id);
-    setProvider(defaultProvider(machine));
-    setModel("");
-    setCwd("");
-    setWorkspaceSearch("");
-    setError(null);
-  }, []);
+  const chooseMachine = useCallback(
+    (machine: MachineDirectoryEntry) => {
+      const currentRepo = normalizeGitRepo(workspaces.find((w) => w.path === cwd)?.git_repo);
+      preferredRepoRef.current = currentRepo;
+      autoSelectedDeviceRef.current = null;
+      const nextProvider = pickProvider(machine, provider);
+      setDeviceId(machine.device_id);
+      setProvider(nextProvider);
+      if (nextProvider !== provider) {
+        setModelState(modelByProvider[nextProvider] ?? "");
+      }
+      setCwd("");
+      setWorkspaceSearch("");
+      setError(null);
+    },
+    [cwd, modelByProvider, provider, workspaces],
+  );
 
-  const chooseProvider = useCallback((next: string) => {
-    setProvider(next);
-    setModel("");
-    setError(null);
-  }, []);
+  const chooseProvider = useCallback(
+    (next: string) => {
+      if (provider) {
+        setModelByProvider((prev) => ({ ...prev, [provider]: model }));
+      }
+      setProvider(next);
+      setModelState(modelByProvider[next] ?? "");
+      setError(null);
+    },
+    [model, modelByProvider, provider],
+  );
 
   const chooseWorkspace = useCallback((path: string) => {
     setCwd(path);
@@ -212,7 +291,15 @@ export function useLaunchForm({
       setSubmitting(false);
       return;
     }
-    writeLastLaunch({ deviceId, provider, model: model.trim(), cwd: cwd.trim() });
+    const nextModelByProvider = { ...modelByProvider, [provider]: model.trim() };
+    setModelByProvider(nextModelByProvider);
+    writeLastLaunch({
+      deviceId,
+      provider,
+      model: model.trim(),
+      cwd: cwd.trim(),
+      modelByProvider: nextModelByProvider,
+    });
     const text = prompt.trim();
     if (text) {
       try {
@@ -233,7 +320,7 @@ export function useLaunchForm({
     }
     setSubmitting(false);
     onLaunched(sessionId);
-  }, [canSubmit, deviceId, provider, model, cwd, displayName, prompt, onLaunched]);
+  }, [canSubmit, deviceId, provider, model, modelByProvider, cwd, displayName, prompt, onLaunched]);
 
   return {
     machinesQuery,

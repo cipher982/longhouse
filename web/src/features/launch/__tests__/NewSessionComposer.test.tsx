@@ -926,4 +926,115 @@ describe("NewSessionComposer", () => {
     expect(await screen.findByText(/on cinder/)).toBeInTheDocument();
     expect(screen.getByTestId("launch-model-select-input")).toHaveAttribute("placeholder", "claude-opus-5-5");
   });
+
+  it("preserves agent, model, and matching repo when switching machines, and remembers model per agent", async () => {
+    const user = userEvent.setup();
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cinder",
+          machine_name: "cinder",
+          online: true,
+          supports: ["codex.turn_start", "claude.turn_start"],
+          control_operations_by_provider: { codex: ["turn_start"], claude: ["turn_start"] },
+        }),
+        machine({
+          device_id: "cube-ws",
+          machine_name: "cube-ws",
+          online: true,
+          supports: ["codex.turn_start", "claude.turn_start"],
+          control_operations_by_provider: { codex: ["turn_start"], claude: ["turn_start"] },
+        }),
+      ],
+    });
+    apiMocks.fetchWorkspaceSuggestions.mockImplementation(async (dev: string) => ({
+      device_id: dev,
+      workspaces:
+        dev === "cinder"
+          ? [
+              {
+                path: "/Users/david/git/me",
+                label: "me (main)",
+                git_repo: "https://github.com/cipher982/me.git",
+                git_branch: "main",
+                score: 100,
+                last_used_at: new Date().toISOString(),
+                session_count: 3,
+              },
+              {
+                path: "/Users/david/git/zerg/longhouse",
+                label: "longhouse (main)",
+                git_repo: "https://github.com/cipher982/longhouse.git",
+                git_branch: "main",
+                score: 80,
+                last_used_at: new Date().toISOString(),
+                session_count: 2,
+              },
+            ]
+          : [
+              {
+                path: "/home/david/git/me",
+                label: "me (main)",
+                git_repo: "https://github.com/cipher982/me.git",
+                git_branch: "main",
+                score: 100,
+                last_used_at: new Date().toISOString(),
+                session_count: 3,
+              },
+              {
+                path: "/home/david/git/zerg/longhouse",
+                label: "longhouse (main)",
+                git_repo: "git@github.com:cipher982/longhouse.git",
+                git_branch: "main",
+                score: 50,
+                last_used_at: new Date().toISOString(),
+                session_count: 1,
+              },
+            ],
+    }));
+    apiMocks.fetchRecentModels.mockImplementation(async (dev: string, prov: string) => ({
+      device_id: dev,
+      provider: prov,
+      models:
+        prov === "claude"
+          ? [{ model: "claude-opus-5-5", label: "opus 5.5", last_used_at: new Date().toISOString(), device_id: "cinder" }]
+          : [{ model: "gpt-6.1-sol", label: "gpt 6.1 sol", last_used_at: new Date().toISOString(), device_id: "cinder" }],
+    }));
+
+    renderModal({ initialDeviceId: "cinder" });
+
+    // Pick workspace longhouse on cinder, switch agent to Claude, pick opus 5.5.
+    const workspaceButton = await screen.findByRole("button", { name: /longhouse \(main\)/i });
+    await user.click(workspaceButton);
+    const providerChip = screen.getByTestId("launch-provider-select");
+    await user.click(providerChip.querySelector("summary")!);
+    await user.click(screen.getByRole("button", { name: /^Claude$/i }));
+    const modelChip = screen.getByTestId("launch-model-select");
+    await user.click(modelChip.querySelector("summary")!);
+    await user.click(await screen.findByRole("button", { name: /opus 5\.5/i }));
+
+    // Switch to cube-ws -> Claude + opus 5.5 stay selected, and longhouse matches by git_repo.
+    const machineChip = screen.getByTestId("launch-machine-select");
+    await user.click(machineChip.querySelector("summary")!);
+    await user.click(screen.getByRole("option", { name: /cube-ws/i }));
+
+    expect(screen.getByTestId("launch-provider-select").querySelector("summary")).toHaveTextContent("Claude");
+    expect(screen.getByTestId("launch-model-select").querySelector("summary")).toHaveTextContent("opus 5.5");
+    await waitFor(() => {
+      expect(screen.getByTestId("launch-cwd-input")).toHaveValue("/home/david/git/zerg/longhouse");
+    });
+
+    // Switch to Codex then back to Claude -> Claude remembers opus 5.5.
+    await user.click(providerChip.querySelector("summary")!);
+    await user.click(screen.getByRole("button", { name: /^Codex$/i }));
+    expect(screen.getByTestId("launch-model-select").querySelector("summary")).toHaveTextContent("Default model");
+    await user.click(providerChip.querySelector("summary")!);
+    await user.click(screen.getByRole("button", { name: /^Claude$/i }));
+    expect(screen.getByTestId("launch-model-select").querySelector("summary")).toHaveTextContent("opus 5.5");
+
+    // Clearing "Other path" stays empty instead of snapping back to top workspace.
+    const cwdInput = screen.getByTestId("launch-cwd-input");
+    await user.clear(cwdInput);
+    expect(cwdInput).toHaveValue("");
+  });
 });

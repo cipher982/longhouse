@@ -166,7 +166,7 @@ def list_machine_health(
 def list_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
-    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    days_back: int = Query(180, ge=1, le=180, description="Lookback window for recent sessions"),
     db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),

@@ -706,7 +706,6 @@ class MachinesMixin:
         """Return recent provider-reported models for one enrolled machine, filling from the owner's other machines."""
 
         observed_at = datetime.now(UTC)
-        since = observed_at - timedelta(days=days_back)
         token = LiveDeviceToken.__table__
         catalog = LiveSessionCatalog.__table__
         facts = SessionProviderFact.__table__
@@ -740,7 +739,6 @@ class MachinesMixin:
                                 catalog.c.environment.is_(None),
                                 func.lower(catalog.c.environment).notin_(("test", "e2e")),
                             ),
-                            func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
                         )
                         .order_by(
                             func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),

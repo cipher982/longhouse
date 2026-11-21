@@ -468,11 +468,11 @@ def test_recent_models_borrows_from_other_enrolled_machines_with_local_first(liv
         assert result["created"] is True
         _insert_usage(live_catalog, session_id=sid, source_epoch=str(uuid4()), model=model, position=1, at=at)
 
-    # cinder ran opus and sonnet; cube-ws only ran haiku (older than cinder's opus); stranger ran leaked-model
-    _seed_model_session(owner_id, "cinder", "claude-opus-5-5", now - timedelta(minutes=1))
-    _seed_model_session(owner_id, "cinder", "claude-sonnet-5-5", now - timedelta(minutes=2))
+    # cinder ran opus and sonnet; cube-ws only ran haiku (older than 45 days); stranger ran leaked-model
+    _seed_model_session(owner_id, "cinder", "claude-opus-5-5", now - timedelta(days=90))
+    _seed_model_session(owner_id, "cinder", "claude-sonnet-5-5", now - timedelta(days=120))
     _seed_model_session(owner_id, "cinder", "claude-haiku-5-5", now - timedelta(seconds=30))
-    _seed_model_session(owner_id, "cube-ws", "claude-haiku-5-5", now - timedelta(minutes=5))
+    _seed_model_session(owner_id, "cube-ws", "claude-haiku-5-5", now - timedelta(days=60))
     _seed_model_session(other_owner_id, "stranger-box", "claude-leaked-9", now)
 
     result = live_catalog.rpc(

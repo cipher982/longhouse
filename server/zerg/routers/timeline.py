@@ -279,7 +279,7 @@ def list_browser_machine_summaries(
 def list_browser_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
-    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    days_back: int = Query(180, ge=1, le=180, description="Lookback window for recent sessions"),
     current_user=Depends(get_current_browser_caller),
 ) -> WorkspaceSuggestionsResponse:
     """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
