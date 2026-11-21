@@ -6872,6 +6872,72 @@ fn codex_activity_timestamp(
         })
 }
 
+/// Codex 0.171 writes a completed `spawn_agent` call as `CollabAgentToolCall`
+/// (the tool-call id, the child thread ids, model and effort) and no
+/// `SubAgentActivity`. Emit the same spawn fact so the child binds to this
+/// exact parent tool call. Other collab tools (wait, send_input, close) name
+/// existing children and spawn nothing.
+fn extract_codex_collab_spawn(
+    obj: &RawLine,
+    payload: &serde_json::Map<String, Value>,
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
+    let Some(item) = payload.get("item").and_then(Value::as_object) else {
+        return;
+    };
+    if item.get("tool").and_then(Value::as_str) != Some("spawn_agent")
+        || item.get("status").and_then(Value::as_str) != Some("completed")
+    {
+        return;
+    }
+    let Some(at) = codex_activity_timestamp(obj, payload) else {
+        return;
+    };
+    let parent_tool_call_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let mut metadata = serde_json::Map::new();
+    for key in ["model", "reasoning_effort"] {
+        if let Some(value) = item.get(key).filter(|v| !v.is_null()) {
+            metadata.insert(key.to_string(), value.clone());
+        }
+    }
+    let children: Vec<Value> = item
+        .get("receiver_thread_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            let mut child = serde_json::Map::new();
+            child.insert("provider_session_id".to_string(), Value::from(id));
+            if let Some(parent_tool_call_id) = parent_tool_call_id {
+                child.insert(
+                    "parent_tool_call_id".to_string(),
+                    Value::from(parent_tool_call_id),
+                );
+            }
+            child.insert("metadata".to_string(), Value::Object(metadata.clone()));
+            Value::Object(child)
+        })
+        .collect();
+    if children.is_empty() {
+        return;
+    }
+    push_bounded_provider_fact(
+        facts,
+        "delegation.spawn",
+        at,
+        line_offset,
+        serde_json::json!({ "children": children }),
+    );
+}
+
 fn extract_codex_delegation_activity(
     obj: &RawLine,
     payload: &serde_json::Map<String, Value>,
@@ -7038,15 +7104,19 @@ fn extract_codex_provider_facts(
         // Codex 0.151 emits native spawn_agent activity as an item_completed
         // envelope whose item is SubAgentActivity. Keep support for the older
         // direct sub_agent_activity shape, but fail closed on unrelated items.
-        if payload_type == "item_completed"
-            && payload
+        if payload_type == "item_completed" {
+            let item_type = payload
                 .get("item")
                 .and_then(Value::as_object)
                 .and_then(|item| item.get("type"))
-                .and_then(Value::as_str)
-                != Some("SubAgentActivity")
-        {
-            return;
+                .and_then(Value::as_str);
+            if item_type == Some("CollabAgentToolCall") {
+                extract_codex_collab_spawn(obj, payload, line_offset, facts);
+                return;
+            }
+            if item_type != Some("SubAgentActivity") {
+                return;
+            }
         }
         extract_codex_delegation_activity(obj, payload, line_offset, facts);
         return;
@@ -10130,6 +10200,42 @@ mod tests {
     }
 
     #[test]
+    fn test_codex_token_count_0171_keeps_usage_past_rate_limit_only_lines() {
+        // codex 0.171 writes `info: null` on a rate-limit-only token_count and
+        // adds `info.last_usage_includes_reasoning`. Neither may drop or blank
+        // the turn's usage.
+        let usage = r#"{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":130}"#;
+        let lines = [
+            r#"{"timestamp":"2026-11-21T00:00:00.000Z","type":"session_meta","payload":{"id":"019c638d-ea04-7983-a845-d0b68a77fa64","cli_version":"0.171.0","account_scoped":true}}"#.to_string(),
+            r#"{"timestamp":"2026-11-21T00:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":258400}}"#.to_string(),
+            r#"{"timestamp":"2026-11-21T00:00:02.000Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/tmp","model":"gpt-fixture","effort":"low"}}"#.to_string(),
+            r#"{"timestamp":"2026-11-21T00:00:02.500Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":1.0}}}}"#.to_string(),
+            format!(
+                r#"{{"timestamp":"2026-11-21T00:00:03.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{usage},"last_token_usage":{usage},"last_usage_includes_reasoning":false,"model_context_window":258400}},"rate_limits":null}}}}"#
+            ),
+            r#"{"timestamp":"2026-11-21T00:00:03.500Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","primary":{"used_percent":2.0}}}}"#.to_string(),
+            r#"{"timestamp":"2026-11-21T00:00:04.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","duration_ms":3000}}"#.to_string(),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let refs: Vec<&str> = lines.iter().map(|l| l.as_str()).collect();
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-11-21T00-00-00-019c638d-ea04-7983-a845-d0b68a77fa64.jsonl",
+            &refs,
+        );
+        let result = parse_session_file(&path, 0).unwrap();
+        let usage_facts: Vec<_> = result
+            .provider_facts
+            .iter()
+            .filter(|fact| fact.kind == "turn.usage")
+            .collect();
+        assert_eq!(usage_facts.len(), 1);
+        assert_eq!(usage_facts[0].payload["output_tokens"], 30);
+        assert_eq!(usage_facts[0].payload["context_tokens"], 130);
+        assert_eq!(usage_facts[0].payload["context_window"], 258400);
+    }
+
+    #[test]
     fn test_codex_git_info_from_session_meta() {
         let dir = tempfile::tempdir().unwrap();
         let path = make_jsonl_file(
@@ -11749,6 +11855,73 @@ please research the steering shaft options"#;
         let child = &spawn.payload["children"][0];
         assert_eq!(child["provider_session_id"].as_str(), Some(child_id));
         assert_eq!(child["parent_tool_call_id"].as_str(), Some(tool_call_id));
+    }
+
+    #[test]
+    fn test_codex_collab_spawn_item_emits_spawn_fact() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_id = "019e0000-0000-7000-8000-000000000001";
+        let child_id = "019e0000-0000-7000-8000-000000000002";
+        let lines = [
+            serde_json::json!({
+                "timestamp": "2026-11-21T22:00:00.000Z",
+                "type": "session_meta",
+                "payload": {"session_id": parent_id, "id": parent_id, "cli_version": "0.171.0"}
+            }),
+            // Shape written by codex 0.171.0 (provider-nightly census).
+            serde_json::json!({
+                "timestamp": "2026-11-21T22:00:02.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CollabAgentToolCall",
+                        "id": "call_spawn1",
+                        "tool": "spawn_agent",
+                        "status": "completed",
+                        "sender_thread_id": parent_id,
+                        "receiver_thread_ids": [child_id],
+                        "receiver_agents": [{"thread_id": child_id, "agent_nickname": "Ada", "agent_role": "default"}],
+                        "prompt": "do the thing",
+                        "model": "gpt-5.5",
+                        "reasoning_effort": "low",
+                        "agents_states": {child_id: {"status": "pending_init"}}
+                    }
+                }
+            }),
+            serde_json::json!({
+                "timestamp": "2026-11-21T22:00:03.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CollabAgentToolCall",
+                        "id": "call_wait1",
+                        "tool": "wait",
+                        "status": "completed",
+                        "sender_thread_id": parent_id,
+                        "receiver_thread_ids": [child_id],
+                        "receiver_agents": [],
+                        "agents_states": {}
+                    }
+                }
+            }),
+        ]
+        .map(|v| v.to_string());
+        let path = dir.path().join(format!("rollout-{parent_id}.jsonl"));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let spawns: Vec<_> = result
+            .provider_facts
+            .iter()
+            .filter(|fact| fact.kind == "delegation.spawn")
+            .collect();
+        assert_eq!(spawns.len(), 1, "only the spawn_agent call spawns a child");
+        let child = &spawns[0].payload["children"][0];
+        assert_eq!(child["provider_session_id"].as_str(), Some(child_id));
+        assert_eq!(child["parent_tool_call_id"].as_str(), Some("call_spawn1"));
+        assert_eq!(child["metadata"]["model"].as_str(), Some("gpt-5.5"));
     }
 
     #[test]

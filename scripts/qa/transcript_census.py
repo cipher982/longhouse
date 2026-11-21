@@ -216,6 +216,11 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
             keys = _sorted_keys(item)
         elif ptype == "token_count":
             info = payload.get("info") or {}
+            if not info:
+                # Rate-limit-only update (`info: null`): no usage to read, and
+                # the parser skips it, so it is its own shape rather than a
+                # token_count missing the keys the parser requires.
+                return f"{shape}/rate_limits_only", keys, version, entrypoint
             keys += _nested_keys(info, "info") + _nested_keys(
                 info.get("last_token_usage") if isinstance(info, dict) else None,
                 "info.last_token_usage",
