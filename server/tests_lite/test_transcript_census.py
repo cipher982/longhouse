@@ -648,13 +648,3 @@ def test_an_empty_cursor_conversation_has_its_own_root_shape(tmp_path: Path):
     assert "store/root/empty" in _census("cursor", store)
     result = _check("cursor", store)
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_codex_token_count_without_info_is_not_a_missing_key(tmp_path):
-    """codex 0.171 writes `info: null` on rate-limit-only updates; the parser skips them."""
-    line = {"timestamp": "2026-11-21T00:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": None, "rate_limits": None}}
-    meta = {"timestamp": "2026-11-21T00:00:00Z", "type": "session_meta", "payload": {"id": "x", "cli_version": "0.171.0"}}
-    path = tmp_path / "rollout.jsonl"
-    path.write_text("\n".join(json.dumps(entry) for entry in (meta, line)) + "\n")
-    result = _check("codex", path)
-    assert result.returncode == 0, result.stdout + result.stderr

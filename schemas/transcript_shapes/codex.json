@@ -86,28 +86,6 @@
     "type"
    ]
   },
-  "event_msg/item_completed/CollabAgentToolCall": {
-   "classification": "signal:delegation.spawn",
-   "first_seen_version": "0.171.0",
-   "last_seen_version": "0.171.0",
-   "entrypoints": [
-    "codex_exec"
-   ],
-   "keys": [
-    "agents_states",
-    "id",
-    "model",
-    "prompt",
-    "reasoning_effort",
-    "receiver_agents",
-    "receiver_thread_ids",
-    "sender_thread_id",
-    "status",
-    "tool",
-    "type"
-   ],
-   "evidence": "spawn_agent with status completed becomes a delegation.spawn fact (extract_codex_collab_spawn); other collab tools name existing children"
-  },
   "event_msg/item_completed/CommandExecution": {
    "classification": "transcript",
    "first_seen_version": "0.151.0",
@@ -248,7 +226,7 @@
   "event_msg/item_completed/UserMessage": {
    "classification": "transcript",
    "first_seen_version": "0.151.0",
-   "last_seen_version": "0.171.0",
+   "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
     "codex_exec",
@@ -256,7 +234,6 @@
     "longhouse_console"
    ],
    "keys": [
-    "client_id",
     "content",
     "id",
     "type"
@@ -429,7 +406,7 @@
   "event_msg/token_count": {
    "classification": "signal:turn.usage",
    "first_seen_version": "0.133.0",
-   "last_seen_version": "0.171.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -446,7 +423,6 @@
     "info.last_token_usage.output_tokens",
     "info.last_token_usage.reasoning_output_tokens",
     "info.last_token_usage.total_tokens",
-    "info.last_usage_includes_reasoning",
     "info.model_context_window",
     "info.total_token_usage",
     "rate_limits",
@@ -459,20 +435,6 @@
     "info.last_token_usage.output_tokens",
     "info.model_context_window"
    ]
-  },
-  "event_msg/token_count/rate_limits_only": {
-   "classification": "state:rate limits",
-   "first_seen_version": "0.171.0",
-   "last_seen_version": "0.171.0",
-   "entrypoints": [
-    "codex_exec"
-   ],
-   "keys": [
-    "info",
-    "rate_limits",
-    "type"
-   ],
-   "evidence": "info is null, so there is no usage; the parser skips it and keeps the turn's earlier token_count"
   },
   "event_msg/turn_aborted": {
    "classification": "signal:turn.duration",
@@ -601,10 +563,9 @@
   "response_item/function_call": {
    "classification": "transcript",
    "first_seen_version": "0.142.2",
-   "last_seen_version": "0.171.0",
+   "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
-    "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
    ],
@@ -615,7 +576,6 @@
     "internal_chat_message_metadata_passthrough",
     "name",
     "namespace",
-    "status",
     "type"
    ]
   },
@@ -639,7 +599,7 @@
   "response_item/message/assistant": {
    "classification": "transcript",
    "first_seen_version": "0.53.0",
-   "last_seen_version": "0.171.0",
+   "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -653,7 +613,6 @@
     "internal_chat_message_metadata_passthrough",
     "phase",
     "role",
-    "status",
     "type"
    ]
   },
@@ -793,7 +752,7 @@
   "session_meta": {
    "classification": "state:session meta",
    "first_seen_version": "0.53.0",
-   "last_seen_version": "0.171.0",
+   "last_seen_version": "0.163.0-alpha.5",
    "entrypoints": [
     "codex-tui",
     "codex_cli_rs",
@@ -802,7 +761,6 @@
     "longhouse_console"
    ],
    "keys": [
-    "account_scoped",
     "agent_nickname",
     "agent_path",
     "base_instructions",

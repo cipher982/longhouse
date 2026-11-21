@@ -381,7 +381,6 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex",
         "omp",
         "pi"
       ]

@@ -1841,7 +1841,7 @@
     "system/stop_hook_summary": {
       "classification": "chrome:hook result",
       "first_seen_version": "2.1.150",
-      "last_seen_version": "2.1.330",
+      "last_seen_version": "2.1.325",
       "entrypoints": [
         "cli",
         "sdk-cli"
@@ -1849,7 +1849,6 @@
       "keys": [
         "cwd",
         "entrypoint",
-        "failedHookErrorIndexes",
         "gitBranch",
         "hasOutput",
         "hookAdditionalContext",
