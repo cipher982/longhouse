@@ -17,36 +17,36 @@
 [codex]
 kind = "npm"
 package = "@openai/codex"
-version = "0.167.1"
+version = "0.171.0"
 binary = "codex"
-reports = "codex-cli 0.167.1"
+reports = "codex-cli 0.171.0"
 
 [claude]
 kind = "npm"
 package = "@anthropic-ai/claude-code"
-version = "2.1.322"
+version = "2.1.330"
 binary = "claude"
-reports = "2.1.322 (Claude Code)"
+reports = "2.1.330 (Claude Code)"
 
 [opencode]
 kind = "npm"
 package = "opencode-ai"
-version = "1.19.5"
+version = "1.19.6"
 binary = "opencode"
-reports = "1.19.5"
+reports = "1.19.6"
 
 [pi]
 kind = "npm"
 package = "@earendil-works/pi-coding-agent"
-version = "1.5.2"
+version = "1.6.0"
 binary = "pi"
-reports = "1.5.2"
+reports = "1.6.0"
 
 [omp]
 kind = "omp"
-version = "18.18.9"
+version = "19.1.0"
 binary = "omp"
-reports = "omp/18.18.9"
+reports = "omp/19.1.0"
 
 [antigravity]
 kind = "agy"
