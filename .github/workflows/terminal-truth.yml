@@ -76,6 +76,12 @@ on:
   schedule:
     # Nightly. GitHub starts this repository's schedules 7 to 10 hours late, so this lands at about 09:00 to 11:00Z.
     - cron: "13 1 * * *"
+  workflow_call:  # provider-nightly.yml: the same gate on candidate pins, no mutations, then the transcript census
+    inputs:
+      pins:
+        description: "Candidate scripts/ci/terminal-truth-providers.toml text"
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       provider:
@@ -148,7 +154,7 @@ permissions:
 # by a later green run (scripts/ops/terminal_truth_cover.py) or passed over for an older green commit
 # (scripts/ops/ring_promoter.py), so a missing verdict no longer stops dogfood.
 concurrency:
-  group: terminal-truth-${{ github.repository }}-${{ github.ref == 'refs/heads/main' && 'main' || github.ref }}
+  group: terminal-truth-${{ github.repository }}-${{ inputs.pins && 'candidate' || github.ref == 'refs/heads/main' && 'main' || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -171,6 +177,8 @@ jobs:
       # The nightly measures the raw rate: nothing is run a second time.
       TT_RERUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rerun)) && '0' || '1' }}
       TT_MUTATIONS: ${{ (github.event_name == 'workflow_dispatch' && !inputs.mutations) && '0' || '1' }}
+      TT_CANDIDATE_PINS: ${{ inputs.pins }}
+      TT_KEEP_TRANSCRIPTS: ${{ inputs.pins && '1' || '0' }}
       TT_MUTATION_NAMES: ${{ inputs.mutation_names || '' }}
       TT_PUBLISH_REQUEST: ${{ inputs.publish_status && '1' || '0' }}
       # The pod's work volume is RAM-backed and /tmp is the host's shared disk. The path is too long for Codex's
@@ -186,6 +194,9 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      - name: Use the candidate pins
+        if: env.TT_CANDIDATE_PINS != ''
+        run: printf '%s\n' "$TT_CANDIDATE_PINS" > scripts/ci/terminal-truth-providers.toml
       - name: Validate inputs and decide what this run is
         run: |
           set -euo pipefail
@@ -223,7 +234,7 @@ jobs:
           if [[ "$TT_MODE" != both ]]; then narrow+=" --mode $TT_MODE"; fi
           if [[ "$TT_TOKENS" != 100 || "$TT_RATE" != 20 ]]; then narrow+=" --tokens $TT_TOKENS --rate $TT_RATE"; fi
           checks=""
-          if [[ "$TT_MUTATIONS" != 1 ]]; then checks+=" --no-mutations"; fi
+          if [[ "$TT_MUTATIONS" != 1 || "${TT_KEEP_TRANSCRIPTS:-}" == 1 ]]; then checks+=" --no-mutations"; fi
           for name in $TT_MUTATION_NAMES; do checks+=" --only $name"; done
           rerun=""
           if [[ "$TT_RERUN" != 1 ]]; then rerun=" --no-rerun"; fi
@@ -398,7 +409,7 @@ jobs:
         run: |
           set +e
           previous=()
-          if [[ "$TT_EVENT" == schedule ]]; then
+          if [[ "$TT_EVENT" == schedule && "${TT_KEEP_TRANSCRIPTS:-}" != 1 ]]; then
             mkdir -p "$RUNNER_TEMP/previous-nightly"
             if python3 scripts/ops/ci_receipts.py get terminal-truth-nightly nightly --file gate.json > "$RUNNER_TEMP/previous-nightly/gate.json" 2>/dev/null; then
               previous=(--previous "$RUNNER_TEMP/previous-nightly")
@@ -406,6 +417,7 @@ jobs:
           fi
           whole=()
           if [[ "$TT_EVENT" != workflow_dispatch || "$TT_PUBLISH" == 1 ]]; then whole=(--gate-profile); fi
+          if [[ "${TT_KEEP_TRANSCRIPTS:-}" == 1 ]]; then whole=(); fi  # a candidate run has no mutation checks
           python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" "${whole[@]}" "${previous[@]}"
           rc=$?
           { cat "$TT_OUT/summary.md"; echo; cat "$TT_OUT/tables.md" 2>/dev/null; } >> "$GITHUB_STEP_SUMMARY"
@@ -415,6 +427,18 @@ jobs:
           fi
           echo "TT_STATE=success" >> "$GITHUB_ENV"
 
+      - name: Transcript census (candidate run only)
+        if: always() && env.TT_KEEP_TRANSCRIPTS == '1'
+        run: |
+          set +e
+          rc=0
+          declare -A home=([claude]=.claude [codex]=.codex [pi]=.pi [omp]=.omp [opencode]=.local/share/opencode [antigravity]=.gemini)
+          for p in ${TT_PROVIDERS//,/ }; do
+            mapfile -t roots < <(find "$TT_SCRATCH_ROOT" -type d -path "*/h/${home[$p]}" 2>/dev/null)
+            echo "census $p: ${#roots[@]} provider homes"
+            python3 scripts/qa/transcript_census.py check --provider "$p" "${roots[@]}" || { echo "::error::transcript census failed for $p"; rc=1; }
+          done
+          exit $rc
       - name: Collect recordings and keep the results
         if: always()
         run: |
@@ -436,6 +460,7 @@ jobs:
           ls -la "$TT_OUT"
           files=()
           for f in "$TT_OUT"/*; do [[ -f "$f" && "$f" != *.lst ]] && files+=("$f"); done
+          [[ "${TT_KEEP_TRANSCRIPTS:-}" == 1 ]] && exit 0  # a candidate run must not overwrite the main receipts
           python3 scripts/ops/ci_receipts.py put terminal-truth "$GITHUB_SHA" "${files[@]}" || echo "::warning::receipt not stored"
           # The nightly's verdict is what the next nightly compares itself with.
           if [[ "$TT_EVENT" == schedule && -f "$TT_OUT/gate.json" ]]; then

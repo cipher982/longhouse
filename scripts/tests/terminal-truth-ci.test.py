@@ -166,7 +166,7 @@ class WorkflowTests(unittest.TestCase):
         group = next(line for line in text.splitlines() if line.strip().startswith("group:"))
         self.assertEqual(
             group.strip(),
-            "group: terminal-truth-${{ github.repository }}-${{ github.ref == 'refs/heads/main' && 'main' || github.ref }}",
+            "group: terminal-truth-${{ github.repository }}-${{ inputs.pins && 'candidate' || github.ref == 'refs/heads/main' && 'main' || github.ref }}",
         )
         self.assertIn("cancel-in-progress: false", text)
         limit = next(line for line in text.splitlines() if line.strip().startswith("timeout-minutes:"))

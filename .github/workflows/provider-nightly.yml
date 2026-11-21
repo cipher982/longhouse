@@ -1,0 +1,67 @@
+# ROLE: tell us within a day when a provider CLI release breaks Longhouse. Finds each provider's latest release,
+# runs Terminal Truth (scripted model, no keys) and the transcript census against it, and opens a pin-bump PR
+# when both pass. A red run is the alert (Sauron's ci-scheduled-red pages on repeated red scheduled runs).
+# Live model turns are not run: the repo has no provider API key secrets meant for them.
+name: Provider Nightly
+on:
+  schedule:
+    - cron: "43 2 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  statuses: write
+jobs:
+  detect:
+    runs-on: ci-browser
+    if: github.repository == 'cipher982/longhouse'
+    outputs:
+      changed: ${{ steps.latest.outputs.changed }}
+      pins: ${{ steps.latest.outputs.pins }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/provider_latest.py "$RUNNER_TEMP/candidate.toml" | tee -a "$GITHUB_STEP_SUMMARY"
+          if cmp -s "$RUNNER_TEMP/candidate.toml" scripts/ci/terminal-truth-providers.toml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            { echo "changed=true"; echo "pins<<EOF_PINS"; cat "$RUNNER_TEMP/candidate.toml"; echo "EOF_PINS"; } >> "$GITHUB_OUTPUT"
+          fi
+  suite:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    uses: ./.github/workflows/terminal-truth.yml
+    with:
+      pins: ${{ needs.detect.outputs.pins }}
+    secrets: inherit
+  bump-pr:
+    needs: [detect, suite]
+    runs-on: ci-browser
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PINS: ${{ needs.detect.outputs.pins }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Open the pin-bump PR and run Terminal Truth on it
+        run: |
+          set -euo pipefail
+          branch="provider-bump/$(date -u +%F)-$GITHUB_RUN_ID"
+          printf '%s\n' "$PINS" > scripts/ci/terminal-truth-providers.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "ci: bump provider pins to latest releases"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "ci: bump provider pins ($(date -u +%F))" \
+            --body "Nightly found newer provider releases. The scripted Terminal Truth suite and transcript census passed on them: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # a push made with GITHUB_TOKEN triggers no workflows, so start the full gate by hand
+          gh workflow run terminal-truth.yml --ref "$branch"

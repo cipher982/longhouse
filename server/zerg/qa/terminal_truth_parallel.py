@@ -878,7 +878,9 @@ def run_all(args: argparse.Namespace) -> int:
         finally:
             gate.leave()
         fine = all(as_wanted(u, by_name.get(u.mutation or ""), verdict_of(u, run.rows[u.id])) for u in shard.units)
-        run.keep = (not fine or run.exit is None) and run.scratch.exists()
+        run.keep = (
+            not fine or run.exit is None or os.environ.get("TT_KEEP_TRANSCRIPTS") == "1"
+        ) and run.scratch.exists()  # the nightly census reads the transcripts
         if not run.keep:
             shutil.rmtree(run.scratch, ignore_errors=True)
         return run
