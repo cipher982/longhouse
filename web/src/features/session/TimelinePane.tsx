@@ -2534,8 +2534,10 @@ export const TimelinePane = memo(function TimelinePane({
   );
 
   const livePane = <TimelineLivenessProvider value={livenessValue}>{paneContent}</TimelineLivenessProvider>;
-  if (!outline) return livePane;
 
+  // Keep `.timeline-pane-shell` mounted unconditionally so toggling `outline`
+  // (Pin/Unpin or turn count crossing 2) never changes the root element type
+  // and never remounts the transcript scroller or SessionChat composer draft.
   return (
     <div className="timeline-pane-shell" data-testid="session-timeline-shell">
       {livePane}

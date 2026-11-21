@@ -6,7 +6,7 @@
  * Turns come from the server's turn index merged with the loaded thread
  * (`mergeTurnOutline`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineItem } from "@/shared/session/model";
 import { formatTime } from "@/shared/session/model";
 import { parseUTC } from "@/shared/lib/dateUtils";
@@ -45,9 +45,16 @@ const ASK_PREVIEW_LENGTH = 96;
  * lists every turn. */
 export const MAX_TICK_MARKS = 36;
 
+/** Brief hover-intent delay so incidental pointer sweeps past the right edge
+ * do not throw the popover over the transcript. */
+export const HOVER_OPEN_DELAY_MS = 120;
+
 /** Hover grace window so moving diagonally from the tick rail to the card does
  * not flicker closed. */
 const HOVER_CLOSE_DELAY_MS = 180;
+
+/** Line-height multiplier when normalizing Firefox DOM_DELTA_LINE wheel events. */
+const WHEEL_LINE_PX = 16;
 
 export interface TurnOutlineTurn {
   /** Stable per-turn key — also usable as the React list key. */
@@ -254,12 +261,18 @@ export function TurnOutline({
   scrollContainer = null,
 }: TurnOutlineProps) {
   const [openSource, setOpenSource] = useState<CardOpenSource>(null);
+  const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const layerRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLButtonElement | null>(null);
 
   const cardOpen = openSource !== null;
 
-  const clearCloseTimer = useCallback(() => {
+  const clearTimers = useCallback(() => {
+    if (openTimerRef.current !== null) {
+      window.clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
@@ -267,19 +280,37 @@ export function TurnOutline({
   }, []);
 
   const closeCard = useCallback(() => {
-    clearCloseTimer();
+    clearTimers();
     setOpenSource(null);
-  }, [clearCloseTimer]);
+  }, [clearTimers]);
+
+  const scheduleHoverOpen = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (openTimerRef.current !== null) return;
+    openTimerRef.current = window.setTimeout(() => {
+      openTimerRef.current = null;
+      setOpenSource((current) => current ?? "hover");
+    }, HOVER_OPEN_DELAY_MS);
+  }, []);
 
   const scheduleHoverClose = useCallback(() => {
-    clearCloseTimer();
+    if (openTimerRef.current !== null) {
+      window.clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+    }
     closeTimerRef.current = window.setTimeout(() => {
       closeTimerRef.current = null;
       setOpenSource((current) => (current === "hover" ? null : current));
     }, HOVER_CLOSE_DELAY_MS);
-  }, [clearCloseTimer]);
+  }, []);
 
-  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+  useEffect(() => () => clearTimers(), [clearTimers]);
 
   // Reset popover when switching into pinned mode or dropping below 2 turns.
   useEffect(() => {
@@ -288,24 +319,55 @@ export function TurnOutline({
     }
   }, [mode, turns.length, closeCard]);
 
-  // Escape and outside pointer clicks dismiss the hover/click card.
+  // Escape (contained in capture phase so it does not also trigger composer or
+  // other page-level Escape handlers) and outside pointer clicks dismiss the card.
   useEffect(() => {
     if (!cardOpen || mode !== "ticks") return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeCard();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeCard();
     };
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && layerRef.current?.contains(target)) return;
       closeCard();
     };
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [cardOpen, mode, closeCard]);
+
+  // Forward wheel events over the tick strip to the transcript scroller with
+  // normalized deltaMode and preventDefault so the outer page cannot scroll.
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || !scrollContainer || mode !== "ticks" || turns.length < 2) return;
+    const onWheel = (event: WheelEvent) => {
+      const scale =
+        event.deltaMode === 1
+          ? WHEEL_LINE_PX
+          : event.deltaMode === 2
+            ? scrollContainer.clientHeight || 400
+            : 1;
+      const top = event.deltaY * scale;
+      const left = event.deltaX * scale;
+      if (top === 0 && left === 0) return;
+      event.preventDefault();
+      if (typeof scrollContainer.scrollBy === "function") {
+        scrollContainer.scrollBy({ top, left });
+      } else {
+        scrollContainer.scrollTop += top;
+        scrollContainer.scrollLeft += left;
+      }
+    };
+    rail.addEventListener("wheel", onWheel, { passive: false });
+    return () => rail.removeEventListener("wheel", onWheel);
+  }, [scrollContainer, mode, turns.length]);
 
   const activeIndex = useMemo(() => {
     if (!currentTurnKey) return turns.length - 1;
@@ -321,18 +383,6 @@ export function TurnOutline({
   const ticks = useMemo(
     () => buildTickMarks(turns.length, activeIndex, runningIndex),
     [turns.length, activeIndex, runningIndex],
-  );
-
-  const handleRailWheel = useCallback(
-    (event: ReactWheelEvent<HTMLButtonElement>) => {
-      if (!scrollContainer) return;
-      if (typeof scrollContainer.scrollBy === "function") {
-        scrollContainer.scrollBy({ top: event.deltaY, left: event.deltaX });
-      } else {
-        scrollContainer.scrollTop += event.deltaY;
-      }
-    },
-    [scrollContainer],
   );
 
   // A 0- or 1-turn session has nowhere to jump: stay out of the way.
@@ -374,24 +424,21 @@ export function TurnOutline({
   return (
     <div ref={layerRef} className="turn-ticks-layer" data-testid="turn-ticks-layer">
       <button
+        ref={railRef}
         type="button"
         className={`turn-ticks__rail${cardOpen ? " is-open" : ""}`}
         data-testid="turn-ticks-trigger"
         aria-label={`Session turns (${activeIndex + 1} of ${turns.length})`}
         aria-haspopup="dialog"
         aria-expanded={cardOpen}
-        onMouseEnter={() => {
-          clearCloseTimer();
-          setOpenSource((current) => current ?? "hover");
-        }}
+        onMouseEnter={scheduleHoverOpen}
         onMouseLeave={scheduleHoverClose}
         onClick={() => {
-          clearCloseTimer();
+          clearTimers();
           // Hovering then clicking promotes the hover preview to click-open
           // instead of flickering it shut; a second click closes it.
           setOpenSource((current) => (current === "click" ? null : "click"));
         }}
-        onWheel={handleRailWheel}
         title={`${headingLabel} · hover or click to jump`}
       >
         {ticks.map((tick) => (
@@ -409,7 +456,7 @@ export function TurnOutline({
           role="dialog"
           aria-label="Session turns"
           data-testid="session-turn-outline"
-          onMouseEnter={clearCloseTimer}
+          onMouseEnter={clearTimers}
           onMouseLeave={scheduleHoverClose}
         >
           <div className="session-turn-outline__head">

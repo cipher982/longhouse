@@ -1,11 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TimelineItem } from "@/shared/session/model";
 import {
   buildTickMarks,
   deriveTurnOutline,
   formatTurnTime,
+  HOVER_OPEN_DELAY_MS,
   MAX_TICK_MARKS,
   mergeTurnOutline,
   TurnOutline,
@@ -152,6 +153,10 @@ describe("TurnOutline", () => {
     { key: "turn-3", eventId: 3, timestamp: "2026-04-15T16:00:00Z", askPreview: "Check the monitor too" },
   ];
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders nothing when there are fewer than 2 turns", () => {
     const onSelectTurn = vi.fn();
     const empty = render(<TurnOutline turns={[]} onSelectTurn={onSelectTurn} />);
@@ -161,26 +166,47 @@ describe("TurnOutline", () => {
     expect(single.container).toBeEmptyDOMElement();
   });
 
-  it("renders right-edge ticks by default, opens the popover on hover or click, and jumps on turn select", async () => {
+  it("opens on hover after hover-intent delay, promotes hover-to-click cleanly, and jumps on turn select", () => {
+    vi.useFakeTimers();
     const onSelectTurn = vi.fn();
-    const onPinnedChange = vi.fn();
     render(
       <TurnOutline
         turns={turns}
         runningTurnKey="turn-3"
         currentTurnKey="turn-3"
         onSelectTurn={onSelectTurn}
-        onPinnedChange={onPinnedChange}
       />,
     );
 
     const trigger = screen.getByTestId("turn-ticks-trigger");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    // Brief sweep across the rail does not pop the card open.
+    fireEvent.mouseEnter(trigger);
+    act(() => {
+      vi.advanceTimersByTime(HOVER_OPEN_DELAY_MS - 20);
+    });
+    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+    fireEvent.mouseLeave(trigger);
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.queryByTestId("session-turn-outline")).toBeNull();
 
-    // Hovering then clicking keeps the popover open (does not flicker shut).
-    await userEvent.click(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // Hovering past the intent delay opens the card; clicking promotes it to click-open
+    // so leaving the rail does not dismiss it.
+    fireEvent.mouseEnter(trigger);
+    act(() => {
+      vi.advanceTimersByTime(HOVER_OPEN_DELAY_MS + 10);
+    });
+    expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    fireEvent.mouseLeave(trigger);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
 
     const items = screen.getAllByTestId("session-turn-outline-item");
     expect(items).toHaveLength(2);
@@ -189,34 +215,67 @@ describe("TurnOutline", () => {
     expect(items[1]).toHaveClass("is-current");
     expect(items[1]).toHaveAttribute("aria-current", "true");
 
-    await userEvent.click(items[0]);
+    fireEvent.click(items[0]);
     expect(onSelectTurn).toHaveBeenCalledTimes(1);
     expect(onSelectTurn).toHaveBeenCalledWith(turns[0]);
     expect(screen.queryByTestId("session-turn-outline")).toBeNull();
   });
 
-  it("dismisses the popover on Escape and allows pinning from the card", async () => {
+  it("contains Escape so page-level handlers do not fire and supports pinning from the card", async () => {
     const onPinnedChange = vi.fn();
+    const outerEscape = vi.fn();
+    window.addEventListener("keydown", outerEscape);
+    try {
+      render(
+        <TurnOutline
+          turns={turns}
+          currentTurnKey="turn-1"
+          onSelectTurn={vi.fn()}
+          onPinnedChange={onPinnedChange}
+        />,
+      );
+
+      const trigger = screen.getByTestId("turn-ticks-trigger");
+      await userEvent.click(trigger);
+      expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+      expect(outerEscape).not.toHaveBeenCalled();
+
+      await userEvent.click(trigger);
+      await userEvent.click(screen.getByTestId("turn-outline-pin"));
+      expect(onPinnedChange).toHaveBeenCalledWith(true);
+      expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+    } finally {
+      window.removeEventListener("keydown", outerEscape);
+    }
+  });
+
+  it("forwards pixel and line-mode wheel events over the tick rail to the scroll container", () => {
+    const scroller = document.createElement("div");
+    const scrollByMock = vi.fn();
+    scroller.scrollBy = scrollByMock;
+
     render(
       <TurnOutline
         turns={turns}
         currentTurnKey="turn-1"
         onSelectTurn={vi.fn()}
-        onPinnedChange={onPinnedChange}
+        scrollContainer={scroller}
       />,
     );
 
     const trigger = screen.getByTestId("turn-ticks-trigger");
-    await userEvent.click(trigger);
-    expect(screen.getByTestId("session-turn-outline")).toBeInTheDocument();
+    const pixelEvent = new WheelEvent("wheel", { deltaY: 48, deltaMode: 0, cancelable: true });
+    trigger.dispatchEvent(pixelEvent);
+    expect(pixelEvent.defaultPrevented).toBe(true);
+    expect(scrollByMock).toHaveBeenCalledWith({ top: 48, left: 0 });
 
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
-
-    await userEvent.click(trigger);
-    await userEvent.click(screen.getByTestId("turn-outline-pin"));
-    expect(onPinnedChange).toHaveBeenCalledWith(true);
-    expect(screen.queryByTestId("session-turn-outline")).toBeNull();
+    const lineEvent = new WheelEvent("wheel", { deltaY: 3, deltaMode: 1, cancelable: true });
+    trigger.dispatchEvent(lineEvent);
+    expect(lineEvent.defaultPrevented).toBe(true);
+    expect(scrollByMock).toHaveBeenCalledWith({ top: 48, left: 0 });
   });
 
   it("renders a docked drawer in pinned mode and lets the user unpin it", async () => {

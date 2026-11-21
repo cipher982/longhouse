@@ -1390,7 +1390,6 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 24;
 }
 
 .turn-ticks__rail {
@@ -1398,7 +1397,10 @@
   top: 50%;
   right: 6px;
   transform: translateY(-50%);
+  max-height: calc(100% - 16px);
+  overflow: hidden;
   pointer-events: auto;
+  z-index: 3;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1482,8 +1484,9 @@
   width: 18px;
 }
 
-/* Reserve a minimal right gutter on desktop when the tick strip is present so
-   the ticks never collide with right-aligned timestamps or running-call cards. */
+/* Ensure at least a 34px right padding floor on desktop when the tick strip is
+   present so narrow desktop viewports keep right-aligned timestamps and
+   running-call cards clear of the strip. */
 @media (min-width: 768px) {
   .timeline-pane__body:has(> .turn-ticks-layer) .timeline-pane__list.timeline-events {
     padding-inline-end: max(

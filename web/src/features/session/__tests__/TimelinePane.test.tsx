@@ -2174,4 +2174,48 @@ describe("TimelinePane outbox", () => {
 
     expect(screen.getAllByTestId("session-reasoning-withheld")).toHaveLength(2);
   });
+
+  it("keeps the scroller and composer dock mounted when toggling the right-hand outline", () => {
+    function Harness() {
+      const [pinned, setPinned] = useState(false);
+      return (
+        <MemoryRouter>
+          <button type="button" data-testid="toggle-outline" onClick={() => setPinned((p) => !p)}>
+            Toggle
+          </button>
+          <TimelinePane
+            items={[messageItem]}
+            totalEntries={1}
+            loadedEntries={1}
+            abandonedEvents={0}
+            showAbandonedBranches={false}
+            onShowAbandonedBranchesChange={vi.fn()}
+            hasPreviousPage={false}
+            isFetchingPreviousPage={false}
+            onFetchPreviousPage={vi.fn()}
+            selectedKey={null}
+            onSelectKey={vi.fn()}
+            outline={pinned ? <aside data-testid="pinned-outline">Turns</aside> : undefined}
+            dock={<textarea data-testid="draft-box" defaultValue="" />}
+          />
+        </MemoryRouter>
+      );
+    }
+
+    render(<Harness />);
+    const listBefore = screen.getByTestId("session-timeline-list");
+    const draft = screen.getByTestId("draft-box") as HTMLTextAreaElement;
+    fireEvent.change(draft, { target: { value: "unsent draft" } });
+
+    fireEvent.click(screen.getByTestId("toggle-outline"));
+    expect(screen.getByTestId("pinned-outline")).toBeInTheDocument();
+    expect(screen.getByTestId("session-timeline-list")).toBe(listBefore);
+    expect(screen.getByTestId("draft-box")).toBe(draft);
+    expect(draft.value).toBe("unsent draft");
+
+    fireEvent.click(screen.getByTestId("toggle-outline"));
+    expect(screen.queryByTestId("pinned-outline")).toBeNull();
+    expect(screen.getByTestId("session-timeline-list")).toBe(listBefore);
+    expect(draft.value).toBe("unsent draft");
+  });
 });
