@@ -201,62 +201,6 @@ def test_provider_release_proof_status_all_make_reports_inventory_missing_baseli
         assert payload["statuses"][0]["failure_code"] == "baseline_missing"
 
 
-def test_provider_release_proof_maturity_make_emits_rollup() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        coverage = root / "coverage.json"
-        artifact = root / "maturity.json"
-        coverage.write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "providers": ["opencode"],
-                    "surfaces": ["binary identity", "send input"],
-                    "rows": [
-                        {
-                            "provider": "opencode",
-                            "surface": "binary identity",
-                            "covered": "yes",
-                            "runs_in_ci": True,
-                            "runs_in_sauron_release_watch": True,
-                            "accepted_baseline": "none",
-                            "baseline_scenarios": [],
-                            "failure_actionable": True,
-                        },
-                        {
-                            "provider": "opencode",
-                            "surface": "send input",
-                            "covered": "partial",
-                            "runs_in_ci": True,
-                            "runs_in_sauron_release_watch": False,
-                            "accepted_baseline": "none",
-                            "baseline_scenarios": [],
-                            "failure_actionable": True,
-                        },
-                    ],
-                    "accepted_release_proof_scenarios": [],
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        result = _run_make(
-            [
-                "provider-release-proof-maturity",
-                f"COVERAGE={coverage}",
-                f"BASELINE_ROOT={root / 'baselines'}",
-                f"ARTIFACT={artifact}",
-            ]
-        )
-
-        assert result.returncode == 0, _combined_output(result)
-        payload = _read_json(artifact)
-        assert payload["artifact_kind"] == "provider_release_proof_maturity_rollup"
-        assert payload["overall"]["weighted_percent"] == 75.0
-        assert payload["provider_rollups"]["opencode"]["weighted_percent"] == 75.0
-        assert payload["accepted_baselines"]["status"] == "checked"
-
-
 def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact() -> (
     None
 ):
@@ -304,12 +248,6 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
         assert payload["result_count"] == len(expected_providers) * len(payload["scenarios"])
         assert Path(payload["universal_harness_artifact"]).is_file()
         assert Path(payload["provider_support_matrix_path"]).is_file()
-        # No COVERAGE= supplied: the coverage inventory is private, so the
-        # rollup reports unavailable rather than passing or failing. The
-        # COVERAGE-supplied path is covered by
-        # test_provider_release_proof_maturity_make_emits_rollup above.
-        assert payload["maturity_rollup"]["status"] == "unavailable"
-        assert payload["maturity_rollup_path"] is None
         support_matrix = payload["provider_support_matrix"]
         assert support_matrix["action_count"] > 20
         assert support_matrix["missing_provider_actions"] == []
@@ -570,7 +508,6 @@ def main() -> int:
         test_provider_release_proof_old_new_make_requires_old_and_new,
         test_provider_release_proof_staged_old_new_make_requires_provider_and_bins,
         test_provider_release_proof_status_all_make_reports_inventory_missing_baseline,
-        test_provider_release_proof_maturity_make_emits_rollup,
         test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact,
         test_provider_release_proof_universal_smoke_runs_old_new_release_diff,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,

@@ -120,7 +120,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
 class Trigger(StrEnum):
     RELEASE_POLL = "release_poll"  # clifford factory, 900s tick, release lane
     PUSH = "push"  # GitHub Actions, every push/PR (contract-first-ci.yml)
-    WEEKLY_CRON = "weekly_cron"  # GitHub Actions, weekly schedule (provider-release-weekly.yml)
+    WEEKLY_CRON = "weekly_cron"  # GitHub Actions, weekly schedule
     MANUAL = "manual"  # human-run, for scenarios no automated trigger can produce acceptable evidence for
 
 
@@ -397,9 +397,7 @@ def _load_push_harness_scenarios() -> tuple[str, ...]:
 def _load_weekly_cron_providers() -> tuple[str, ...]:
     """Providers with `weekly_unconditional: true` in the release schedule.
 
-    provider-release-weekly.yml's matrix job reads this file via
-    scripts/qa/provider-release-schedule.py; parsed directly here to avoid
-    depending on that script's own YAML shape assumptions twice.
+    Parsed directly here rather than through scripts/qa/provider-release-schedule.py.
     """
     payload = yaml.safe_load(WEEKLY_SCHEDULE_PATH.read_text(encoding="utf-8"))
     providers = payload.get("providers") or []
@@ -567,7 +565,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             build_provenance=build_provenance,
             trigger=trigger,
             status="runs",
-            reason="weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+            reason="weekly full-column smoke (DEFAULT_SCENARIOS)",
             harness_scenarios=facts.default_harness_scenarios,
             assertion_status=_assertion_statuses(
                 facts,

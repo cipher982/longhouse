@@ -573,8 +573,7 @@ def codex_helm_interrupt_oracle(
     exact turn that was sent, not just any turn) and verified cleanup (stop.json
     must show an attempted stop, a clean subprocess exit, and post-hoc
     verification that the process reached a terminal state with its socket
-    gone) — both timing-coupled interventions the spec's run-evidence index is
-    designed to carry (see run_evidence_index.InterventionLogEntry).
+    gone) — both timing-coupled interventions.
     """
     start_summary = canary_result.get("start_summary") if isinstance(canary_result.get("start_summary"), dict) else {}
     send_summary = canary_result.get("send_summary") if isinstance(canary_result.get("send_summary"), dict) else {}

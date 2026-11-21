@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 361,
+  "file_count": 359,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -955,13 +955,6 @@
       ]
     },
     {
-      "path": "scripts/tests/provider-live-proof-publish.test.py",
-      "providers": [
-        "claude",
-        "opencode"
-      ]
-    },
-    {
       "path": "scripts/tests/provider-release-proof-baseline.test.py",
       "providers": [
         "codex",
@@ -972,13 +965,6 @@
       "path": "scripts/tests/provider-release-proof-make.test.py",
       "providers": [
         "codex",
-        "opencode"
-      ]
-    },
-    {
-      "path": "scripts/tests/provider-release-proof-maturity.test.py",
-      "providers": [
-        "claude",
         "opencode"
       ]
     },

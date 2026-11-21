@@ -44,8 +44,7 @@ The smoke writes:
 - provider support and execution coverage matrices;
 - `provider-builds.lock` plus per-provider closure directories;
 - `provider_builds` identity and pre/post verification records;
-- raw scenario evidence; and
-- `provider-release-proof-maturity.json`.
+- raw scenario evidence.
 
 ## One Explicit Provider Binary
 
@@ -172,14 +171,6 @@ Compare a new artifact:
 make provider-release-proof-diff \
   CANDIDATE=/tmp/opencode-proof.json \
   BASELINE_ROOT=.provider-release-proofs
-```
-
-Check maturity and accepted coverage:
-
-```bash
-make provider-release-proof-maturity \
-  BASELINE_ROOT=.provider-release-proofs \
-  ARTIFACT=/tmp/provider-release-proof-maturity.json
 ```
 
 Accepted artifacts are immutable evidence. Reaccept a scenario only after

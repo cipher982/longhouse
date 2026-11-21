@@ -20,9 +20,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
 # No default coverage path: the inventory moved to the private repo on
-# 2026-07-31. `status-all` takes --coverage explicitly. See
-# provider-release-proof-maturity.py for why a sibling-checkout fallback was
-# rejected rather than added.
+# 2026-07-31. `status-all` takes --coverage explicitly.
 COMPARABLE_ARTIFACT_KEYS = (
     "normalized_contract",
     "provider_contract",
