@@ -20,6 +20,33 @@ fn terminal_result_with_payload(mut result: Value, terminal_event: Option<&Value
     result
 }
 
+pub(super) fn resolve_console_cwd(
+    cwd_raw: &str,
+    home_dir: Option<&Path>,
+) -> std::result::Result<PathBuf, CommandError> {
+    let cwd = if cwd_raw == "~" {
+        home_dir.map(PathBuf::from).ok_or_else(|| CommandError {
+            code: "cwd_not_allowed".to_string(),
+            message: "cannot expand '~' without HOME".to_string(),
+        })?
+    } else if let Some(rest) = cwd_raw.strip_prefix("~/") {
+        let home = home_dir.ok_or_else(|| CommandError {
+            code: "cwd_not_allowed".to_string(),
+            message: "cannot expand '~/' without HOME".to_string(),
+        })?;
+        home.join(rest)
+    } else {
+        PathBuf::from(cwd_raw)
+    };
+    if !cwd.is_absolute() {
+        return Err(CommandError {
+            code: "cwd_not_allowed".to_string(),
+            message: "cwd must be absolute".to_string(),
+        });
+    }
+    Ok(cwd)
+}
+
 pub(super) async fn execute_turn_start(
     frame: &Value,
     payload: &Value,
@@ -61,13 +88,8 @@ pub(super) async fn execute_turn_start(
         });
     }
     let cwd_raw = payload_required_string(payload, "cwd")?;
-    let cwd = PathBuf::from(&cwd_raw);
-    if !cwd.is_absolute() {
-        return Err(CommandError {
-            code: "cwd_not_allowed".to_string(),
-            message: "cwd must be absolute".to_string(),
-        });
-    }
+    let home_dir = std::env::var_os("HOME").map(PathBuf::from);
+    let cwd = resolve_console_cwd(&cwd_raw, home_dir.as_deref())?;
     if !cwd.is_dir() {
         return Err(CommandError {
             code: "cwd_not_found".to_string(),
@@ -651,6 +673,35 @@ mod tests {
 
         assert_eq!(result["terminal_reason"], "provider_auth_missing");
         assert_eq!(result["stderr_tail"], "No API key found for openai");
+    }
+
+    #[test]
+    fn resolve_console_cwd_expands_tilde_and_rejects_relative() {
+        let home = Path::new("/home/davidrose");
+        assert_eq!(
+            resolve_console_cwd("~", Some(home)).unwrap(),
+            PathBuf::from("/home/davidrose")
+        );
+        assert_eq!(
+            resolve_console_cwd("~/git/longhouse", Some(home)).unwrap(),
+            PathBuf::from("/home/davidrose/git/longhouse")
+        );
+        assert_eq!(
+            resolve_console_cwd("/Users/davidrose/git/longhouse", Some(home)).unwrap(),
+            PathBuf::from("/Users/davidrose/git/longhouse")
+        );
+        assert_eq!(
+            resolve_console_cwd("git/longhouse", Some(home))
+                .unwrap_err()
+                .code,
+            "cwd_not_allowed"
+        );
+        assert_eq!(
+            resolve_console_cwd("~/git/longhouse", None)
+                .unwrap_err()
+                .code,
+            "cwd_not_allowed"
+        );
     }
 }
 

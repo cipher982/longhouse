@@ -31,6 +31,7 @@ export type WorkspaceSuggestion = {
   score: number;
   last_used_at: string | null;
   session_count: number;
+  device_id?: string | null;
 };
 
 export type WorkspaceSuggestionsResponse = {
@@ -55,6 +56,8 @@ export type RecentModel = {
   last_used_at: string | null;
   /** Server-owned short name ("opus 5.5"), the same naming as usage_latest.label. */
   label?: string | null;
+  /** Machine that most recently ran this model; differs from response device_id when borrowed from another machine. */
+  device_id?: string | null;
 };
 
 export type RecentModelsResponse = {

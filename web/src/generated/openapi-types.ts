@@ -6586,6 +6586,11 @@ export interface components {
              * @description Short display name ('opus 5.5'), the same naming as usage_latest.label; clients render it verbatim.
              */
             label?: string | null;
+            /**
+             * Device Id
+             * @description Machine that most recently ran this model; differs from response device_id when borrowed from another machine.
+             */
+            device_id?: string | null;
         };
         /** RecentModelsResponse */
         RecentModelsResponse: {
@@ -10835,7 +10840,7 @@ export interface components {
         WorkspaceSuggestion: {
             /**
              * Path
-             * @description Absolute working directory on the target machine.
+             * @description Absolute or home-relative working directory on the target machine.
              */
             path: string;
             /**
@@ -10868,6 +10873,11 @@ export interface components {
              * @description Sessions launched in this cwd within the lookback window.
              */
             session_count: number;
+            /**
+             * Device Id
+             * @description Machine that supplied this workspace suggestion; differs from response device_id when borrowed from another machine.
+             */
+            device_id?: string | null;
         };
         /** WorkspaceSuggestionsResponse */
         WorkspaceSuggestionsResponse: {

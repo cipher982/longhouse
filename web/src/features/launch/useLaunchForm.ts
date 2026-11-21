@@ -291,7 +291,7 @@ export function machineStatusClass(machine: MachineDirectoryEntry): string {
 }
 
 export function compactPath(path: string): string {
-  return path.replace(/^\/Users\/[^/]+/, "~");
+  return path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
 
 export function workspaceTitle(cwd: string, workspaces: Array<{ path: string; label: string }>): string {

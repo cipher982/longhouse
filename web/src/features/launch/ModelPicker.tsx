@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchRecentModels } from "@/shared/api/index";
-import { getProviderLabel } from "@/shared/lib/providers";
+import { getProviderLabel, getStarterModels } from "@/shared/lib/providers";
 import "./model-chip.css";
 
 export interface ModelPickerProps {
@@ -12,6 +12,7 @@ export interface ModelPickerProps {
   testId: string;
   compact?: boolean;
   pickerRef?: RefObject<HTMLDetailsElement | null>;
+  deviceLabels?: Record<string, string>;
 }
 
 const MODEL_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -41,6 +42,7 @@ export default function ModelPicker({
   testId,
   compact = false,
   pickerRef: externalPickerRef,
+  deviceLabels,
 }: ModelPickerProps) {
   const internalPickerRef = useRef<HTMLDetailsElement | null>(null);
   const detailsRef = externalPickerRef ?? internalPickerRef;
@@ -53,6 +55,13 @@ export default function ModelPicker({
   });
   const selectedModel = value.trim();
   const providerLabel = getProviderLabel(provider);
+  const recentModels = recentModelsQuery.data?.models ?? [];
+  const starterModels = recentModels.length === 0 ? getStarterModels(provider) : [];
+  const manualPlaceholder = recentModels[0]?.model ?? starterModels[0]?.model ?? "Model id";
+  const remoteMachineLabel = (sourceDeviceId: string | null | undefined): string | null => {
+    if (!sourceDeviceId || !deviceId || sourceDeviceId === deviceId) return null;
+    return deviceLabels?.[sourceDeviceId] ?? sourceDeviceId;
+  };
   // The provider is already named by the row above in the launch sheet and by
   // the composer header, so a bare provider name here reads as a second value
   // rather than as a caption -- "Default / Codex" directly under
@@ -74,7 +83,10 @@ export default function ModelPicker({
         testId={testId}
         providerLabel={providerLabel}
         selectedModel={selectedModel}
-        models={recentModelsQuery.data?.models ?? []}
+        models={recentModels}
+        starterModels={starterModels}
+        manualPlaceholder={manualPlaceholder}
+        remoteMachineLabel={remoteMachineLabel}
         onChange={onChange}
         choose={choose}
       />
@@ -104,18 +116,35 @@ export default function ModelPicker({
           </span>
           <span>{!selectedModel ? "✓" : ""}</span>
         </button>
-        {(recentModelsQuery.data?.models ?? []).map((recent) => (
+        {recentModels.map((recent) => {
+          const onOther = remoteMachineLabel(recent.device_id);
+          return (
+            <button
+              key={recent.model}
+              type="button"
+              className="launch-option-row"
+              onClick={() => choose(recent.model)}
+            >
+              <span>
+                <strong>{recent.model}</strong>
+                <small>{onOther ? `on ${onOther} · ` : ""}{lastUsedLabel(recent.last_used_at)}</small>
+              </span>
+              <span>{recent.model === selectedModel ? "✓" : ""}</span>
+            </button>
+          );
+        })}
+        {starterModels.map((starter) => (
           <button
-            key={recent.model}
+            key={starter.model}
             type="button"
             className="launch-option-row"
-            onClick={() => choose(recent.model)}
+            onClick={() => choose(starter.model)}
           >
             <span>
-              <strong>{recent.model}</strong>
-              <small>{lastUsedLabel(recent.last_used_at)}</small>
+              <strong>{starter.label}</strong>
+              <small>{providerLabel} alias</small>
             </span>
-            <span>{recent.model === selectedModel ? "✓" : ""}</span>
+            <span>{starter.model === selectedModel ? "✓" : ""}</span>
           </button>
         ))}
         <label className="launch-manual-path">
@@ -124,7 +153,7 @@ export default function ModelPicker({
             type="text"
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            placeholder="e.g. provider/model-id"
+            placeholder={manualPlaceholder}
             autoComplete="off"
             spellCheck={false}
             data-testid={`${testId}-input`}
@@ -140,7 +169,10 @@ interface CompactModelPickerProps {
   testId: string;
   providerLabel: string;
   selectedModel: string;
-  models: { model: string; last_used_at: string | null; label?: string | null }[];
+  models: { model: string; last_used_at: string | null; label?: string | null; device_id?: string | null }[];
+  starterModels: ReadonlyArray<{ model: string; label: string }>;
+  manualPlaceholder: string;
+  remoteMachineLabel: (sourceDeviceId: string | null | undefined) => string | null;
   onChange: (model: string) => void;
   choose: (model: string) => void;
 }
@@ -155,6 +187,9 @@ function CompactModelPicker({
   providerLabel,
   selectedModel,
   models,
+  starterModels,
+  manualPlaceholder,
+  remoteMachineLabel,
   onChange,
   choose,
 }: CompactModelPickerProps) {
@@ -189,15 +224,20 @@ function CompactModelPicker({
   useEffect(() => {
     setManualDraft((draft) => (draft !== null && draft.trim() === selectedModel ? draft : null));
   }, [selectedModel]);
-  const isListed = models.some((recent) => recent.model === selectedModel);
+  const isListed =
+    models.some((recent) => recent.model === selectedModel) ||
+    starterModels.some((starter) => starter.model === selectedModel);
   const manualValue = manualDraft ?? (isListed ? "" : selectedModel);
   const pick = (model: string) => {
     setManualDraft(null);
     choose(model);
   };
   const selectedLabel = selectedModel
-    ? models.find((recent) => recent.model === selectedModel)?.label || selectedModel
+    ? models.find((recent) => recent.model === selectedModel)?.label ||
+      starterModels.find((starter) => starter.model === selectedModel)?.label ||
+      selectedModel
     : "Default model";
+  const hasListedOptions = models.length > 0 || starterModels.length > 0;
   return (
     <details ref={detailsRef} className="model-chip" data-testid={testId}>
       <summary
@@ -211,9 +251,10 @@ function CompactModelPicker({
         </svg>
       </summary>
       <div className="model-chip__panel" data-popover-panel>
-        <div className="model-chip__heading">Model for the next turn</div>
+        <div className="model-chip__heading">Model</div>
         {models.map((recent) => {
           const selected = recent.model === selectedModel;
+          const onOther = remoteMachineLabel(recent.device_id);
           return (
             <button
               key={recent.model}
@@ -225,14 +266,33 @@ function CompactModelPicker({
               <span className="model-chip__option-copy">
                 <span className="model-chip__option-name">{recent.label || recent.model}</span>
                 <small>
-                  <code>{recent.model}</code> · {lastUsedLabel(recent.last_used_at)}
+                  <code>{recent.model}</code>
+                  {onOther ? ` · on ${onOther}` : ""} · {lastUsedLabel(recent.last_used_at)}
                 </small>
               </span>
               {selected ? <CheckIcon /> : null}
             </button>
           );
         })}
-        {models.length > 0 ? <div className="model-chip__divider" /> : null}
+        {starterModels.map((starter) => {
+          const selected = starter.model === selectedModel;
+          return (
+            <button
+              key={starter.model}
+              type="button"
+              className={`model-chip__option${selected ? " is-selected" : ""}`}
+              aria-pressed={selected}
+              onClick={() => pick(starter.model)}
+            >
+              <span className="model-chip__option-copy">
+                <span className="model-chip__option-name">{starter.label}</span>
+                <small>{providerLabel} alias</small>
+              </span>
+              {selected ? <CheckIcon /> : null}
+            </button>
+          );
+        })}
+        {hasListedOptions ? <div className="model-chip__divider" /> : null}
         <button
           type="button"
           className={`model-chip__option${!selectedModel ? " is-selected" : ""}`}
@@ -254,7 +314,7 @@ function CompactModelPicker({
               setManualDraft(event.target.value);
               onChange(event.target.value);
             }}
-            placeholder="provider/model-id"
+            placeholder={manualPlaceholder}
             autoComplete="off"
             spellCheck={false}
             data-testid={`${testId}-input`}

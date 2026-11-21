@@ -817,4 +817,113 @@ describe("NewSessionComposer", () => {
     expect(screen.getByText("Offline · Last seen 11 hours ago")).toBeInTheDocument();
     expect(screen.queryByText("Offline · Last seen today")).not.toBeInTheDocument();
   });
+
+  it("shows Claude starter aliases on cold start and labels cross-machine models and workspaces", async () => {
+    const user = userEvent.setup();
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube-ws",
+          machine_name: "cube-ws",
+          online: true,
+          supports: ["claude.turn_start"],
+          control_operations_by_provider: { claude: ["turn_start"] },
+        }),
+        machine({
+          device_id: "cinder",
+          machine_name: "cinder",
+          online: true,
+          supports: ["claude.turn_start"],
+          control_operations_by_provider: { claude: ["turn_start"] },
+        }),
+      ],
+    });
+    apiMocks.fetchWorkspaceSuggestions.mockResolvedValue({
+      device_id: "cube-ws",
+      workspaces: [
+        {
+          path: "/home/david/git/me",
+          label: "me (main)",
+          git_repo: "https://github.com/cipher982/me.git",
+          git_branch: "main",
+          score: 100,
+          last_used_at: new Date().toISOString(),
+          session_count: 1,
+          device_id: "cube-ws",
+        },
+        {
+          path: "/home/david/git/zerg/longhouse",
+          label: "longhouse (main)",
+          git_repo: "https://github.com/cipher982/longhouse.git",
+          git_branch: "main",
+          score: 90,
+          last_used_at: new Date().toISOString(),
+          session_count: 5,
+          device_id: "cinder",
+        },
+      ],
+    });
+    apiMocks.fetchRecentModels.mockResolvedValue({
+      device_id: "cube-ws",
+      provider: "claude",
+      models: [],
+    });
+
+    renderModal({ initialDeviceId: "cube-ws" });
+
+    // Linux /home/<user> compacts to ~ and borrowed workspaces show their source machine.
+    expect(await screen.findByText("~/git/me")).toBeInTheDocument();
+    expect(screen.getByText("~/git/zerg/longhouse · on cinder")).toBeInTheDocument();
+
+    // Cold-start Claude shows opus/sonnet/haiku aliases, "Model" heading, and honest placeholder.
+    const modelChip = screen.getByTestId("launch-model-select");
+    await user.click(modelChip.querySelector("summary")!);
+    expect(screen.getByText("Model")).toBeInTheDocument();
+    expect(screen.queryByText("Model for the next turn")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /opus/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sonnet/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /haiku/i })).toBeInTheDocument();
+    expect(screen.getByTestId("launch-model-select-input")).toHaveAttribute("placeholder", "opus");
+  });
+
+  it("labels borrowed models from another machine with the machine name", async () => {
+    const user = userEvent.setup();
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube-ws",
+          machine_name: "cube-ws",
+          online: true,
+          supports: ["claude.turn_start"],
+          control_operations_by_provider: { claude: ["turn_start"] },
+        }),
+        machine({
+          device_id: "cinder",
+          machine_name: "cinder",
+          online: true,
+          supports: ["claude.turn_start"],
+          control_operations_by_provider: { claude: ["turn_start"] },
+        }),
+      ],
+    });
+    apiMocks.fetchRecentModels.mockResolvedValue({
+      device_id: "cube-ws",
+      provider: "claude",
+      models: [
+        {
+          model: "claude-opus-5-5",
+          label: "opus 5.5",
+          last_used_at: new Date().toISOString(),
+          device_id: "cinder",
+        },
+      ],
+    });
+
+    renderModal({ initialDeviceId: "cube-ws" });
+
+    const modelChip = await screen.findByTestId("launch-model-select");
+    await user.click(modelChip.querySelector("summary")!);
+    expect(await screen.findByText(/on cinder/)).toBeInTheDocument();
+    expect(screen.getByTestId("launch-model-select-input")).toHaveAttribute("placeholder", "claude-opus-5-5");
+  });
 });

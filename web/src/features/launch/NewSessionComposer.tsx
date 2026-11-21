@@ -101,6 +101,7 @@ export default function NewSessionComposer({
 
   const { selectedMachine } = form;
   const providers = selectedMachine ? launchProvidersForMachine(selectedMachine) : [];
+  const deviceLabels = Object.fromEntries(form.machines.map((m) => [m.device_id, m.machine_name]));
 
   return (
     <div className="new-session" data-testid="new-session-pane">
@@ -197,26 +198,39 @@ export default function NewSessionComposer({
                       data-testid="launch-workspace-search"
                     />
                   )}
-                  {form.filteredWorkspaces.map((w) => (
-                    <button
-                      key={w.path}
-                      type="button"
-                      className="launch-option-row launch-workspace-row"
-                      onClick={() => {
-                        form.chooseWorkspace(w.path);
-                        close(workspacePickerRef);
-                      }}
-                    >
-                      <span><strong>{w.label}</strong><small>{compactPath(w.path)}</small></span><span>{w.path === form.cwd ? "✓" : ""}</span>
-                    </button>
-                  ))}
+                  {form.filteredWorkspaces.map((w) => {
+                    const onOther =
+                      w.device_id && form.deviceId && w.device_id !== form.deviceId
+                        ? deviceLabels[w.device_id] ?? w.device_id
+                        : null;
+                    return (
+                      <button
+                        key={w.path}
+                        type="button"
+                        className="launch-option-row launch-workspace-row"
+                        onClick={() => {
+                          form.chooseWorkspace(w.path);
+                          close(workspacePickerRef);
+                        }}
+                      >
+                        <span>
+                          <strong>{w.label}</strong>
+                          <small>
+                            {compactPath(w.path)}
+                            {onOther ? ` · on ${onOther}` : ""}
+                          </small>
+                        </span>
+                        <span>{w.path === form.cwd ? "✓" : ""}</span>
+                      </button>
+                    );
+                  })}
                   <label className="launch-manual-path">
                     <span>Other path</span>
                     <input
                       type="text"
                       value={form.cwd}
                       onChange={(event) => form.setCwd(event.target.value)}
-                      placeholder="/Users/example/git/zerg/longhouse"
+                      placeholder="~/git/longhouse"
                       autoComplete="off"
                       spellCheck={false}
                       data-testid="launch-cwd-input"
@@ -259,6 +273,7 @@ export default function NewSessionComposer({
                 value={form.model}
                 onChange={form.setModel}
                 pickerRef={modelPickerRef}
+                deviceLabels={deviceLabels}
                 testId="launch-model-select"
                 compact
               />

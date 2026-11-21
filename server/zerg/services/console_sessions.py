@@ -47,11 +47,14 @@ async def create_empty_console_session(
     cwd = str(cwd or "").strip()
     launch_surface = str(launch_surface or "").strip().lower() or "console"
     launch_actor = "automation" if launch_surface == "test" else "user"
-    if not provider or not device_id or not cwd.startswith("/"):
-        raise ValueError("provider, device_id, and absolute cwd are required")
+    if not provider or not device_id or not (cwd.startswith("/") or cwd == "~" or cwd.startswith("~/")):
+        raise ValueError("provider, device_id, and absolute or home-relative cwd are required")
     session_id = session_id or uuid4()
     thread_id = thread_id or uuid4()
     now = datetime.now(timezone.utc)
+    default_project = cwd.rstrip("/").rsplit("/", 1)[-1]
+    if default_project in {"", "~"}:
+        default_project = "console"
     data = {
         "session_id": str(session_id),
         "thread_id": str(thread_id),
@@ -59,7 +62,7 @@ async def create_empty_console_session(
         "provider": provider,
         "device_id": device_id,
         "cwd": cwd,
-        "project": str(project or "").strip() or cwd.rstrip("/").rsplit("/", 1)[-1] or "console",
+        "project": str(project or "").strip() or default_project,
         "display_name": str(display_name or "").strip() or None,
         "provider_config": normalize_console_provider_config(provider_config),
         "launch_actor": launch_actor,

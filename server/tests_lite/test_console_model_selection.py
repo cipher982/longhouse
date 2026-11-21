@@ -435,3 +435,132 @@ def test_other_providers_keep_the_ten_second_turn_start_wait():
 
     assert console_turn_start_reply_timeout_seconds("codex") == 10
     assert console_turn_start_reply_timeout_seconds("claude") == 10
+
+
+def test_recent_models_borrows_from_other_enrolled_machines_with_local_first(live_catalog):
+    owner_id = live_catalog.create_user("cross-machine-models@example.test")
+    live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")
+    live_catalog.create_device_token(owner_id=owner_id, device_id="cube-ws")
+    other_owner_id = live_catalog.create_user("other-owner@example.test")
+    live_catalog.create_device_token(owner_id=other_owner_id, device_id="stranger-box")
+
+    now = datetime.now(UTC)
+
+    def _seed_model_session(target_owner: int, dev: str, model: str, at: datetime) -> None:
+        sid = str(uuid4())
+        result = live_catalog.rpc(
+            "session.console.create.v2",
+            {
+                "session": {
+                    "session_id": sid,
+                    "thread_id": str(uuid4()),
+                    "owner_id": target_owner,
+                    "provider": "claude",
+                    "device_id": dev,
+                    "cwd": "/Users/david/git/zerg",
+                    "project": "zerg",
+                    "launch_actor": "user",
+                    "provider_config": {},
+                    "started_at": at.isoformat(),
+                }
+            },
+        )
+        assert result["created"] is True
+        _insert_usage(live_catalog, session_id=sid, source_epoch=str(uuid4()), model=model, position=1, at=at)
+
+    # cinder ran opus and sonnet; cube-ws only ran haiku (older than cinder's opus); stranger ran leaked-model
+    _seed_model_session(owner_id, "cinder", "claude-opus-5-5", now - timedelta(minutes=1))
+    _seed_model_session(owner_id, "cinder", "claude-sonnet-5-5", now - timedelta(minutes=2))
+    _seed_model_session(owner_id, "cinder", "claude-haiku-5-5", now - timedelta(seconds=30))
+    _seed_model_session(owner_id, "cube-ws", "claude-haiku-5-5", now - timedelta(minutes=5))
+    _seed_model_session(other_owner_id, "stranger-box", "claude-leaked-9", now)
+
+    result = live_catalog.rpc(
+        "machine.models.list.v2",
+        {"owner_id": owner_id, "device_id": "cube-ws", "provider": "claude", "limit": 12, "days_back": 45},
+    )
+    assert [(m["model"], m["device_id"]) for m in result["models"]] == [
+        ("claude-haiku-5-5", "cube-ws"),
+        ("claude-opus-5-5", "cinder"),
+        ("claude-sonnet-5-5", "cinder"),
+    ]
+
+
+def test_cross_machine_workspaces_rewrite_to_target_home_or_tilde():
+    from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts
+    from zerg.services.workspace_suggestion_projection import rank_human_workspace_candidates
+
+    now = datetime.now(UTC)
+
+    def _fact(device_id: str, cwd: str, git_repo: str | None, minutes_ago: int) -> WorkspaceSessionFacts:
+        at = now - timedelta(minutes=minutes_ago)
+        return WorkspaceSessionFacts(
+            device_id=device_id,
+            provider="claude",
+            environment="prod",
+            project=None,
+            cwd=cwd,
+            git_repo=git_repo,
+            git_branch="main",
+            last_activity_at=at,
+            started_at=at,
+            origin_kind="console",
+            hidden_from_default_timeline=False,
+            user_hidden_from_timeline=False,
+            launch_actor="user",
+            is_sidechain=False,
+        )
+
+    remote = [
+        _fact("cinder", "/Users/david/git/me", "git@github.com:cipher982/me.git", 1),
+        _fact("cinder", "/Users/david/git/zerg/longhouse", "https://github.com/cipher982/longhouse.git", 2),
+        _fact("cinder", "/tmp/scratch", "https://github.com/cipher982/scratch.git", 3),
+    ]
+
+    # Target machine already has one Linux session -> remote unseen repo rewrites to /home/david/...
+    local = [_fact("cube-ws", "/home/david/git/me", "https://github.com/cipher982/me", 10)]
+    ranked_with_home = rank_human_workspace_candidates(local, device_id="cube-ws", now=now, days_back=45, limit=12, remote_facts=remote)
+    assert [(e.path, e.device_id) for e in ranked_with_home] == [
+        ("/home/david/git/me", "cube-ws"),
+        ("/home/david/git/zerg/longhouse", "cinder"),
+    ]
+
+    # Completely fresh target machine -> remote repos rewrite to ~/...
+    ranked_fresh = rank_human_workspace_candidates([], device_id="fresh-box", now=now, days_back=45, limit=12, remote_facts=remote)
+    assert [(e.path, e.device_id) for e in ranked_fresh] == [
+        ("~/git/me", "cinder"),
+        ("~/git/zerg/longhouse", "cinder"),
+    ]
+
+
+def test_console_session_create_accepts_tilde_cwd(live_catalog, monkeypatch):
+    from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
+    from zerg.routers import session_chat
+
+    owner_id = live_catalog.create_user("tilde-cwd@example.test")
+    live_catalog.create_device_token(owner_id=owner_id, device_id="cube-ws")
+    cookie = live_catalog.browser_cookie(owner_id=owner_id, email="tilde-cwd@example.test")
+
+    class Registry:
+        @staticmethod
+        def supports(**_kwargs: object) -> bool:
+            return True
+
+        @staticmethod
+        def provider_readiness_state(**_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(session_chat, "get_machine_control_channel_registry", lambda: Registry())
+    with live_catalog.http_client(extra_overrides={get_current_browser_route_caller: lambda: SimpleNamespace(id=owner_id)}) as client:
+        created = client.post(
+            "/sessions/console",
+            json={"provider": "claude", "device_id": "cube-ws", "cwd": "~/git/longhouse"},
+            cookies={"longhouse_session": cookie},
+        )
+        assert created.status_code == 201, created.text
+        rejected = client.post(
+            "/sessions/console",
+            json={"provider": "claude", "device_id": "cube-ws", "cwd": "relative/path"},
+            cookies={"longhouse_session": cookie},
+        )
+        assert rejected.status_code == 400, rejected.text

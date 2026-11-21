@@ -43,6 +43,7 @@ class WorkspaceSuggestionEntry:
     score: float
     last_used_at: datetime | None
     session_count: int
+    device_id: str | None = None
 
     def to_response(self) -> dict[str, object]:
         return {
@@ -53,6 +54,7 @@ class WorkspaceSuggestionEntry:
             "score": self.score,
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
             "session_count": self.session_count,
+            "device_id": self.device_id,
         }
 
 
@@ -197,11 +199,42 @@ def _recency_weight(age_days: float) -> int:
     return _RECENCY_TAIL_WEIGHT
 
 
-def _compact_path(path: str) -> str:
+def _home_prefix_and_rel(path: str) -> tuple[str, str] | None:
     parts = path.split("/")
-    if len(parts) >= 3 and parts[1] == "Users":
-        return "~/" + "/".join(parts[3:]) if len(parts) > 3 else "~"
-    return path
+    if len(parts) >= 3 and parts[0] == "" and parts[1] in ("Users", "home") and parts[2]:
+        if ".." in parts[3:]:
+            return None
+        home_prefix = f"/{parts[1]}/{parts[2]}"
+        rel = "/".join(parts[3:])
+        return home_prefix, rel
+    return None
+
+
+def _compact_path(path: str) -> str:
+    parsed = _home_prefix_and_rel(path)
+    if parsed is None:
+        return path
+    _, rel = parsed
+    return f"~/{rel}" if rel else "~"
+
+
+def _normalize_git_repo(git_repo: str | None) -> str | None:
+    raw = str(git_repo or "").strip().lower()
+    if not raw:
+        return None
+    for prefix in ("https://", "http://", "ssh://"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    if raw.startswith("git@"):
+        raw = raw[4:]
+        if ":" in raw:
+            host, rest = raw.split(":", 1)
+            raw = f"{host}/{rest}"
+    raw = raw.rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    return raw or None
 
 
 def _repo_name(git_repo: str | None) -> str | None:
@@ -227,8 +260,16 @@ def rank_human_workspace_candidates(
     now: datetime,
     days_back: int,
     limit: int,
+    remote_facts: list[WorkspaceSessionFacts] | None = None,
 ) -> list[WorkspaceSuggestionEntry]:
-    """Classify, deduplicate, label, and rank human workspaces."""
+    """Classify, deduplicate, label, and rank human workspaces.
+
+    Local machine history always ranks ahead of cross-machine suggestions.
+    When ``remote_facts`` are supplied and local history does not fill
+    ``limit``, unseen git repositories from the owner's other machines are
+    appended with paths rewritten to this machine's known home prefix (or
+    ``~/...`` when this machine has no home prefix yet).
+    """
 
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -241,8 +282,13 @@ def rank_human_workspace_candidates(
         last_used_at: datetime | None = None
         git_repo: str | None = None
         git_branch: str | None = None
+        device_id: str | None = None
 
     groups: dict[str, _Group] = {}
+    local_repos: set[str] = set()
+    target_home_prefix: str | None = None
+    target_home_seen_at: datetime | None = None
+
     for item in facts:
         # A proven human workspace first; failing that, a tracked checkout.
         # Both survive the same exclusions -- the second only forgoes the
@@ -254,36 +300,87 @@ def rank_human_workspace_candidates(
             continue
         path, used_at = candidate
         age_days = max(0.0, (now - used_at).total_seconds() / 86400.0)
-        group = groups.setdefault(path, _Group())
+        group = groups.setdefault(path, _Group(device_id=device_id))
         group.count += 1
         group.score += _recency_weight(age_days)
         if group.last_used_at is None or used_at > group.last_used_at:
             group.last_used_at = used_at
             group.git_repo = item.git_repo
             group.git_branch = item.git_branch
+        repo_key = _normalize_git_repo(item.git_repo)
+        if repo_key:
+            local_repos.add(repo_key)
+        parsed_home = _home_prefix_and_rel(path)
+        if parsed_home is not None and (target_home_seen_at is None or used_at > target_home_seen_at):
+            target_home_prefix = parsed_home[0]
+            target_home_seen_at = used_at
 
-    entries = [
-        WorkspaceSuggestionEntry(
-            path=path,
-            label=_label(path, group.git_repo, group.git_branch),
-            git_repo=group.git_repo,
-            git_branch=group.git_branch,
-            score=group.score,
-            last_used_at=group.last_used_at,
-            session_count=group.count,
+    def _to_sorted_entries(grouped: dict[str, _Group]) -> list[WorkspaceSuggestionEntry]:
+        built = [
+            WorkspaceSuggestionEntry(
+                path=path,
+                label=_label(path, group.git_repo, group.git_branch),
+                git_repo=group.git_repo,
+                git_branch=group.git_branch,
+                score=group.score,
+                last_used_at=group.last_used_at,
+                session_count=group.count,
+                device_id=group.device_id,
+            )
+            for path, group in grouped.items()
+        ]
+        # Path is the last key, and the only one that cannot tie: two workspaces
+        # last used in the same second score identically, and without it the order
+        # came from dict insertion, i.e. from session-id ordering in the candidate
+        # query. The picker then reshuffled between reads for no reason a user could
+        # see. Score and recency stay descending; the tiebreak is ascending path.
+        built.sort(
+            key=lambda entry: (
+                -entry.score,
+                -(entry.last_used_at or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+                entry.path,
+            )
         )
-        for path, group in groups.items()
-    ]
-    # Path is the last key, and the only one that cannot tie: two workspaces
-    # last used in the same second score identically, and without it the order
-    # came from dict insertion, i.e. from session-id ordering in the candidate
-    # query. The picker then reshuffled between reads for no reason a user could
-    # see. Score and recency stay descending; the tiebreak is ascending path.
-    entries.sort(
-        key=lambda entry: (
-            -entry.score,
-            -(entry.last_used_at or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
-            entry.path,
-        )
-    )
+        return built
+
+    entries = _to_sorted_entries(groups)
+
+    if remote_facts and len(entries) < limit:
+        local_paths = {entry.path for entry in entries}
+        remote_groups: dict[str, _Group] = {}
+        for item in remote_facts:
+            remote_device_id = str(item.device_id or "").strip()
+            if not remote_device_id or remote_device_id == device_id:
+                continue
+            candidate = classify_human_workspace_candidate(
+                item, device_id=remote_device_id, since=since
+            ) or classify_checkout_workspace_candidate(item, device_id=remote_device_id, since=since)
+            if candidate is None:
+                continue
+            raw_path, used_at = candidate
+            repo_key = _normalize_git_repo(item.git_repo)
+            if not repo_key or repo_key in local_repos:
+                continue
+            parsed_home = _home_prefix_and_rel(raw_path)
+            if parsed_home is None:
+                continue
+            _, rel = parsed_home
+            if target_home_prefix is not None:
+                rewritten_path = f"{target_home_prefix}/{rel}" if rel else target_home_prefix
+            else:
+                rewritten_path = f"~/{rel}" if rel else "~"
+            if rewritten_path in local_paths:
+                continue
+            age_days = max(0.0, (now - used_at).total_seconds() / 86400.0)
+            group = remote_groups.setdefault(rewritten_path, _Group())
+            group.count += 1
+            group.score += _recency_weight(age_days)
+            if group.last_used_at is None or used_at > group.last_used_at:
+                group.last_used_at = used_at
+                group.git_repo = item.git_repo
+                group.git_branch = item.git_branch
+                group.device_id = remote_device_id
+
+        entries.extend(_to_sorted_entries(remote_groups)[: max(0, limit - len(entries))])
+
     return entries[:limit]

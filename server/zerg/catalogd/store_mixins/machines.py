@@ -703,7 +703,7 @@ class MachinesMixin:
         limit: int,
         days_back: int,
     ) -> dict[str, Any]:
-        """Return recent provider-reported models for one enrolled machine."""
+        """Return recent provider-reported models for one enrolled machine, filling from the owner's other machines."""
 
         observed_at = datetime.now(UTC)
         since = observed_at - timedelta(days=days_back)
@@ -711,44 +711,54 @@ class MachinesMixin:
         catalog = LiveSessionCatalog.__table__
         facts = SessionProviderFact.__table__
         with _read_snapshot(self.engine) as connection:
-            enrolled = connection.execute(
-                select(token.c.id)
-                .where(
-                    token.c.owner_id == owner_id,
-                    token.c.device_id == device_id,
-                    token.c.revoked_at.is_(None),
-                )
-                .limit(1)
-            ).first()
-            models: list[dict[str, Any]] = []
-            if enrolled is not None:
-                session_rows = connection.execute(
-                    select(catalog.c.session_id)
+            owner_device_ids = [
+                str(row.device_id)
+                for row in connection.execute(
+                    select(token.c.device_id)
                     .where(
-                        catalog.c.device_id == device_id,
-                        catalog.c.provider == provider,
-                        or_(
-                            catalog.c.environment.is_(None),
-                            func.lower(catalog.c.environment).notin_(("test", "e2e")),
-                        ),
-                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                        token.c.owner_id == owner_id,
+                        token.c.revoked_at.is_(None),
                     )
-                    .order_by(
-                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
-                        catalog.c.session_id.desc(),
-                    )
-                    .limit(min(max(limit * 4, limit), 200))
+                    .distinct()
                 ).all()
-                session_ids = [str(row.session_id) for row in session_rows]
-                if session_ids:
-                    seen: set[str] = set()
+                if str(row.device_id or "").strip()
+            ]
+            models: list[dict[str, Any]] = []
+            if device_id in owner_device_ids:
+                seen: set[str] = set()
+                session_cap = min(max(limit * 4, limit), 200)
+
+                def _collect_for_devices(target_device_ids: list[str]) -> None:
+                    if not target_device_ids or len(models) >= limit:
+                        return
+                    session_rows = connection.execute(
+                        select(catalog.c.session_id, catalog.c.device_id)
+                        .where(
+                            catalog.c.device_id.in_(target_device_ids),
+                            catalog.c.provider == provider,
+                            or_(
+                                catalog.c.environment.is_(None),
+                                func.lower(catalog.c.environment).notin_(("test", "e2e")),
+                            ),
+                            func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                        )
+                        .order_by(
+                            func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
+                            catalog.c.session_id.desc(),
+                        )
+                        .limit(session_cap)
+                    ).all()
+                    session_device_map = {str(row.session_id): str(row.device_id) for row in session_rows}
+                    if not session_device_map:
+                        return
                     fact_rows = connection.execute(
                         select(
+                            facts.c.session_id,
                             facts.c.at,
                             facts.c.payload_json,
                         )
                         .where(
-                            facts.c.session_id.in_(session_ids),
+                            facts.c.session_id.in_(list(session_device_map)),
                             facts.c.kind == "turn.usage",
                         )
                         .order_by(facts.c.at.desc(), facts.c.source_position.desc(), facts.c.id.desc())
@@ -769,10 +779,15 @@ class MachinesMixin:
                             {
                                 "model": model,
                                 "last_used_at": _encode_datetime(_as_aware_utc(row.at)),
+                                "device_id": session_device_map.get(str(row.session_id), device_id),
                             }
                         )
                         if len(models) >= limit:
                             break
+
+                _collect_for_devices([device_id])
+                other_device_ids = [other for other in owner_device_ids if other != device_id]
+                _collect_for_devices(other_device_ids)
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
@@ -796,85 +811,111 @@ class MachinesMixin:
         catalog = LiveSessionCatalog.__table__
         thread = LiveSessionThread.__table__
         with _read_snapshot(self.engine) as connection:
-            enrolled = connection.execute(
-                select(token.c.id)
-                .where(
-                    token.c.owner_id == owner_id,
-                    token.c.device_id == device_id,
-                    token.c.revoked_at.is_(None),
-                )
-                .limit(1)
-            ).first()
-            candidates: list[WorkspaceSessionFacts] = []
-            limit_exceeded = False
-            if enrolled is not None:
-                stmt = (
-                    select(
-                        catalog.c.device_id,
-                        catalog.c.provider,
-                        catalog.c.environment,
-                        catalog.c.project,
-                        catalog.c.cwd,
-                        catalog.c.git_repo,
-                        catalog.c.git_branch,
-                        catalog.c.last_activity_at,
-                        catalog.c.started_at,
-                        catalog.c.origin_kind,
-                        catalog.c.hidden_from_default_timeline,
-                        catalog.c.user_hidden_from_timeline,
-                        catalog.c.launch_actor,
-                        thread.c.branch_kind,
-                    )
-                    .select_from(
-                        catalog.outerjoin(
-                            thread,
-                            and_(thread.c.session_id == catalog.c.session_id, thread.c.is_primary == 1),
-                        )
-                    )
+            owner_device_ids = [
+                str(row.device_id)
+                for row in connection.execute(
+                    select(token.c.device_id)
                     .where(
-                        catalog.c.device_id == device_id,
-                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                        token.c.owner_id == owner_id,
+                        token.c.revoked_at.is_(None),
                     )
-                    .order_by(
-                        func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
-                        catalog.c.session_id.desc(),
+                    .distinct()
+                ).all()
+                if str(row.device_id or "").strip()
+            ]
+            candidates: list[WorkspaceSessionFacts] = []
+            remote_candidates: list[WorkspaceSessionFacts] = []
+            limit_exceeded = False
+
+            def _facts_from_row(row: Any) -> WorkspaceSessionFacts:
+                return WorkspaceSessionFacts(
+                    device_id=row.device_id,
+                    provider=row.provider,
+                    environment=row.environment,
+                    project=row.project,
+                    cwd=row.cwd,
+                    git_repo=row.git_repo,
+                    git_branch=row.git_branch,
+                    last_activity_at=_as_aware_utc(row.last_activity_at),
+                    started_at=_as_aware_utc(row.started_at),
+                    origin_kind=row.origin_kind,
+                    hidden_from_default_timeline=bool(row.hidden_from_default_timeline),
+                    user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
+                    launch_actor=row.launch_actor,
+                    is_sidechain=row.branch_kind == "subagent",
+                )
+
+            workspaces = []
+            if device_id in owner_device_ids:
+                base_select = select(
+                    catalog.c.device_id,
+                    catalog.c.provider,
+                    catalog.c.environment,
+                    catalog.c.project,
+                    catalog.c.cwd,
+                    catalog.c.git_repo,
+                    catalog.c.git_branch,
+                    catalog.c.last_activity_at,
+                    catalog.c.started_at,
+                    catalog.c.origin_kind,
+                    catalog.c.hidden_from_default_timeline,
+                    catalog.c.user_hidden_from_timeline,
+                    catalog.c.launch_actor,
+                    thread.c.branch_kind,
+                ).select_from(
+                    catalog.outerjoin(
+                        thread,
+                        and_(thread.c.session_id == catalog.c.session_id, thread.c.is_primary == 1),
                     )
+                )
+                stmt = base_select.where(
+                    catalog.c.device_id == device_id,
+                    func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                ).order_by(
+                    func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
+                    catalog.c.session_id.desc(),
                 )
                 for page in range(WORKSPACE_CANDIDATE_MAX_PAGES):
                     rows = connection.execute(
                         stmt.offset(page * WORKSPACE_CANDIDATE_PAGE_SIZE).limit(WORKSPACE_CANDIDATE_PAGE_SIZE + 1)
                     ).all()
                     has_more = len(rows) > WORKSPACE_CANDIDATE_PAGE_SIZE
-                    page_facts = [
-                        WorkspaceSessionFacts(
-                            device_id=row.device_id,
-                            provider=row.provider,
-                            environment=row.environment,
-                            project=row.project,
-                            cwd=row.cwd,
-                            git_repo=row.git_repo,
-                            git_branch=row.git_branch,
-                            last_activity_at=_as_aware_utc(row.last_activity_at),
-                            started_at=_as_aware_utc(row.started_at),
-                            origin_kind=row.origin_kind,
-                            hidden_from_default_timeline=bool(row.hidden_from_default_timeline),
-                            user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
-                            launch_actor=row.launch_actor,
-                            is_sidechain=row.branch_kind == "subagent",
-                        )
-                        for row in rows[:WORKSPACE_CANDIDATE_PAGE_SIZE]
-                    ]
-                    candidates.extend(page_facts)
+                    candidates.extend(_facts_from_row(row) for row in rows[:WORKSPACE_CANDIDATE_PAGE_SIZE])
                     limit_exceeded = has_more
                     if not has_more:
                         break
-            workspaces = rank_human_workspace_candidates(
-                candidates,
-                device_id=device_id,
-                now=observed_at,
-                days_back=days_back,
-                limit=limit,
-            )
+                workspaces = rank_human_workspace_candidates(
+                    candidates,
+                    device_id=device_id,
+                    now=observed_at,
+                    days_back=days_back,
+                    limit=limit,
+                )
+                other_device_ids = [other for other in owner_device_ids if other != device_id]
+                if len(workspaces) < limit and other_device_ids:
+                    remote_rows = connection.execute(
+                        base_select.where(
+                            catalog.c.device_id.in_(other_device_ids),
+                            catalog.c.git_repo.is_not(None),
+                            catalog.c.git_repo != "",
+                            func.coalesce(catalog.c.last_activity_at, catalog.c.started_at) >= since,
+                        )
+                        .order_by(
+                            func.coalesce(catalog.c.last_activity_at, catalog.c.started_at).desc(),
+                            catalog.c.session_id.desc(),
+                        )
+                        .limit(WORKSPACE_CANDIDATE_PAGE_SIZE)
+                    ).all()
+                    remote_candidates = [_facts_from_row(row) for row in remote_rows]
+                    if remote_candidates:
+                        workspaces = rank_human_workspace_candidates(
+                            candidates,
+                            device_id=device_id,
+                            now=observed_at,
+                            days_back=days_back,
+                            limit=limit,
+                            remote_facts=remote_candidates,
+                        )
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),

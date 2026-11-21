@@ -154,6 +154,19 @@ export function getLaunchProviderSupport(provider: string): LaunchProviderSuppor
   return (LAUNCH_PROVIDER_SUPPORT as Record<string, LaunchProviderSupport | undefined>)[key] ?? null;
 }
 
+/** Stable provider-native aliases offered only when no recent models exist yet. */
+const STARTER_MODELS: Record<string, ReadonlyArray<{ model: string; label: string }>> = {
+  claude: [
+    { model: "opus", label: "opus" },
+    { model: "sonnet", label: "sonnet" },
+    { model: "haiku", label: "haiku" },
+  ],
+};
+
+export function getStarterModels(provider: string): ReadonlyArray<{ model: string; label: string }> {
+  return STARTER_MODELS[canonicalProvider(provider)] ?? [];
+}
+
 /** Ordered list for landing/docs surfaces, sorted by capability depth. */
 export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
   return [
