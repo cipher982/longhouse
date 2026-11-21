@@ -1272,8 +1272,27 @@ test.describe("Session Detail Page", () => {
 
     const afterLeft = await timelineList.evaluate((el) => el.scrollTop);
 
-    // Wheel from the far-right edge of the timeline pane.
-    await timelineList.hover({ position: { x: rightX, y: gutterY } });
+    // Wheel from the far-right edge of the timeline pane. The right-edge turn
+    // ticks sit over this gutter by design and forward wheel events to the
+    // transcript scroller. Playwright's hover() refuses to hover through an
+    // overlay, so move the real mouse to the point and confirm the ticks are
+    // what the wheel lands on.
+    const rightPoint = {
+      x: (box?.x ?? 0) + rightX,
+      y: (box?.y ?? 0) + gutterY,
+    };
+    await page.mouse.move(rightPoint.x, rightPoint.y);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ x, y }) =>
+            !!document.elementFromPoint(x, y)?.closest(
+              '[data-testid="turn-ticks-trigger"]',
+            ),
+          rightPoint,
+        ),
+      )
+      .toBe(true);
     await page.mouse.wheel(0, 600);
 
     await expect
