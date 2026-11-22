@@ -15,7 +15,7 @@ shared checkout, which command moves which surface and how to read the result.
 |---|---|---|
 | Canary | `release-canary-a` | every green `main` commit whose range changes a runtime input (Release workflow) |
 | QA (not a ring) | `hosted-qa-a` | Release runs Hosted Live QA there when the range touches a dogfood-sensitive path |
-| Dogfood | the maintainer's own tenant (`david010`) | after the canary (and QA when sensitive), automatically |
+| Dogfood | the maintainer's own tenant | after the canary (and QA when sensitive), automatically |
 | Production | `longhouse.ai` | dark: no deploy target. Added to `release.yml` when it launches |
 | Laptops | Mac app, CLI, engine | only from `make release VERSION=vX.Y.Z` |
 
@@ -166,7 +166,7 @@ commits it sweeps in.
 
 - `make rollback SHA=<full-sha>` runs Release for that commit with
   `rollback=true`: image reused, canary, QA gate, dogfood. Read RELEASE.md
-  "Rollback" first: do not roll david010 back across a schema migration.
+  "Rollback" first: do not roll dogfood back across a schema migration.
 - `make reprovision SUBDOMAIN=<name> IMAGE=ghcr.io/cipher982/longhouse-runtime@sha256:<digest>`
   submits a durable deployment through the control-plane API. Always pass
   `SUBDOMAIN` (the fallback is `demo`). Tenant data survives.
@@ -222,6 +222,6 @@ still ships.
 
 Give the task SHA, runtime disposition (`deployed` or `no_runtime_change`), the
 Release run URL, the Hosted Live QA verdict (or "skipped"/"pending"/"failed"),
-the commit david010 serves (`curl -sL https://david010.longhouse.ai/api/health`),
+the commit dogfood serves (its `/api/health` build commit),
 and which local refresh, release or device install was needed. There is no
 production deploy. If nothing deployed, do not say the canary changed.
