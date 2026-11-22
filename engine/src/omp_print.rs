@@ -4869,7 +4869,12 @@ for line in sys.stdin:
                 out({"type":"message_update","assistantMessageEvent":{"type":"thinking_start"}})
                 out({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"weighing "}})
                 out({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"the options"}})
-                time.sleep(0.4)
+                # The status slot keeps only the newest preview, so hold the reply
+                # text back until the test says it has seen the thinking preview.
+                gate = source + ".release-reply"
+                gate_deadline = time.monotonic() + 30
+                while not os.path.exists(gate) and time.monotonic() < gate_deadline:
+                    time.sleep(0.01)
             out({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"first response"}})
         elif prompt.startswith(("scenario=background", "scenario=stop", "scenario=user", "scenario=wake", "scenario=drain", "scenario=restart")):
             user_message(prompt)
@@ -5712,6 +5717,8 @@ for line in sys.stdin:
         };
         assert_eq!(preview["live_text"], "weighing the options");
         assert_eq!(preview["progress_kind"], "omp_print_stream");
+        // Thinking has been observed; now let the provider print its reply.
+        std::fs::write(format!("{}.release-reply", started.session_file), "").unwrap();
         wait_for_progress_text(&session_id, &run_id, "first response").await;
         let events = runtime_events();
         assert!(
