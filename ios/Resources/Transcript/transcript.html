@@ -2344,113 +2344,71 @@ details.trail .tool-meta {
 	var GENERATED_PROVIDER_CAPABILITIES = {
 		antigravity: {
 			id: "antigravity",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: false,
-			proven: {
-				launchAndSend: false,
-				interrupt: false,
-				steerMidTurn: false,
-				resume: false,
-				search: false
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse antigravity"
 		},
 		claude: {
 			id: "claude",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse claude"
 		},
 		codex: {
 			id: "codex",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse codex"
 		},
 		cursor: {
 			id: "cursor",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse cursor"
 		},
 		omp: {
 			id: "omp",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse omp"
 		},
 		opencode: {
 			id: "opencode",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse opencode"
 		},
 		pi: {
 			id: "pi",
+			search: true,
 			launchAndSend: true,
 			interrupt: true,
 			steerMidTurn: true,
 			resume: true,
-			proven: {
-				launchAndSend: true,
-				interrupt: true,
-				steerMidTurn: true,
-				resume: true,
-				search: true
-			},
 			cloudSessionStart: "live",
 			nativeLaunchCommand: "longhouse pi"
 		}
@@ -2693,11 +2651,11 @@ details.trail .tool-meta {
 			id,
 			marketingName: lookupProviderBrand(id).marketingName,
 			nativeLaunchCommand: generated.nativeLaunchCommand,
+			search: generated.search,
 			launchAndSend: generated.launchAndSend,
 			interrupt: generated.interrupt,
 			steerMidTurn: generated.steerMidTurn,
 			resume: generated.resume,
-			proven: generated.proven,
 			cloudSessionStart: generated.cloudSessionStart,
 			...LAUNCH_PROVIDER_PRESENTATION[id]
 		}];
