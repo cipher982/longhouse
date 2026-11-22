@@ -81,7 +81,7 @@ def test_failure_paths_settle_their_verdict_through_one_rule() -> None:
     offending = {key: lines for key, lines in _offending_failure_paths().items() if key not in ALLOWED}
     assert not offending, (
         "A producer failure path sets observation/assertions itself; finish it with "
-        f"factory_registration.settle_failed_result instead: {offending}"
+        f"failed_results.settle_failed_result instead: {offending}"
     )
 
 

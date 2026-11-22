@@ -19,8 +19,8 @@ from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_harness_qualification as bridge
 from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
-from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
-from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
+from zerg.qa.provider_harness_qualification import DEFAULT_HARNESS_SCENARIOS
+from zerg.qa.provider_harness_qualification import LIVE_TOKEN_HARNESS_SCENARIO
 
 
 @pytest.fixture(autouse=True)

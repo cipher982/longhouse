@@ -12,9 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from zerg.qa import antigravity_console_producer as producer
 from zerg.qa import antigravity_scripted_lane as lane
-from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import scripted_model_server as server
 
 SHELL = {"type": "object", "properties": {"CommandLine": {"type": "string"}}, "required": ["CommandLine"]}
@@ -143,33 +141,6 @@ def test_the_steer_step_uses_the_fixtures_tag(monkeypatch):
 def test_lifecycle_markers_are_recognised_as_scripted_input_markers():
     marker = f"LH_ANTIGRAVITY_POST_INTERRUPT_{_hex()}"
     assert server.SCRIPTED_INPUT_MARKER.search(f"Reply with exactly {marker} and nothing else.").group() == marker
-
-
-def test_registration_is_scripted_only_with_no_model_token():
-    registration = producer.REGISTRATION.to_dict()
-    assert registration["producer_id"] == "antigravity.console_lifecycle.v1"
-    assert registration["providers"] == ["antigravity"]
-    assert registration["evidence_classes"] == ["scripted_model"]
-    assert registration["credential_binding_ids_by_evidence_class"] == {"scripted_model": ["runtime_host_control"]}
-    assert "credential_binding_ids_by_provider" not in registration
-    assert registration["scenario_ids"] == ["antigravity_console_adapter_lifecycle"]
-    assert "antigravity" not in lifecycle.REGISTRATION.to_dict()["providers"]
-    assert producer.STEER_VARIANT in producer.PRODUCER.variants
-
-
-def test_transcript_search_prompts_are_answered_with_their_joined_word():
-    from zerg.qa import search_ingest_oracle as oracle
-    from zerg.qa import antigravity_transcript_search_producer as search_producer
-
-    markers = (oracle.new_marker(), oracle.new_marker())
-    fixture = lane.script(uuid4().hex, markers)["turns"]
-    for index, marker in enumerate(markers):
-        plan = _plan(fixture, [_user(oracle.search_prompt(marker)), SYSTEM])
-        assert (plan.turn_id, plan.text) == (f"search-{index}", marker["marker"])
-    registration = search_producer.REGISTRATION.to_dict()
-    assert registration["providers"] == ["antigravity"]
-    assert registration["evidence_classes"] == ["scripted_model"]
-    assert registration["credential_binding_ids_by_evidence_class"] == {"scripted_model": ["runtime_host_control"]}
 
 
 def test_start_puts_the_provider_binary_back_after_the_profile_scrubs_it(tmp_path):

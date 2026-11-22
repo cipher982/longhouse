@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa.provider_adapters.cursor import CURSOR_GATE0_ARTIFACT_ENV
-from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
+from zerg.qa.provider_harness_qualification import DEFAULT_HARNESS_SCENARIOS
 from zerg.qa.provider_harness_qualification import _full_column_gate
 from zerg.qa.provider_semantic_qualification import temporary_environment
 from zerg.qa.universal_agent_harness import HarnessOptions

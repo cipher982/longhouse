@@ -17,7 +17,6 @@ from types import SimpleNamespace
 import pytest
 
 from tests_lite import _pi_family_helm_fake as fake
-from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import omp_background_producer
 from zerg.qa.failed_results import reached_only
 from zerg.qa.openrouter_routing import OPENROUTER_QUALIFICATION_ROUTING
@@ -183,7 +182,6 @@ def test_a_whole_lifecycle_holds_every_cell(provider, whole):
     not_held = [name for name, held in result.get("assertions", {}).items() if not held]
     assert not not_held and result.get("assertions"), {"not held": not_held, "error": result.get("error")}
     assert (code, result["status"]) == (0, "pass")
-    _conforms(provider, result)
     if provider == "pi":
         abort = result["observation"]["controls"]["abort"]["native_abort"]
         local_abort = result["observation"]["controls"]["local_abort"]["native_abort"]
@@ -522,14 +520,6 @@ def test_a_cell_does_not_hold_once_a_fact_it_rests_on_is_broken(provider, cell, 
     assert module.FAMILY.cells(observation)[f"{provider}_helm_{cell}"] is False
 
 
-def _conforms(provider: str, result: dict, cell: str = "launch_registration") -> None:
-    """The factory would take ``result`` as the answer to its command for ``cell``."""
-
-    module = importlib.import_module(f"zerg.qa.{provider}_helm_lifecycle")
-    variant = module.PRODUCER.variants[module.ASSERTIONS.index(f"{provider}_helm_{cell}")]
-    assert_result_conforms(module, result, variant=variant)
-
-
 @pytest.mark.parametrize("provider", ["omp", "pi"])
 def test_a_provider_that_dies_mid_run_is_a_typed_failure_with_what_it_reached_kept(provider, longhouse, tmp_path, monkeypatch, capsys):
     cli, _isolation = longhouse
@@ -538,7 +528,6 @@ def test_a_provider_that_dies_mid_run_is_a_typed_failure_with_what_it_reached_ke
     code, result, root = _run(provider, cli, tmp_path, monkeypatch)
     capsys.readouterr()
 
-    _conforms(provider, result)
     assert (code, result["status"], result["failure_code"]) == (1, "fail", f"{provider}_helm_lifecycle_failed")
     assert "Runtime Host HTTP 502" in result["error"]
     # Every cell it reached had held, so the run reports no verdict: it is a failure of the run, not of a cell.
@@ -578,7 +567,6 @@ def test_a_failing_verdict_reached_before_a_late_failure_is_kept(provider, longh
     code, result, _root = _run(provider, cli, tmp_path, monkeypatch)
     capsys.readouterr()
 
-    _conforms(provider, result, cell="steer_active")
     assert (code, result["status"], result["failure_code"]) == (1, "fail", f"{provider}_helm_lifecycle_failed")
     # The verdicts of the steps it reached, the failing one among them; none for a step it did not reach.
     reached = {"send_idle": True, "follow_up_native": True, "steer_active": False}

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_interaction_semantics import evaluate_observation
 from zerg.qa.provider_interaction_semantics import generated_fake_observation
 from zerg.qa.provider_interaction_semantics import raw_event_digest
@@ -34,6 +33,8 @@ from zerg.provider_contract.provider_interaction_semantics import seed_provider_
 from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
 from zerg.provider_contract.provider_interaction_semantics import semantic_projection_facts
 from zerg.provider_contract.provider_interaction_semantics import title_eligible_provider_event
+
+ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor", "pi", "omp")
 
 
 def test_every_factory_provider_declares_interaction_probes() -> None:
@@ -1334,7 +1335,6 @@ def test_notification_display_text_keeps_the_claude_summary_contract() -> None:
 
 def test_full_compaction_records_classify_as_compaction_boundary_and_stay_out_of_semantic_context() -> None:
     from zerg.provider_contract.provider_interaction_semantics import INTERACTION_COMPACTION_BOUNDARY
-    from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
     from zerg.provider_contract.provider_interaction_semantics import classify_provider_interaction
     from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
 

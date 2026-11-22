@@ -17,10 +17,7 @@ import pytest
 
 from zerg.qa import claude_helm_lifecycle
 from zerg.qa import claude_live_session_support
-from zerg.qa import codex_helm_launch_visibility
-from zerg.qa import codex_native_resume
 from zerg.qa import codex_provider_release_canary
-from zerg.qa import cursor_coordination_producer
 from zerg.qa import cursor_helm_product_e2e
 from zerg.qa import opencode_helm_lifecycle
 from zerg.qa import provider_console_lifecycle
@@ -231,43 +228,6 @@ def _write_cursor_hooks(root: Path, session_id: str, *events: tuple[str, dict[st
     path.write_text("".join(json.dumps({"event": name, "payload": payload}) + "\n" for name, payload in events), encoding="utf-8")
 
 
-def test_a_cursor_reply_missing_from_the_archive_says_which_side_stopped(monkeypatch, tmp_path) -> None:
-    prompt = ("beforeSubmitPrompt", {"prompt": f"Reply with exactly {MARKER}", "generation_id": "g1"})
-    response = ("afterAgentResponse", {"text": MARKER, "generation_id": "g1"})
-    monkeypatch.setattr(cursor_coordination_producer, "_hosted_events", lambda *_a: {"events": []})
-
-    def reply_wait(hook_root: Path | None) -> BaseException:
-        with pytest.raises(RuntimeError, match="timed out waiting for Cursor session s1 reply containing marker") as raised:
-            cursor_coordination_producer._wait_marker_reply(
-                "https://runtime.invalid", "token", "s1", MARKER, timeout=0.4, hook_root=hook_root
-            )
-        return raised.value
-
-    # Cursor took the prompt and never answered.
-    _write_cursor_hooks(tmp_path, "s1", prompt)
-    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
-    # Cursor answered; Longhouse never served the answer.
-    _write_cursor_hooks(tmp_path, "s1", prompt, response)
-    assert waited_on(reply_wait(tmp_path)) == LONGHOUSE_INGEST
-    # Cursor took the prompt and its turn stopped without a reply (its usage
-    # limit, in the retained runs): the provider's own failure, not a stall.
-    _write_cursor_hooks(tmp_path, "s1", prompt, ("stop", {"status": "error", "generation_id": "g1"}))
-    assert waited_on(reply_wait(tmp_path)) is None
-    # A stop that belongs to an earlier generation leaves this turn open.
-    _write_cursor_hooks(tmp_path, "s1", ("stop", {"status": "completed", "generation_id": "g0"}), prompt)
-    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
-    _write_cursor_hooks(tmp_path, "s1", prompt, ("stop", {"status": "completed", "generation_id": "g0"}))
-    assert waited_on(reply_wait(tmp_path)) == PROVIDER_TURN
-    # Cursor never took the prompt, or its hooks are not at hand: nothing to declare.
-    _write_cursor_hooks(tmp_path, "s1")
-    assert waited_on(reply_wait(tmp_path)) is None
-    assert waited_on(reply_wait(None)) is None
-
-    rows = cursor_helm_product_e2e._hook_rows(tmp_path, "s1")
-    assert cursor_helm_product_e2e.hosted_reply_waited_on(rows, MARKER) is None
-    assert cursor_helm_product_e2e.hosted_reply_waited_on([{"event": "afterAgentResponse", "text": "another reply"}], MARKER) is None
-
-
 def _cursor_resume_fixture(tmp_path: Path, *events: tuple[str, dict[str, object]], claim_status: str = "observed") -> tuple[dict, dict]:
     state = {"session_id": "s1", "provider_session_id": "conversation-1", "run_id": "run-1"}
     root = tmp_path / "managed-local" / "cursor-helm"
@@ -373,49 +333,6 @@ def test_a_codex_turn_wait_reads_the_bridge_and_the_rollout() -> None:
     assert kind({"last_turn_status": "completed", "active_turn_id": None}, provider_answered=False) == {}
     # A turn the bridge never opened declares nothing.
     assert kind({}, provider_answered=False) == {}
-
-
-def test_the_codex_marker_wait_declares_an_open_turn_and_not_a_failed_one(monkeypatch, tmp_path) -> None:
-    state_file = tmp_path / "state.json"
-    rollout = tmp_path / "rollout.jsonl"
-    rollout.write_text("", encoding="utf-8")
-    monkeypatch.setattr(codex_provider_release_canary, "_assistant_transcript_contains", lambda _path, _marker: False)
-
-    state_file.write_text(json.dumps({"last_turn_status": "inProgress", "active_turn_id": "t1", "thread_path": str(rollout)}))
-    with pytest.raises(RuntimeError, match="Codex turn did not retain the expected assistant marker") as stalled:
-        codex_native_resume._wait_for_marker(state_file, MARKER, timeout=1)
-    assert waited_on(stalled.value) == PROVIDER_TURN
-
-    state_file.write_text(json.dumps({"last_turn_status": "failed", "active_turn_id": None, "thread_path": str(rollout)}))
-    with pytest.raises(RuntimeError, match="Codex turn did not retain the expected assistant marker") as failed:
-        codex_native_resume._wait_for_marker(state_file, MARKER, timeout=1)
-    assert waited_on(failed.value) is None
-
-
-def test_the_codex_seed_turn_says_whether_codex_took_the_typed_prompt(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(codex_helm_launch_visibility, "_answer_startup_dialogs", lambda _tui: [])
-
-    class _Tui:
-        def submit_line(self, _text: str) -> None:
-            return None
-
-        def alive(self) -> bool:
-            return True
-
-    def seed(codex_home: Path) -> BaseException:
-        with pytest.raises(RuntimeError, match="Codex TUI did not persist the seed turn") as raised:
-            codex_helm_launch_visibility._seed_codex_rollout(_Tui(), codex_home=codex_home, marker=MARKER, timeout=0.3)
-        return raised.value
-
-    # The rollout holds the prompt and no reply: the model's turn.
-    prompted = tmp_path / "prompted"
-    (prompted / "sessions" / "2026").mkdir(parents=True)
-    (prompted / "sessions" / "2026" / "rollout.jsonl").write_text(
-        json.dumps({"type": "response_item", "payload": {"role": "user", "content": f"Reply with exactly {MARKER}"}}) + "\n"
-    )
-    assert waited_on(seed(prompted)) == PROVIDER_TURN
-    # No rollout names the prompt: Codex never took what was typed into it.
-    assert waited_on(seed(tmp_path / "never-prompted")) == PROVIDER_PROCESS
 
 
 # --- Console: the adapter's claim, then the served reply --------------------------

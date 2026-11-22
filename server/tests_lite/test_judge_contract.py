@@ -34,14 +34,7 @@ JUDGING_MODULES = (
     "provider_console_lifecycle",
     "omp_console_producer",
     "pi_console_tool_producer",
-    "pi_coordination_awareness",
     "omp_coordination_awareness",
-    "claude_coordination_awareness_create",
-    "claude_coordination_awareness_post_compaction",
-    "claude_coordination_directed_input",
-    "cursor_coordination_producer",
-    "codex_coordination_native",
-    "codex_native_resume",
     "claude_background_producer",
 )
 
@@ -175,15 +168,7 @@ def test_the_live_run_and_the_replay_share_one_judge():
 
 # --- coordination: the scenario a result records picks the oracle ---------------------------------------------------------
 
-COORDINATION = (
-    "pi_coordination_awareness",
-    "omp_coordination_awareness",
-    "claude_coordination_awareness_create",
-    "claude_coordination_awareness_post_compaction",
-    "claude_coordination_directed_input",
-    "cursor_coordination_producer",
-    "codex_coordination_native",
-)
+COORDINATION = ("omp_coordination_awareness",)
 
 HELD = {
     "awareness_create": {"coordination_instructions_model_visible": True},
@@ -290,29 +275,6 @@ def test_native_resume_with_no_or_unknown_variant_is_an_error():
     for evidence in ({"observation": {}}, {"variant": "other", "observation": {}}):
         with pytest.raises((KeyError, ValueError)):
             oracles.judge(evidence)
-
-
-def test_a_written_result_carries_the_inputs_its_judge_reads(tmp_path):
-    """Round trip through the shell: what the guard reads from result.json is enough to decide the assertions again."""
-
-    from zerg.qa import codex_coordination_native
-    from zerg.qa import codex_native_resume
-
-    resume = codex_native_resume.PRODUCER.verdict(
-        Run(root=tmp_path / "r", observation=_resume_observation("process_loss"), assertions={"native_provider_resume_proven": True}),
-        variant="process_loss",
-    )
-    (tmp_path / "r").mkdir(exist_ok=True)
-    stored = json.loads(json.dumps(resume))
-    assert resume_judge(stored) == stored["assertions"]
-
-    scenario = "codex_coordination_directed_input"
-    run = Run(root=tmp_path / "c", observation=dict(HELD["directed_input"]), assertions={})
-    coordination = codex_coordination_native.PRODUCER.verdict(run, scenario_id=scenario)
-    stored = json.loads(json.dumps(coordination))
-    assert stored["scenario_id"] == scenario
-    verdict = resolve(stored["judge"]["entry_point"])(evidence_of(stored))
-    assert verdict and all(verdict.values())
 
 
 def resume_judge(stored):

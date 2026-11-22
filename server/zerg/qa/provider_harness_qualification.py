@@ -59,10 +59,37 @@ from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.provider_build_store import OBSERVED_INSTALL_PROVENANCE
 from zerg.qa.provider_build_store import ProviderBuildRef
 from zerg.qa.provider_build_store import materialize_staged_provider_build
-from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS
-from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
+from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
 from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import run_harness
+
+# The full-column harness scenario set (weekly provider proofs).
+DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
+    "probe_identity",
+    "adapter_conformance",
+    "collect_raw_evidence",
+    "action_matrix",
+    "control_surface",
+    "baseline_compare",
+    "old_new_release_diff",
+    "full_action_suite",
+    "parse_ingest_project",
+    "interaction_semantics",
+    "session_projection",
+    "timeline_projection",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+    "pause_request_detect",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
+    "multi_turn_continuity",
+    "crash_timeout_cleanup",
+    "managed_session_e2e",
+    *PROVIDER_RESUME_SCENARIOS,
+)
+LIVE_TOKEN_HARNESS_SCENARIO = "live_token_streaming"
 
 RequestError = identity_bridge.RequestError
 _REPO_ROOT = Path(__file__).resolve().parents[3]

@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 
 from zerg.qa import search_ingest_oracle as oracle
-from zerg.qa import transcript_search_producer as producer
 
 SESSION = "4f9b0c1e-0000-4000-8000-000000000001"
 MARKER = {"marker": "lhsearch1a2b3c4d5e6f7a8b", "pieces": "lhsearch 1a2b3c4d 5e6f7a8b"}
@@ -119,14 +118,3 @@ def test_negative_control_with_broken_preconditions_is_inconclusive() -> None:
 
 def test_negative_control_that_still_finds_the_marker_fails() -> None:
     assert oracle.negative_control_verdict(_observation(), fault_receipts=[_receipt()])["status"] == "fail"
-
-
-def test_registration_names_one_live_token_console_cell_per_provider() -> None:
-    registration = producer.REGISTRATION.to_dict()
-    assert registration["assertion_cells"] == [{"assertion_id": "transcript_ingested_searchable", "variant": None}] or registration[
-        "assertion_cells"
-    ] == [["transcript_ingested_searchable", None]]
-    # Antigravity runs on antigravity.transcript_search.v1, scripted (the CI Gemini key is free tier).
-    assert set(producer.PROVIDERS) == {"claude", "codex", "cursor", "opencode", "pi", "omp"}
-    assert registration["evidence_classes"] == ["live_token"]
-    assert registration["modes"] == ["console"]

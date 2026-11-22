@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from datetime import UTC
 from datetime import datetime
@@ -26,8 +25,8 @@ sys.path.insert(0, str(SERVER_PATH))
 from zerg.qa.provider_build_store import materialize_generated_fake_builds
 from zerg.qa.conversation_reset import produce_live_reset_artifact
 from zerg.qa.conversation_reset import reset_artifact_env
-from zerg.qa.provider_factory_model import DEFAULT_HARNESS_SCENARIOS as DEFAULT_SCENARIOS
-from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO as LIVE_TOKEN_SCENARIO
+from zerg.qa.provider_harness_qualification import DEFAULT_HARNESS_SCENARIOS as DEFAULT_SCENARIOS
+from zerg.qa.provider_harness_qualification import LIVE_TOKEN_HARNESS_SCENARIO as LIVE_TOKEN_SCENARIO
 
 TOKEN_SPENDING_SCENARIOS = frozenset(
     {LIVE_TOKEN_SCENARIO, "conversation_reset"}

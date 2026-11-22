@@ -13,12 +13,8 @@ import pytest
 
 from zerg.provider_contract.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
-from zerg.qa import codex_native_resume
 from zerg.qa import live_session_toolkit
 from zerg.qa import provider_native_resume
-from zerg.qa.codex_native_resume import _redact_process_command
-from zerg.qa.codex_native_resume import _validate_resume_intent
-from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.live_session_toolkit import RuntimeHostRegistrationTransient
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import _accept_claude_development_channel_prompt
@@ -2070,25 +2066,6 @@ def test_the_projection_snapshot_records_the_roots_delivery_is_judged_by(tmp_pat
     assert live_session_toolkit._cursor_store_root(metadata.encode())["latest_root_blob_id"] == "root-2"
 
 
-def test_codex_resume_intent_uses_the_actual_isolated_workspace(tmp_path: Path) -> None:
-    args = _args(tmp_path)
-    workspace = tmp_path / "isolated-workspace"
-    workspace.mkdir()
-    session_id = "11111111-1111-4111-8111-111111111111"
-    intent = {
-        "available": True,
-        "session_id": session_id,
-        "provider": "codex",
-        "cwd": str(workspace),
-        "handoff": "terminal_command",
-        "argv": ["longhouse", "codex", "--cwd", str(workspace), "--resume-session", session_id],
-    }
-
-    receipt = _validate_resume_intent(args, session_id, intent, cwd=workspace)
-
-    assert receipt["identity_valid"] is True
-
-
 def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -> None:
     state = tmp_path / ".claude" / "channels" / "longhouse" / "sessions" / "session.json"
     state.parent.mkdir(parents=True)
@@ -2293,86 +2270,6 @@ def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypa
     assert isolated_provider_home() == home
 
 
-def test_codex_native_resume_tui_uses_the_bridge_provider_home(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("HOME", "/root")
-    isolation_root = tmp_path / "isolation"
-
-    environment = codex_native_resume._native_resume_tui_environment(isolation_root, "session-1", "relay-secret")
-
-    assert environment["HOME"] == str(isolation_root / "provider-home")
-    assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
-    assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
-    assert environment["CODEX_REMOTE_AUTH_TOKEN"] == "relay-secret"
-
-
-def test_codex_native_resume_command_names_but_never_contains_relay_secret(tmp_path: Path) -> None:
-    command = codex_native_resume._native_resume_command(tmp_path / "codex", "thread-1", "ws://127.0.0.1:1")
-
-    assert command[:3] == [str(tmp_path / "codex"), "resume", "thread-1"]
-    assert command[command.index("--remote-auth-token-env") + 1] == "CODEX_REMOTE_AUTH_TOKEN"
-    assert "relay-secret" not in command
-
-
-def test_codex_initial_bridge_reuses_the_shipper_isolation_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    args = _args(tmp_path)
-    evidence_root = tmp_path / "evidence"
-    isolation_root = tmp_path / "isolation"
-    seen: dict[str, object] = {}
-
-    def fake_start(*_args: object, **kwargs: object) -> tuple[dict[str, object], subprocess.CompletedProcess[str], Path]:
-        seen.update(kwargs)
-        root = kwargs["isolation_root"]
-        assert isinstance(root, Path)
-        return {}, subprocess.CompletedProcess([], 0), root
-
-    monkeypatch.setattr(codex_native_resume.bridge_canary, "_start_bridge", fake_start)
-
-    codex_native_resume._start_initial_bridge(
-        args,
-        evidence_root=evidence_root,
-        codex_bin=str(args.provider_bin),
-        isolation_root=isolation_root,
-    )
-
-    assert seen["isolation_root"] == isolation_root
-
-
-def test_codex_post_stop_ship_receipt_is_retained_separately_from_transition(tmp_path: Path) -> None:
-    class FakeShipper:
-        def flush(self, label: str) -> dict[str, object]:
-            assert label == "post-stop"
-            return {"status": "pass", "files_shipped": 1}
-
-    transition: dict[str, object] = {}
-    receipt = codex_native_resume._record_post_stop_ship_receipt(
-        tmp_path,
-        transition,
-        FakeShipper(),  # type: ignore[arg-type]
-    )
-
-    assert receipt == {"status": "pass", "files_shipped": 1}
-    assert transition["post_stop_transcript_ship"] == receipt
-    assert json.loads((tmp_path / "post-stop-transcript-ship-receipt.json").read_text()) == receipt
-
-
-def test_codex_native_resume_rejects_a_failed_transcript_ship_immediately() -> None:
-    with pytest.raises(RuntimeError, match="initial transcript ship failed: source_epoch_conflict_unresolved"):
-        codex_native_resume._require_transcript_ship(
-            {"status": "fail", "retry_reason": "source_epoch_conflict_unresolved"},
-            label="initial",
-        )
-
-
-def test_codex_native_resume_accepts_a_passing_transcript_ship() -> None:
-    codex_native_resume._require_transcript_ship({"status": "pass"}, label="post-resume")
-
-
 def test_cursor_native_resume_preserves_storage_capability_failure_before_transcript_judgment() -> None:
     with pytest.raises(
         RuntimeError,
@@ -2405,79 +2302,6 @@ def test_cursor_native_resume_preserves_storage_capability_timeout_before_transc
             },
             label="post-resume",
         )
-
-
-def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
-    isolation_root = tmp_path / "isolation"
-    workspace = isolation_root / "workspace"
-    provider = isolation_root / "provider"
-    workspace.mkdir(parents=True)
-    provider.write_text("provider")
-
-    state = {
-        "session_id": "11111111-1111-4111-8111-111111111111",
-        "cwd": str(workspace),
-        "thread_id": "thread-1",
-        "thread_path": str(isolation_root / "thread.jsonl"),
-    }
-    (isolation_root / "thread.jsonl").write_text("{}\n")
-
-    state_path, contract_path = _write_resume_contract_snapshot(
-        isolation_root=isolation_root,
-        state=state,
-        codex_bin=provider,
-        provider_version="0.147.0-test",
-    )
-
-    assert state_path.parent.name == "sessions"
-    assert state_path.is_file()
-    assert json.loads(contract_path.read_text())["control"]["state_path"] == str(state_path.resolve())
-
-
-def test_codex_process_evidence_redacts_bridge_tokens() -> None:
-    command = 'env LONGHOUSE_COORDINATION_TOKEN="zst_secret" codex app-server'
-
-    assert _redact_process_command(command) == "env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server"
-
-
-def test_codex_main_serializes_path_values_in_result_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    engine = tmp_path / "longhouse-engine"
-    provider = tmp_path / "codex"
-    for executable in (engine, provider):
-        executable.write_text("#!/bin/sh\n")
-        executable.chmod(0o755)
-    result_path = tmp_path / "evidence"
-
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "http://127.0.0.1:9")
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "device-token")
-    monkeypatch.setattr(
-        codex_native_resume,
-        "run_native_resume",
-        lambda args: {"status": "pass", "path": result_path},
-    )
-
-    assert (
-        codex_native_resume.main(
-            [
-                "--variant",
-                "clean_exit",
-                "--evidence-root",
-                str(tmp_path),
-                "--repo-root",
-                str(tmp_path),
-                "--engine",
-                str(engine),
-                "--codex-bin",
-                str(provider),
-            ]
-        )
-        == 0
-    )
-    assert json.loads(capsys.readouterr().out)["path"] == str(result_path)
 
 
 def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path) -> None:
@@ -3715,13 +3539,6 @@ def test_claude_clean_stop_requires_zero_exit(
 
     assert receipt["exit_code"] == exit_code
     assert receipt["clean"] is expected_clean
-
-
-def test_codex_concurrent_lock_error_is_a_refusal_even_if_state_identity_races() -> None:
-    assert codex_native_resume._is_concurrent_lock_refusal(
-        "codex bridge start failed: another codex bridge already owns lock /tmp/bridge.lock"
-    )
-    assert not codex_native_resume._is_concurrent_lock_refusal("codex bridge start failed: provider exited")
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:

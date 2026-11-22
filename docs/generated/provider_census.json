@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 361,
+  "file_count": 351,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1103,13 +1103,6 @@
       ]
     },
     {
-      "path": "server/scripts/render_provider_factory_status.py",
-      "providers": [
-        "cursor",
-        "pi"
-      ]
-    },
-    {
       "path": "server/tests/integration/test_shipper_e2e.py",
       "providers": [
         "antigravity",
@@ -1334,13 +1327,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_claude_codex_producer_failure_conformance.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_codex_hooks.py",
       "providers": [
         "codex",
@@ -1435,14 +1421,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_factory_registration.py",
-      "providers": [
-        "claude",
-        "codex",
-        "omp"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_funnel_facts.py",
       "providers": [
         "claude",
@@ -1462,15 +1440,6 @@
     },
     {
       "path": "server/tests_lite/test_helm_producer_failure_conformance.py",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_helm_reached_verdicts.py",
       "providers": [
         "claude",
         "codex",
@@ -1806,18 +1775,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_provider_factory_model.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_provider_field_versions.py",
       "providers": [
         "claude",
@@ -1854,6 +1811,7 @@
         "antigravity",
         "claude",
         "codex",
+        "cursor",
         "omp",
         "opencode",
         "pi"
@@ -1893,14 +1851,6 @@
         "cursor",
         "opencode",
         "pi"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_release_schedule.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1951,16 +1901,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_render_provider_factory_status.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "opencode"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_render_shadow.py",
       "providers": [
         "claude",
@@ -1970,8 +1910,6 @@
     {
       "path": "server/tests_lite/test_resume_assurance.py",
       "providers": [
-        "claude",
-        "codex",
         "cursor",
         "omp"
       ]
@@ -1991,17 +1929,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_search_ingest_oracle.py",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
       ]
     },
     {
@@ -2569,18 +2496,6 @@
       ]
     },
     {
-      "path": "server/zerg/qa/provider_factory_model.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
-      ]
-    },
-    {
       "path": "server/zerg/qa/provider_generic_resume.py",
       "providers": [
         "claude",
@@ -2733,18 +2648,6 @@
       "providers": [
         "claude",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/qa/transcript_search_producer.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "omp",
-        "opencode",
-        "pi"
       ]
     },
     {

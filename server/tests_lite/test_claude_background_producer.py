@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from tests_lite._factory_envelope import assert_result_conforms
 from zerg.qa import claude_background_producer as oracle
 
 
@@ -393,7 +392,6 @@ def test_a_setup_failure_reports_the_authored_variant_and_keeps_the_execution_ke
     assert result["failure_code"] == "claude_background_setup_failed"
     assert result["variant"] is None
     assert result["execution_variant"] == variant
-    assert_result_conforms(oracle, result, variant=variant)
     assert result["status"] == "fail"
     assert result["error"] == "RuntimeError: setup exploded"
     assert "observation" not in result
@@ -447,4 +445,3 @@ def test_a_failed_run_whose_assertions_all_held_is_a_typed_harness_failure(monke
     assert isinstance(result["error"], str) and result["error"]
     assert result["partial_observation"]["lifecycle"]["scenario"] == held
     assert all(oracle.claude_background_assertions(held).values())
-    assert_result_conforms(oracle, result, variant=oracle._VARIANTS[0])

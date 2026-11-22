@@ -5,9 +5,6 @@ import json
 import subprocess
 from pathlib import Path
 
-from tests_lite._factory_envelope import assert_result_conforms
-from zerg.qa import wait_kind
-
 
 class _FakeProcess:
     pid = 321
@@ -144,7 +141,6 @@ def test_claude_entrypoint_retains_send_before_native_late_failure(monkeypatch, 
     result = producer.run_lifecycle(_args(tmp_path, binary, variant=variant))
     report = _json(tmp_path / "evidence" / "lifecycle-report.json")
     payload = _json(tmp_path / "evidence" / "result.json")
-    assert_result_conforms(producer, payload, variant=variant)
 
     assert result["status"] == "fail"
     assert payload["status"] == "fail"
@@ -220,7 +216,6 @@ def test_codex_entrypoint_retains_rollout_before_native_late_failure(monkeypatch
     variant = producer._VARIANTS[0]
     result = producer.run_codex_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
-    assert_result_conforms(producer, payload, variant=variant)
     cleanup = _json(tmp_path / "evidence" / "cleanup-receipt.json")
 
     assert result["status"] == "fail"
@@ -233,111 +228,6 @@ def test_codex_entrypoint_retains_rollout_before_native_late_failure(monkeypatch
     assert payload["error"] == "RuntimeError: late Codex native steer failure"
     assert cleanup["required_cleanup"]["final_bridge_stopped"] is True
     assert _json(tmp_path / "evidence" / "provider-rollout.json")[0]["type"] == "event_msg"
-
-
-def test_cursor_entrypoint_retains_product_report_before_runtime_failure(monkeypatch, tmp_path) -> None:
-    from zerg.qa import cursor_helm_lifecycle as producer
-    from zerg.qa import cursor_helm_product_e2e as e2e
-
-    binary = _binary(tmp_path, "cursor")
-    root = tmp_path / "cursor-state"
-    session_id = "cursor-session"
-    state = {"ready": True, "session_id": session_id, "cursor_pid": 321, "run_id": "run-1", "socket_path": "/tmp/cursor.sock"}
-    wait_values = {
-        "Cursor Helm managed state": state,
-        "native Cursor binding claim": {"conversation_uuid": "conversation-1"},
-        "first Cursor reply in hosted archive": {"events": [], "total": 1},
-        "remote Cursor reply in hosted archive": {"events": [], "total": 1},
-        "first Cursor shell step": {"generation_id": "generation-1"},
-    }
-
-    class _Response:
-        status_code = 200
-        text = "{}"
-        is_error = False
-
-        def __init__(self, payload=None):
-            self._payload = payload or {"events": [], "total": 1}
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._payload
-
-    posts = {"count": 0}
-
-    def fake_post(url, **kwargs):
-        posts["count"] += 1
-        if "/send-live" in url and posts["count"] == 2:
-            # A wait that expired, with what it was waiting on.
-            raise wait_kind.expired(RuntimeError("late Cursor runtime steer failure"), wait_kind.PROVIDER_TURN)
-        return _Response({"accepted": True})
-
-    def fake_wait(predicate, *, description, **kwargs):
-        return wait_values.get(description, {"run_id": "run-1", "lifecycle": "running", "activity": "quiescent"})
-
-    monkeypatch.setattr(e2e, "get_managed_local_dir", lambda name: root)
-    monkeypatch.setattr(e2e.shutil, "which", lambda value: str(binary))
-    monkeypatch.setattr(e2e, "_PtyProcess", type("FakePty", (), {"start": lambda cls, *a, **k: _FakePty(tmp_path / "cursor-terminal.raw")}))
-    monkeypatch.setattr(e2e, "_wait_until", fake_wait)
-    monkeypatch.setattr(e2e, "_state_ids", lambda path: set())
-    monkeypatch.setattr(e2e, "_response_observed_at", lambda *a, **k: e2e.datetime.now(e2e.UTC))
-    monkeypatch.setattr(e2e, "_hook_rows", lambda *a, **k: [])
-    monkeypatch.setattr(e2e, "_engine_command", lambda *a, **k: None)
-    monkeypatch.setattr(e2e.httpx, "get", lambda *a, **k: _Response())
-    monkeypatch.setattr(e2e.httpx, "post", fake_post)
-    monkeypatch.setattr(producer, "sha256_file", lambda path: "digest")
-    monkeypatch.setattr(producer.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "cursor 1.2.3\n", ""))
-    monkeypatch.setattr(producer, "isolated_provider_home", lambda: tmp_path / "home")
-    monkeypatch.setattr(
-        producer,
-        "start_transcript_shipper",
-        lambda *a, **k: type(
-            "Shipper",
-            (),
-            {
-                "receipt": {"status": "pass", "machine_name": "fixture-machine"},
-                "flush": lambda *_: {
-                    "status": "pass",
-                    "exit_code": 0,
-                    "daemon_paused": True,
-                    "daemon_restarted": True,
-                    "events_shipped": 0,
-                },
-                "stop": lambda *_: {"status": "pass", "stopped": True, "process_dead": True},
-            },
-        )(),
-    )
-    monkeypatch.setattr(producer, "wait_pid_dead", lambda *a, **k: True)
-    monkeypatch.setattr(producer, "wait_process_group_dead", lambda *a, **k: True)
-    monkeypatch.setattr(producer, "bound_terminal_recordings", lambda *a, **k: None)
-    monkeypatch.setattr(producer, "secret_scan", lambda *a, **k: [])
-
-    from zerg.qa.resume_assurance import execution_variant_key
-
-    variant = execution_variant_key(
-        provider="cursor",
-        assertion_id=producer.REGISTRATION.assertion_cells[0][0],
-        scenario_id=producer.REGISTRATION.scenario_id,
-        variant=None,
-    )
-    result = producer.run_lifecycle(_args(tmp_path, binary, longhouse_cli=binary, variant=variant))
-    assert_result_conforms(producer, _json(tmp_path / "evidence" / "result.json"), variant=variant)
-    report = _json(tmp_path / "evidence" / "product-e2e-report.json")
-    product = _json(tmp_path / "evidence" / "product-e2e" / "product-e2e.json")
-
-    assert result["status"] == "fail"
-    assert report["status"] == "failed"
-    # One statement of the failure, in every artifact of the run: the report the run
-    # wrote itself, the one the producer keeps, and the result.
-    failure = {"status": "failed", "error": "RuntimeError: late Cursor runtime steer failure", "waited_on": "provider_turn"}
-    assert {key: product.get(key) for key in failure} == failure == {key: report.get(key) for key in failure}
-    assert (result["observation"]["error"], result["waited_on"]) == (failure["error"], failure["waited_on"])
-    assert report["lifecycle"]["launch_registration"]["native_binding_claimed"] is True
-    assert report["lifecycle"]["send_idle"]["remote_reply_archived"] is True
-    assert product["lifecycle"]["send_idle"]["remote_reply_archived"] is True
-    assert _json(tmp_path / "evidence" / "cleanup-receipt.json")["required_cleanup"]["no_orphan_provider_processes"] is True
 
 
 def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypatch, tmp_path) -> None:
@@ -443,7 +333,6 @@ def test_opencode_entrypoint_retains_send_before_runtime_steer_failure(monkeypat
     variant = producer._VARIANTS[0]
     result = producer.run_opencode_helm_lifecycle(_args(tmp_path, binary, variant=variant))
     payload = _json(tmp_path / "evidence" / "result.json")
-    assert_result_conforms(producer, payload, variant=variant)
     # Steer raised before its record was written, so it is never reported. Launch
     # was reached (its input was dispatched) and fails on this fixture, which has
     # no connection_id: a reached failing step, so the result stays a verdict over

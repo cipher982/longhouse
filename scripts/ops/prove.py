@@ -413,9 +413,8 @@ class ProofRun:
         code = (
             "import importlib, json, re, sys\n"
             "from pathlib import Path\n"
-            "import yaml\n"
             "want = json.loads(sys.argv[1]); tree = Path(sys.argv[2])\n"
-            "mods = [e['module'] for e in yaml.safe_load((tree/'schemas'/'factory_producers.yml').read_text())['producers']]\n"
+            "mods = ['zerg.qa.pi_helm_lifecycle', 'zerg.qa.omp_helm_lifecycle']\n"
             "out = {}\n"
             "for mod in mods:\n"
             "    src = (tree/'server'/(mod.replace('.', '/') + '.py')).read_text()\n"
