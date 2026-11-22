@@ -82,6 +82,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(rp.plan(self.shas["docs"], True, False)["deploy"], "false")
         back = rp.plan(self.shas["docs"], True, True)
         self.assertEqual((back["deploy"], back["sensitive"]), ("true", "true"))
+        same = rp.plan(self.shas["web"], True, True)  # a redeploy of the served commit is explicit too
+        self.assertEqual((same["deploy"], same["sensitive"]), ("true", "true"))
 
     def test_a_runtime_change_in_a_non_sensitive_range_is_not_qa_gated(self):
         self.served = self.shas["docs"]

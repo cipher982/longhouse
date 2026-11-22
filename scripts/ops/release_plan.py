@@ -26,7 +26,8 @@ or pending after --wait. Exit 5: failed, errored, or not posted by Actions; a fa
 Terminal Truth runs beside CI and takes about as long, so the release waits here instead of being re-triggered.
 
 Dogfood holds irreplaceable history, so these gates are the contract the deploy keeps:
-  - never move dogfood sideways or backwards (rollback is explicit: --rollback, which always takes the QA gate);
+  - never move dogfood sideways or backwards (rollback is explicit: --rollback, which always takes the QA gate and
+    also allows redeploying the served commit);
   - a range touching sensitive paths is qualified on Hosted Live QA first;
   - a live-preview change needs its Terminal Truth verdict.
 """
@@ -126,10 +127,10 @@ def plan(sha: str, dogfood: bool, rollback: bool) -> dict:
     result["served"] = served
     if not paths.git(ROOT, "cat-file", "-t", served, check=False).strip():
         subprocess.run(["git", "-C", str(ROOT), "fetch", "--quiet", "origin"], capture_output=True)
+    if rollback:  # the explicit operator override: any commit, the served one included (a redeploy); always QA gated
+        return {**result, "sensitive": "true", "reason": f"rollback of {DOGFOOD} from {served[:12]} to {sha[:12]} (QA gated)"}
     if served == sha:
         return {**result, "deploy": "false", "reason": f"{DOGFOOD} already serves {sha[:12]}"}
-    if rollback:
-        return {**result, "sensitive": "true", "reason": f"rollback of {DOGFOOD} from {served[:12]} to {sha[:12]} (QA gated)"}
     if not is_ancestor(served, sha):
         return {**result, "deploy": "false",
                 "reason": f"{sha[:12]} does not contain {served[:12]}, which {DOGFOOD} serves; never moves dogfood backwards or sideways"}

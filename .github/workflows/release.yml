@@ -1,5 +1,9 @@
 name: Release
 
+# The title carries the commit being released: a run started by CI completing may report the
+# default-branch head as its own head_sha, so consumers (ship-monitor, Sauron) match on this title.
+run-name: Release ${{ github.event.workflow_run.head_sha || inputs.sha || github.sha }}
+
 # The one deploy path. A green CI run on main becomes a runtime image, is deployed to the canary, qualified,
 # and then deployed to personal dogfood (david010). Replaces Publish Runtime Image, Archive Runtime Image,
 # Deploy and Verify, Hosted Live QA and Promote Rings.
@@ -38,7 +42,7 @@ on:
         type: boolean
         default: false
       rollback:
-        description: "Allow dogfood to move to a commit that does not contain what it serves (always takes the QA gate)"
+        description: "Allow dogfood to move to any commit, the served one included (always takes the QA gate)"
         required: false
         type: boolean
         default: false
