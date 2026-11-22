@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from datetime import UTC
 from datetime import datetime
@@ -2672,8 +2673,11 @@ def test_shape_canary_ignores_classified_shapes_and_flags_garbage():
     assert observe_records("cursor", "byte_offset", []) is None
 
 
-def test_transcript_census_loads_from_the_runtime_image_path():
-    # The runtime image copies the census alone to /schemas/, one level below /.
+def test_transcript_census_loads_from_the_runtime_image_path(monkeypatch):
+    # The runtime image copies the census alone to /schemas/, one level below /,
+    # and does not ship zerg.qa.
+    monkeypatch.setitem(sys.modules, "zerg.qa", None)
+    monkeypatch.setitem(sys.modules, "zerg.qa.provider_sqlite", None)
     source = Path(__file__).resolve().parents[2] / "scripts" / "qa" / "transcript_census.py"
     namespace = {"__file__": "/schemas/transcript_census.py", "__name__": "_census_at_image_path"}
     exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), namespace)

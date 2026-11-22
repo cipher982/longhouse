@@ -41,6 +41,7 @@ block type the parser has no arm for still makes its shape unclassified.
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib.util
 import json
 import sqlite3
@@ -517,19 +518,19 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
     return files
 
 
+@functools.cache
 def _load_open_readonly():
     """The QA producers' one way to open a provider's SQLite store for reading.
 
     `zerg.qa.provider_sqlite` is loaded by path, not imported: this tool runs
     where the `zerg` package is not installed, beside a checkout that has the
     file. It reads through the write-ahead log, and reads the main file alone
-    when a closed store sits in a directory that cannot be written.
+    when a closed store sits in a directory that cannot be written. Loaded on
+    first use, because the server's shape canary imports this module for the
+    JSONL shapers only and its runtime image ships neither the file nor
+    `zerg.qa`.
     """
     path = REPO_ROOT / "server" / "zerg" / "qa" / "provider_sqlite.py"
-    if not path.is_file():  # inside the server, where `zerg` is installed
-        from zerg.qa.provider_sqlite import open_readonly
-
-        return open_readonly
     spec = importlib.util.spec_from_file_location("longhouse_provider_sqlite", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
@@ -538,7 +539,8 @@ def _load_open_readonly():
     return module.open_readonly
 
 
-_open_sqlite_readonly = _load_open_readonly()
+def _open_sqlite_readonly(path: Path) -> sqlite3.Connection:
+    return _load_open_readonly()(path)
 
 
 def _protobuf_fields(data: bytes) -> tuple[list[str], list[bytes]] | None:

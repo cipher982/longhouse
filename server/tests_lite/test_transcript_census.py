@@ -545,7 +545,7 @@ def test_the_census_sqlite_reader_falls_back_when_the_first_read_fails(tmp_path:
 
     monkeypatch.setattr(tool.sqlite3, "connect", connect)
     # The tool has no opener of its own: it is the QA producers', loaded by path.
-    assert Path(tool._open_sqlite_readonly.__code__.co_filename) == REPO_ROOT / "server" / "zerg" / "qa" / "provider_sqlite.py"
+    assert Path(tool._load_open_readonly().__code__.co_filename) == REPO_ROOT / "server" / "zerg" / "qa" / "provider_sqlite.py"
     connection = tool._open_sqlite_readonly(store)
     try:
         assert opened == ["mode=ro", "closed", "mode=ro&immutable=1"]
