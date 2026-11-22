@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,7 @@ from typing import Callable
 ACCEPTED_CONCLUSIONS = {"success"}
 DEFAULT_REQUIRED_WORKFLOWS = (
     "CI",
-    "Deploy and Verify",
+    "Release",
     "Launch Gate",
     "Local Runtime Binary Release",
 )
@@ -48,9 +49,8 @@ class Check:
 
 WORKFLOW_DISPATCH_FILES = {
     "CI": "contract-first-ci.yml",
-    "Deploy and Verify": "deploy-and-verify.yml",
+    "Release": "release.yml",
     "Launch Gate": "launch-gate.yml",
-    "Hosted Live QA": "hosted-live-qa.yml",
     "Local Runtime Binary Release": "local-runtime-release.yml",
 }
 
@@ -117,7 +117,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Accept coverage, not only identity, on a busy main: a required workflow run on the SHA that a "
         "newer main push cancelled passes when the same workflow succeeded on a main commit descending from "
-        "it, and the canary passes when it serves a descendant whose own Deploy and Verify succeeded. A "
+        "it, and the canary passes when it serves a descendant whose own Release succeeded. A "
         "genuine failure (anything but a superseded cancellation) stays terminal.",
     )
     parser.add_argument(
@@ -155,7 +155,41 @@ def latest_run_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, An
     return latest
 
 
+RELEASE = "Release"
+_FULL_SHA = re.compile(r"\b[0-9a-f]{40}\b")
+
+
+def run_commit(item: dict[str, Any]) -> str:
+    """The commit a run is about. A Release run starts from CI completing, so its own headSha can be main's
+    head; its title is `Release <sha>`."""
+    if item.get("workflowName") == RELEASE:
+        found = _FULL_SHA.search(str(item.get("displayTitle") or ""))
+        if found:
+            return found.group(0)
+    return str(item.get("headSha") or "")
+
+
+def release_runs(repo: str, sha: str | None = None) -> list[dict[str, Any]]:
+    """Main's recent Release runs, with headSha replaced by the commit each is about; only `sha`'s when given."""
+    proc = run(
+        ["gh", "run", "list", "-R", repo, "--workflow", RELEASE, "--branch", "main", "--limit", "50", "--json",
+         "databaseId,workflowName,displayTitle,status,conclusion,headSha,url,event"],
+        check=False,
+    )
+    try:
+        runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
+    except ValueError:
+        runs = []
+    runs = [{**item, "headSha": run_commit({**item, "workflowName": RELEASE})} for item in runs]
+    return [item for item in runs if sha is None or item["headSha"] == sha]
+
+
 def missing_workflow_hint(repo: str, sha: str, workflow: str) -> str:
+    if workflow == RELEASE:
+        return (
+            "Release starts when CI completes green for the commit; if CI is still running or was superseded "
+            f"there is none yet. To start one by hand: gh workflow run release.yml -R {repo} -f sha={sha}"
+        )
     workflow_file = WORKFLOW_DISPATCH_FILES.get(workflow)
     if workflow_file is None:
         return (
@@ -194,18 +228,21 @@ def descends_from(ancestor: str, commit: str) -> bool:
 def covering_run(repo: str, sha: str, workflow: str) -> Check | None:
     """The newest main run of `workflow` on a commit descending from `sha`: its success covers `sha`,
     one still running may, and None when no descendant run exists or all of them failed."""
-    proc = run(
-        [
-            # Any main run, push or workflow_dispatch: release.sh dispatches the path-filtered gates.
-            "gh", "run", "list", "-R", repo, "--workflow", workflow, "--branch", "main",
-            "--limit", "30", "--json", "databaseId,headSha,status,conclusion,url",
-        ],
-        check=False,
-    )
-    try:
-        runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
-    except ValueError:
-        runs = []
+    if workflow == RELEASE:
+        runs = release_runs(repo)
+    else:
+        proc = run(
+            [
+                # Any main run, push or workflow_dispatch: release.sh dispatches the path-filtered gates.
+                "gh", "run", "list", "-R", repo, "--workflow", workflow, "--branch", "main",
+                "--limit", "30", "--json", "databaseId,headSha,status,conclusion,url",
+            ],
+            check=False,
+        )
+        try:
+            runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
+        except ValueError:
+            runs = []
     pending = None
     for item in runs:  # newest first
         head = str(item.get("headSha") or "")
@@ -235,7 +272,9 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...], accept_cover
             "databaseId,workflowName,status,conclusion,headSha,url,event",
         ]
     )
-    runs = [item for item in json.loads(proc.stdout or "[]") if item.get("headSha") == sha]
+    runs = [item for item in json.loads(proc.stdout or "[]") if item.get("headSha") == sha and item.get("workflowName") != RELEASE]
+    if RELEASE in required:
+        runs += release_runs(repo, sha)
     latest = latest_run_by_workflow(runs)
 
     checks: list[Check] = []
@@ -285,18 +324,9 @@ def fetch_json_url(url: str) -> dict[str, Any]:
     return payload
 
 
-def deploy_passed(repo: str, commit: str) -> str | None:
-    """The URL of `commit`'s own successful Deploy and Verify run, else None."""
-    proc = run(
-        ["gh", "run", "list", "-R", repo, "--workflow", "Deploy and Verify", "--commit", commit, "--limit", "10",
-         "--json", "databaseId,status,conclusion,url,headSha"],
-        check=False,
-    )
-    try:
-        runs = json.loads(proc.stdout or "[]") if proc.returncode == 0 else []
-    except ValueError:
-        return None
-    exact = [r for r in runs if r.get("headSha") == commit]
+def release_passed(repo: str, commit: str) -> str | None:
+    """The URL of `commit`'s own successful Release run, else None."""
+    exact = release_runs(repo, commit)
     latest = max(exact, key=lambda r: int(r.get("databaseId") or 0), default=None)
     if latest and latest.get("status") == "completed" and latest.get("conclusion") in ACCEPTED_CONCLUSIONS:
         return str(latest.get("url"))
@@ -315,10 +345,10 @@ def check_live_surface(name: str, url: str, sha: str, *, accept_covering: bool =
     status = str(payload.get("status") or "")
     ok = commit_matches(commit, sha) and status in {"ok", "healthy", "degraded"}
     if not ok and accept_covering and repo and status in {"ok", "healthy", "degraded"} and descends_from(sha, commit):
-        deploy = deploy_passed(repo, commit)
+        deploy = release_passed(repo, commit)
         if deploy:
             return Check(f"live:{name}", "succeeded", f"status={status} serves descendant {commit} of {sha[:12]}, "
-                                                      f"whose Deploy and Verify passed ({deploy}) url={url}")
+                                                      f"whose Release passed ({deploy}) url={url}")
     return Check(
         f"live:{name}",
         "succeeded" if ok else "pending",

@@ -1,6 +1,6 @@
 ---
 name: zerg-ship
-description: Land and ship a Longhouse change (the `cowbell` flow) - push an exact SHA, watch canary qualification, read Hosted Live QA, decide whether a CLI release, TestFlight build or local dogfood refresh is also needed. Use when pushing to main, answering "is it deployed", or promoting or releasing by hand.
+description: Land and ship a Longhouse change (the `cowbell` flow) - push an exact SHA, watch the Release workflow, read Hosted Live QA, decide whether a CLI release, TestFlight build or local dogfood refresh is also needed. Use when pushing to main, answering "is it deployed", or promoting or releasing by hand.
 ---
 
 # Ship a change
@@ -13,22 +13,24 @@ shared checkout, which command moves which surface and how to read the result.
 
 | Ring | Surface | Moves when |
 |---|---|---|
-| Canary | `release-canary-a` | every `main` push touching runtime paths (`server/`, `web/`, `engine/`, `config/`, runtime Dockerfile) |
-| QA (not a ring) | `hosted-qa-a` | Hosted Live QA deploys each published commit, one run at a time |
-| Dogfood | the maintainer's own tenant | every published runtime image of `main`, automatically (Promote Rings) |
-| Production | other hosted tenants and the new-tenant image | the exact image dogfood serves, once its gates pass; no tag needed |
+| Canary | `release-canary-a` | every green `main` commit whose range changes a runtime input (Release workflow) |
+| QA (not a ring) | `hosted-qa-a` | Release runs Hosted Live QA there when the range touches a dogfood-sensitive path |
+| Dogfood | the maintainer's own tenant (`david010`) | after the canary (and QA when sensitive), automatically |
+| Production | `longhouse.ai` | dark: no deploy target. Added to `release.yml` when it launches |
 | Laptops | Mac app, CLI, engine | only from `make release VERSION=vX.Y.Z` |
 
-Promote Rings (`.github/workflows/promote-rings.yml`) runs after every image,
-archive, canary, QA and CI completion, and on a Sauron wake every 10 minutes
-while a ring trails. It never moves backwards. Its decision per ring is a commit
-status (`longhouse/dogfood`, `longhouse/production`); `make promote-rings` runs
-it now. Sauron pages when David's machines stop shipping after a dogfood
-cutover, and when production trails dogfood for 8 hours. Promote Rings is the
-only automatic writer of dogfood and production; `make release` and by-hand
-promotions take an expiring ring lock (`python3 scripts/ops/ring_lock.py
-status`). Before cutting a release, check `origin/main` still equals the
-candidate SHA.
+The Release workflow (`.github/workflows/release.yml`) starts when `CI` completes
+green on `main` and does everything in one run: plan, build the image once,
+archive it, canary deploy and smoke, QA (sensitive ranges), dogfood deploy and
+smoke. `scripts/ops/release_plan.py` holds the gates: green CI, never backwards
+or sideways, nothing to do when no runtime input changed, QA when the range
+matches `scripts/ops/dogfood-sensitive-paths.toml`, and a Terminal Truth verdict
+when a live-preview path changed. One release runs at a time and is never
+cancelled; a newer green commit replaces a waiting one. A red release leaves
+dogfood where it was. Sauron pages when David's machines stop shipping after a
+dogfood cutover. `make release` takes an expiring ring lock (`python3
+scripts/ops/ring_lock.py status`). Before cutting a release, check `origin/main`
+still equals the candidate SHA.
 
 ## Landing in the shared checkout
 
@@ -56,8 +58,8 @@ David and several agents work in `~/git/zerg/longhouse` at once.
   to see whether CI passes. When `make ship` reports the queue SATURATED, batch
   commits. A rare `TLS handshake timeout` on a cube runner is usually the home
   WAN, not Longhouse (`control-plane/docs/runbooks/hosted-operations.md`).
-- A newer push supersedes queued runs; Deploy and Verify then stands down green
-  naming the covering commit.
+- A newer push supersedes a queued CI run and a waiting Release run; the newer
+  commit contains yours, so its release ships your change.
 - While `main` is red, one agent claims the fix, lands it and posts the SHA;
   nobody else reruns. Diagnose a failing check before owning it.
 - Anchor every CI and deploy claim to an exact SHA, run id and live surface;
@@ -71,7 +73,7 @@ David and several agents work in `~/git/zerg/longhouse` at once.
 
 | Change touches | Lane | What moves it |
 |---|---|---|
-| `server/`, `web/`, `engine/`, `config/`, runtime Dockerfile | Hosted runtime | A `main` push builds the image and qualifies the canary. Dogfood and production follow by themselves (Promote Rings). |
+| `server/`, `web/`, `engine/`, `config/`, runtime Dockerfile | Hosted runtime | Green CI on `main` starts Release: image, canary, QA when sensitive, then dogfood, by itself. |
 | `longhouse` CLI, hooks, installer, `longhouse machine repair`, engine, Desktop App | CLI/package release | `make release VERSION=vX.Y.Z` ([RELEASE.md](../../../RELEASE.md)). A hosted deploy does not reach users' machines. Say so; do not report "deployed". |
 | `ios/` | TestFlight | `make testflight` (below). Never a hosted deploy. |
 | The separately installed runner | Runner release | `runner-release.yml`; its own path. |
@@ -138,42 +140,33 @@ Check the budget with `gh api rate_limit` (free).
 
 Reading the result:
 
-- `deploy-and-verify.yml` waits for the exact-SHA image, reprovisions the canary
-  and runs a fast smoke. The canary is shared: a run whose canary a newer push
-  replaced ends green as *superseded* ("Stand down, canary superseded"). That is
-  not a verdict on your SHA; check the newest commit's run. A newer head that
-  publishes no runtime image (a CI or docs push) does not supersede: the deploy
-  waits on that head's CI, which contains your SHA, and deploys your image.
-- Hosted Live QA (`hosted-live-qa.yml`) is dispatched per qualified SHA and runs
-  daily at 10:41 UTC. It deploys the exact commit to its own instance and records
-  a verdict per SHA. "Did QA pass this SHA" is that verdict; a passed,
-  non-superseded verdict gates production. Dispatch by hand with
-  `gh workflow run hosted-live-qa.yml -f source_sha=<full-sha>`.
+- Release runs are titled `Release <full sha>` (a run started by CI completing
+  may carry another head SHA of its own). A docs-only or already-served commit
+  runs only the Plan job and ends green: nothing deployed, and the summary says
+  why. Do not say the canary changed in that case.
+- Hosted Live QA is a job of Release, run only for sensitive ranges (or by hand
+  with `-f qa=true`). It deploys the exact commit to its own instance and
+  records a verdict (passed, superseded or failed); dogfood proceeds only on
+  `passed`.
 - `make qa-live` is not a developer command; it refuses personal and dogfood
   targets and needs a dedicated QA instance and token.
 - To state what a host runs: `make deploy-status` or
   `curl -sL https://<host>/api/health` (`build.commit`).
-- To release a held push by `workflow_dispatch`, dispatch `runtime-image.yml` and
-  `deploy-and-verify.yml` at the same exact SHA.
+- To release a commit by hand: `gh workflow run release.yml -f sha=<full sha>`
+  (canary only), add `-f dogfood=true` to continue to dogfood.
 - Never deploy a hosted tenant by direct SSH or Compose; it bypasses the
   deployment receipt and target fencing.
 
-## Promoting by hand
+## Moving a surface by hand
 
-Promote Rings does this automatically. By hand only to roll back or unstick a
-ring, and the targets refuse while a Promote Rings run is active. Both need
-`CONTROL_PLANE_ADMIN_TOKEN` (`control-plane/docs/runbooks/hosted-operations.md`). State the full
-SHA and the commits it sweeps in.
+Release does this automatically. By hand only to roll back or unstick.
+`CONTROL_PLANE_ADMIN_TOKEN` is needed for `make reprovision`
+(`control-plane/docs/runbooks/hosted-operations.md`). State the full SHA and the
+commits it sweeps in.
 
-- `make promote-dogfood SHA=<full-sha> [FAST_LANE=1] [SUBDOMAIN=...]` needs a
-  canary-qualified Deploy and Verify run for the SHA. The fast lane is allowed
-  only when no path between the served SHA and the target matches
-  `scripts/ops/dogfood-sensitive-paths.toml` (auth, migrations and similar).
-- `make promote-production [SHA=<full-sha>] [CHECK=1]` moves production tenants and
-  the new-tenant image to the image dogfood serves (default when `SHA` is omitted).
-  `CHECK=1` prints the gate receipt and moves nothing; `VERSION=` is refused.
-  After a halted tenant wave, rerun with `PROMOTION_ATTEMPT=<n+1>`. The retired
-  demo is skipped unless `DEMO_ENABLED=1` with `DEMO_SSH_HOST` and `DEMO_ENV_PATH`.
+- `make rollback SHA=<full-sha>` runs Release for that commit with
+  `rollback=true`: image reused, canary, QA gate, dogfood. Read RELEASE.md
+  "Rollback" first: do not roll david010 back across a schema migration.
 - `make reprovision SUBDOMAIN=<name> IMAGE=ghcr.io/cipher982/longhouse-runtime@sha256:<digest>`
   submits a durable deployment through the control-plane API. Always pass
   `SUBDOMAIN` (the fallback is `demo`). Tenant data survives.
@@ -185,7 +178,7 @@ SHA and the commits it sweeps in.
 `make release VERSION=vX.Y.Z` publishes the native pair (`longhouse`,
 `longhouse-engine`), `Longhouse.app` and the PyPI wheel. Existing users get it by
 rerunning `scripts/install.sh` or `uv tool upgrade longhouse`. It is independent
-of production promotion and runs from any checkout (details in
+of the Release workflow and runs from any checkout (details in
 [RELEASE.md](../../../RELEASE.md)). It runs from a disposable checkout of
 `origin/main`, holds the release ring lock, validates the bump commit under the
 heavy-build lock, waits for the exact-SHA gates and notarizes; a rerun resumes.
@@ -228,7 +221,7 @@ still ships.
 ## Report
 
 Give the task SHA, runtime disposition (`deployed` or `no_runtime_change`), the
-workflow run and receipt IDs from the verdict, the Hosted Live QA verdict (or
-"pending"/"failed"), and which local refresh, release or device install was
-needed. Claim production only after `make promote-production` (or Promote Rings)
-reported its receipt. If nothing deployed, do not say the canary changed.
+Release run URL, the Hosted Live QA verdict (or "skipped"/"pending"/"failed"),
+the commit david010 serves (`curl -sL https://david010.longhouse.ai/api/health`),
+and which local refresh, release or device install was needed. There is no
+production deploy. If nothing deployed, do not say the canary changed.

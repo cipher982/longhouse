@@ -897,7 +897,6 @@ validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
 
 validate-ship-monitor: ## @internal Ship monitor regression tests
 	@python3 scripts/tests/ship-monitor.test.py
-	@bun scripts/tests/wait-for-ci.test.mjs
 
 validate-ship-register: ## @internal make ship pushes, registers the watch ref, lands in memory and returns
 	@python3 scripts/tests/ship-register.test.py
@@ -907,11 +906,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/ring-lock.test.py
 	@python3 scripts/tests/dogfood-refresh-exact.test.py
 	@python3 scripts/tests/dogfood-server-cli-install.test.py
-	@python3 scripts/tests/promote-dogfood.test.py
 	@python3 scripts/tests/ci-receipts.test.py
-	@python3 scripts/tests/promotion-gates.test.py
-	@python3 scripts/tests/promote-production.test.py
-	@python3 scripts/tests/ring-promoter.test.py
 	@python3 scripts/tests/terminal-truth-cover.test.py
 	@python3 scripts/tests/release-plan.test.py
 	@python3 scripts/tests/remote.test.py
@@ -1315,27 +1310,14 @@ reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=..
 			LH_DEPLOYMENT_IDEMPOTENCY_KEY LH_DEPLOYMENT_REASON && \
 		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$$TARGET_IMAGE"'
 
-# Promote Rings (.github/workflows/promote-rings.yml) moves dogfood and production on its own; the
-# targets below are for a specific SHA by hand (a rollback, a stuck ring). They refuse while a Promote
-# Rings run is queued or running, so the two writers do not interleave; the control plane fences the rest.
-PROMOTER_IDLE = busy="$$(gh run list -R cipher982/longhouse --workflow promote-rings.yml --limit 10 --json status,url -q '[.[] | select(.status != "completed")][0].url // empty' 2>/dev/null)"; \
-	[ -z "$$busy" ] || { echo "Promote Rings is running ($$busy); wait for it to finish (it may be doing this already)." >&2; exit 1; }
-
-.PHONY: promote-rings
-promote-rings: ## Run the ring promoter now (Promote Rings workflow): dogfood follows main, production follows dogfood
-	@gh workflow run promote-rings.yml -R cipher982/longhouse --ref main && echo "Dispatched; follow it: gh run list -R cipher982/longhouse --workflow promote-rings.yml --limit 1"
-
-.PHONY: promote-dogfood
-promote-dogfood: ## By hand: promote an exact image to dogfood (SHA=<full sha> required; FAST_LANE=1 skips canary only when served..SHA has no sensitive paths)
-	@$(PROMOTER_IDLE)
-	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(if $(FAST_LANE),--fast-lane,) $(SHA)
-
-# The old interface was VERSION=vX.Y.Z. Make would swallow it and promote whatever dogfood serves, so refuse it.
-.PHONY: promote-production
-promote-production: ## By hand: promote the image dogfood serves to production tenants, demo, and the new-tenant pointer (SHA=<full sha> optional; CHECK=1 prints the gate receipt and moves nothing)
-	@$(if $(filter command line,$(origin VERSION)),echo "promote-production no longer takes VERSION=; it promotes the image dogfood serves (pass SHA=<full sha> to name the commit; CHECK=1 moves nothing)" >&2; exit 2,:)
-	@$(if $(CHECK),:,$(PROMOTER_IDLE))
-	@./scripts/ops/promote-production.sh $(if $(CHECK),--check,) $(SHA)
+# The Release workflow (.github/workflows/release.yml) deploys every green main commit on its own. This is the
+# manual rollback of dogfood to an earlier commit: the same chain (image reused, canary, QA gate), one run at a
+# time, never cancelled. Read RELEASE.md "Rollback" first: an image that predates a schema migration may not
+# read the newer data. The control plane fences nothing here because every Release run orders after the last.
+.PHONY: rollback
+rollback: ## Roll dogfood back to an earlier commit through Release (SHA=<full sha> required)
+	@[ -n "$(SHA)" ] || { echo "SHA=<full commit sha to roll back to> is required" >&2; exit 2; }
+	@gh workflow run release.yml -R cipher982/longhouse --ref main -f sha=$(SHA) -f dogfood=true -f rollback=true && echo "Dispatched; follow it: gh run list -R cipher982/longhouse --workflow release.yml --limit 1"
 
 deploy-status: ## Show deployed SHA + health for all surfaces
 	@./scripts/ops/deploy-status.sh

@@ -43,9 +43,8 @@ def test_web_styling_does_not_select_backend_or_engine() -> None:
 
 def test_shared_manifest_selects_every_relevant_filter() -> None:
     result = resolve("server/zerg/config/managed_provider_contracts.json")
-    for category in ("backend", "packaging", "e2e", "runtime_image", "deploy_verify"):
+    for category in ("backend", "packaging", "e2e", "runtime_image"):
         assert category in result["categories"], (category, result)
-    assert "cube-deploy" in result["lanes"]
     assert {row["command"] for row in result["commands"]} >= {
         "make test",
         "make test-wheel-package",

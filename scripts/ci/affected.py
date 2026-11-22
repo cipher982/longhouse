@@ -89,11 +89,6 @@ FILTER_PLANS: dict[str, FilterPlan] = {
         (),
         "Runtime-image assembly is CI-owned; no local deployment is run by this resolver.",
     ),
-    "deploy_verify": FilterPlan(
-        ("cube-deploy",),
-        (),
-        "Deploy verification stays on the existing deploy lane and exact-SHA evidence path.",
-    ),
 }
 
 UNKNOWN_PLAN = FilterPlan(

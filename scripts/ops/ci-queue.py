@@ -25,7 +25,7 @@ from datetime import timezone
 
 REPO = "cipher982/longhouse"
 # The push workflows a commit's ship waits on, by workflow file name.
-SHIP_WORKFLOWS = ("contract-first-ci.yml", "runtime-image.yml", "deploy-and-verify.yml")
+SHIP_WORKFLOWS = ("contract-first-ci.yml", "release.yml")
 
 
 def gh_json(path: str) -> dict:
@@ -100,7 +100,6 @@ def main() -> int:
     main_queued = [r for r in queued if r.get("head_branch") == "main" and workflow_file(r) == "contract-first-ci.yml"]
     superseded = sorted({r["head_sha"] for r in main_queued if r["head_sha"] != main_head})
     saturated = bool(full and queued)
-    waiting_gates = [r for r in running if workflow_file(r) == "deploy-and-verify.yml"]
 
     headline = (
         f"CI {'SATURATED' if saturated else 'ok'}: {len(running)} running, {len(queued)} queued"
@@ -136,8 +135,6 @@ def main() -> int:
         return 0
 
     lines.append("Runner pools (busy/online): " + ", ".join(f"{p} {b}/{t}" for p, (b, t) in pools.items()))
-    if waiting_gates:
-        lines.append(f"{len(waiting_gates)} Deploy and Verify run(s) hold deploy runners while they wait for their CI.")
     if stale:
         lines.append(
             f"Ignored {len(stale)} abandoned run(s) untouched for over a day: "

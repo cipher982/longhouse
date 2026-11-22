@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Classify the dogfood range for fast-lane eligibility.
+"""Classify the dogfood range for the Release workflow.
 
-A matching path means the change must use the canary-qualified dogfood path.
-This classifier is used to choose between dogfood promotion lanes, and (`live-preview`) to find the commit
-whose `longhouse/terminal-truth` status promote-dogfood.sh requires in either lane.
+A matching path means the range is qualified by Hosted Live QA before dogfood is deployed.
+Used by release_plan.py, and (`live-preview`) to find the commit
+whose `longhouse/terminal-truth` status the dogfood deploy requires.
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", default=".", help="repository (default: cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
-    check = sub.add_parser("check", help="check whether base..head may use the dogfood fast lane")
+    check = sub.add_parser("check", help="check whether base..head touches a sensitive path")
     check.add_argument("--base", required=True)
     check.add_argument("--head", required=True)
     preview = sub.add_parser("live-preview", help="print the newest commit in base..head that touches a live-preview path (nothing if none)")

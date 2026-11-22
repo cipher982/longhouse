@@ -6,7 +6,6 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
-      - "/.github/actions/wait-for-ci"
     schedule:
       interval: "weekly"
     # Paused 2026-10-17 while the repository is private and Longhouse is paused: its PRs ran iOS

@@ -228,16 +228,15 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/auth/`, `server/zerg/middleware/`, `server/zerg/websocket/` | Auth, middleware, WebSocket |
 | `server/tests_lite/` | Backend tests (`make test`) |
 
-### Ship and promotion (`scripts/`)
+### Ship and release (`scripts/`)
 
 | Path | What |
 | --- | --- |
-| `scripts/ops/dogfood_sensitive_paths.py`, `scripts/ops/dogfood-sensitive-paths.toml` | Dogfood fast-lane classifier: changes matching this path list require canary-qualified promotion; auth and migration paths stay out of the fast lane |
+| `scripts/ops/dogfood_sensitive_paths.py`, `scripts/ops/dogfood-sensitive-paths.toml` | Sensitive-path classifier: a range matching this path list takes the Hosted Live QA gate before dogfood; also names the live-preview paths that need a Terminal Truth verdict |
 | `scripts/ops/check-push-readiness.sh` | Pre-push check: stale duplicate commits on main and the verifier-boundary ratchet |
 | `scripts/ci/verifier_boundary.py`, `scripts/ci/verifier-boundary.allow` | Import boundary between the verifier (`server/zerg/qa/`) and the code it judges; the allowlist only shrinks; computes the verifier digest |
 | `scripts/ops/ship.sh`, `scripts/ops/ship-monitor.py` | `make ship` and `make ship-watch`: push an exact SHA, wait for its workflows |
-| `scripts/ops/promote-dogfood.sh`, `scripts/ops/promote-production.sh`, `scripts/ops/promotion_gates.py` | Ring promotions; dogfood's fast lane takes a published image only when the range matches no sensitive path, otherwise the canary-qualified path; production promotes dogfood's image after its five gates (including the OCI archive) pass |
-| `scripts/ops/ring_promoter.py`, `.github/workflows/promote-rings.yml` | Continuous promotion: Promote Rings reacts to image publication, archive, canary, QA and CI completion, plus the Sauron wake |
+| `.github/workflows/release.yml`, `scripts/ops/release_plan.py` | The one deploy path: a green CI run on main is built once into the runtime image, archived, deployed to the canary and (sensitive ranges) Hosted Live QA, then to dogfood; `release_plan.py` holds the gates (green CI, never backwards, no-op when no runtime input changed, QA for sensitive paths, Terminal Truth for live-preview paths) |
 | `scripts/ops/install-precommit-autofix.sh` | Installs the self-staging pre-commit shims and retires only its own obsolete pre-push hook |
 | `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
 | `scripts/ops/remote.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the `ci` VM, iOS build and simulator work on the bench Mac |

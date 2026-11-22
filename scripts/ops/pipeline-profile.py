@@ -27,7 +27,7 @@ import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 
-SHIP_WORKFLOWS = ("CI", "Publish Runtime Image", "Deploy and Verify", "Launch Gate")
+SHIP_WORKFLOWS = ("CI", "Release", "Launch Gate")
 
 
 def gh(path: str) -> list[dict]:
@@ -80,12 +80,12 @@ def fetch_jobs(repo: str, run_ids: list[int]) -> dict[int, list[dict]]:
 def ship_path(runs: list[dict]) -> None:
     by_sha: dict[str, dict[str, list[dict]]] = collections.defaultdict(lambda: collections.defaultdict(list))
     for run in runs:
-        if run["event"] == "push" and run["head_branch"] == "main" and run["name"] in SHIP_WORKFLOWS:
+        if run["event"] in ("push", "workflow_run") and run["head_branch"] == "main" and run["name"] in SHIP_WORKFLOWS:
             by_sha[run["head_sha"]][run["name"]].append(run)
     stages: dict[str, list[float]] = collections.defaultdict(list)
     shas = 0
     for workflows in by_sha.values():
-        if "CI" not in workflows or "Deploy and Verify" not in workflows:
+        if "CI" not in workflows or "Release" not in workflows:
             continue
         origin = min(r["created_at"] for r in workflows["CI"])
         done = {}
@@ -93,12 +93,12 @@ def ship_path(runs: list[dict]) -> None:
             ok = [r["updated_at"] for r in items if r["conclusion"] == "success"]
             if ok:
                 done[name] = min(ok)
-        if "CI" not in done or "Deploy and Verify" not in done:
+        if "CI" not in done or "Release" not in done:
             continue
         shas += 1
         for name, end in done.items():
             stages[name].append(minutes(origin, end) or 0)
-    print(f"\n== Main push to stage complete (minutes), {shas} SHAs with green CI and Deploy and Verify")
+    print(f"\n== Main push to stage complete (minutes), {shas} SHAs with green CI and Release")
     for name in SHIP_WORKFLOWS:
         if stages[name]:
             print(f"  {name:24} n={len(stages[name]):3}  {summary(stages[name])}")

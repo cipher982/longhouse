@@ -254,11 +254,13 @@ fi
 git -C "$ROOT" update-ref -d "$CANDIDATE_REF" 2>/dev/null || true  # on origin/main now: nothing left to resume
 lh_ring_lock_renew 600 "$BUMP_SHA" >/dev/null || true
 
-# GitHub path filters may omit required release gates when the final candidate
+# GitHub path filters may omit a required push gate when the final candidate
 # only changes another product surface. Give push-triggered runs a moment to
 # register, then dispatch only the exact-SHA gates GitHub did not create.
+# Release is not one of them: it starts by itself when CI completes green on
+# the candidate, so it appears later than the push gates (see --discovery-grace).
 sleep "${RELEASE_SETTLE_SECONDS:-10}"
-for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
+for workflow in launch-gate.yml; do
   run_count="$(gh run list \
     --repo cipher982/longhouse \
     --workflow "$workflow" \
@@ -277,8 +279,8 @@ echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
 # supersede logic cancels the candidate's queued runs while the canary moves past it
 # (v0.1.76 died twice that way, 2026-10-07). --accept-covering takes coverage for identity
 # there: a cancelled run passes when the same workflow succeeded on a main commit that
-# contains the candidate, and the canary when it serves such a commit whose own Deploy and
-# Verify passed. A cancelled run nothing covers is rerun for the exact SHA, at most twice.
+# contains the candidate, and the canary when it serves such a commit whose own Release
+# passed. A cancelled run nothing covers is rerun for the exact SHA, at most twice.
 # A genuine failure stays terminal.
 # The canary ring (same source as deploy-status.sh); the public demo is production.
 CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-release-canary-a}"
@@ -287,14 +289,14 @@ CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
   --sha "$BUMP_SHA" \
   --canary-url "$CANARY_HEALTH_URL" \
   --required-workflow "CI" \
-  --required-workflow "Deploy and Verify" \
+  --required-workflow "Release" \
   --required-workflow "Launch Gate" \
   --skip-release \
   --skip-public-package \
   --skip-runtime-artifacts \
   --skip-demo \
   --accept-covering --redispatch-superseded 2 \
-  --wait --timeout 7200 --discovery-grace 1800 --poll 30
+  --wait --timeout 7200 --discovery-grace 3600 --poll 30
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
 PREV_TAG="$(git -C "$ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"

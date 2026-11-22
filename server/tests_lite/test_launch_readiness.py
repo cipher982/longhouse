@@ -460,9 +460,9 @@ NEWER = "e9e02b21b0000000000000000000000000000000"
 UNRELATED = "f3ece996486b2b1d56325ce4cd62cf88197b9a48"
 
 
-def _fake_gh(monkeypatch, mod, *, exact, main_runs=(), deploys=None, reruns=None):
+def _fake_gh(monkeypatch, mod, *, exact, main_runs=(), reruns=None):
     """Answers `gh run list --commit SHA` with `exact`, `gh run list --branch main` with `main_runs`,
-    `--workflow "Deploy and Verify" --commit X` from `deploys`, and records `gh run rerun`."""
+    and records `gh run rerun`. Release runs come from `main_runs` too (they are listed by workflow, not by commit)."""
 
     def fake_run(cmd, **kwargs):
         if cmd[:3] == ["gh", "run", "rerun"]:
@@ -472,9 +472,6 @@ def _fake_gh(monkeypatch, mod, *, exact, main_runs=(), deploys=None, reruns=None
         if "--branch" in cmd:
             workflow = cmd[cmd.index("--workflow") + 1]
             return SimpleNamespace(returncode=0, stdout=json.dumps([r for r in main_runs if r["workflow"] == workflow]), stderr="")
-        if "--workflow" in cmd and cmd[cmd.index("--workflow") + 1] == "Deploy and Verify":
-            commit = cmd[cmd.index("--commit") + 1]
-            return SimpleNamespace(returncode=0, stdout=json.dumps((deploys or {}).get(commit, [])), stderr="")
         return SimpleNamespace(returncode=0, stdout=json.dumps(exact), stderr="")
 
     monkeypatch.setattr(mod, "run", fake_run)
@@ -574,15 +571,38 @@ def test_without_accept_covering_a_cancelled_run_stays_a_failure(monkeypatch):
     assert check.terminal and check.rerun_id is None
 
 
-def test_the_canary_may_serve_a_descendant_whose_own_deploy_passed(monkeypatch):
+def _release(commit, run_id, status="completed", conclusion="success", head="e" * 40):
+    """A Release run: started by CI completing, so its headSha is main's head and its title names the commit."""
+    return {
+        "workflow": "Release",
+        "workflowName": "Release",
+        "databaseId": run_id,
+        "headSha": head,
+        "displayTitle": f"Release {commit}",
+        "status": status,
+        "conclusion": conclusion,
+        "url": f"d{run_id}",
+    }
+
+
+def test_a_release_run_is_matched_to_its_commit_by_title(monkeypatch):
+    mod = _load_module()
+    _fake_gh(monkeypatch, mod, exact=[], main_runs=[_release(CANDIDATE, 5), _release(UNRELATED, 6)])
+
+    [check] = mod.check_workflows("cipher982/longhouse", CANDIDATE, ("Release",))
+
+    assert check.ok and "run 5 " in check.detail
+    [missing] = mod.check_workflows("cipher982/longhouse", NEWER, ("Release",))
+    assert missing.state == "missing" and "gh workflow run release.yml" in missing.hint
+
+
+def test_the_canary_may_serve_a_descendant_whose_own_release_passed(monkeypatch):
     mod = _load_module()
     _fake_gh(
         monkeypatch,
         mod,
         exact=[],
-        deploys={
-            NEWER: [{"databaseId": 9, "status": "completed", "conclusion": "success", "url": "d9", "headSha": NEWER}],
-        },
+        main_runs=[_release(NEWER, 9)],
     )
     monkeypatch.setattr(mod, "fetch_json_url", lambda url: {"status": "ok", "build": {"commit": NEWER}})
 
@@ -592,15 +612,13 @@ def test_the_canary_may_serve_a_descendant_whose_own_deploy_passed(monkeypatch):
     assert not mod.check_live_surface("canary", "https://c.test/api/health", CANDIDATE).ok  # identity without the flag
 
 
-def test_the_canary_on_a_descendant_without_a_passed_deploy_or_on_an_unrelated_commit_is_pending(monkeypatch):
+def test_the_canary_on_a_descendant_without_a_passed_release_or_on_an_unrelated_commit_is_pending(monkeypatch):
     mod = _load_module()
     _fake_gh(
         monkeypatch,
         mod,
         exact=[],
-        deploys={
-            NEWER: [{"databaseId": 9, "status": "in_progress", "conclusion": None, "url": "d9", "headSha": NEWER}],
-        },
+        main_runs=[_release(NEWER, 9, status="in_progress", conclusion=None)],
     )
     for served in (NEWER, UNRELATED):
         monkeypatch.setattr(mod, "fetch_json_url", lambda url, served=served: {"status": "ok", "build": {"commit": served}})

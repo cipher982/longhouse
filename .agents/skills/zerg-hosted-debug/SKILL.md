@@ -123,4 +123,4 @@ process health (the API must stop returning `branch_projection_pending`).
 - No broad startup backfills. Startup may create tables, add columns, create indexes
   and verify FTS.
 - Change nothing on the runtime host from a diagnosis session beyond the commands above; deploys
-  and promotions go through Promote Rings (`zerg-ship`).
+  and deploys go through the Release workflow (`zerg-ship`).

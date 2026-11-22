@@ -30,7 +30,7 @@ name: Terminal Truth
 #
 # Triggers
 #   push to main, paths below    the whole gate. The verdict is the commit status `longhouse/terminal-truth` and a CI
-#                                receipt. Dogfood promotion requires it (scripts/ops/promote-dogfood.sh) for a range that touches these paths.
+#                                receipt. The Release workflow's dogfood deploy requires it (scripts/ops/release_plan.py) for a range that touches these paths.
 #   schedule (nightly)           the whole gate with reruns off, so a red night is the raw rate. New failing cells are
 #                                annotated as errors, and the Sauron job ci-scheduled-red pages after three red nights
 #                                in a row. GitHub starts this repository's schedules 7 to 10 hours late.
@@ -151,8 +151,7 @@ permissions:
 # one, so a dispatch from a branch used to take the pending slot of a main push and cancel it (2026-11-15, 430ea7f3c).
 # A branch run can now share the pool's second slot with a main run; main's rerun-alone step absorbs a slowed cell.
 # Nothing in main's group is ever cancelled once it is running. The pending push that a newer push replaces is covered
-# by a later green run (scripts/ops/terminal_truth_cover.py) or passed over for an older green commit
-# (scripts/ops/ring_promoter.py), so a missing verdict no longer stops dogfood.
+# by a later green run (scripts/ops/terminal_truth_cover.py), so a missing verdict does not stop dogfood.
 concurrency:
   group: terminal-truth-${{ github.repository }}-${{ inputs.pins && 'candidate' || github.ref == 'refs/heads/main' && 'main' || github.ref }}
   cancel-in-progress: false

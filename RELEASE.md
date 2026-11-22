@@ -2,22 +2,21 @@
 
 A release is how installed users and self-hosters get new code: installed CLIs,
 the macOS app, and self-hosted Runtime Hosts only change when a `vX.Y.Z` release
-ships. A push to `main` does not do that. It builds the runtime image and
-qualifies the hosted canary, and the dogfood and production rings then follow
-by themselves (Promote Rings, `.github/workflows/promote-rings.yml`; no tag or
-release needed). The `zerg-ship` skill has those commands and gates. The iOS app
-ships separately to TestFlight with `make testflight`.
+ships. A green push to `main` does not do that. The Release workflow
+(`.github/workflows/release.yml`) builds the runtime image, qualifies it on the
+hosted canary and deploys personal dogfood by itself (no tag or release
+needed). The `zerg-ship` skill has those commands and gates. The iOS app ships
+separately to TestFlight with `make testflight`.
 
 ## Tags
 
 | Tag | Workflow | Ships |
 |---|---|---|
 | `vX.Y.Z` | `publish.yml` and `local-runtime-release.yml`, on the GitHub release | PyPI wheel, `longhouse` and `longhouse-engine` binaries, signed macOS DMG |
-| `runtime-v*` | `runtime-image.yml` | `ghcr.io/cipher982/longhouse-runtime:runtime-v*` |
 | `runner-v*` | `runner-release.yml` | signed runner binaries and manifest |
 
-`vX.Y.Z` is what ships to users. The other two are ops-only, cut when a pinned
-runtime image or runner release is wanted outside the normal cadence.
+`vX.Y.Z` is what ships to users. `runner-v*` is ops-only, cut when a runner release is wanted outside the
+normal cadence.
 
 ## Cutting a `vX.Y.Z` release
 
@@ -66,13 +65,12 @@ Steps, in order:
    is already there). If the push loses a race and the bump is the only local
    commit, the script replays it onto the new `origin/main` and pushes again.
    Otherwise it stops and you rerun.
-4. **Gates.** Any exact-SHA gate workflow that GitHub's path filters skipped
-   (`runtime-image.yml`, `deploy-and-verify.yml`, `launch-gate.yml`) is
-   dispatched at the candidate SHA. `scripts/ops/launch-readiness.py` then waits
-   on that SHA for `CI`, `Deploy and Verify` and `Launch Gate`, plus a matching
-   build SHA on the canary (`--skip-demo`: the public demo is not part of a
-   release). `Deploy and Verify` dispatches Hosted Live QA asynchronously; its
-   verdict gates production promotion, not the release.
+4. **Gates.** `launch-gate.yml` is dispatched at the candidate SHA if GitHub's
+   path filters skipped it. `scripts/ops/launch-readiness.py` then waits on that
+   SHA for `CI`, `Release` and `Launch Gate`, plus a matching build SHA on the
+   canary (`--skip-demo`: the public demo is not part of a release). `Release`
+   starts when CI completes green; a candidate that changes no runtime input
+   passes with its Plan job alone.
 5. **Release.** `gh release create` cuts the release against the candidate SHA,
    with a changelog link to the previous tag. That fires `publish.yml` (wheel to
    PyPI and the release) and `local-runtime-release.yml` (engine and facade
@@ -110,11 +108,12 @@ signing step fails fast. The secrets are `MACOS_SIGNING_CERT_P12_BASE64`,
 ## Runtime image and runner
 
 The runtime image is built on a `main` push that touches runtime paths
-(`server/`, `web/`, `engine/`, `config/`, the runtime Dockerfile; see
-`.github/workflows/runtime-image.yml`) and tagged with the commit SHA. Archive
-Runtime Image then moves `:latest` to it if it is still main's head. A
-`runtime-v*` tag adds the semantic tag. Hosted tenants always get the
-digest-pinned image through a deployment, never `:latest`.
+(`server/`, `web/`, `engine/`, `config/`, the runtime Dockerfile; the
+`runtime_image` list in `.github/path-filters.yml`) once CI is green, and tagged
+with the commit SHA. The Release workflow's archive job copies the image to the
+immutable object store and moves `:latest` to it if it is still main's head.
+Hosted tenants always get the digest-pinned image through a deployment, never
+`:latest`.
 
 The runner has its own release cadence and signing manifest, independent of
 `vX.Y.Z` (`.github/workflows/runner-release.yml`).
@@ -123,5 +122,17 @@ The runner has its own release cadence and signing manifest, independent of
 
 - **PyPI:** wheels are immutable. Publish a new `vX.Y.Z+1` with the previous commit's content.
 - **Desktop app:** replace the DMG on the old release, or cut a new release at the previous commit.
-- **Canary runtime image:** re-deploy the previous SHA with `workflow_dispatch` on `deploy-and-verify.yml`, setting `runtime_image_tag` to the good SHA.
-- **Production:** a halted `make promote-production` prints its own recovery commands (control-plane rollback, or a rerun with `PROMOTION_ATTEMPT=<n+1>`).
+- **Hosted runtime (canary and dogfood):** there is no automatic rollback. A red
+  Release leaves dogfood on the last good image (dogfood is deployed last, after
+  the canary and, for sensitive ranges, QA). To go back on purpose, run
+  `make rollback SHA=<previous full sha>`: it runs Release for that commit with
+  `rollback=true`, reusing its image, through the canary and QA gate. Each
+  image also has an immutable OCI copy in the object store
+  (`scripts/ops/release-artifacts.py fetch`) if GHCR no longer has it. **Check
+  schema first:** `scripts/ops/runtime-schema.py` and the image's
+  `org.longhouse.catalog-schema.*` labels say what each image reads. Rolling
+  back across a forward migration can leave a tenant on an image that cannot
+  read its own data; david010 holds irreplaceable history, so do not roll back
+  across a schema change without a backup and a decision from the owner.
+- **Production (longhouse.ai):** dark, no deploy target. One is added to
+  `release.yml` when it launches.

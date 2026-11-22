@@ -1,5 +1,6 @@
-# Changes to these paths require the canary-qualified dogfood path. Everything
-# else may use the fast lane once its exact-SHA image publication is verified.
+# A range that changes any of these paths is qualified by Hosted Live QA before the
+# Release workflow deploys dogfood (scripts/ops/release_plan.py). Every other range
+# follows the canary smoke alone.
 paths = [
   # Migrations and persistent schema.
   "server/zerg/db_migrations.py",
@@ -31,10 +32,10 @@ paths = [
   # Billing, provisioning, deploy, promotion, and release controls.
   "server/zerg/routers/internal_deployments.py",
   "scripts/lib/hosted-instance.sh",
-  "scripts/ops/promote-*.sh",
-  "scripts/ops/promotion_gates.py",
-  "scripts/ops/ring_promoter.py",
   "scripts/ops/ring_lock.py",
+  "scripts/ops/release_plan.py",
+  "scripts/qa/hosted-qa-verdict.py",
+  "scripts/qa/run-hosted-target.sh",
   "scripts/lib/ring-lock.sh",
   "scripts/lib/exact-checkout.sh",
   "scripts/lib/heavy-build-lock.sh",

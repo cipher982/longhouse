@@ -25,37 +25,14 @@ EXIT_LIVE_DRIFT = 13
 
 ACCEPTED_CONCLUSIONS = {"success", "neutral", "skipped"}
 RUNTIME_HEALTH = {"healthy", "degraded"}
-DEPLOY_AND_VERIFY = "Deploy and Verify"
 CI_WORKFLOW = "CI"
-DEPLOY_DEMO_JOB = "Deploy public demo runtime"
-DEPLOY_AND_VERIFY_JOB = "Canary qualification smoke"
-NO_RUNTIME_CHANGE_JOB = "No runtime mutation required"
-DEPLOY_GATE_JOB = "Resolve exact-SHA deploy metadata"
-RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
-RUNTIME_IMAGE_JOB = "build-and-push"
+RELEASE_WORKFLOW = "Release"
+RELEASE_WORKFLOW_FILE = "release.yml"
+RELEASE_CANARY_JOB = "Canary deploy and smoke"
 DEFAULT_CANARY_SUBDOMAIN = os.environ.get("HOSTED_CANARY_SUBDOMAIN", "release-canary-a")
 CANARY_SURFACE = f"Canary {DEFAULT_CANARY_SUBDOMAIN}"
 DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/api/health"
-RUNTIME_IMAGE_PATHS = (
-    ".dockerignore",
-    "bun.lock",
-    "package.json",
-    "e2e/package.json",
-    "runner/package.json",
-    "config",
-    "docker/entrypoint.sh",
-    "docker/runtime.dockerfile",
-    "engine",
-    "schemas",
-    "server",
-    "web",
-    "video/src",
-    "video/scripts",
-    "video/package.json",
-    ".github/workflows/runtime-image.yml",
-    "scripts/ops/runtime-schema.py",
-    "scripts/ops/release-artifacts.py",
-)
+_FULL_SHA = re.compile(r"\b[0-9a-f]{40}\b")
 
 
 class NoRunsError(RuntimeError):
@@ -195,20 +172,36 @@ def fetch_runs_for_sha(repo: str, sha: str) -> list[RunInfo]:
     for item in data.get("workflow_runs") or []:
         if item.get("head_sha") != sha or item.get("event") not in ("push", "workflow_dispatch"):
             continue
-        runs.append(
-            RunInfo(
-                databaseId=int(item["id"]),
-                workflowName=item.get("name") or f"run-{item['id']}",
-                status=item.get("status") or "",
-                conclusion=item.get("conclusion"),
-                url=item.get("html_url") or "",
-                headSha=item.get("head_sha"),
-                createdAt=item.get("created_at"),
-                event=item.get("event"),
-                headBranch=item.get("head_branch"),
-            )
-        )
+        if item.get("name") == RELEASE_WORKFLOW:
+            continue  # read below, by title
+        runs.append(run_from_api(item))
+    # Release starts from CI completing (workflow_run), so its own head_sha can be main's head rather than
+    # this commit; its title is `Release <sha>`.
+    released = gh_api_cached(f"repos/{repo}/actions/workflows/{RELEASE_WORKFLOW_FILE}/runs?branch=main&per_page=30")
+    for item in released.get("workflow_runs") or []:
+        if item.get("name") == RELEASE_WORKFLOW and release_sha(item) == sha:
+            runs.append(run_from_api(item))
     return runs
+
+
+def release_sha(item: dict) -> str:
+    """The commit a Release run is about: the sha in its title, else its head_sha."""
+    found = _FULL_SHA.search(str(item.get("display_title") or item.get("name") or ""))
+    return found.group(0) if found else str(item.get("head_sha") or "")
+
+
+def run_from_api(item: dict) -> RunInfo:
+    return RunInfo(
+        databaseId=int(item["id"]),
+        workflowName=item.get("name") or f"run-{item['id']}",
+        status=item.get("status") or "",
+        conclusion=item.get("conclusion"),
+        url=item.get("html_url") or "",
+        headSha=item.get("head_sha"),
+        createdAt=item.get("created_at"),
+        event=item.get("event"),
+        headBranch=item.get("head_branch"),
+    )
 
 
 def default_branch() -> str | None:
@@ -355,12 +348,9 @@ def job_succeeded(repo: str, run: RunInfo, expected_job_name: str) -> bool:
 
 
 def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[str]]:
+    """CI and Release speak for a ship; other push workflows (Terminal Truth, Launch Gate) do not hold it."""
     workflow_names = {run.workflowName for run in runs}
-    required_names: list[str] = []
-
-    if DEPLOY_AND_VERIFY in workflow_names:
-        required_names.append(DEPLOY_AND_VERIFY)
-
+    required_names = [name for name in (CI_WORKFLOW, RELEASE_WORKFLOW) if name in workflow_names]
     if not required_names:
         return runs, []
 
@@ -371,6 +361,15 @@ def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[s
         selected.extend(matches[:1])
     selected.sort(key=lambda run: (run.workflowName, run.databaseId))
     return selected, required_names
+
+
+def awaiting_release(runs: list[RunInfo]) -> bool:
+    """CI has passed for this commit but its Release run has not started: Release starts when CI completes."""
+    ci = [run for run in runs if run.workflowName == CI_WORKFLOW]
+    if not ci or any(run.workflowName == RELEASE_WORKFLOW for run in runs):
+        return False
+    newest = max(ci, key=lambda run: run.databaseId)
+    return newest.status == "completed" and newest.conclusion == "success"
 
 
 def summarize_runs(runs: list[RunInfo], short_sha: str, scope_label: str | None = None) -> str:
@@ -465,84 +464,12 @@ def describe_run_progress(repo: str, run_info: RunInfo) -> str:
     return f"{run_info.workflowName} #{run_info.databaseId} / {job_name} / {step_name}: {status}{current_duration_suffix(started_at)}"
 
 
-def find_run(runs: list[RunInfo], workflow_name: str) -> RunInfo | None:
-    matches = [run_info for run_info in runs if run_info.workflowName == workflow_name]
-    if not matches:
-        return None
-    matches.sort(key=lambda run_info: run_info.databaseId, reverse=True)
-    return matches[0]
-
-
-def describe_blocking_workflow(repo: str, workflow_name: str, sha: str, runs: list[RunInfo] | None = None) -> str:
-    candidate_runs = runs if runs is not None else fetch_runs(repo, sha)
-    run_info = find_run(candidate_runs, workflow_name)
-    if run_info is None:
-        return f"{workflow_name}: no exact-SHA run found for {sha[:10]}"
-    if run_info.status == "completed":
-        return f"{workflow_name} #{run_info.databaseId}: completed/{run_info.conclusion or '-'}"
-    return describe_run_progress(repo, run_info)
-
-
-def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy_run: RunInfo) -> str | None:
-    try:
-        jobs = fetch_run_jobs(repo, deploy_run.databaseId)
-    except RuntimeError:
-        return None
-
-    gate_job = next((job for job in jobs if field(job, "name") == DEPLOY_GATE_JOB), None)
-    if gate_job and field(gate_job, "status") == "in_progress":
-        step = active_step(gate_job)
-        if step is None:
-            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB}: in_progress"
-
-        step_name = field(step, "name") or "current gate step"
-        status = field(step, "status") or "unknown"
-        started_at = field(step, "started_at", "startedAt")
-
-        # The first name is what the gate step was called until 2026-09-24 (kept
-        # so historical runs still read correctly); the second is its name now
-        # that it waits on the suites that can invalidate a deploy rather than on
-        # browser E2E.
-        if step_name in {
-            "Wait for core E2E gate",
-            "Wait for full CI gate",
-            "Wait for the suites that can invalidate this deploy",
-        }:
-            blocker = describe_blocking_workflow(repo, CI_WORKFLOW, sha, runs)
-            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
-
-        if step_name == "Wait for runtime image publish":
-            blocker = describe_blocking_workflow(repo, RUNTIME_IMAGE_WORKFLOW, sha, runs)
-            return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
-
-        return (
-            f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB} / {step_name}: {status}{current_duration_suffix(started_at)}"
-        )
-
-    active = active_job(jobs)
-    if active is None:
-        return None
-    job_name = field(active, "name") or "active job"
-    step = active_step(active)
-    if step is None:
-        return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name}: {field(active, 'status') or 'unknown'}"
-    step_name = field(step, "name") or "current step"
-    status = field(step, "status") or "unknown"
-    started_at = field(step, "started_at", "startedAt")
-    return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name} / {step_name}: {status}{current_duration_suffix(started_at)}"
-
-
 def describe_ship_blocker(repo: str, sha: str, runs: list[RunInfo]) -> str | None:
     for run_info in runs:
-        if run_info.status != "completed" and run_info.workflowName == DEPLOY_AND_VERIFY:
-            blocker = describe_deploy_run_blocker(repo, sha, runs, run_info)
-            if blocker:
-                return blocker
-
-    for run_info in runs:
-        if run_info.status == "completed":
-            continue
-        return describe_run_progress(repo, run_info)
+        if run_info.status != "completed":
+            return describe_run_progress(repo, run_info)
+    if awaiting_release(runs):
+        return f"{CI_WORKFLOW} passed; waiting for the {RELEASE_WORKFLOW} run for {sha[:10]} to start"
     return None
 
 
@@ -636,7 +563,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
             if args.heartbeat > 0:
                 next_heartbeat = now + max(args.heartbeat, 1)
 
-        if all(run.status == "completed" for run in monitored_runs):
+        if all(run.status == "completed" for run in monitored_runs) and not awaiting_release(runs):
             return runs
 
         if next_heartbeat is not None and now >= next_heartbeat:
@@ -652,23 +579,10 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
         time.sleep(args.poll)
 
 
-GATE_JOB = "Resolve exact-SHA deploy metadata"
-CANARY_REPROVISION_JOB = "Reprovision hosted canary"
-
-
-def was_superseded(repo: str, runs: list[RunInfo]) -> bool:
-    """Main CI drops queued runs for commits main has moved past, and the deploy
-    for such a commit stands down green. Either shape means another commit
-    carries this one; neither is a failure of this commit."""
-    if any(run.status == "completed" and run.conclusion == "cancelled" for run in runs):
-        return True
-    for run in runs:
-        if run.workflowName != DEPLOY_AND_VERIFY or run.status != "completed" or run.conclusion != "success":
-            continue
-        jobs = {job.get("name"): job.get("conclusion") for job in fetch_run_jobs(repo, run.databaseId)}
-        if jobs.get(GATE_JOB) == "success" and jobs.get(CANARY_REPROVISION_JOB) == "skipped" and jobs.get(NO_RUNTIME_CHANGE_JOB) != "success":
-            return True
-    return False
+def was_superseded(runs: list[RunInfo]) -> bool:
+    """Main CI drops queued runs for commits main has moved past, and GitHub keeps one pending Release: a
+    cancelled run means another commit carries this one; it is not a failure of this commit."""
+    return any(run.status == "completed" and run.conclusion == "cancelled" for run in runs)
 
 
 def contains_commit(root: Path, descendant: str, ancestor: str) -> bool:
@@ -679,19 +593,13 @@ def contains_commit(root: Path, descendant: str, ancestor: str) -> bool:
 def wait_following_coverage(args: argparse.Namespace, root: Path, sha: str) -> tuple[str, list[RunInfo]]:
     """Wait on `sha`; when its runs were superseded, follow main's head, which contains it.
 
-    This is the descendant-coverage mode: a newer main commit's verified deploy
-    ships this change, so the ship result is that commit's result.
+    This is the descendant-coverage mode: a newer main commit's Release deploys
+    everything since what the tenant serves, so the ship result is that commit's result.
     """
     while True:
         runs = wait_for_workflows(args, sha)
         head = fetch_remote_head(args.repo)
-        if not head or head == sha or not was_superseded(args.repo, runs) or not contains_commit(root, head, sha):
-            return sha, runs
-        # A docs-only head cannot publish the runtime image skipped by this
-        # commit's cancelled CI. Refuse descendant coverage without a
-        # runtime-affecting successor; live verification checks this SHA.
-        if latest_runtime_affecting_sha(root, sha) == sha and latest_runtime_affecting_sha(root, head) != head:
-            print(f"{head[:10]} has no runtime artifact; cannot cover {sha[:10]}'s deploy.", file=sys.stderr)
+        if not head or head == sha or not was_superseded(runs) or not contains_commit(root, head, sha):
             return sha, runs
         print(
             f"{sha[:10]} was superseded: its queued runs were dropped because main moved to {head[:10]}, "
@@ -730,52 +638,20 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     return surfaces
 
 
-def latest_runtime_affecting_sha(root: Path, target_sha: str) -> str | None:
-    proc = run(
-        ["git", "rev-list", "-1", target_sha, "--", *RUNTIME_IMAGE_PATHS],
-        cwd=root,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    value = proc.stdout.strip()
-    return value or None
-
-
-def runtime_reuse_accepted_shas(root: Path, latest_runtime_sha: str | None, target_sha: str) -> set[str]:
-    if not latest_runtime_sha:
-        return {target_sha[:10]}
-    accepted = {latest_runtime_sha[:10], target_sha[:10]}
-    proc = run(
-        ["git", "rev-list", "--ancestry-path", f"{latest_runtime_sha}..{target_sha}"],
-        cwd=root,
-        check=False,
-    )
-    if proc.returncode == 0:
-        accepted.update(line[:10] for line in proc.stdout.splitlines() if line.strip())
-    return accepted
+def release_disposition(repo: str, runs: list[RunInfo]) -> str:
+    """deployed (the Release canary job succeeded), no_runtime_change (Release had nothing to deploy) or unverified."""
+    releases = [run for run in runs if run.workflowName == RELEASE_WORKFLOW and run.status == "completed" and run.conclusion == "success"]
+    if not releases:
+        return "unverified"
+    if any(job_succeeded(repo, run, RELEASE_CANARY_JOB) for run in releases):
+        return "deployed"
+    return "no_runtime_change"
 
 
 def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
-    jobs_by_run_id: dict[int, list[dict]] = {}
-
-    def job_succeeded(run: RunInfo, expected_job_name: str) -> bool:
-        if run.status != "completed" or run.conclusion != "success":
-            return False
-        jobs = jobs_by_run_id.get(run.databaseId)
-        if jobs is None:
-            jobs = fetch_run_jobs(repo, run.databaseId)
-            jobs_by_run_id[run.databaseId] = jobs
-        for job in jobs:
-            if job.get("name") == expected_job_name and job.get("conclusion") == "success":
-                return True
-        return False
-
-    runtime_image_published = any(run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB) for run in runs)
-    expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
-    if runtime_image_published:
-        expected_runtime_sha = sha
-    expected_runtime_short = expected_runtime_sha[:10] if expected_runtime_sha else None
+    # Only a release that deployed must show: the canary serves this commit or one that contains it. Dogfood
+    # follows the canary under its own gates and is printed in the status table for reference.
+    deployed = release_disposition(repo, runs) == "deployed"
 
     def read_deploy_status() -> tuple[dict[str, SurfaceInfo], str]:
         proc = run(
@@ -788,55 +664,28 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         raw = proc.stdout
         return parse_deploy_status(raw), raw
 
-    def require_surface(
-        errors: list[str],
-        surfaces: dict[str, SurfaceInfo],
-        surface_name: str,
-        allowed_health: set[str],
-        *,
-        expected_shas: set[str],
-    ) -> None:
-        surface = surfaces.get(surface_name)
+    def check_canary(surfaces: dict[str, SurfaceInfo]) -> list[str]:
+        surface = surfaces.get(CANARY_SURFACE)
         if surface is None:
-            errors.append(f"Missing {surface_name!r} in deploy-status output")
-            return
-        if expected_shas and surface.sha not in expected_shas:
-            expected = sorted(expected_shas)
-            expected_label = expected[0] if len(expected) == 1 else f"one of {expected}"
-            errors.append(f"{surface_name} is on {surface.sha}, expected {expected_label}")
-        if surface.health not in allowed_health:
-            errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
+            return [f"Missing {CANARY_SURFACE!r} in deploy-status output"]
+        errors: list[str] = []
+        if surface.sha != sha[:10] and not contains_commit(root, surface.sha, sha):
+            errors.append(f"{CANARY_SURFACE} is on {surface.sha}, expected {sha[:10]} or a commit that contains it")
+        if surface.health not in RUNTIME_HEALTH:
+            errors.append(f"{CANARY_SURFACE} health is {surface.health}, expected one of {sorted(RUNTIME_HEALTH)}")
+        return errors
 
-    deploy_run_completed = any(
-        run.workflowName == DEPLOY_AND_VERIFY and run.status == "completed" and run.conclusion in ACCEPTED_CONCLUSIONS for run in runs
-    )
-    deploy_run_succeeded = any(
-        run.workflowName == DEPLOY_AND_VERIFY and run.status == "completed" and run.conclusion in {"success", "neutral"} for run in runs
-    )
-    deploy_job_succeeded = any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB) for run in runs)
-    no_runtime_change = any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, NO_RUNTIME_CHANGE_JOB) for run in runs)
-    expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
-    if (deploy_job_succeeded or deploy_run_succeeded) and not no_runtime_change:
-        expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
-
-    def live_status_retryable(surfaces: dict[str, SurfaceInfo]) -> bool:
-        for surface_name in (CANARY_SURFACE,):
-            surface = surfaces.get(surface_name)
-            if surface is None or surface.sha == "-" or surface.health == "unreachable":
-                return True
-        return False
+    def retryable(surfaces: dict[str, SurfaceInfo]) -> bool:
+        surface = surfaces.get(CANARY_SURFACE)
+        return surface is None or surface.sha == "-" or surface.health == "unreachable"
 
     surfaces: dict[str, SurfaceInfo] = {}
     raw = ""
     errors: list[str] = []
     for attempt in range(3):
         surfaces, raw = read_deploy_status()
-        errors = []
-        if (deploy_run_completed or deploy_job_succeeded) and not no_runtime_change:
-            # Only the canary has to match this deploy; dogfood is promoted
-            # after it and is printed in the status table for reference.
-            require_surface(errors, surfaces, CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
-        if not errors or not live_status_retryable(surfaces) or attempt == 2:
+        errors = check_canary(surfaces) if deployed else []
+        if not errors or not retryable(surfaces) or attempt == 2:
             break
         time.sleep(2)
 
@@ -911,11 +760,7 @@ def main() -> int:
     monitored_runs, required_names = select_load_bearing_runs(runs)
     workflow_payload = [asdict(run) for run in runs]
     monitored_payload = [asdict(run) for run in monitored_runs]
-    runtime_disposition = (
-        "no_runtime_change"
-        if any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(args.repo, run, NO_RUNTIME_CHANGE_JOB) for run in runs)
-        else "unverified"
-    )
+    runtime_disposition = release_disposition(args.repo, runs) if runs_succeeded(monitored_runs) else "unverified"
 
     if not runs_succeeded(monitored_runs):
         failures = failed_runs(monitored_runs)
@@ -973,10 +818,6 @@ def main() -> int:
                     print("", file=sys.stderr)
                     print(live_output.rstrip(), file=sys.stderr)
             return EXIT_LIVE_DRIFT
-        if runtime_disposition == "unverified" and any(
-            run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(args.repo, run, DEPLOY_AND_VERIFY_JOB) for run in runs
-        ):
-            runtime_disposition = "deployed"
 
     payload = {
         "repo": args.repo,

@@ -23,13 +23,20 @@ run-name: Release ${{ github.event.workflow_run.head_sha || inputs.sha || github
 # SHA replaces a waiting one (it contains it); `dogfood` refuses any SHA that does not contain what david010
 # serves.
 #
-# Manual:
+# Starts when CI completes green on main, or by hand:
 #   gh workflow run release.yml -f sha=<full sha>                canary only
 #   gh workflow run release.yml -f sha=<full sha> -f dogfood=true
 # Roll back dogfood to an earlier commit (see RELEASE.md, "Rollback" before a migration-bearing range):
 #   gh workflow run release.yml -f sha=<previous full sha> -f dogfood=true -f rollback=true
 
 on:
+  workflow_run:
+    # CI always concludes (its path filters are job-level), so every main push yields a Release run; a run
+    # for a commit with nothing to deploy ends after Plan. Events caused by GITHUB_TOKEN start no workflow,
+    # which is why this is not a push-triggered chain of dispatches.
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       sha:
@@ -69,7 +76,10 @@ jobs:
   plan:
     name: "Plan"
     runs-on: ci-gate
-    if: github.repository == 'cipher982/longhouse'
+    if: >-
+      github.repository == 'cipher982/longhouse' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.plan.outputs.sha }}
@@ -88,12 +98,12 @@ jobs:
       - uses: ./.github/actions/setup-gh
       - name: Resolve mode
         id: mode
-        run: echo "dogfood=${{ inputs.dogfood == true }}" >> "$GITHUB_OUTPUT"
+        run: echo "dogfood=${{ github.event_name == 'workflow_run' || inputs.dogfood == true }}" >> "$GITHUB_OUTPUT"
       - name: Decide
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.sha || github.sha }}
+          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha || github.sha }}
           DOGFOOD: ${{ steps.mode.outputs.dogfood }}
           ROLLBACK: ${{ inputs.rollback == true }}
         run: |

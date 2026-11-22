@@ -61,11 +61,11 @@ def test_pre_release_gate_precedes_github_release_and_skips_only_release_evidenc
 
     for workflow in (
         '"CI"',
-        '"Deploy and Verify"',
+        '"Release"',
         '"Launch Gate"',
     ):
         assert f"--required-workflow {workflow}" in gate
-    assert '--required-workflow "Hosted Live QA"' not in gate
+    assert '--required-workflow "Deploy and Verify"' not in gate
     assert "--timeout 7200" in gate
     for skipped_check in ("--skip-release", "--skip-public-package", "--skip-runtime-artifacts", "--skip-demo"):
         assert skipped_check in gate
@@ -86,7 +86,7 @@ def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> 
     readiness = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
     dispatch = SOURCE[push:readiness]
 
-    assert "for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml" in dispatch
+    assert "for workflow in launch-gate.yml; do" in dispatch  # Release starts itself when CI completes
     assert "test-install.yml" not in dispatch
     assert '--commit "$BUMP_SHA"' in dispatch
     assert 'if [[ "$run_count" == "0" ]]' in dispatch
