@@ -9,7 +9,7 @@ Longhouse already has most of the measuring and gating systems an agent is
 tempted to build. Read `~/git/zerg/control-plane/docs/concepts-index.md` before
 you write a plan that adds one. It lists each system with its make target, spec
 or skill, grouped by area (provider transcripts, session state, shipping, provider
-factory, iOS, testing, performance, hosted, agents).
+checks, iOS, testing, performance, hosted, agents).
 
 The index is generated from `control-plane/scripts/workspace_index/concepts.toml`.
 To add or change an entry, edit that file and run `make workspace-index` from

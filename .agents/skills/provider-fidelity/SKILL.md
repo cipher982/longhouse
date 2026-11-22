@@ -36,7 +36,7 @@ before building a census, a feature matrix or a coverage report.
    `surface_proof` or `.facts.expected.json` names.
 4. Prove a parser change with `make test-engine TEST=<filter>`, then
    `make provider-parity` for the stage it moves. Live provider proofs run on
-   the bench or the factory, never a provider CLI on this Mac (`managed-provider-cli` says why).
+   the bench, never a provider CLI on this Mac (`managed-provider-cli` says why).
 
 ## Mistakes already made
 

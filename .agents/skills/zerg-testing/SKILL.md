@@ -51,8 +51,8 @@ named real-provider cells against any commit (default `HEAD`, pushed or not) on
 (credential-free scripted model; never a provider CLI on this Mac, and never in
 David's workspace `cube-ws`; `PROVE_HOST` overrides the host) and prints one `PASS|FAIL <cell> <seconds> <evidence path>` line per
 cell, exit 1 on any failure. Use it for a real provider cell before pushing
-and before waiting on a factory tick or the Terminal
-Truth workflow.
+and before waiting on the Terminal Truth or provider
+nightly workflow.
 
 - Cells: a Terminal Truth cell `provider/mode[:scenario]` (`claude/helm`,
   `codex/console:thinking`; scenarios `long_reply` (default), `two_message`,
@@ -68,7 +68,7 @@ Truth workflow.
 - Teardown runs on success, failure, timeout and signal and the summary line says
   `cleanup clean` or `DIRTY` (counted as a failure). Evidence is copied to
   `/tmp/agents/prove/<run>/` and stays on the proof host for 24 h.
-- `TARGET=factory` and `TARGET=wisp` are not built and refuse by name.
+- `TARGET=wisp` is not built and refuse by name.
   Measurements and open work: `control-plane/docs/specs/multi-agent-dev-loop-speed.md`.
 
 ## Attributing a failure first
@@ -185,7 +185,7 @@ The specifics:
 - Reparented descendants (provider, bridge, shipper, catalog daemon, server with
   parent PID 1) are still yours. Stop them through the ownership record and
   re-read the inventory after the controller exits.
-- Provider probes run on the bench or the factory, never on this Mac
+- Provider probes run on the bench, never on this Mac
   (`managed-provider-cli`, which says why), with `--no-session` or a disposable `--session-dir`.
   If a protocol ignores that, record the native session path and remove it in
   `finally`.
