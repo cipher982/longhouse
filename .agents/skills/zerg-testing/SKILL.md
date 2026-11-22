@@ -68,7 +68,7 @@ nightly workflow.
 - Teardown runs on success, failure, timeout and signal and the summary line says
   `cleanup clean` or `DIRTY` (counted as a failure). Evidence is copied to
   `/tmp/agents/prove/<run>/` and stays on the proof host for 24 h.
-- `TARGET=wisp` is not built and refuse by name.
+- `TARGET=factory` and `TARGET=wisp` are not built and refuse by name.
   Measurements and open work: `control-plane/docs/specs/multi-agent-dev-loop-speed.md`.
 
 ## Attributing a failure first
