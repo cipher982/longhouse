@@ -7,7 +7,6 @@ Desktop and iOS tests alike, so the four clients cannot drift apart.
 from __future__ import annotations
 
 import json
-import urllib.error
 from pathlib import Path
 
 import pytest
@@ -392,35 +391,10 @@ def test_the_desktop_ui_url_honours_the_opt_in_stored_under_a_custom_longhouse_h
     assert "http://192.168.1.20:8080" in plist
 
 
-def test_background_collectors_skip_a_stored_address_the_rule_forbids(monkeypatch, tmp_path: Path):
+def test_token_is_not_sent_to_an_address_the_rule_forbids(monkeypatch, tmp_path: Path):
     from zerg.services import local_health
-    from zerg.services import provider_capability_remote_proof as remote_proof
 
     monkeypatch.delenv(OPT_IN_ENV, raising=False)
-    sent: list[str] = []
-
-    def opener(request, timeout=None):
-        sent.append(request.full_url)
-        raise AssertionError("the token must not be sent")
-
-    for refused_url in ("http://demo.longhouse.ai", "http://192.168.1.20:8080"):
-        refused = remote_proof.refresh_cached_provider_capability_proofs(
-            tmp_path, runtime_url=refused_url, token="device-token", opener=opener
-        )
-        assert refused.summary["refresh_state"] == "invalid_runtime_url"
-        assert "Refusing plaintext" in refused.summary["error"]
-        assert sent == []
-
-    # A Tailscale address is now a valid Runtime Host for the proof refresh too.
-    def offline(request, timeout=None):
-        sent.append(request.full_url)
-        raise urllib.error.URLError("offline")
-
-    tailscale = remote_proof.refresh_cached_provider_capability_proofs(
-        tmp_path, runtime_url="http://100.64.0.1:8080", token="device-token", opener=offline
-    )
-    assert sent == ["http://100.64.0.1:8080/api/agents/provider-capability-proofs"]
-    assert tailscale.summary["refresh_state"] != "invalid_runtime_url"
 
     from zerg.services.shipper.token import may_send_token_to
 

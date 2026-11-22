@@ -137,7 +137,6 @@ from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.permission_gate import router as permission_gate_router
 from zerg.routers.presence import router as presence_router
-from zerg.routers.provider_capability_proofs import router as provider_capability_proofs_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runtime import router as runtime_router
 from zerg.routers.session_chat import agents_router as agents_session_chat_router
@@ -306,7 +305,6 @@ api_app.include_router(observability_router)
 api_app.include_router(agents_observability_router)
 api_app.include_router(agents_media_router)
 api_app.include_router(media_router)
-api_app.include_router(provider_capability_proofs_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
 api_app.include_router(session_inputs_attachments_router)

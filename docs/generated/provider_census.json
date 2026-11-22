@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 351,
+  "file_count": 342,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1062,14 +1062,6 @@
       ]
     },
     {
-      "path": "scripts/ui-fixtures/providerCertification.ts",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor"
-      ]
-    },
-    {
       "path": "scripts/ui-fixtures/sessionDetailStress.ts",
       "providers": [
         "antigravity",
@@ -1186,13 +1178,6 @@
       "providers": [
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_capability_projection.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1720,42 +1705,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_provider_capability_proof_routes.py",
-      "providers": [
-        "claude",
-        "codex",
-        "cursor"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_capability_proof_store.py",
-      "providers": [
-        "claude",
-        "cursor"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_capability_schema.py",
-      "providers": [
-        "omp",
-        "pi"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_chip_certification.py",
-      "providers": [
-        "antigravity",
-        "pi"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_chip_proof_edges.py",
-      "providers": [
-        "antigravity",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_provider_console_lifecycle.py",
       "providers": [
         "antigravity",
@@ -1772,13 +1721,6 @@
       "providers": [
         "claude",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_field_versions.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1891,13 +1833,6 @@
         "claude",
         "codex",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_provider_version_evidence.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {

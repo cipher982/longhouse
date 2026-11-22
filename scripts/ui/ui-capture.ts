@@ -59,7 +59,7 @@
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-parked-close
  *   bunx tsx scripts/ui/ui-capture.ts session-detail --scene=session-demo-shell   # the read-only demo's banner under the app bar
  *   bunx tsx scripts/ui/ui-capture.ts devices --scene=devices-revoke
- *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-certification --viewport=desktop-tall
+ *   bunx tsx scripts/ui/ui-capture.ts landing --scene=provider-support --viewport=desktop-tall
  *   bunx tsx scripts/ui/ui-capture.ts machines
  *   bunx tsx scripts/ui/ui-capture.ts --all
  */
@@ -98,7 +98,6 @@ import {
   type SessionTone,
 } from "../ui-fixtures/sessionDetailStress";
 import { captureWheelMap } from "./wheel-map";
-import { buildProviderCertificationFixture } from "../ui-fixtures/providerCertification";
 import { buildFirstRunMachineFixture, FIRST_RUN_NOW } from "../ui-fixtures/firstRun";
 import { buildFirstRunMachinesSummary, buildMachinesFleetFixture } from "../ui-fixtures/machinesFleet";
 import { buildTimelineCardStressFixture } from "../ui-fixtures/timelineCardStress";
@@ -184,7 +183,7 @@ const SCENES = [
   "landing",
   "landing-search",
   "landing-session",
-  "provider-certification",
+  "provider-support",
   "first-run",
   "first-run-machine",
   "login",
@@ -202,9 +201,9 @@ const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launc
 // Scenes whose frames show the Hearth fires moving: the Timeline's, and the
 // session rail's beside the new-session composer.
 const HEARTH_MOTION_SCENES: readonly SceneName[] = ["timeline-hearth", "new-session"];
-// The marketing page's provider chart, answered by the certification fixture.
-const PROVIDER_CERTIFICATION_SCENE: SceneName = "provider-certification";
-const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session", PROVIDER_CERTIFICATION_SCENE];
+// The marketing page's provider chart reads the generated contract, no fixture.
+const PROVIDER_SUPPORT_SCENE: SceneName = "provider-support";
+const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session", PROVIDER_SUPPORT_SCENE];
 // A brand-new Runtime Host: no sessions, no machines. The timeline shows its
 // connect command; the machines page opens its Connect a machine sheet.
 const FIRST_RUN_SCENE: SceneName = "first-run";
@@ -435,7 +434,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "new-session" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
-    scene === PROVIDER_CERTIFICATION_SCENE ||
+    scene === PROVIDER_SUPPORT_SCENE ||
     scene === "session-detail-stress" ||
     scene === "session-prose-idle" ||
     scene === "session-research-turn" ||
@@ -481,8 +480,8 @@ function validateOptions(opts: Options): void {
   if (opts.cssVariant && !existsSync(cssVariantPath(opts.cssVariant))) {
     throw new Error(`--css-variant=${opts.cssVariant}: no ${path.relative(REPO_ROOT, cssVariantPath(opts.cssVariant))}`);
   }
-  if ((opts.scene === PROVIDER_CERTIFICATION_SCENE) !== (opts.page === "landing")) {
-    throw new Error(`PAGE=landing and --scene=${PROVIDER_CERTIFICATION_SCENE} capture only each other.`);
+  if ((opts.scene === PROVIDER_SUPPORT_SCENE) !== (opts.page === "landing")) {
+    throw new Error(`PAGE=landing and --scene=${PROVIDER_SUPPORT_SCENE} capture only each other.`);
   }
   if (DEVICES_SCENES.includes(opts.scene) && opts.page !== "devices") {
     throw new Error(`--scene=${opts.scene} captures PAGE=devices only.`);
@@ -1085,15 +1084,9 @@ export async function installSceneMocks(
     return;
   }
 
-  if (scene === PROVIDER_CERTIFICATION_SCENE) {
-    const certification = buildProviderCertificationFixture();
+  if (scene === PROVIDER_SUPPORT_SCENE) {
     await context.route(`${appOrigin}/api/**`, async (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === "/api/public/provider-certification") {
-        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(certification) });
-        return;
-      }
-      await sealOrFallback(route, scene, pathname);
+      await sealOrFallback(route, scene, new URL(route.request().url()).pathname);
     });
     return;
   }
@@ -1652,9 +1645,8 @@ async function captureBundle(
     await page.waitForSelector("[data-testid='connect-machine-command']", { timeout: 5000 });
   }
 
-  // The chart fetches after first paint: wait for it to resolve, then frame it.
-  if (scene === PROVIDER_CERTIFICATION_SCENE) {
-    await page.waitForSelector("#providers [data-certification='certified']", { timeout: 5000 });
+  if (scene === PROVIDER_SUPPORT_SCENE) {
+    await page.waitForSelector("#providers .landing-provider-capability", { timeout: 5000 });
     await page.evaluate("document.getElementById('providers').scrollIntoView()");
   }
 
