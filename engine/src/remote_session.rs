@@ -32,7 +32,7 @@ pub struct RemoteTargetArgs {
     pub on: Option<String>,
     /// Attach to a specific named remote session instead of auto-selecting one.
     #[arg(long, requires = "on", value_name = "NAME")]
-    pub attach: Option<String>,
+    pub remote_attach: Option<String>,
     /// Override the base name used for the remote session socket.
     #[arg(long, requires = "on", value_name = "NAME")]
     pub remote_name: Option<String>,
@@ -311,7 +311,7 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
         .on
         .as_deref()
         .context("missing --on target for remote launch")?;
-    if let Some(attach) = spec.remote.attach.as_deref() {
+    if let Some(attach) = spec.remote.remote_attach.as_deref() {
         validate_session_name(attach)?;
     }
     if let Some(remote_name) = spec.remote.remote_name.as_deref() {
@@ -319,7 +319,7 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
     }
     let resolved_cwd = std::fs::canonicalize(&spec.cwd)
         .with_context(|| format!("resolve working directory {}", spec.cwd.display()))?;
-    if spec.remote.attach.is_none() {
+    if spec.remote.remote_attach.is_none() {
         warn_local_git_divergence(&resolved_cwd, target);
     }
     let mapped_cwd = map_cwd_for_remote(&resolved_cwd, local_home_dir().as_deref())?;
@@ -330,7 +330,7 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
         "--provider".to_string(),
         spec.provider.as_str().to_string(),
     ];
-    if let Some(attach) = spec.remote.attach {
+    if let Some(attach) = spec.remote.remote_attach {
         remote_args.push("--attach".to_string());
         remote_args.push(attach);
     }

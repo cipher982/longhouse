@@ -7660,4 +7660,29 @@ mod tests {
             vec!["antigravity", "--project", "demo", "--", "--foo"]
         );
     }
+
+    #[test]
+    fn cli_command_has_no_clap_conflicts() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+
+        let codex = Cli::try_parse_from([
+            "longhouse",
+            "codex",
+            "--on",
+            "box",
+            "--remote-attach",
+            "codex-demo",
+        ])
+        .unwrap();
+        let Some(Commands::Codex {
+            command: None,
+            launch,
+        }) = codex.command
+        else {
+            panic!("expected codex");
+        };
+        assert_eq!(launch.remote.on.as_deref(), Some("box"));
+        assert_eq!(launch.remote.remote_attach.as_deref(), Some("codex-demo"));
+    }
 }
