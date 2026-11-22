@@ -273,6 +273,7 @@ fn type_message(writer: &PtyWriter, text: &str) -> Result<(), TypeError> {
 }
 
 /// One poll: if agy is idle and a send is waiting, claim and type it.
+#[cfg(test)]
 pub fn wake_once(
     gate: &mut WakeGate,
     writer: &PtyWriter,

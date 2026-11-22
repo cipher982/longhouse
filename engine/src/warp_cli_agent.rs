@@ -4,13 +4,17 @@
 //! environment identifies Warp (`TERM_PROGRAM=WarpTerminal`, plus non-empty
 //! `WARP_CLI_AGENT_PROTOCOL_VERSION` and `WARP_CLIENT_VERSION`).
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 
 const MAX_OSC_SEQUENCE_BYTES: usize = 4096;
 const EXTRA_FIELD_MAX_CHARS: usize = 160;
 const SUPPORTED_PROTOCOL_VERSION: u64 = 1;
+pub(crate) const WARP_STATE_FILE_ENV: &str = "LONGHOUSE_WARP_STATE_FILE";
+pub(crate) const REMOTE_VIEWERS_DIR_ENV: &str = "LONGHOUSE_REMOTE_VIEWERS_DIR";
 
 fn is_warp_env(
     term_program: Option<&str>,
@@ -22,7 +26,8 @@ fn is_warp_env(
         && client_version.is_some_and(|value| !value.trim().is_empty())
 }
 
-pub(crate) fn is_warp_terminal() -> bool {
+#[allow(dead_code)]
+pub(crate) fn is_warp_env_current() -> bool {
     let term_program = std::env::var("TERM_PROGRAM").ok();
     let protocol_version = std::env::var("WARP_CLI_AGENT_PROTOCOL_VERSION").ok();
     let client_version = std::env::var("WARP_CLIENT_VERSION").ok();
@@ -31,6 +36,54 @@ pub(crate) fn is_warp_terminal() -> bool {
         protocol_version.as_deref(),
         client_version.as_deref(),
     )
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) fn viewer_locks_want_warp(dir: &Path) -> Option<bool> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut active_viewers = 0usize;
+    let mut all_warp = true;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("lock") {
+            continue;
+        }
+        let Ok(file) = std::fs::OpenOptions::new().read(true).open(&path) else {
+            continue;
+        };
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            unsafe {
+                libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+            }
+            continue;
+        }
+        let err = std::io::Error::last_os_error().raw_os_error();
+        if err == Some(libc::EWOULDBLOCK) || err == Some(libc::EAGAIN) {
+            active_viewers += 1;
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            if !contents.lines().any(|line| line.trim() == "warp=1") {
+                all_warp = false;
+            }
+        }
+    }
+    (active_viewers > 0).then_some(all_warp)
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)]
+pub(crate) fn viewer_locks_want_warp(_dir: &Path) -> Option<bool> {
+    None
+}
+
+pub(crate) fn is_warp_terminal() -> bool {
+    if let Some(dir) = std::env::var_os(REMOTE_VIEWERS_DIR_ENV).filter(|val| !val.is_empty()) {
+        if let Some(want_warp) = viewer_locks_want_warp(Path::new(&dir)) {
+            return want_warp;
+        }
+    }
+    is_warp_env_current()
 }
 
 fn protocol_version() -> u64 {
@@ -182,6 +235,115 @@ pub(crate) fn session_event_marker(
     session_event_marker_with_fields(agent, event, session_id, cwd, project, &[])
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct WarpSessionState {
+    pub agent: String,
+    pub session_id: String,
+    pub cwd: String,
+    pub project: String,
+    pub last_event: String,
+    pub updated_at: String,
+}
+
+#[allow(dead_code)]
+pub(crate) fn has_warp_state_file() -> bool {
+    std::env::var_os(WARP_STATE_FILE_ENV).is_some_and(|value| !value.is_empty())
+}
+
+#[allow(dead_code)]
+pub(crate) fn record_warp_state(
+    agent: &str,
+    event: &str,
+    session_id: &str,
+    cwd: &Path,
+    project: Option<&str>,
+) {
+    let Some(path) = std::env::var_os(WARP_STATE_FILE_ENV).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let state = WarpSessionState {
+        agent: strip_control_chars(agent),
+        session_id: strip_control_chars(session_id),
+        cwd: strip_control_chars(&cwd.to_string_lossy()),
+        project: project_name(cwd, project),
+        last_event: strip_control_chars(event),
+        updated_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    let Ok(bytes) = serde_json::to_vec(&state) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension(format!("json.tmp.{}", uuid::Uuid::new_v4().simple()));
+    if std::fs::write(&tmp, &bytes).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    if std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn read_warp_state(path: &Path) -> Option<WarpSessionState> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+#[allow(dead_code)]
+pub(crate) fn replay_markers_for_state(state: &WarpSessionState) -> Vec<String> {
+    if state.last_event == "session_end" {
+        return Vec::new();
+    }
+    let cwd = Path::new(&state.cwd);
+    let mut markers = vec![session_event_marker(
+        &state.agent,
+        "session_start",
+        &state.session_id,
+        cwd,
+        Some(&state.project),
+    )];
+    if matches!(
+        state.last_event.as_str(),
+        "prompt_submit" | "input_required" | "stop"
+    ) {
+        markers.push(session_event_marker(
+            &state.agent,
+            &state.last_event,
+            &state.session_id,
+            cwd,
+            Some(&state.project),
+        ));
+    }
+    markers
+}
+
+#[allow(dead_code)]
+pub(crate) fn emit_replay_markers(path: &Path) {
+    if !is_warp_env_current() || !std::io::stdout().is_terminal() {
+        return;
+    }
+    let Some(state) = read_warp_state(path) else {
+        return;
+    };
+    let markers = replay_markers_for_state(&state);
+    if markers.is_empty() {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    for marker in markers {
+        let _ = stdout.write_all(marker.as_bytes());
+    }
+    let _ = stdout.flush();
+}
+
 pub(crate) fn emit_session_event(
     agent: &str,
     event: &str,
@@ -189,6 +351,7 @@ pub(crate) fn emit_session_event(
     cwd: &Path,
     project: Option<&str>,
 ) {
+    record_warp_state(agent, event, session_id, cwd, project);
     if !is_warp_terminal() || !std::io::stdout().is_terminal() {
         return;
     }
@@ -215,6 +378,7 @@ pub(crate) fn emit_tty_event(
     cwd: &Path,
     project: Option<&str>,
 ) -> bool {
+    record_warp_state(agent, event, session_id, cwd, project);
     if !is_warp_terminal() {
         return false;
     }
@@ -305,5 +469,99 @@ mod tests {
         ));
         assert!(!is_warp_env(Some("WarpTerminal"), Some("1"), Some("   ")));
         assert!(!is_warp_env(Some("WarpTerminal"), None, Some("1.0")));
+    }
+
+    #[test]
+    fn record_and_replay_markers_handle_all_session_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state.warp.json");
+        temp_env::with_var(
+            super::WARP_STATE_FILE_ENV,
+            Some(state_path.to_str().unwrap()),
+            || {
+                assert!(super::has_warp_state_file());
+                super::record_warp_state(
+                    "omp",
+                    "prompt_submit",
+                    "sess-42",
+                    Path::new("/tmp/demo"),
+                    Some("custom-proj"),
+                );
+            },
+        );
+        let state = super::read_warp_state(&state_path).expect("state saved");
+        assert_eq!(state.agent, "omp");
+        assert_eq!(state.session_id, "sess-42");
+        assert_eq!(state.project, "custom-proj");
+        assert_eq!(state.last_event, "prompt_submit");
+
+        let markers = super::replay_markers_for_state(&state);
+        assert_eq!(markers.len(), 2);
+        assert!(markers[0].contains(r#""event":"session_start""#));
+        assert!(markers[1].contains(r#""event":"prompt_submit""#));
+
+        let mut start_only = state.clone();
+        start_only.last_event = "session_start".to_string();
+        assert_eq!(super::replay_markers_for_state(&start_only).len(), 1);
+
+        let mut attn = state.clone();
+        attn.last_event = "input_required".to_string();
+        let attn_markers = super::replay_markers_for_state(&attn);
+        assert_eq!(attn_markers.len(), 2);
+        assert!(attn_markers[1].contains(r#""event":"input_required""#));
+
+        let mut stopped = state.clone();
+        stopped.last_event = "stop".to_string();
+        let stop_markers = super::replay_markers_for_state(&stopped);
+        assert_eq!(stop_markers.len(), 2);
+        assert!(stop_markers[1].contains(r#""event":"stop""#));
+
+        let mut ended = state;
+        ended.last_event = "session_end".to_string();
+        assert!(super::replay_markers_for_state(&ended).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn viewer_locks_require_live_lock_and_all_warp_viewers() {
+        use std::os::fd::AsRawFd;
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(super::viewer_locks_want_warp(dir.path()), None);
+
+        // Unlocked stale file is ignored.
+        let stale = dir.path().join("stale.lock");
+        std::fs::write(&stale, "warp=1\n").unwrap();
+        assert_eq!(super::viewer_locks_want_warp(dir.path()), None);
+
+        // Held warp=1 viewer enables Warp emission.
+        let warp_path = dir.path().join("v1.lock");
+        let warp_file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&warp_path)
+            .unwrap();
+        std::fs::write(&warp_path, "warp=1\n").unwrap();
+        assert_eq!(
+            unsafe { libc::flock(warp_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert_eq!(super::viewer_locks_want_warp(dir.path()), Some(true));
+
+        // Adding a non-Warp viewer suppresses mixed emissions.
+        let plain_path = dir.path().join("v2.lock");
+        let plain_file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&plain_path)
+            .unwrap();
+        std::fs::write(&plain_path, "warp=0\n").unwrap();
+        assert_eq!(
+            unsafe { libc::flock(plain_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert_eq!(super::viewer_locks_want_warp(dir.path()), Some(false));
     }
 }

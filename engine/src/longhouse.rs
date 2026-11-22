@@ -55,6 +55,8 @@ mod process_identity;
 #[allow(dead_code)]
 #[path = "pty_relay.rs"]
 mod pty_relay;
+#[path = "remote_session.rs"]
+mod remote_session;
 #[allow(dead_code)]
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;
@@ -151,6 +153,7 @@ enum Commands {
         launch: OpencodeLaunchArgs,
     },
     /// Launch the stock Antigravity TUI under Longhouse hook control.
+    #[command(alias = "agy")]
     Antigravity {
         #[command(flatten)]
         launch: AntigravityLaunchArgs,
@@ -163,6 +166,17 @@ enum Commands {
         #[command(flatten)]
         launch: CursorLaunchArgs,
     },
+    /// List or attach persistent remote agent sessions started with `--on`.
+    Remote {
+        #[command(subcommand)]
+        command: remote_session::RemoteCommand,
+    },
+    #[command(name = "__remote-session", hide = true)]
+    RemoteSession(remote_session::RemoteSessionArgs),
+    #[command(name = "__remote-host", hide = true)]
+    RemoteHost(remote_session::RemoteHostArgs),
+    #[command(name = "__remote-list", hide = true)]
+    RemoteList(remote_session::RemoteListArgs),
     /// Inspect or discard retained evidence for blocked durable uploads.
     ///
     /// Local health has printed `longhouse shipping inspect` as the next step
@@ -270,6 +284,8 @@ struct ClaudeLaunchArgs {
     claude_bin: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
+    #[command(flatten)]
+    remote: remote_session::RemoteTargetArgs,
 }
 
 #[derive(Args)]
@@ -358,6 +374,8 @@ struct CodexLaunchArgs {
     resume_session: Option<String>,
     #[arg(long)]
     dangerously_bypass_approvals_and_sandbox: bool,
+    #[command(flatten)]
+    remote: remote_session::RemoteTargetArgs,
 }
 
 #[derive(Args)]
@@ -402,6 +420,8 @@ struct OmpLaunchArgs {
     url: Option<String>,
     #[arg(long)]
     token: Option<String>,
+    #[command(flatten)]
+    remote: remote_session::RemoteTargetArgs,
 }
 
 #[derive(Args)]
@@ -447,6 +467,8 @@ struct AntigravityLaunchArgs {
     token: Option<String>,
     #[arg(long)]
     antigravity_bin: Option<String>,
+    #[command(flatten)]
+    remote: remote_session::RemoteTargetArgs,
     /// Pass-through arguments handed to the stock `agy` TUI.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     antigravity_args: Vec<String>,
@@ -1640,7 +1662,96 @@ fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn push_str_opt(out: &mut Vec<String>, flag: &str, value: &Option<String>) {
+    if let Some(val) = value {
+        out.push(flag.to_string());
+        out.push(val.clone());
+    }
+}
+
+fn push_path_opt(out: &mut Vec<String>, flag: &str, value: &Option<PathBuf>) {
+    if let Some(val) = value {
+        out.push(flag.to_string());
+        out.push(val.to_string_lossy().into_owned());
+    }
+}
+
+fn serialize_claude_remote_args(args: &ClaudeLaunchArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    push_str_opt(&mut out, "--project", &args.project);
+    push_str_opt(&mut out, "--name", &args.name);
+    push_str_opt(&mut out, "--url", &args.url);
+    push_str_opt(&mut out, "--token", &args.token);
+    if args.remote_approve {
+        out.push("--remote-approve".to_string());
+    }
+    push_str_opt(&mut out, "--resume", &args.resume);
+    push_str_opt(&mut out, "--claude-bin", &args.claude_bin);
+    push_path_opt(&mut out, "--claude-dir", &args.claude_dir);
+    out
+}
+
+fn serialize_antigravity_remote_args(args: &AntigravityLaunchArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    push_str_opt(&mut out, "--project", &args.project);
+    push_str_opt(&mut out, "--name", &args.name);
+    push_str_opt(&mut out, "--url", &args.url);
+    push_str_opt(&mut out, "--token", &args.token);
+    push_str_opt(&mut out, "--antigravity-bin", &args.antigravity_bin);
+    if !args.antigravity_args.is_empty() {
+        out.push("--".to_string());
+        out.extend(args.antigravity_args.iter().cloned());
+    }
+    out
+}
+
+fn serialize_omp_remote_args(args: &OmpLaunchArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    push_str_opt(&mut out, "--prompt", &args.prompt);
+    push_str_opt(&mut out, "--model", &args.model);
+    push_str_opt(&mut out, "--profile", &args.profile);
+    push_path_opt(&mut out, "--session-dir", &args.session_dir);
+    push_str_opt(&mut out, "--resume-session", &args.resume_session);
+    push_str_opt(&mut out, "--omp-bin", &args.omp_bin);
+    push_str_opt(&mut out, "--url", &args.url);
+    push_str_opt(&mut out, "--token", &args.token);
+    out
+}
+
+fn serialize_codex_remote_args(args: &CodexLaunchArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    push_str_opt(&mut out, "--project", &args.project);
+    push_str_opt(&mut out, "--name", &args.name);
+    if !args.attach || args.no_attach {
+        out.push("--no-attach".to_string());
+    }
+    push_str_opt(&mut out, "--url", &args.url);
+    push_str_opt(&mut out, "--token", &args.token);
+    push_str_opt(&mut out, "--codex-bin", &args.codex_bin);
+    push_str_opt(&mut out, "--model", &args.model);
+    push_str_opt(
+        &mut out,
+        "--model-reasoning-effort",
+        &args.model_reasoning_effort,
+    );
+    push_str_opt(&mut out, "--resume-session", &args.resume_session);
+    if args.dangerously_bypass_approvals_and_sandbox {
+        out.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+    }
+    out
+}
+
 fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()> {
+    if args.remote.on.is_some() {
+        let provider_args = serialize_antigravity_remote_args(&args);
+        let code = remote_session::run_remote_launch(remote_session::RemoteLaunchSpec {
+            provider: ManagedProvider::Antigravity,
+            cwd: args.cwd,
+            remote: args.remote,
+            provider_args,
+        })?;
+        std::process::exit(code);
+    }
     if !interactive_stdio() {
         anyhow::bail!(
             "longhouse antigravity Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console."
@@ -2188,6 +2299,16 @@ fn resolve_claude_provider_session_id(
 }
 
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
+    if args.remote.on.is_some() {
+        let provider_args = serialize_claude_remote_args(&args);
+        let code = remote_session::run_remote_launch(remote_session::RemoteLaunchSpec {
+            provider: ManagedProvider::Claude,
+            cwd: args.cwd,
+            remote: args.remote,
+            provider_args,
+        })?;
+        std::process::exit(code);
+    }
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
     // Resolve the machine's runtime URL and device token first. Configuring
     // hooks edits the user's own `~/.claude/settings.json`, and pointing it at
@@ -3450,6 +3571,16 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
 }
 
 fn launch_managed_omp(args: OmpLaunchArgs) -> anyhow::Result<()> {
+    if args.remote.on.is_some() {
+        let provider_args = serialize_omp_remote_args(&args);
+        let code = remote_session::run_remote_launch(remote_session::RemoteLaunchSpec {
+            provider: ManagedProvider::Omp,
+            cwd: args.cwd,
+            remote: args.remote,
+            provider_args,
+        })?;
+        std::process::exit(code);
+    }
     if !interactive_stdio() {
         anyhow::bail!("longhouse omp Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console.");
     }
@@ -3486,6 +3617,16 @@ fn launch_managed_omp(args: OmpLaunchArgs) -> anyhow::Result<()> {
 }
 
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
+    if args.remote.on.is_some() {
+        let provider_args = serialize_codex_remote_args(&args);
+        let code = remote_session::run_remote_launch(remote_session::RemoteLaunchSpec {
+            provider: ManagedProvider::Codex,
+            cwd: args.cwd,
+            remote: args.remote,
+            provider_args,
+        })?;
+        std::process::exit(code);
+    }
     let cwd = std::fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve {}", args.cwd.display()))?;
     let (url, token, machine_name) = resolve_codex_config(args.url.clone(), args.token.clone())?;
@@ -5461,6 +5602,30 @@ fn main() -> anyhow::Result<()> {
             command: None,
             launch,
         } => launch_managed_cursor(launch)?,
+        Commands::Remote { command } => {
+            let code = remote_session::run_remote_command(command)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::RemoteSession(args) => {
+            let code = remote_session::run_remote_session(args)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::RemoteHost(args) => {
+            let code = remote_session::run_remote_host(args)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Commands::RemoteList(args) => {
+            let code = remote_session::run_remote_list_local(args)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
     }
     Ok(())
 }
@@ -6642,6 +6807,7 @@ mod tests {
                     model_reasoning_effort: None,
                     resume_session: Some(session_id.to_string()),
                     dangerously_bypass_approvals_and_sandbox: false,
+                    remote: remote_session::RemoteTargetArgs::default(),
                 };
                 let target =
                     validate_codex_resume_target(&args, session_id, &cwd, codex.to_str().unwrap())
@@ -7364,6 +7530,134 @@ mod tests {
                     TeardownOutcome::NoDurableRecord { detail } if detail.contains("no durable terminal record")
                 ));
             },
+        );
+    }
+
+    #[test]
+    fn remote_provider_flags_and_hidden_subcommands_parse_cleanly() {
+        let claude = Cli::try_parse_from([
+            "longhouse",
+            "claude",
+            "--on",
+            "box",
+            "--pull",
+            "--remote-approve",
+        ])
+        .unwrap();
+        let Some(Commands::Claude { launch, .. }) = claude.command else {
+            panic!("expected claude");
+        };
+        assert_eq!(launch.remote.on.as_deref(), Some("box"));
+        assert!(launch.remote.pull);
+        assert!(launch.remote_approve);
+
+        let agy = Cli::try_parse_from([
+            "longhouse",
+            "agy",
+            "--on",
+            "box",
+            "--pull",
+            "--",
+            "--model",
+            "neon",
+        ])
+        .unwrap();
+        let Some(Commands::Antigravity { launch }) = agy.command else {
+            panic!("expected antigravity via agy alias");
+        };
+        assert_eq!(launch.remote.on.as_deref(), Some("box"));
+        assert!(launch.remote.pull);
+        assert_eq!(launch.antigravity_args, vec!["--model", "neon"]);
+
+        let omp = Cli::try_parse_from(["longhouse", "omp", "--on", "box", "--model", "deepseek"])
+            .unwrap();
+        let Some(Commands::Omp { launch }) = omp.command else {
+            panic!("expected omp");
+        };
+        assert_eq!(launch.remote.on.as_deref(), Some("box"));
+        assert_eq!(launch.model.as_deref(), Some("deepseek"));
+
+        let codex = Cli::try_parse_from([
+            "longhouse",
+            "codex",
+            "--on",
+            "box",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ])
+        .unwrap();
+        let Some(Commands::Codex { launch, .. }) = codex.command else {
+            panic!("expected codex");
+        };
+        assert_eq!(launch.remote.on.as_deref(), Some("box"));
+        assert!(launch.dangerously_bypass_approvals_and_sandbox);
+
+        let remote_ls =
+            Cli::try_parse_from(["longhouse", "remote", "ls", "--on", "box", "--json"]).unwrap();
+        assert!(matches!(
+            remote_ls.command,
+            Some(Commands::Remote {
+                command: remote_session::RemoteCommand::Ls { on, json: true }
+            }) if on == "box"
+        ));
+
+        let remote_attach = Cli::try_parse_from([
+            "longhouse",
+            "remote",
+            "attach",
+            "claude-repo",
+            "--on",
+            "box",
+        ])
+        .unwrap();
+        assert!(matches!(
+            remote_attach.command,
+            Some(Commands::Remote {
+                command: remote_session::RemoteCommand::Attach { name, on }
+            }) if name == "claude-repo" && on == "box"
+        ));
+
+        let session = Cli::try_parse_from([
+            "longhouse",
+            "__remote-session",
+            "--cwd",
+            "~/git/demo",
+            "--provider",
+            "antigravity",
+            "--pull",
+            "--",
+            "--project",
+            "demo",
+            "--",
+            "--foo",
+        ])
+        .unwrap();
+        let Some(Commands::RemoteSession(s)) = session.command else {
+            panic!("expected __remote-session");
+        };
+        assert_eq!(s.cwd, "~/git/demo");
+        assert!(s.pull);
+        assert_eq!(s.provider_args, vec!["--project", "demo", "--", "--foo"]);
+
+        let host = Cli::try_parse_from([
+            "longhouse",
+            "__remote-host",
+            "--state-file",
+            "/tmp/s.json",
+            "--",
+            "antigravity",
+            "--project",
+            "demo",
+            "--",
+            "--foo",
+        ])
+        .unwrap();
+        let Some(Commands::RemoteHost(h)) = host.command else {
+            panic!("expected __remote-host");
+        };
+        assert_eq!(h.state_file, PathBuf::from("/tmp/s.json"));
+        assert_eq!(
+            h.args,
+            vec!["antigravity", "--project", "demo", "--", "--foo"]
         );
     }
 }

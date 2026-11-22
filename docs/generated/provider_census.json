@@ -294,6 +294,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },
@@ -579,6 +580,7 @@
       "path": "engine/src/warp_cli_agent.rs",
       "providers": [
         "claude",
+        "omp",
         "pi"
       ]
     },

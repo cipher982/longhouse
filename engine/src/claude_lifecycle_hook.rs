@@ -345,7 +345,8 @@ fn evaluate_input_outcome(
         Ok(_) => Ok(()),
         Err(error) => Err(anyhow::anyhow!("{error}")),
     };
-    if warp_enabled {
+    let record_state = crate::warp_cli_agent::has_warp_state_file();
+    if warp_enabled || record_state {
         let stopping_agent_id = (event == "SubagentStop")
             .then(|| string(input, "agent_id"))
             .flatten();
@@ -362,22 +363,33 @@ fn evaluate_input_outcome(
             notification_type.as_deref(),
             turn_control_blocked_stop,
         ) {
-            let extra_owned = warp_extra_fields(marker_event, input);
-            let extra_refs: Vec<(&str, &str)> = extra_owned
-                .iter()
-                .map(|(key, value)| (*key, value.as_str()))
-                .collect();
-            let marker = crate::warp_cli_agent::session_event_marker_with_fields(
-                "claude",
-                marker_event,
-                &session_id,
-                Path::new(cwd.as_deref().unwrap_or(".")),
-                None,
-                &extra_refs,
-            );
-            let delivered_via_tty = try_tty && crate::warp_cli_agent::write_tty_marker(&marker);
-            if !delivered_via_tty {
-                hook_output.insert("terminalSequence".to_string(), Value::String(marker));
+            if record_state {
+                crate::warp_cli_agent::record_warp_state(
+                    "claude",
+                    marker_event,
+                    &session_id,
+                    Path::new(cwd.as_deref().unwrap_or(".")),
+                    None,
+                );
+            }
+            if warp_enabled {
+                let extra_owned = warp_extra_fields(marker_event, input);
+                let extra_refs: Vec<(&str, &str)> = extra_owned
+                    .iter()
+                    .map(|(key, value)| (*key, value.as_str()))
+                    .collect();
+                let marker = crate::warp_cli_agent::session_event_marker_with_fields(
+                    "claude",
+                    marker_event,
+                    &session_id,
+                    Path::new(cwd.as_deref().unwrap_or(".")),
+                    None,
+                    &extra_refs,
+                );
+                let delivered_via_tty = try_tty && crate::warp_cli_agent::write_tty_marker(&marker);
+                if !delivered_via_tty {
+                    hook_output.insert("terminalSequence".to_string(), Value::String(marker));
+                }
             }
         }
     }
@@ -3287,6 +3299,51 @@ mod tests {
             assert!(
                 outside_warp.is_none(),
                 "outside Warp must emit no terminalSequence"
+            );
+        });
+    }
+
+    #[test]
+    fn warp_state_file_records_claude_session_outside_warp() {
+        let home = tempfile::tempdir().unwrap();
+        let warp_state_path = home.path().join("remote-claude.warp.json");
+        with_managed_home(home.path(), "lh-remote-claude", "run-remote-1", || {
+            temp_env::with_var(
+                crate::warp_cli_agent::WARP_STATE_FILE_ENV,
+                Some(warp_state_path.to_str().unwrap()),
+                || {
+                    let out = evaluate_input(
+                        &json!({
+                            "hook_event_name": "UserPromptSubmit",
+                            "session_id": "native-id",
+                            "cwd": "/tmp/demo-proj",
+                            "prompt": "start outside warp",
+                        }),
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                    assert!(out.is_none());
+                    let state = crate::warp_cli_agent::read_warp_state(&warp_state_path)
+                        .expect("warp state file written outside Warp");
+                    assert_eq!(state.agent, "claude");
+                    assert_eq!(state.session_id, "lh-remote-claude");
+                    assert_eq!(state.last_event, "prompt_submit");
+
+                    let _ = evaluate_input(
+                        &json!({
+                            "hook_event_name": "Stop",
+                            "session_id": "native-id",
+                            "cwd": "/tmp/demo-proj",
+                        }),
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                    let stopped = crate::warp_cli_agent::read_warp_state(&warp_state_path)
+                        .expect("stop state written");
+                    assert_eq!(stopped.last_event, "stop");
+                },
             );
         });
     }
