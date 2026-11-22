@@ -125,7 +125,7 @@ Every backticked path in this section must exist; `make validate` checks them
 | `ios/` | SwiftUI iOS app, widget and Live Activity (read/steer client) |
 | `desktop/` | macOS Desktop App menu bar (Swift package `desktop/LonghouseMenuBarHarness/`) |
 | `runner/` | TypeScript optional WebSocket command executor |
-| `schemas/` | Source-of-truth contracts: `schemas/managed_providers.yml`, `schemas/session_state_contract.yml`, WS protocol, transcript shapes; `schemas/factory_producers.yml` mirrors the private provider factory's producer registry, and `make validate-factory-registration` fails a release-gate row it has no producer for |
+| `schemas/` | Source-of-truth contracts: `schemas/managed_providers.yml`, `schemas/session_state_contract.yml`, WS protocol, transcript shapes |
 | `config/` | Checked-in config: `config/models.json`, `config/tool-tiers.json`, `config/provider-brands.json`, fixtures |
 | `tests/fixtures/` | Cross-client fixtures that server, web and iOS tests all read |
 | `e2e/` | Playwright end-to-end suites and probes |
@@ -224,7 +224,7 @@ Python modules stay flat by design; services group by file prefix.
 | `server/zerg/models/` | SQLAlchemy models (`AgentsBase` for agent infrastructure) |
 | `server/zerg/schemas/` | Pydantic request/response models |
 | `server/zerg/cli/` | `longhouse-server` commands |
-| `server/zerg/qa/` | Live QA producers and oracles; every producer is built in `producer_shell.py` (the factory's command line, the result envelope, the typed failure), and what lifecycle producers share is in `live_kit.py` |
+| `server/zerg/qa/` | Live QA producers and oracles; every producer is built in `producer_shell.py` (the command line, the result envelope, the typed failure), and what lifecycle producers share is in `live_kit.py` |
 | `server/zerg/auth/`, `server/zerg/middleware/`, `server/zerg/websocket/` | Auth, middleware, WebSocket |
 | `server/tests_lite/` | Backend tests (`make test`) |
 
@@ -234,7 +234,7 @@ Python modules stay flat by design; services group by file prefix.
 | --- | --- |
 | `scripts/ops/dogfood_sensitive_paths.py`, `scripts/ops/dogfood-sensitive-paths.toml` | Dogfood fast-lane classifier: changes matching this path list require canary-qualified promotion; auth and migration paths stay out of the fast lane |
 | `scripts/ops/check-push-readiness.sh` | Pre-push check: stale duplicate commits on main and the verifier-boundary ratchet |
-| `scripts/ci/verifier_boundary.py`, `scripts/ci/verifier-boundary.allow` | Import boundary between the provider factory's verifier (`server/zerg/qa/`) and the code it judges; the allowlist only shrinks; computes the verifier digest |
+| `scripts/ci/verifier_boundary.py`, `scripts/ci/verifier-boundary.allow` | Import boundary between the verifier (`server/zerg/qa/`) and the code it judges; the allowlist only shrinks; computes the verifier digest |
 | `scripts/ops/ship.sh`, `scripts/ops/ship-monitor.py` | `make ship` and `make ship-watch`: push an exact SHA, wait for its workflows |
 | `scripts/ops/promote-dogfood.sh`, `scripts/ops/promote-production.sh`, `scripts/ops/promotion_gates.py` | Ring promotions; dogfood's fast lane takes a published image only when the range matches no sensitive path, otherwise the canary-qualified path; production promotes dogfood's image after its five gates (including the OCI archive) pass |
 | `scripts/ops/ring_promoter.py`, `.github/workflows/promote-rings.yml` | Continuous promotion: Promote Rings reacts to image publication, archive, canary, QA and CI completion, plus the Sauron wake |
@@ -260,7 +260,6 @@ Never edit these by hand. `make validate` fails when one is stale.
 | `engine/src/managed_phase_contract.rs`, `web/src/generated/presence-states.ts` | `server/zerg/config/managed_phase_contract.json` | `make generate-phase-contract` |
 | `engine/src/managed_identity_contract.rs` | `schemas/managed_providers.yml` | `make generate-managed-identity` |
 | `docs/generated/provider_census.json` | tracked source files | `make generate-provider-census` |
-| `docs/generated/provider_factory_plan.json`, `docs/generated/provider_factory_status_tables.md` | provider schema and proofs | `make generate-provider-factory-plan` |
 | `ios/Resources/Transcript/transcript.html` | `web/src/embeds/ios-transcript/` | `make generate-ios-transcript` (`web/scripts/build-ios-transcript.mjs`) |
 | `web/src/features/marketing/remote-scene/generated/` | recorded scene | `web/scripts/generate-remote-scene.ts` |
 
