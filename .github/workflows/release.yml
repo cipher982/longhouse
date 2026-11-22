@@ -455,8 +455,9 @@ jobs:
         if: always() && steps.qa_live.outcome == 'success'
         env:
           QA_IMAGE: ${{ steps.prepare.outputs.image }}
-        run: .qa-tools/scripts/qa/run-hosted-target.sh cohort-journey "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN" \
-          --set "LONGHOUSE_JOURNEY_OUTPUT=/work/artifacts/cohort-journey/cohort-journey.json"
+        run: |
+          .qa-tools/scripts/qa/run-hosted-target.sh cohort-journey "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN" \
+            --set "LONGHOUSE_JOURNEY_OUTPUT=/work/artifacts/cohort-journey/cohort-journey.json"
 
       # Passed, superseded (something else deployed to the instance mid-run: it says nothing about this
       # commit) or failed. Dogfood proceeds only on `passed`.
