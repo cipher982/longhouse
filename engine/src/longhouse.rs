@@ -1802,7 +1802,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         |cmd, after_spawn| {
             // agy runs under a PTY this launcher owns, so it can type an idle
             // remote send into the TUI and sees the exit itself.
-            antigravity_helm_pty::run(cmd, &session_id, |pid| {
+            antigravity_helm_pty::run(cmd, &session_id, &cwd, args.project.as_deref(), |pid| {
                 FOREGROUND_CHILD_PGRP.store(pid, std::sync::atomic::Ordering::Release);
                 after_spawn()?;
                 record_antigravity_provider_process(&session_id);

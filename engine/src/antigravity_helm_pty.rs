@@ -90,6 +90,36 @@ pub struct WakeGate {
     typed_at: Option<(Instant, String)>,
 }
 
+/// Tracks turn boundaries observed from Antigravity's session state file so
+/// the foreground PTY owner emits `prompt_submit` and `stop` markers to Warp
+/// even across SSH/dtach where hook subprocesses lack the outer terminal env.
+#[derive(Default)]
+struct WarpTurnTracker {
+    active: bool,
+}
+
+impl WarpTurnTracker {
+    fn observe(&mut self, state: &Value) -> Option<&'static str> {
+        match state.get("state").and_then(Value::as_str)? {
+            "thinking" | "running" if !self.active => {
+                self.active = true;
+                Some("prompt_submit")
+            }
+            "idle" if self.active => {
+                self.active = false;
+                Some("stop")
+            }
+            _ => None,
+        }
+    }
+}
+
+fn read_session_state(session_id: &str) -> Option<Value> {
+    std::fs::read(session_state_path(session_id).ok()?)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
 fn parse_utc(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -249,10 +279,18 @@ pub fn wake_once(
     session_id: &str,
     now: DateTime<Utc>,
 ) -> Option<Typed> {
-    let state: Value = std::fs::read(session_state_path(session_id).ok()?)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
-    let mark = idle_mark(&state, now)?;
+    let state = read_session_state(session_id)?;
+    wake_once_with_state(gate, writer, session_id, &state, now)
+}
+
+fn wake_once_with_state(
+    gate: &mut WakeGate,
+    writer: &PtyWriter,
+    session_id: &str,
+    state: &Value,
+    now: DateTime<Utc>,
+) -> Option<Typed> {
+    let mark = idle_mark(state, now)?;
     if let Some((typed, seen_mark)) = &gate.typed_at {
         if *seen_mark == mark && typed.elapsed() < TURN_START_PATIENCE {
             return None;
@@ -294,10 +332,28 @@ pub fn wake_once(
     }
 }
 
-fn pump(session_id: String, writer: PtyWriter, stop: Arc<AtomicBool>) {
+fn pump(
+    session_id: String,
+    cwd: PathBuf,
+    project: Option<String>,
+    writer: PtyWriter,
+    stop: Arc<AtomicBool>,
+) {
     let mut gate = WakeGate::default();
+    let mut warp_tracker = WarpTurnTracker::default();
     while !stop.load(Ordering::Relaxed) {
-        wake_once(&mut gate, &writer, &session_id, Utc::now());
+        if let Some(state) = read_session_state(&session_id) {
+            if let Some(event) = warp_tracker.observe(&state) {
+                crate::warp_cli_agent::emit_tty_event(
+                    "antigravity",
+                    event,
+                    &session_id,
+                    &cwd,
+                    project.as_deref(),
+                );
+            }
+            wake_once_with_state(&mut gate, &writer, &session_id, &state, Utc::now());
+        }
         std::thread::sleep(POLL_INTERVAL);
     }
 }
@@ -374,6 +430,8 @@ fn pty_command(command: &Command, size: &libc::winsize) -> anyhow::Result<PtyCom
 pub fn run(
     command: &Command,
     session_id: &str,
+    cwd: &Path,
+    project: Option<&str>,
     after_spawn: impl FnOnce(libc::pid_t) -> anyhow::Result<()>,
 ) -> anyhow::Result<i32> {
     let mut size = pty_relay::terminal_winsize(1);
@@ -403,9 +461,14 @@ pub fn run(
     let writer = PtyWriter::new(child.master);
     let pump_stop = Arc::new(AtomicBool::new(false));
     let pump_thread = {
-        let (session_id, writer, stop) =
-            (session_id.to_string(), writer.clone(), pump_stop.clone());
-        std::thread::spawn(move || pump(session_id, writer, stop))
+        let (session_id, cwd, project, writer, stop) = (
+            session_id.to_string(),
+            cwd.to_path_buf(),
+            project.map(str::to_owned),
+            writer.clone(),
+            pump_stop.clone(),
+        );
+        std::thread::spawn(move || pump(session_id, cwd, project, writer, stop))
     };
     let reaped_status = pty_relay::relay(&child, &writer, 0, 1, &stop, &resized);
     let requested_stop = stop.load(Ordering::Relaxed);
@@ -709,5 +772,30 @@ mod tests {
             .env
             .iter()
             .any(|pair| pair.to_bytes().starts_with(b"TERM=")));
+    }
+
+    #[test]
+    fn warp_turn_tracker_ignores_initial_idle_and_tracks_turn_boundaries() {
+        let mut tracker = WarpTurnTracker::default();
+        assert_eq!(tracker.observe(&json!({ "state": "idle" })), None);
+        assert_eq!(tracker.observe(&json!({ "state": "idle" })), None);
+        assert_eq!(tracker.observe(&json!({})), None);
+
+        assert_eq!(
+            tracker.observe(&json!({ "state": "thinking" })),
+            Some("prompt_submit")
+        );
+        assert_eq!(tracker.observe(&json!({ "state": "running" })), None);
+        assert_eq!(tracker.observe(&json!({ "state": "thinking" })), None);
+        assert_eq!(tracker.observe(&json!({ "state": "unknown" })), None);
+        assert_eq!(tracker.observe(&json!({ "state": "running" })), None);
+        assert_eq!(tracker.observe(&json!({ "state": "idle" })), Some("stop"));
+        assert_eq!(tracker.observe(&json!({ "state": "idle" })), None);
+
+        assert_eq!(
+            tracker.observe(&json!({ "state": "running" })),
+            Some("prompt_submit")
+        );
+        assert_eq!(tracker.observe(&json!({ "state": "idle" })), Some("stop"));
     }
 }
