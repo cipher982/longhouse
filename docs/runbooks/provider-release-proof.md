@@ -1,9 +1,8 @@
 # Provider Release Proof Runbook
 
 Use this runbook to generate, compare, accept, and inspect provider proof
-artifacts. The private control-plane specification owns the release-proof
-contract and provider-factory execution model; this public runbook documents
-the commands and artifact rules exposed by the Longhouse repository.
+artifacts. This runbook documents the commands and artifact rules exposed by the
+Longhouse repository.
 
 ## Rules
 
@@ -13,7 +12,7 @@ the commands and artifact rules exposed by the Longhouse repository.
 - Keep live-token profiles opt-in. They may spend provider tokens.
 - Run every step that executes a real provider binary (the single-binary proof,
   the old/new differential, the installed-provider smoke) on a disposable host
-  (a scratch VM, the bench, or the provider factory), never on a machine whose
+  (a scratch VM or the bench), never on a machine whose
   Machine Agent ships your own history: a provider writes its state to its own
   directories, and that agent imports them.
 - Treat execution status, assertion outcome, operational policy, and human
