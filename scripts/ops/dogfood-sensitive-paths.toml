@@ -114,8 +114,8 @@ paths = [
 # Live-preview paths: a commit that touches one of these must carry a passing `longhouse/terminal-truth`
 # commit status before dogfood promotion (scripts/ops/promote-dogfood.sh, both lanes). They are NOT sensitive
 # in the lane sense: the fast lane also waits for the status, so it cannot outrun the gate.
-# THIS LIST IS A COPY of `on.push.paths` in .github/workflows/terminal-truth.yml, which is the one
-# original; scripts/tests/dogfood-sensitive-paths.test.py fails when the two differ.
+# THIS LIST IS A COPY of the `terminal_truth` filter in .github/path-filters.yml, which is the one
+# original (the CI job `terminal-truth` runs when it matches); scripts/tests/dogfood-sensitive-paths.test.py fails when the two differ.
 live_preview_paths = [
   # --- the Machine Agent and what it embeds; every mutated engine is rebuilt when these change
   "engine/**",
@@ -132,9 +132,9 @@ live_preview_paths = [
   "web/src/features/session/SessionRuntimeStrip.tsx",
   "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift",
   "ios/Sources/LonghouseApp/Session/Runtime/ActivityPulseStore.swift",
-  # --- the build wrapper, the pinned versions and this lane
+  # --- the build wrapper, the pinned versions and the steps
   "scripts/build/**",
   "scripts/ci/terminal-truth-*",
   "scripts/ci/terminal_truth_*.py",
-  ".github/workflows/terminal-truth.yml",
+  ".github/actions/terminal-truth/**",
 ]

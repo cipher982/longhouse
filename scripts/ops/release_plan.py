@@ -158,7 +158,7 @@ def terminal_truth_state(commit: str) -> tuple[int, str]:
         return REFUSED, f"the terminal-truth status on {commit[:12]} is {state} ({url}): live text regressed on a live-preview change"
     # No status or pending: a later main commit that contains it and passed covers it.
     try:
-        runs = gh_json("api", f"repos/{REPO}/actions/workflows/terminal-truth.yml/runs?branch=main&status=success&per_page=30")
+        runs = gh_json("api", f"repos/{REPO}/actions/workflows/contract-first-ci.yml/runs?branch=main&status=success&per_page=30")
         found = cover.covering(str(ROOT), "origin/main", commit, (runs or {}).get("workflow_runs") or [],
                                lambda sha: gh_json("api", f"repos/{REPO}/commits/{sha}/statuses?per_page=30"))
     except (RuntimeError, ValueError) as exc:

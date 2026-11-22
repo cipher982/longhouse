@@ -3,9 +3,13 @@
 # failed job names in Sauron's ci-scheduled-red alert say what broke.
 #   detect, live, suite, bump  provider CLI releases: Terminal Truth (scripted model) and the transcript census on the
 #                              latest versions, one real-model turn per provider; green with new versions commits the pins
+#   terminal-truth-mutations   the 43 checks that put each known defect back and require the Terminal Truth gate to fail it
+#                              (CI runs them too when the harness changes); the cells themselves run in CI on every push
+#   hosted-live-qa             Hosted Live QA of the newest published runtime image on the dedicated QA instance (Release
+#                              runs it only before a deploy of a dogfood-sensitive range)
 #   ui-sweep                   every menu on every fixture scene at desktop, wide and mobile
 #   console-served-state       stock provider CLIs against a loopback fake model, asserted on the browser-served surface
-#   web-quality                image sizes, bundle size, Lighthouse
+#   lighthouse                 Lighthouse (image sizes and bundle size run in CI on every web change)
 #   smoke                      scripts/qa/smoke-prod.sh against the hosted canary
 #   readme-tests, perf         weekly (readme-tests Wednesday, perf Tuesday)
 #   perf-macos                 by hand only: workflow_dispatch with perf_macos=true
@@ -79,23 +83,12 @@ jobs:
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       - name: Run readme-test blocks
         run: make test-readmes MODE=smoke
-  web-quality:
+  lighthouse:
     if: github.repository == 'cipher982/longhouse'
     runs-on: ci-fast
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Check for oversized images (>2MB)
-        run: |
-          found=0
-          while IFS= read -r -d '' file; do
-            size_bytes=$(stat -c%s "$file")
-            if [ "$size_bytes" -gt 2097152 ]; then
-              echo "::error::$file is $((size_bytes / 1048576)) MB (max 2 MB)"
-              found=1
-            fi
-          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
-          exit "$found"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "20"
@@ -104,11 +97,69 @@ jobs:
           bun-version: "1.2.20"
       - run: bun install --frozen-lockfile
       - run: cd web && bun run build
-      - name: Check bundle size
-        run: cd web && node ./scripts/check-bundle-size.mjs
       - name: Run Lighthouse CI
         run: npm install -g @lhci/cli && lhci autorun
         working-directory: web
+  hosted-live-qa:
+    # The newest published runtime image (`latest` moves to main's head on every release that builds one), deployed to
+    # the dedicated QA instance and put through the same checks Release runs before a sensitive deploy
+    # (.github/actions/hosted-live-qa). It fences under its own name so it never blocks a Release deployment.
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: ci-browser
+    timeout-minutes: 30
+    concurrency:
+      group: hosted-live-qa-nightly-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_QA_TELEMETRY_TOKEN }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
+      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
+      QA_ARGS_BASE: "https://${{ vars.HOSTED_QA_SUBDOMAIN }}.longhouse.ai"
+      DEPLOY_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
+    steps:
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Find the newest published image and the commit it was built from
+        id: image
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "$IMAGE_NAME:latest" --format '{{.Manifest.Digest}}')"
+          sha="$(docker buildx imagetools inspect "$IMAGE_NAME@$digest" --format '{{json .Image}}' | jq -er '.config.Labels["org.opencontainers.image.revision"] | select(test("^[0-9a-f]{40}$"))')"
+          echo "ref=$IMAGE_NAME@$digest" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Hosted Live QA of $sha ($IMAGE_NAME@$digest)" >> "$GITHUB_STEP_SUMMARY"
+      # The commit under test supplies the tests; the commit this workflow runs from supplies the tooling.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.image.outputs.sha }}
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: .qa-tools
+          sparse-checkout: |
+            .github/actions/hosted-live-qa
+            scripts/lib/hosted-instance.sh
+            scripts/ci/wait-for-http.sh
+            scripts/ops/release-artifacts.py
+            scripts/ops/runtime-deploy.sh
+            scripts/qa/hosted-qa-verdict.py
+            scripts/qa/run-hosted-target.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          show-progress: false
+      - uses: ./.qa-tools/.github/actions/hosted-live-qa
+        with:
+          sha: ${{ steps.image.outputs.sha }}
+          image_ref: ${{ steps.image.outputs.ref }}
+          source_workflow: Provider Nightly
   smoke:
     if: github.repository == 'cipher982/longhouse'
     runs-on: ci-deploy
@@ -656,12 +707,47 @@ jobs:
           python3 scripts/ci/terminal_truth_providers.py verify --providers "$providers"
           python3 scripts/ci/provider_live_turns.py "$root/runs" --providers "$providers"
   suite:
+    # Terminal Truth on the candidate pins: every cell, no mutation checks, then the transcript census.
     needs: detect
-    if: needs.detect.outputs.changed == 'true'
-    uses: ./.github/workflows/terminal-truth.yml
-    with:
-      pins: ${{ needs.detect.outputs.pins }}
-    secrets: inherit
+    if: needs.detect.outputs.changed == 'true' && github.repository == 'cipher982/longhouse'
+    runs-on: ci-browser
+    timeout-minutes: 45
+    concurrency:
+      group: terminal-truth-nightly-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+      CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+      CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+      CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+      CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ./.github/actions/terminal-truth
+        with:
+          pins: ${{ needs.detect.outputs.pins }}
+  terminal-truth-mutations:
+    # The whole gate with reruns off, so a red night is the raw rate; new failing cells are marked against the previous
+    # night's verdict. Sauron's ci-scheduled-red pages after three red nights in a row.
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: ci-browser
+    timeout-minutes: 45
+    concurrency:
+      group: terminal-truth-nightly-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+      CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+      CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+      CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+      CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ./.github/actions/terminal-truth
+        with:
+          mutations: "true"
+          rerun: "false"
+          nightly: "true"
   bump:
     # A branch run (a test of this workflow) must never push to main.
     needs: [detect, suite, live]
@@ -691,8 +777,6 @@ jobs:
             git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- "$file" || { echo "::error::$file changed on main during the run"; exit 1; }
             git reset -q --hard FETCH_HEAD
           done
-          # a push made with GITHUB_TOKEN triggers no workflows. Dispatch the ones a push would have run that gate
-          # promotion: Terminal Truth with its commit status (live-preview path), and CI. Runtime image and deploy
-          # do not watch this file.
-          gh workflow run terminal-truth.yml --ref main -f publish_status=true
+          # a push made with GITHUB_TOKEN triggers no workflows. Dispatch CI, which a push would have started: it runs
+          # Terminal Truth with its commit status (the pins file is a live-preview path), and Release follows it.
           gh workflow run contract-first-ci.yml --ref main

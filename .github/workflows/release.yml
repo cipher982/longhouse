@@ -324,7 +324,7 @@ jobs:
     runs-on: ci-browser
     timeout-minutes: 25
     outputs:
-      verdict: ${{ steps.verdict.outputs.verdict }}
+      verdict: ${{ steps.qa.outputs.verdict }}
     env:
       # The QA instance is a tenant of the canary control plane that only this job deploys to (one release at
       # a time), with its own device tokens, never the deploy canary's.
@@ -336,6 +336,7 @@ jobs:
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
       QA_ARGS_BASE: "https://${{ vars.HOSTED_QA_SUBDOMAIN }}.longhouse.ai"
+      DEPLOY_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
     steps:
       # The commit under test supplies the tests; the commit this workflow runs from supplies the tooling.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -346,6 +347,7 @@ jobs:
           ref: ${{ github.sha }}
           path: .qa-tools
           sparse-checkout: |
+            .github/actions/hosted-live-qa
             scripts/lib/hosted-instance.sh
             scripts/ci/wait-for-http.sh
             scripts/ops/release-artifacts.py
@@ -355,142 +357,13 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           show-progress: false
-      - name: Validate the dedicated QA instance
-        env:
-          DEPLOY_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
-        run: |
-          set -euo pipefail
-          case "${QA_INSTANCE_SUBDOMAIN,,}" in
-            ""|david010|demo|dogfood|personal)
-              echo "::error::Configure a dedicated HOSTED_QA_SUBDOMAIN; refusing personal dogfood or demo." >&2; exit 1 ;;
-          esac
-          if [[ "${QA_INSTANCE_SUBDOMAIN,,}" == "${DEPLOY_CANARY_SUBDOMAIN,,}" ]]; then
-            echo "::error::HOSTED_QA_SUBDOMAIN is the deploy canary ($DEPLOY_CANARY_SUBDOMAIN); QA needs its own instance." >&2; exit 1
-          fi
-          for name in CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN; do
-            [[ -n "${!name}" ]] || { echo "::error::Missing required QA configuration: $name" >&2; exit 1; }
-          done
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - name: Hosted Live QA of the image under test
+        id: qa
+        uses: ./.qa-tools/.github/actions/hosted-live-qa
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      # CI publishes the fixture image after its amd64 build, off CI's critical path; after a dependency change
-      # the release can finish first, so wait for the tag (registry calls, no API quota).
-      - name: Resolve the published fixture image
-        run: |
-          set -euo pipefail
-          key="$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')"
-          image="ghcr.io/${{ github.repository_owner }}/longhouse-test:${key}"
-          for attempt in $(seq 1 40); do
-            if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
-              break
-            fi
-            [[ "$attempt" -lt 40 ]] || { echo "fixture image $image never appeared" >&2; exit 1; }
-            echo "waiting for fixture image $image ($attempt/40)"
-            sleep 30
-          done
-          echo "LONGHOUSE_TEST_IMAGE_REF=${image%:*}@${digest}" >> "$GITHUB_ENV"
-      - name: Pull the credential-free isolation image by digest
-        id: prepare
-        run: echo "image=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
-
-      # Deploy the exact image under test to the QA instance and hold it for the run: this job is the only thing
-      # that deploys here, one release at a time.
-      - name: Deploy the image under test to the QA instance
-        id: deploy_qa
-        env:
-          INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
-          RUNTIME_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
-          RUNTIME_SOURCE_WORKFLOW: Release
-          RUNTIME_SOURCE_ORDER: ${{ github.run_number }}
-          RUNTIME_QUALIFICATION_ID: release-qa-${{ github.run_id }}-${{ github.run_attempt }}
-          RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: release-${{ github.run_id }}-${{ github.run_attempt }}-qa
-          RUNTIME_DEPLOYMENT_REASON: release QA of ${{ needs.plan.outputs.sha }}
-          RUNTIME_DEPLOY_TIMEOUT: "600"
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ github.token }}
-        run: .qa-tools/scripts/ops/runtime-deploy.sh "$INSTANCE_SUBDOMAIN" --docker-ref "${{ needs.build.outputs.ref }}"
-      - name: Verify the QA instance serves the commit under test
-        id: runtime_before
-        env:
-          EXPECTED_SHA: ${{ needs.plan.outputs.sha }}
-        run: |
-          set -euo pipefail
-          # Any deployment overlapping the run after this instant replaced the thing under test.
-          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          health="$(curl --fail --silent --show-error --max-time 15 --retry 3 --retry-all-errors --retry-delay 3 "$QA_ARGS_BASE/api/health")"
-          printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
-          actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
-          [[ "$actual_sha" == "$EXPECTED_SHA" ]] || { echo "The QA instance serves $actual_sha, not $EXPECTED_SHA" >&2; exit 1; }
-          echo "runtime_sha=$actual_sha" >> "$GITHUB_OUTPUT"
-          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
-
-      # The four steps that touch the instance are continue-on-error: their outcomes are judged together,
-      # against the instance's deployment receipts, by the verdict step.
-      - name: Run hosted live QA
-        id: qa_live
-        continue-on-error: true
-        env:
-          QA_IMAGE: ${{ steps.prepare.outputs.image }}
-        run: |
-          attempts=0
-          until .qa-tools/scripts/qa/run-hosted-target.sh qa-live "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN"; do
-            attempts=$((attempts + 1))
-            [[ "$attempts" -lt 2 ]] || exit 1
-            echo "qa-live failed; retrying once after 5s..." >&2
-            sleep 5
-          done
-      - name: Run hosted mixed live/archive shipper bench
-        id: hosted_shipper_bench
-        continue-on-error: true
-        if: always() && steps.qa_live.outcome == 'success'
-        env:
-          QA_IMAGE: ${{ steps.prepare.outputs.image }}
-          CARGO_PROFILE: ci
-        run: .qa-tools/scripts/qa/run-hosted-target.sh hosted-shipper-mixed-bench "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN"
-      - name: Run render-canary SLA check
-        id: render_canary
-        continue-on-error: true
-        if: always() && steps.qa_live.outcome == 'success' && env.LONGHOUSE_CANARY_TOKEN != ''
-        env:
-          QA_IMAGE: ${{ steps.prepare.outputs.image }}
-        run: .qa-tools/scripts/qa/run-hosted-target.sh render-canary "SMOKE_RUNTIME_TOKEN LONGHOUSE_CANARY_TOKEN"
-      - name: Validate cohort journey contracts
-        id: cohort_contracts
-        # Never touches the QA instance.
-        if: always() && steps.qa_live.outcome == 'success'
-        run: python3 scripts/qa/test-isolation.py --target validate-cohort-journey
-      - name: Run privacy-safe isolated cohort journey
-        id: cohort_journey
-        continue-on-error: true
-        if: always() && steps.qa_live.outcome == 'success'
-        env:
-          QA_IMAGE: ${{ steps.prepare.outputs.image }}
-        run: |
-          .qa-tools/scripts/qa/run-hosted-target.sh cohort-journey "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN" \
-            --set "LONGHOUSE_JOURNEY_OUTPUT=/work/artifacts/cohort-journey/cohort-journey.json"
-
-      # Passed, superseded (something else deployed to the instance mid-run: it says nothing about this
-      # commit) or failed. Dogfood proceeds only on `passed`.
-      - name: Decide verdict
-        id: verdict
-        if: always() && steps.runtime_before.outcome == 'success'
-        env:
-          EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
-          QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
-          OWN_DEPLOYMENT: ${{ steps.deploy_qa.outputs.deployment_id }}
-        run: |
-          python3 .qa-tools/scripts/qa/hosted-qa-verdict.py \
-            --expected-sha "$EXPECTED_RUNTIME_SHA" \
-            --started-at "$QA_STARTED_AT" \
-            --subdomain "$QA_INSTANCE_SUBDOMAIN" \
-            --own-deployment "$OWN_DEPLOYMENT" \
-            --step "qa_live=${{ steps.qa_live.outcome }}" \
-            --step "hosted_shipper_bench=${{ steps.hosted_shipper_bench.outcome }}" \
-            --step "render_canary=${{ steps.render_canary.outcome }}" \
-            --step "cohort_journey=${{ steps.cohort_journey.outcome }}" \
-            --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}"
+          sha: ${{ needs.plan.outputs.sha }}
+          image_ref: ${{ needs.build.outputs.ref }}
+          source_workflow: Release
 
   dogfood:
     name: "Deploy dogfood"
@@ -520,8 +393,8 @@ jobs:
             david010) ;;
             *) echo "Refusing: dogfood is david010, got '${INSTANCE_SUBDOMAIN}'." >&2; exit 1 ;;
           esac
-      # Terminal Truth runs beside CI and takes about as long, so a live-preview change waits here for its
-      # verdict (or a later main commit's that contains it). Failed or errored is never overridden. If the
+      # Terminal Truth is a job of CI, so the verdict of the released commit is already in. An older live-preview
+      # commit of the range may still wait for its own verdict (or a later main commit's that contains it). Failed or errored is never overridden. If the
       # wait runs out, dogfood stays where it is and the next green release carries the change.
       - name: Terminal Truth verdict
         if: needs.plan.outputs.tt_commit != ''

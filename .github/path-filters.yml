@@ -96,3 +96,38 @@ runtime_image:
   - 'video/package.json'
   - 'scripts/ops/runtime-schema.py'
   - 'scripts/ops/release-artifacts.py'
+
+# THE ONE COPY of what a Terminal Truth run measures: the CI job `terminal-truth` runs when any of these changed.
+# scripts/ops/dogfood-sensitive-paths.toml carries the same list as live_preview_paths, which decides whose status
+# the dogfood deploy requires, and scripts/tests/dogfood-sensitive-paths.test.py fails if the two differ. Keep one
+# quoted path per line.
+terminal_truth:
+  # --- the Machine Agent and what it embeds; every mutated engine is rebuilt when these change
+  - "engine/**"
+  - "config/**"
+  - "schemas/**"
+  # --- the Runtime Host: ingest, live preview, stream, and the harness, scripted model and ledger under zerg/qa
+  - "server/zerg/**"
+  - "server/pyproject.toml"
+  - "server/uv.lock"
+  # --- clients that render the live preview
+  - "web/src/features/session/useSessionWorkspace.ts"
+  - "web/src/features/session/sessionActivityFeed.ts"
+  - "web/src/features/session/TimelinePane.tsx"
+  - "web/src/features/session/SessionRuntimeStrip.tsx"
+  - "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift"
+  - "ios/Sources/LonghouseApp/Session/Runtime/ActivityPulseStore.swift"
+  # --- the build wrapper, the pinned versions and the steps
+  - "scripts/build/**"
+  - "scripts/ci/terminal-truth-*"
+  - "scripts/ci/terminal_truth_*.py"
+  - ".github/actions/terminal-truth/**"
+
+# The harness that judges the cells. A push that changes one of these also runs the 43 mutation checks, which prove the
+# gate still fails each known defect; every other push runs the cells only, and the nightly runs the mutation checks.
+terminal_truth_harness:
+  - "server/zerg/qa/**"
+  - "server/zerg/provider_contract/**"
+  - "scripts/ci/terminal-truth-*"
+  - "scripts/ci/terminal_truth_*.py"
+  - ".github/actions/terminal-truth/**"

@@ -1,6 +1,6 @@
 # The provider CLIs the terminal-truth CI lane installs, at exact versions.
 #
-# .github/workflows/terminal-truth.yml runs `scripts/ci/terminal_truth_providers.py install` then
+# .github/actions/terminal-truth/action.yml runs `scripts/ci/terminal_truth_providers.py install` then
 # `verify`: it installs exactly these and fails if a binary reports anything else, so a failure on the
 # runner is never a surprise provider update. Changing a version here is a deliberate edit that
 # re-runs the lane (this file is a push path of the lane). Versions are the ones the Linux runner

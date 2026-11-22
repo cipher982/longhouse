@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Find a later green Terminal Truth run that covers a live-preview commit with no verdict of its own.
+"""Find a later green CI run with a Terminal Truth status that covers a live-preview commit with no verdict of its own.
 
   terminal_truth_cover.py [--repo DIR] [--main REF] COMMIT
 
-COMMIT is the newest live-preview commit of a promotion range (dogfood_sensitive_paths.py live-preview). Terminal
-Truth runs one at a time and GitHub keeps one pending run per group, so a push that is followed by another before
+COMMIT is the newest live-preview commit of a promotion range (dogfood_sensitive_paths.py live-preview). CI runs one at a time on main and GitHub keeps one pending run per group, so a push that is followed by another before
 the lane frees up never gets a run of its own. Its run tested a tree that did not contain it. A later commit D covers
 COMMIT only when D descends from COMMIT (so D's tree holds COMMIT's change), D is on main, and D carries a passing
 `longhouse/terminal-truth` status posted by GitHub Actions. The caller uses this only when COMMIT has no status or a
@@ -24,7 +23,7 @@ import sys
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "cipher982/longhouse")
 CONTEXT = "longhouse/terminal-truth"
-MAX_STATUS_LOOKUPS = 4  # newest candidates only; the API budget is shared
+MAX_STATUS_LOOKUPS = 8  # newest candidates only; most CI runs carry no terminal-truth status of their own
 
 
 def gh_json(*args: str):
@@ -73,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("commit")
     args = parser.parse_args(argv)
     try:
-        runs = gh_json("api", f"repos/{REPO}/actions/workflows/terminal-truth.yml/runs?branch=main&status=success&per_page=30")
+        runs = gh_json("api", f"repos/{REPO}/actions/workflows/contract-first-ci.yml/runs?branch=main&status=success&per_page=30")
         if not isinstance(runs, dict):
             raise ValueError("the workflow run list is not an object")
         found = covering(args.repo, args.main, args.commit, runs.get("workflow_runs") or [],

@@ -15,7 +15,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "scripts" / "ci" / "terminal-truth-providers.toml"
 SUMMARY = ROOT / "scripts" / "ci" / "terminal_truth_summary.py"
-WORKFLOW = ROOT / ".github" / "workflows" / "terminal-truth.yml"
+WORKFLOW = ROOT / ".github" / "actions" / "terminal-truth" / "action.yml"  # the steps; CI and the nightly call it
+CI = ROOT / ".github" / "workflows" / "contract-first-ci.yml"
+NIGHTLY = ROOT / ".github" / "workflows" / "provider-nightly.yml"
+FILTERS = ROOT / ".github" / "path-filters.yml"
 BUDGET = ROOT / "schemas" / "terminal-truth-budget.json"
 PROVIDERS = {"codex", "claude", "opencode", "pi", "omp", "antigravity"}
 
@@ -105,75 +108,81 @@ class PinsTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_push_paths_are_the_one_list_and_cover_everything_the_result_is_made_from(self):
-        text = WORKFLOW.read_text()
-        block = text.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
+    def test_the_path_filter_is_the_one_list_and_covers_everything_the_result_is_made_from(self):
+        block = FILTERS.read_text().split("\nterminal_truth:\n", 1)[1].split("\n\n", 1)[0]
         paths = re.findall(r'^\s+- "([^"]+)"$', block, re.M)
         for needed in (
             # The engine and what it embeds (the engine cache key hashes exactly these three), the host and harness.
             "engine/**", "config/**", "schemas/**", "server/zerg/**", "server/uv.lock", "scripts/build/**",
-            "scripts/ci/terminal-truth-*", "scripts/ci/terminal_truth_*.py", ".github/workflows/terminal-truth.yml",
+            "scripts/ci/terminal-truth-*", "scripts/ci/terminal_truth_*.py", ".github/actions/terminal-truth/**",
             "web/src/features/session/useSessionWorkspace.ts", "ios/Sources/Shared/Streams/SessionWorkspaceStream.swift",
         ):  # fmt: skip
             self.assertIn(needed, paths)
 
-    def test_the_workflow_publishes_one_stable_status_and_uses_no_secret_but_the_receipt_store(self):
+    def test_ci_runs_the_cells_as_a_path_filtered_job_and_the_harness_paths_add_the_mutation_checks(self):
+        ci = CI.read_text()
+        job = ci.split("\n  terminal-truth:\n", 1)[1].split("\n  web-quality:", 1)[0]
+        self.assertIn("needs.changes.outputs.terminal_truth == 'true'", job)  # the filter is at the job, so CI always concludes
+        self.assertIn("needs.changes.outputs.terminal_truth_harness == 'true'", job)
+        self.assertIn("uses: ./.github/actions/terminal-truth", job)
+        self.assertIn("terminal_truth_harness:", ci)
+        harness = FILTERS.read_text().split("\nterminal_truth_harness:\n", 1)[1].split("\n\n", 1)[0]
+        for needed in ("server/zerg/qa/**", ".github/actions/terminal-truth/**"):
+            self.assertIn(f'"{needed}"', harness)
+
+    def test_the_action_publishes_one_stable_status_and_uses_no_secret_but_the_receipt_store(self):
         text = WORKFLOW.read_text()
         self.assertEqual(len(re.findall(r"terminal_truth_status\.py", text)), 2)  # pending, result
         self.assertNotIn("gh api", text)  # the Linux runner has no gh
         secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
-        self.assertTrue(all(name.startswith("CI_RECEIPTS_S3_") for name in secrets), secrets)
+        self.assertFalse(secrets, secrets)  # the receipt store's come from the caller's job env
+        for caller in (CI, NIGHTLY):
+            names = set(re.findall(r"secrets\.(CI_RECEIPTS_S3_[A-Z_]+)", caller.read_text()))
+            self.assertEqual(len(names), 5, caller)
         self.assertNotIn("upload-artifact", text)
         self.assertNotIn("--live", text)  # never a real model
 
-    def test_every_run_is_the_one_command_and_a_push_and_the_nightly_are_the_whole_gate(self):
+    def test_every_run_is_the_one_command_and_judged_by_the_summary_script(self):
         text = WORKFLOW.read_text()
         runs = [line for line in text.splitlines() if "make -s terminal-truth-all" in line]
-        self.assertEqual(len(runs), 2, runs)  # the run, and the extra reply passes of a hand-started run
-        gate, extra = runs
+        self.assertEqual(len(runs), 1, runs)
+        (gate,) = runs
         for part in ("--engine $TT_ENGINE", "--longhouse-cli $TT_CLI", "--out-dir $TT_OUT ", "--jobs $TT_JOBS", "--fault-engine $TT_FAULT_ENGINE", "--fault-longhouse-cli $TT_FAULT_CLI",
                      "--embed-model-cache $TT_CACHE/embedding-model"):
             self.assertIn(part, gate)
-        self.assertTrue(gate.rstrip().endswith('$TT_NARROW_ARGS$TT_CHECK_ARGS$TT_RERUN_ARGS" \\'), gate)
-        self.assertIn("--no-mutations --no-rerun --pass-index $i", extra)
-        # Nothing narrows a push or the nightly: every narrowing variable comes from a dispatch input.
-        for name in ("TT_PROVIDER", "TT_MODE", "TT_TOKENS", "TT_RATE", "TT_REPEATS", "TT_MUTATION_NAMES"):
-            line = next(line for line in text.splitlines() if line.strip().startswith(f"{name}:"))
-            self.assertRegex(line, r"\$\{\{ inputs\.[a-z_]+ \|\| '[a-z0-9]*' \}\}$", name)
-        self.assertIn("TT_MUTATIONS: ${{ (github.event_name == 'workflow_dispatch' && !inputs.mutations) && '0' || '1' }}", text)
-        # Verdict requires the whole gate of every run that is not a narrowed hand-started one.
-        self.assertIn('if [[ "$TT_EVENT" != workflow_dispatch || "$TT_PUBLISH" == 1 ]]; then whole=(--gate-profile); fi', text)
-        self.assertIn('python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" --repeats "$TT_REPEATS" "${whole[@]}" "${previous[@]}"', text)
+        self.assertTrue(gate.rstrip().endswith('$TT_CHECK_ARGS$TT_RERUN_ARGS" \\'), gate)
+        # Every cell always runs; only the mutation checks and the rerun are switched.
+        self.assertIn('checks=""; [[ "$mutations" == 1 ]] || checks=" --no-mutations"', text)
+        # The verdict holds every run to the whole gate (the cells only when no mutation check was asked for).
+        self.assertIn("whole=(--gate-profile)", text)
+        self.assertIn("whole=(--gate-profile --cells-only)", text)
+        self.assertIn('python3 scripts/ci/terminal_truth_summary.py "$TT_OUT" "${whole[@]}" "${previous[@]}"', text)
         # The run's exit status and the verdict script must both be good.
         self.assertIn('if [[ "$rc" != 0 || "${TT_RC:-1}" != 0 ]]; then', text)
 
-    def test_the_nightly_never_runs_a_row_again_and_is_the_only_schedule(self):
-        text = WORKFLOW.read_text()
+    def test_the_nightly_runs_the_mutation_checks_without_reruns_and_the_candidate_runs_the_cells(self):
+        text = NIGHTLY.read_text()
         crons = re.findall(r'^\s+- cron: "([^"]+)"$', text, re.M)
-        self.assertEqual(len(crons), 1, crons)  # the weekly mutation run is gone: every run has the mutation tests
+        self.assertEqual(len(crons), 1, crons)
         self.assertEqual(crons[0].split()[2:], ["*", "*", "*"])
-        self.assertNotIn("github.event.schedule", text)
-        self.assertIn(
-            "TT_RERUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.rerun)) && '0' || '1' }}", text
-        )
-        self.assertIn('if [[ "$TT_RERUN" != 1 && "${TT_KEEP_TRANSCRIPTS:-}" != 1 ]]; then rerun=" --no-rerun"; fi', text)  # candidate runs rerun
+        job = text.split("\n  terminal-truth-mutations:\n", 1)[1].split("\n  live:", 1)[0] if "\n  live:" in text else text.split("\n  terminal-truth-mutations:\n", 1)[1]
+        for line in ('mutations: "true"', 'rerun: "false"', 'nightly: "true"'):
+            self.assertIn(line, job.split("\n  hosted-live-qa:", 1)[0])
+        suite = text.split("\n  suite:\n", 1)[1].split("\n  terminal-truth-mutations:", 1)[0]
+        self.assertIn("pins: ${{ needs.detect.outputs.pins }}", suite)
+        self.assertNotIn("mutations:", suite.split("uses:", 1)[1])  # a candidate run has no mutation checks
+        action = WORKFLOW.read_text()
+        self.assertIn('rerun=1; [[ "$IN_RERUN" == false && "$candidate" == 0 ]] && rerun=0', action)  # candidate runs rerun
+        self.assertNotIn("terminal-truth.yml", text)
 
-    def test_one_queue_a_short_limit_and_scratch_on_the_ram_backed_work_volume(self):
+    def test_the_nightly_jobs_share_one_queue_and_scratch_is_on_the_ram_backed_work_volume(self):
+        # Two runs on one host disk made a pass fail (2026-11-12). CI's main group is one queue; the nightly's two
+        # Terminal Truth jobs share a group and never cancel a running one.
+        nightly = NIGHTLY.read_text()
+        self.assertEqual(nightly.count("group: terminal-truth-nightly-${{ github.repository }}-${{ github.ref }}"), 2)
         text = WORKFLOW.read_text()
-        # One queue for main (push, nightly, a dispatch on main): two runs on one host disk made a pass fail
-        # (2026-11-12). Every other ref has a queue of its own, so a branch dispatch cannot take main's pending slot
-        # (it cancelled the pending run of 430ea7f3c on 2026-11-15). Nothing is ever cancelled once running.
-        group = next(line for line in text.splitlines() if line.strip().startswith("group:"))
-        self.assertEqual(
-            group.strip(),
-            "group: terminal-truth-${{ github.repository }}-${{ inputs.pins && 'candidate' || github.ref == 'refs/heads/main' && 'main' || github.ref }}",
-        )
-        self.assertIn("cancel-in-progress: false", text)
-        limit = next(line for line in text.splitlines() if line.strip().startswith("timeout-minutes:"))
-        self.assertIn("github.event_name == 'workflow_dispatch' && 240 || 45", limit)
         # /tmp in the pod is the host's shared disk; the work volume is RAM-backed. Short, for unix socket paths.
-        scratch = next(line for line in text.splitlines() if line.strip().startswith("TT_SCRATCH_ROOT:"))
-        self.assertEqual(scratch.strip(), "TT_SCRATCH_ROOT: /home/runner/_work/tt")
+        self.assertIn('echo "TT_SCRATCH_ROOT=/home/runner/_work/tt"', text)
         self.assertNotIn("/tmp/agents", text)
 
     def test_the_engine_the_mutated_engines_and_the_provider_install_come_from_the_cache_when_unchanged(self):
@@ -196,9 +205,9 @@ class WorkflowTests(unittest.TestCase):
         nothing, and under bash -e the step failed before the receipt was stored: a red job on a passing gate."""
 
         text = WORKFLOW.read_text()
-        start = text.index("      - name: Collect recordings and keep the results\n")
-        body = text[text.index("        run: |\n", start) + len("        run: |\n") : text.index("\n      - name:", start + 1)]
-        script = "\n".join(line[10:] for line in body.splitlines())
+        start = text.index("    - name: Collect recordings and keep the results\n")
+        body = text[text.index("      run: |\n", start) + len("      run: |\n") : text.index("\n    - name:", start + 1)]
+        script = "\n".join(line[8:] for line in body.splitlines())
         for kept in ([], ["{root}/a1001"]):
             with tempfile.TemporaryDirectory() as tmp:
                 work = Path(tmp)
@@ -211,7 +220,7 @@ class WorkflowTests(unittest.TestCase):
                 (work / "scripts" / "ops" / "ci_receipts.py").write_text(
                     "import sys, pathlib\npathlib.Path('stored.txt').write_text('\\n'.join(sys.argv[1:]))\n"
                 )
-                env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "TT_OUT": str(out), "TT_SCRATCH_ROOT": str(scratch), "GITHUB_SHA": "abc", "TT_EVENT": "push"}
+                env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "TT_OUT": str(out), "TT_SCRATCH_ROOT": str(scratch), "GITHUB_SHA": "abc", "TT_CANDIDATE": "0", "TT_NIGHTLY": "0"}
                 result = subprocess.run(["bash", "-e", "-c", script], cwd=work, env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 stored = (work / "stored.txt").read_text()
@@ -367,6 +376,20 @@ class SummaryTests(unittest.TestCase):
         unmarked = {k: v for k, v in GOOD_RUN["fleet.json"].items() if k != "narrowed"}
         result, gate = self.run_summary({**GOOD_RUN, "fleet.json": unmarked}, "--gate-profile")
         self.assertEqual(result.returncode, 1)  # a fleet.json that does not say is not trusted to be whole
+
+    def test_a_cells_only_push_is_the_gate_for_its_cells_but_a_narrowed_cell_set_is_not(self):
+        fleet_ = GOOD_RUN["fleet.json"]
+        no_mutations = {**GOOD_RUN, "fleet.json": {**fleet_, "narrowed": True, "cells_narrowed": False, "planned": {**fleet_["planned"], "mutations": []}}}
+        result, gate = self.run_summary(no_mutations, "--gate-profile", "--cells-only")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        result, gate = self.run_summary(no_mutations, "--gate-profile")  # the whole gate still needs its mutation checks
+        self.assertEqual(result.returncode, 1)
+        cells = {**GOOD_RUN, "fleet.json": {**fleet_, "narrowed": True, "cells_narrowed": True}}
+        result, gate = self.run_summary(cells, "--gate-profile", "--cells-only")
+        self.assertEqual(result.returncode, 1)
+        unmarked = {**GOOD_RUN, "fleet.json": {k: v for k, v in fleet_.items() if k != "cells_narrowed"}}
+        result, gate = self.run_summary(unmarked, "--gate-profile", "--cells-only")
+        self.assertEqual(result.returncode, 1)  # a fleet.json that does not say is not trusted
 
     def test_a_reply_row_that_is_not_good_fails_whatever_the_fleet_says(self):
         bad = row("codex/helm", "fail", None, stage="host_published")

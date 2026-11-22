@@ -24,9 +24,8 @@ concurrency:
   # verified main commit deploys, and it contains the older ones. (Per-SHA
   # groups queued every commit; on 2026-09-24 that was 15 runs for commits
   # already behind main head on a saturated cube pool.) A dropped run is
-  # "superseded", not failed: Deploy and Verify stands down green for it
-  # (wait-for-ci superseded_branch), and make ship follows the covering
-  # commit. Branch and PR runs keep a per-SHA group and stay cancellable.
+  # "superseded", not failed: the Release workflow only takes a commit whose
+  # own CI run is green, and make ship follows the covering commit. Branch and PR runs keep a per-SHA group and stay cancellable.
   group: ci-${{ github.repository }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || (github.event.pull_request.head.sha || github.sha) }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/main') }}
 
@@ -76,6 +75,8 @@ jobs:
       models: ${{ steps.filter.outputs.models }}
       scripts: ${{ steps.filter.outputs.scripts }}
       ui_sweep: ${{ steps.filter.outputs.ui_sweep }}
+      terminal_truth: ${{ steps.filter.outputs.terminal_truth }}
+      terminal_truth_harness: ${{ steps.filter.outputs.terminal_truth_harness }}
       image_tag: ${{ steps.image.outputs.tag }}
     permissions:
       contents: read
@@ -307,7 +308,7 @@ jobs:
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
     # xdist; three runners take ~2. "Backend tests" below is the one name that
-    # Deploy and Verify and ship tooling wait on.
+    # ship tooling waits on.
     strategy:
       fail-fast: false
       matrix:
@@ -439,8 +440,7 @@ jobs:
     runs-on: ci-fast
     # Opens every menu on every fixture scene at three sizes and fails when one
     # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
-    # browser check verifies after the fact: it is not in Deploy and Verify's
-    # required_jobs, like Core E2E. One job per viewport: all three in one
+    # browser check verifies after the fact. One job per viewport: all three in one
     # guest took 19m24s with 3 Chromiums on 4 vCPUs and timed a screenshot out.
     # A shard (37 captures, 2 at a time) took 5m48s on crunch; this runner ran
     # the sweep 1.8x slower than crunch, so ~10.5 min, and 15 min is the cap.
@@ -452,7 +452,7 @@ jobs:
     # 2026-11-15 (the evidence panel clipped at the left edge, the Jump to live
     # pill over the model chip), and queue waits are about a minute, so mobile
     # earns its slot. It runs for the web app and scripts/ui only (the ui_sweep
-    # path filter), not for every scripts/ change. ui-sweep-nightly.yml runs all
+    # path filter), not for every scripts/ change. provider-nightly.yml runs all
     # three once a day whatever changed, where Sauron's ci-scheduled-red watches
     # it; a manual run here also does all three.
     strategy:
@@ -562,6 +562,64 @@ jobs:
             echo "No isolation receipts were written; nothing to record."
           fi
 
+  # The stock provider CLIs in Console and Helm against the scripted model: live text, thinking, tool and subagent
+  # rows, terminal to client (.github/actions/terminal-truth). Path-filtered at the job, so CI always concludes and the
+  # Release workflow always fires; a skipped job is not a failure. The cells run on a push that changes what they
+  # measure (the terminal_truth filter in .github/path-filters.yml, also the dogfood live-preview list). The 43
+  # mutation checks that test the gate itself run when the harness changed (terminal_truth_harness), on a manual
+  # run, and every night (provider-nightly.yml). On main the job posts the commit status `longhouse/terminal-truth`,
+  # which Release's dogfood deploy requires for a range that changes these paths (scripts/ops/release_plan.py); a
+  # commit CI dropped for a newer push is covered by a later green run (scripts/ops/terminal_truth_cover.py).
+  terminal-truth:
+    name: "Terminal Truth"
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.terminal_truth == 'true' || github.event_name == 'workflow_dispatch') && github.repository == 'cipher982/longhouse' }}
+    runs-on: ci-browser
+    # A push that changes the engine also rebuilds it. With the mutation checks: about 11 minutes.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: ./.github/actions/terminal-truth
+        with:
+          mutations: ${{ (needs.changes.outputs.terminal_truth_harness == 'true' || github.event_name == 'workflow_dispatch') && 'true' || 'false' }}
+          publish_status: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+
+  # Bundle size and oversized images: a minute of work, only when the web app changed. Lighthouse stays in the nightly.
+  web-quality:
+    name: "Web size checks"
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ci-fast
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+      - name: Check for oversized images (>2MB)
+        run: |
+          found=0
+          while IFS= read -r -d '' file; do
+            size_bytes=$(stat -c%s "$file")
+            if [ "$size_bytes" -gt 2097152 ]; then
+              echo "::error::$file is $((size_bytes / 1048576)) MB (max 2 MB)"
+              found=1
+            fi
+          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
+          exit "$found"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "20"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
+      - run: bun install --frozen-lockfile
+      - run: cd web && bun run build
+      - name: Check bundle size
+        run: cd web && node ./scripts/check-bundle-size.mjs
+
   model-smoke:
     timeout-minutes: 20
     needs: changes
@@ -591,9 +649,7 @@ jobs:
     # Four checks that each take under a minute, in one job. As four jobs they
     # each waited for one of this repo's three crunch slots (median 2.6 to 4.0
     # minutes of waiting for 0.3 to 0.7 minutes of work, 2026-11-11/12) and
-    # paid a checkout and a guest start apiece. None of them is in Deploy and
-    # Verify's required_jobs, and none is now: a failure here does not hold a
-    # deploy. Every step runs whatever the earlier ones did, so one failure
+    # paid a checkout and a guest start apiece. Every step runs whatever the earlier ones did, so one failure
     # does not hide another; the job is red if any step is.
     needs: [changes, test-image]
     if: ${{ !cancelled() && needs.test-image.result == 'success' }}
@@ -607,28 +663,6 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      # release-rings.md change 5 -- the server keeps accepting the engine that
-      # is actually running on users' laptops right now. Runs on every push
-      # (cheap: no cargo build, no fixture image) rather than gating on engine/
-      # backend paths, because a server-only change can just as easily break
-      # what an old engine expects from it.
-      - name: Ship a transcript with the last released engine against the candidate server
-        # `make engine-compat` downloads the newest published release that
-        # isn't the candidate's own version (via `gh`, using this job's
-        # token) and skips cleanly when none exists for this platform yet.
-        id: engine_compat
-        timeout-minutes: 10
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: make engine-compat
-
-      # `make promote-production` reads this receipt per commit (kind engine-compat,
-      # scripts/ops/promotion_gates.py). `passed` needs a test that ran; a skip is
-      # recorded as skipped and no promotion accepts it (scripts/qa/engine_compat_receipt.py).
-      - name: Record the engine-compat receipt
-        if: ${{ !cancelled() && steps.engine_compat.outcome == 'success' && github.event_name != 'pull_request' }}
-        run: python3 scripts/ops/ci_receipts.py put engine-compat "$GITHUB_SHA" .build/engine-compat/receipt.json
 
       - name: Verify CLI wheel packaging
         if: ${{ !cancelled() && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') }}

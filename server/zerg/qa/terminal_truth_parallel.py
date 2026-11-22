@@ -1063,6 +1063,9 @@ def _write(
         "narrowed": bool(
             args.scenario or args.provider or args.mode or args.only or not args.mutations or (args.tokens, args.rate) != (100, 20.0)
         ),
+        # Narrowed in anything but the mutation checks: a push that changes what the cells measure runs every cell and no
+        # mutation check, and its verdict (summary --cells-only) is the cells'.
+        "cells_narrowed": bool(args.scenario or args.provider or args.mode or args.only or (args.tokens, args.rate) != (100, 20.0)),
         "reruns_allowed": bool(args.rerun),
         "jobs": args.jobs,
         "jobs_asked": getattr(args, "jobs_asked", args.jobs),

@@ -239,7 +239,7 @@ working tree).
 The private provider factory was retired. Provider CLIs are checked in this
 repo's CI instead:
 
-- Terminal Truth (`.github/workflows/terminal-truth.yml`) runs the real CLIs
+- Terminal Truth (`.github/actions/terminal-truth`, a job of CI) runs the real CLIs
   against the scripted model server on every push.
 - `.github/workflows/provider-nightly.yml` detects new CLI versions, runs
   Terminal Truth on them, runs one real cheap-model turn per provider and the

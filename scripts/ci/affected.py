@@ -84,6 +84,10 @@ FILTER_PLANS: dict[str, FilterPlan] = {
         ("make test-ui-sweep ARGS=--viewports=desktop", "make test-ui-sweep ARGS=--viewports=mobile"),
         "A push sweeps the desktop and mobile sizes; the nightly sweep adds wide.",
     ),
+    # Terminal Truth is CI-owned (real provider CLIs); the pre-push gate runs its harness selfcheck lane instead
+    # (gate_plan reads the terminal_truth filter itself).
+    "terminal_truth": FilterPlan(("ubuntu-24.04-arm",), (), "Terminal Truth cells run in CI only."),
+    "terminal_truth_harness": FilterPlan(("ubuntu-24.04-arm",), (), "The Terminal Truth mutation checks run in CI and nightly only."),
     "runtime_image": FilterPlan(
         ("cube-maint",),
         (),
@@ -331,7 +335,7 @@ def resolve(filters: dict[str, tuple[str, ...]], paths_by_source: dict[str, list
 # The pre-push gate: the lanes CI would run for these paths, runnable before the push.
 # ---------------------------------------------------------------------------------------------------------------------
 
-TERMINAL_TRUTH_WORKFLOW = ".github/workflows/terminal-truth.yml"
+TERMINAL_TRUTH_FILTERS = ".github/path-filters.yml"
 
 
 @dataclass(frozen=True)
@@ -343,16 +347,15 @@ class Lane:
 
 
 def terminal_truth_paths(root: Path) -> tuple[str, ...]:
-    """The push filter of the Terminal Truth workflow, read from it so the two cannot drift."""
+    """The `terminal_truth` path filter of the CI workflow, read from it so the two cannot drift."""
 
     try:
-        doc = yaml.safe_load((root / TERMINAL_TRUTH_WORKFLOW).read_text(encoding="utf-8"))
+        doc = yaml.safe_load((root / TERMINAL_TRUTH_FILTERS).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise ResolverError(f"cannot read {TERMINAL_TRUTH_WORKFLOW}: {exc}") from exc
-    triggers = doc.get(True) or doc.get("on") or {}
-    paths = (triggers.get("push") or {}).get("paths") or []
+        raise ResolverError(f"cannot read {TERMINAL_TRUTH_FILTERS}: {exc}") from exc
+    paths = (doc or {}).get("terminal_truth") or []
     if not paths:
-        raise ResolverError(f"{TERMINAL_TRUTH_WORKFLOW} has no push paths filter")
+        raise ResolverError(f"{TERMINAL_TRUTH_FILTERS} has no terminal_truth filter")
     return tuple(str(p) for p in paths)
 
 
@@ -427,7 +430,7 @@ def gate_plan(root: Path, result: dict[str, Any], *, backend_select: Any | None 
     ):
         if cat in cats:
             ci_only.append(text)
-    ci_only.append("engine-compat, OSS onboarding, transcript-stability replays (CI small checks)")
+    ci_only.append("OSS onboarding, transcript-stability replays (CI small checks)")
     return {
         "lanes": [lane.__dict__ for lane in lanes],
         "ci_only": ci_only,

@@ -100,9 +100,9 @@ class DogfoodSensitivePathsTests(unittest.TestCase):
         self.assertEqual((miss.returncode, miss.stdout), (0, ""))
         self.assertEqual(run("0" * 40, touched).returncode, 2)
 
-    def test_the_live_preview_list_is_a_copy_of_the_workflow_push_filter(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "terminal-truth.yml").read_text()
-        block = workflow.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
+    def test_the_live_preview_list_is_a_copy_of_the_ci_path_filter(self) -> None:
+        filters = (ROOT / ".github" / "path-filters.yml").read_text()
+        block = filters.split("\nterminal_truth:\n", 1)[1].split("\n\n", 1)[0]
         pushed = re.findall(r'^\s+- "([^"]+)"$', block, re.M)
         self.assertEqual(classifier.load_live_preview_paths(), pushed)
 

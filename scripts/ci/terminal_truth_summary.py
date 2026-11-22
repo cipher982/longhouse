@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read the result files of one terminal-truth run and decide the lane's verdict.
 
-  terminal_truth_summary.py DIR [--repeats N] [--gate-profile] [--previous DIR]
+  terminal_truth_summary.py DIR [--repeats N] [--gate-profile [--cells-only]] [--previous DIR]
 
 DIR is the ``--out-dir`` of ``make terminal-truth-all`` (server/zerg/qa/terminal_truth_parallel.py): ``fleet.json`` (what
 the run planned, each unmutated cell's verdict, what was run again), ``pass-<i>-<scenario>.json`` (the reply cells' full
@@ -15,7 +15,8 @@ rows), ``kinds.json`` and ``mutations.json``. The run's own exit status is not t
 - a measured reply row's scripted model served no request (the harness already treats this as a preflight failure; this is
   the independent fail-closed check);
 - ``--gate-profile`` is given and the run was narrowed (fewer scenarios, providers, modes or mutation checks, or another
-  stream than the gate's): the commit status means the whole gate ran.
+  stream than the gate's): the commit status means the whole gate ran. With ``--cells-only`` the mutation checks may be
+  left out (a push that did not touch the harness) but nothing else may be narrowed.
 
 ``--repeats N`` also requires ``pass-<i>-<scenario>.json`` for i up to N (a hand-started run for the budget record).
 
@@ -78,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--gate-profile", action="store_true", help="fail a run that was narrowed"
     )
+    parser.add_argument(
+        "--cells-only", action="store_true", help="with --gate-profile: the mutation checks need not have run"
+    )
     parser.add_argument("--previous", type=Path)
     args = parser.parse_args(argv)
     directory: Path = args.directory
@@ -100,10 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     planned_mutations: list[str] = list(planned.get("mutations") or [])
     if fleet and not planned_cells:
         problems.append("the run planned no cell")
-    if args.gate_profile and fleet and fleet.get("narrowed") is not False:
-        problems.append(
-            "the run was narrowed: the gate is every scenario, provider and mode and every mutation check"
-        )
+    if args.gate_profile and fleet:
+        narrowed_key = "cells_narrowed" if args.cells_only else "narrowed"
+        if fleet.get(narrowed_key) is not False:
+            problems.append(
+                "the run was narrowed: the gate is every scenario, provider and mode"
+                + ("" if args.cells_only else " and every mutation check")
+            )
 
     # Every planned cell needs a good verdict.
     verdicts = {str(cell.get("id")): cell for cell in fleet.get("cells") or []}
