@@ -241,7 +241,7 @@ Python modules stay flat by design; services group by file prefix.
 | `scripts/ops/install-precommit-autofix.sh` | Installs the self-staging pre-commit shims and retires only its own obsolete pre-push hook |
 | `scripts/ops/release.sh`, `scripts/ops/release-artifacts.py`, `scripts/ops/launch-readiness.py` | `make release`: bump, validate, push, exact-SHA gates, GitHub release, notarization checks |
 | `scripts/ops/remote.sh`, `scripts/ops/bench.sh` | Remote executors: heavy Docker-dispatched goals on the `ci` VM, iOS build and simulator work on the bench Mac |
-| `scripts/ci/perf-proof.py`, `scripts/ci/perf-soak.py`, `scripts/ci/perf_soak_fixtures.py`, `.github/workflows/perf-proof.yml` | Nightly perf lane: throughput proof, then a steady-state soak of the engine; fails on a resource-budget breach or a regression against recent runs |
+| `scripts/ci/perf-proof.py`, `scripts/ci/perf-soak.py`, `scripts/ci/perf_soak_fixtures.py`, `.github/workflows/provider-nightly.yml` (`perf` job, Tuesdays) | Weekly perf lane: throughput proof, then a steady-state soak of the engine; fails on a resource-budget breach or a regression against recent runs |
 | `scripts/ops/testflight.py`, `scripts/ops/testflight-ship.sh` | `make testflight` and `make testflight-status` (workflow `.github/workflows/ios-testflight.yml`) |
 
 ### Generated files

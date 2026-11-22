@@ -1,19 +1,609 @@
-# ROLE: tell us within a day when a provider CLI release or a Longhouse commit breaks something. Finds each provider's
-# latest release, runs Terminal Truth (scripted model, no keys) and the transcript census against it, and runs one
-# real-model turn per provider (cheapest model, one forced tool call) with the census on those transcripts. When a version
-# changed and all of that passes, it commits the new pins to main. A red run is the alert (Sauron's ci-scheduled-red pages
-# on repeated red scheduled runs).
+# ROLE: the one scheduled workflow. Tells us within a day when a provider CLI release, a Longhouse commit or the hosted
+# canary breaks something. Every job is independent (no `needs` between them), so one red job never hides another and the
+# failed job names in Sauron's ci-scheduled-red alert say what broke.
+#   detect, live, suite, bump  provider CLI releases: Terminal Truth (scripted model) and the transcript census on the
+#                              latest versions, one real-model turn per provider; green with new versions commits the pins
+#   ui-sweep                   every menu on every fixture scene at desktop, wide and mobile
+#   console-served-state       stock provider CLIs against a loopback fake model, asserted on the browser-served surface
+#   web-quality                image sizes, bundle size, Lighthouse
+#   smoke                      scripts/qa/smoke-prod.sh against the hosted canary
+#   readme-tests, perf         weekly (readme-tests Wednesday, perf Tuesday)
+#   perf-macos                 by hand only: workflow_dispatch with perf_macos=true
 # Real turns: Claude on LONGHOUSE_CI_ANTHROPIC_API_KEY; Codex, OpenCode, Pi and OMP through OpenRouter on
 # LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY. Models are the CONSOLE_QA_*_MODEL repo variables. Antigravity stays scripted-only.
+# GitHub starts this repository's schedules 7 to 10 hours late, so 02:43 UTC lands at about 10:00 to 13:00 UTC.
 name: Provider Nightly
 on:
   schedule:
     - cron: "43 2 * * *"
   workflow_dispatch:
+    inputs:
+      perf_macos:
+        description: "Also run the macOS engine and Desktop soak on wisp"
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
   statuses: write
+  packages: read
+  actions: read
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
 jobs:
+  plan:
+    # The only shared input: which weekday it is, for the weekly jobs. Nothing else waits on this job.
+    runs-on: ci-fast
+    if: github.repository == 'cipher982/longhouse'
+    outputs:
+      weekday: ${{ steps.day.outputs.weekday }}
+    steps:
+      - id: day
+        run: echo "weekday=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+  ui-sweep:
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: ci-fast
+    timeout-minutes: 20
+    env:
+      LONGHOUSE_TEST_CPUS: "4"
+      LONGHOUSE_TEST_MEMORY: "8g"
+    # One size at a time: three at once would hold all three of this repo's crunch slots.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        viewport: [desktop, wide, mobile]
+    name: "UI popover sweep (${{ matrix.viewport }})"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+      - name: Build or reuse the fixture image on this runner
+        run: python3 scripts/qa/test-isolation.py --prepare
+      - name: Open every menu at this size
+        run: make test-ui-sweep ARGS=--viewports=${{ matrix.viewport }}
+  readme-tests:
+    needs: plan
+    if: github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || needs.plan.outputs.weekday == '3')
+    runs-on: ci-fast
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Run readme-test blocks
+        run: make test-readmes MODE=smoke
+  web-quality:
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: ci-fast
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Check for oversized images (>2MB)
+        run: |
+          found=0
+          while IFS= read -r -d '' file; do
+            size_bytes=$(stat -c%s "$file")
+            if [ "$size_bytes" -gt 2097152 ]; then
+              echo "::error::$file is $((size_bytes / 1048576)) MB (max 2 MB)"
+              found=1
+            fi
+          done < <(find web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
+          exit "$found"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "20"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
+      - run: bun install --frozen-lockfile
+      - run: cd web && bun run build
+      - name: Check bundle size
+        run: cd web && node ./scripts/check-bundle-size.mjs
+      - name: Run Lighthouse CI
+        run: npm install -g @lhci/cli && lhci autorun
+        working-directory: web
+  smoke:
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: ci-deploy
+    timeout-minutes: 10
+    env:
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Resolve hosted instance
+        run: ./scripts/ci/export-hosted-instance-env.sh
+      - name: Wait for the instance
+        run: |
+          ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "API" 10 10
+          ./scripts/ci/wait-for-http.sh "$FRONTEND_URL" "Frontend" 10 10
+      - name: Run smoke tests
+        run: |
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN SMOKE_RUNTIME_TOKEN
+          ./scripts/qa/smoke-prod.sh
+  perf:
+    # Weekly. It ran daily until 2026-11-12 and every run that reached a runner in the two weeks before was green.
+    needs: plan
+    if: github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || needs.plan.outputs.weekday == '2')
+    runs-on: ci-maint
+    timeout-minutes: 30
+    env:
+      # The soak's baseline is the median of the last runs' receipts (scripts/ops/ci_receipts.py).
+      CI_RECEIPTS_S3_ENDPOINT: ${{ secrets.CI_RECEIPTS_S3_ENDPOINT }}
+      CI_RECEIPTS_S3_BUCKET: ${{ secrets.CI_RECEIPTS_S3_BUCKET }}
+      CI_RECEIPTS_S3_PREFIX: ${{ secrets.CI_RECEIPTS_S3_PREFIX }}
+      CI_RECEIPTS_S3_ACCESS_KEY_ID: ${{ secrets.CI_RECEIPTS_S3_ACCESS_KEY_ID }}
+      CI_RECEIPTS_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_RECEIPTS_S3_SECRET_ACCESS_KEY }}
+      PERF_PROOF_OUTPUT: artifacts/perf-proof/perf-proof-${{ github.sha }}.json
+      PERF_SOAK_OUTPUT: artifacts/perf-proof/perf-soak-linux-${{ github.sha }}.json
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+      - run: ./scripts/ci/ensure-make.sh
+      - name: Validate perf proof collector
+        run: make validate-perf-proof
+      - name: Run perf proof
+        run: make perf-proof
+      - name: Run Linux steady-state soak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/perf-soak.py \
+            --output "$PERF_SOAK_OUTPUT" \
+            --summary "${PERF_SOAK_OUTPUT%.json}.md"
+      - name: Write job summary
+        if: always()
+        run: |
+          for summary in "${PERF_PROOF_OUTPUT%.json}.md" "${PERF_SOAK_OUTPUT%.json}.md"; do
+            if [[ -f "$summary" ]]; then
+              cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Perf proof summary missing: $summary" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      # A measurement kept over time is a receipt: the next soak reads the last runs' receipts for its baseline.
+      - name: Record perf proof receipt
+        if: always()
+        run: |
+          if compgen -G "artifacts/perf-proof/*.json" >/dev/null; then
+            python3 scripts/ops/ci_receipts.py put perf-proof "$GITHUB_SHA" artifacts/perf-proof/*.json artifacts/perf-proof/*.md
+          else
+            echo "No perf proof files were written; nothing to record."
+          fi
+  perf-macos:
+    # By hand only: a steady-state soak is a measurement, and wisp is shared with the iOS lanes. The soak reports no
+    # baseline: the receipt store holds Linux baselines only.
+    if: github.repository == 'cipher982/longhouse' && inputs.perf_macos
+    runs-on: wisp
+    timeout-minutes: 45
+    env:
+      PERF_SOAK_OUTPUT: artifacts/perf-proof/perf-soak-macos-${{ github.sha }}.json
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+      - name: Build release engine
+        run: |
+          python3 scripts/build/generate_build_identity.py
+          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+      - name: Build Desktop harness
+        run: swift build -c release
+        working-directory: desktop/LonghouseMenuBarHarness
+      - name: Run macOS steady-state soak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/perf-soak.py \
+            --output "$PERF_SOAK_OUTPUT" \
+            --summary "${PERF_SOAK_OUTPUT%.json}.md"
+      - name: Write job summary
+        if: always()
+        run: |
+          summary="${PERF_SOAK_OUTPUT%.json}.md"
+          if [[ -f "$summary" ]]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "macOS soak summary missing: $summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
+  console-served-state:
+    # Can a person who opens Longhouse in a browser run a Console turn and see it finish, on every provider that offers
+    # one? Real stock CLI turns through a local fake model, asserted on the served surface. Live-model coverage is the
+    # `live` job. Cursor is excluded: cursor-agent has no supported custom base-URL setting, and live Cursor calls
+    # stopped 2026-11-20 (the only key was an employer credential); fixture tests cover it.
+    runs-on: ci-browser
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 60
+    env:
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
+      LONGHOUSE_QA_HOSTED_TARGET: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Validate isolated canary configuration
+        run: |
+          set -euo pipefail
+          case "${INSTANCE_SUBDOMAIN,,}" in
+            ""|david010|demo)
+              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$LONGHOUSE_MACHINE_TOKEN" ]]; then
+            echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN; refusing unauthenticated Console coverage." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+
+      - name: Stage stock providers and native engine in job-owned paths
+        id: fixture
+        run: |
+          set -euo pipefail
+          fixture_root="$(mktemp -d "$RUNNER_TEMP/console-served-state-fixture.XXXXXX")"
+          staging_ok=0
+          trap 'if [[ "$staging_ok" != 1 ]]; then rm -rf -- "$fixture_root"; fi' EXIT INT TERM
+          chmod 700 "$fixture_root"
+          provider_root="$fixture_root/providers"
+          home="$fixture_root/home"
+          # Discovery admits only canonical roots that already exist at Agent
+          # startup. Create every root used by the seven Console adapters so a
+          # stock provider's first turn cannot race root creation and disappear
+          # from the served transcript.
+          mkdir -p \
+            "$provider_root" "$home" "$fixture_root/bin" "$fixture_root/workspace" \
+            "$home/.claude/projects" "$home/.codex/sessions" \
+            "$home/.pi/agent/sessions" \
+            "$home/.gemini/antigravity-cli/brain" "$home/.gemini/antigravity/brain" "$home/.gemini/tmp" \
+            "$home/.local/share/opencode" "$home/.local/share/omp/sessions" \
+            "$home/.longhouse/agent/pi-console" "$home/.longhouse/agent/cursor-acp-source" \
+            "$home/.config/cursor/chats" "$home/.cursor/chats" "$home/.cursor/projects"
+          git init --quiet "$fixture_root/workspace"
+          echo "CONSOLE_QA_CWD=$fixture_root/workspace" >> "$GITHUB_ENV"
+          echo "CONSOLE_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
+          printf '%s\n' '{"modelProvider":"gemini"}' > "$home/.gemini/antigravity-cli/settings.json"
+          chmod 600 "$home/.gemini/antigravity-cli/settings.json"
+          # engine/build.rs requires the checkout-scoped identity before any
+          # cargo invocation. This lane builds from a fresh checkout, so the
+          # ignored identity must be generated in this same step and verified
+          # before cargo performs its preflight.
+          python3 "$GITHUB_WORKSPACE/scripts/build/generate_build_identity.py" \
+            --output "$GITHUB_WORKSPACE/.build/build-identity.json"
+          test -s "$GITHUB_WORKSPACE/.build/build-identity.json"
+          python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" exec -- \
+            build --manifest-path "$GITHUB_WORKSPACE/engine/Cargo.toml" --profile ci --bin longhouse-engine --bin longhouse
+          engine="$(python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)"
+          cli="$(python3 "$GITHUB_WORKSPACE/scripts/build/cargo.py" artifact --profile ci --bin longhouse)"
+          test -x "$engine"
+          test -x "$cli"
+          export HOME="$home"
+          export XDG_CONFIG_HOME="$home/.config"
+          export XDG_DATA_HOME="$home/.local/share"
+          export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
+          export LONGHOUSE_ENGINE_BIN="$engine"
+          install -m 755 "$cli" "$fixture_root/bin/longhouse"
+          # Claude Console admission is deliberately gated on its lifecycle
+          # hook. Configure the disposable profile with the paired engine
+          # before the Machine Agent computes its capabilities.
+          "$fixture_root/bin/longhouse" claude configure --claude-dir "$home/.claude"
+          export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
+          # Installation scripts are untrusted network inputs; never expose
+          # provider credentials while they run. The next step receives the
+          # job-scoped secrets again from the workflow environment.
+          unset CODEX_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN \
+            CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CURSOR_ACCESS_TOKEN GEMINI_API_KEY \
+            GOOGLE_API_KEY OPENROUTER_API_KEY PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY \
+            LONGHOUSE_MACHINE_TOKEN
+          # These are upstream package/install surfaces, staged below the
+          # disposable fixture root. Nothing is written to the runner's user
+          # profile or PATH.
+          npm install --prefix "$provider_root" --no-save \
+            @openai/codex \
+            @anthropic-ai/claude-code \
+            opencode-ai \
+            @earendil-works/pi-coding-agent
+          curl -fsSL https://omp.sh/install | sh -s -- --binary
+          curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
+          bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
+          # Keep the disposable home explicit across steps. Live mode logs in
+          # with its scoped key; mock mode uses only a non-secret dummy key.
+          echo "HOME=$home" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$home/.config" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$home/.local/share" >> "$GITHUB_ENV"
+          echo "PATH=$fixture_root/bin:$home/.local/bin:$PATH" >> "$GITHUB_ENV"
+          echo "CODEX_HOME=$home/.codex" >> "$GITHUB_ENV"
+          echo "LONGHOUSE_CLI_BIN=$fixture_root/bin/longhouse" >> "$GITHUB_ENV"
+          echo "LONGHOUSE_ENGINE_BIN=$engine" >> "$GITHUB_ENV"
+          echo "CONSOLE_FIXTURE_ENGINE=$engine" >> "$GITHUB_ENV"
+          for pair in \
+            "LONGHOUSE_CODEX_BIN=$provider_root/node_modules/.bin/codex" \
+            "LONGHOUSE_CLAUDE_BIN=$provider_root/node_modules/.bin/claude" \
+            "LONGHOUSE_OPENCODE_BIN=$provider_root/node_modules/.bin/opencode" \
+            "LONGHOUSE_PI_BIN=$provider_root/node_modules/.bin/pi" \
+            "LONGHOUSE_OMP_BIN=$home/.local/bin/omp" \
+            "LONGHOUSE_ANTIGRAVITY_BIN=$home/.local/bin/agy"; do
+            name="${pair%%=*}"
+            path="${pair#*=}"
+            if [[ -x "$path" ]]; then
+              echo "$name=$path" >> "$GITHUB_ENV"
+            else
+              echo "::warning::Owned Console fixture lacks $name; all-provider report will retain it as unavailable."
+            fi
+          done
+          staging_ok=1
+
+      - name: Start loopback fake LLM and configure disposable profiles
+        run: |
+          set -euo pipefail
+          port_file="$CONSOLE_FIXTURE_ROOT/mock-llm.port"
+          owner_file="$CONSOLE_FIXTURE_ROOT/mock-llm.owner"
+          log_file="$CONSOLE_FIXTURE_ROOT/mock-llm.log"
+          # One process with no children: ownership is its PID, which cleanup
+          # re-checks against the module name before signalling.
+          PYTHONPATH="$GITHUB_WORKSPACE/server" nohup python3 -m zerg.qa.scripted_model_server \
+            --port-file "$port_file" > "$log_file" 2>&1 < /dev/null &
+          endpoint_pid=$!
+          printf '%s\n' "$endpoint_pid" > "$owner_file"
+          for attempt in {1..40}; do
+            if [[ -s "$port_file" ]]; then
+              break
+            fi
+            if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+              cat "$log_file" >&2
+              echo "::error::Loopback fake LLM exited before binding." >&2
+              exit 1
+            fi
+            sleep 0.25
+          done
+          if [[ ! -s "$port_file" ]]; then
+            cat "$log_file" >&2
+            echo "::error::Loopback fake LLM did not bind in time." >&2
+            exit 1
+          fi
+          mock_port="$(cat "$port_file")"
+          if [[ ! "$mock_port" =~ ^[0-9]+$ ]]; then
+            echo "::error::Loopback fake LLM returned an invalid port." >&2
+            exit 1
+          fi
+          mock_url="http://127.0.0.1:$mock_port"
+          export MOCK_LLM_BASE_URL="$mock_url"
+          curl --retry 20 --retry-connrefused --retry-delay 0 --max-time 2 -fsS \
+            "$mock_url/healthz" >/dev/null
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          home = Path(os.environ["HOME"])
+          base = os.environ["MOCK_LLM_BASE_URL"]
+          openai_base = f"{base}/v1"
+
+          codex = home / ".codex" / "config.toml"
+          codex.parent.mkdir(parents=True, exist_ok=True)
+          codex.write_text(
+              'model_provider = "openai"\n'
+              'model = "mock-model"\n'
+              f'openai_base_url = "{openai_base}"\n',
+              encoding="utf-8",
+          )
+          codex.chmod(0o600)
+
+          opencode = home / ".config" / "opencode" / "opencode.json"
+          opencode.parent.mkdir(parents=True, exist_ok=True)
+          opencode.write_text(
+              json.dumps(
+                  {
+                      "$schema": "https://opencode.ai/config.json",
+                      "provider": {
+                          "longhouse-mock": {
+                              "npm": "@ai-sdk/openai-compatible",
+                              "name": "Longhouse mock",
+                              "options": {"baseURL": openai_base, "apiKey": "longhouse-mock-key"},
+                              "models": {"mock-model": {"name": "Longhouse mock"}},
+                          }
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          opencode.chmod(0o600)
+
+          pi = home / ".pi" / "agent" / "models.json"
+          pi.parent.mkdir(parents=True, exist_ok=True)
+          custom_model = {
+              "id": "mock-model",
+              "name": "Longhouse mock",
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+          }
+          pi.write_text(
+              json.dumps(
+                  {
+                      "providers": {
+                          "longhouse-mock": {
+                              "baseUrl": openai_base,
+                              "api": "openai-completions",
+                              "apiKey": "longhouse-mock-key",
+                              "models": [custom_model],
+                          }
+                      }
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          pi.chmod(0o600)
+
+          omp = home / ".omp" / "agent" / "models.yml"
+          omp.parent.mkdir(parents=True, exist_ok=True)
+          omp.write_text(
+              "providers:\n"
+              "  longhouse-mock:\n"
+              f'    baseUrl: "{openai_base}"\n'
+              "    api: openai-completions\n"
+              "    apiKey: longhouse-mock-key\n"
+              "    models:\n"
+              "      - id: mock-model\n"
+              "        name: Longhouse mock\n"
+              "        contextWindow: 200000\n"
+              "        maxTokens: 8192\n",
+              encoding="utf-8",
+          )
+          omp.chmod(0o600)
+          PY
+          {
+            echo "MOCK_LLM_BASE_URL=$mock_url"
+            echo "ANTHROPIC_API_KEY=longhouse-mock-key"
+            echo "ANTHROPIC_BASE_URL=$mock_url"
+            echo "OPENROUTER_API_KEY=longhouse-mock-key"
+            echo "GEMINI_API_KEY=longhouse-mock-key"
+            echo "GOOGLE_GEMINI_BASE_URL=$mock_url"
+            echo "DISABLE_AUTOUPDATER=1"
+            echo "CODEX_MODEL=mock-model"
+            echo "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+            echo "LONGHOUSE_PI_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+            echo "LONGHOUSE_OMP_QUALIFICATION_MODEL=longhouse-mock/mock-model"
+          } >> "$GITHUB_ENV"
+
+      - name: Prove Console on the browser-served surface
+        id: served_state
+        run: |
+          set -euo pipefail
+          # Satisfy the Machine Agent's native Codex readiness probe with a
+          # dummy key stored only in this disposable profile.
+          PYTHONPATH="$GITHUB_WORKSPACE/server" python3 -c \
+            'import os,sys; from pathlib import Path; from zerg.qa.codex_auth import login_with_api_key; print(login_with_api_key(Path(sys.argv[1]), api_key="mock-not-a-key", environment=os.environ, cwd=Path(sys.argv[2])))' \
+            "$LONGHOUSE_CODEX_BIN" "$CONSOLE_QA_CWD" > "$CONSOLE_FIXTURE_ROOT/codex-auth-receipt.txt"
+          # The child now uses only the isolated Codex auth.json; never pass
+          # the Longhouse binding or an ambient OpenAI key to Console.
+          unset CODEX_API_KEY OPENAI_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_OAUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
+            CURSOR_ACCESS_TOKEN GOOGLE_API_KEY OPENAI_CODEX_OAUTH_TOKEN \
+            PI_OPENROUTER_API_KEY OMP_OPENROUTER_API_KEY
+          provider_arg="codex,claude,opencode,pi,omp,antigravity"
+          mkdir -p artifacts
+          result="artifacts/console-served-state.json"
+          uv run --project server python scripts/qa/console-served-state-e2e.py \
+            --owned-machine-agent \
+            --engine "$CONSOLE_FIXTURE_ENGINE" \
+            --provider "$provider_arg" \
+            --cwd "$CONSOLE_QA_CWD" \
+            --api-url "$LONGHOUSE_API_URL" \
+            --json-out "$result"
+          verdict="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict", ""))' "$result" 2>/dev/null || echo "")"
+          case "$verdict" in
+            green) echo "Console proved on the served surface." ;;
+            unqualified) echo "::error::No machine could serve a Console turn; nothing was proved."; exit 1 ;;
+            *) echo "::error::Console served-state verdict: ${verdict:-unknown}"; exit 1 ;;
+          esac
+
+      - name: Summarise
+        if: always()
+        run: |
+          result="artifacts/console-served-state.json"
+          if [[ -n "$result" && -s "$result" ]]; then
+            python3 scripts/qa/summarise-console-served-state.py "$result" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Console served state" >> "$GITHUB_STEP_SUMMARY"
+            echo "No artifact produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retain fixture diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          diagnostics="artifacts/console-fixture"
+          mkdir -p "$diagnostics"
+          fixture_root="${CONSOLE_FIXTURE_ROOT:-}"
+          if [[ -n "$fixture_root" && "$fixture_root" == "$RUNNER_TEMP"/* ]]; then
+            if [[ -f "$fixture_root/codex-auth-receipt.txt" ]]; then
+              cp -- "$fixture_root/codex-auth-receipt.txt" "$diagnostics/codex-auth-receipt.txt"
+            fi
+            if [[ -f "$fixture_root/mock-llm.log" ]]; then
+              cp -- "$fixture_root/mock-llm.log" "$diagnostics/mock-llm.log"
+            fi
+            antigravity_logs="$fixture_root/home/.longhouse/agent/antigravity-console"
+            if [[ -d "$antigravity_logs" ]]; then
+              mkdir -p "$diagnostics/antigravity-console"
+              cp -R -- "$antigravity_logs/." "$diagnostics/antigravity-console/"
+            fi
+          fi
+
+      - name: Stop loopback fake LLM
+        if: always()
+        run: |
+          set -euo pipefail
+          fixture_root="${CONSOLE_FIXTURE_ROOT:-}"
+          if [[ -n "$fixture_root" ]]; then
+            owner_file="$fixture_root/mock-llm.owner"
+            if [[ -f "$owner_file" ]]; then
+              read -r endpoint_pid < "$owner_file"
+              if [[ "$endpoint_pid" =~ ^[0-9]+$ ]] &&
+                grep -qa 'zerg\.qa\.scripted_model_server' "/proc/$endpoint_pid/cmdline" 2>/dev/null; then
+                kill -TERM "$endpoint_pid" 2>/dev/null || true
+                for attempt in {1..20}; do
+                  if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 0.1
+                done
+                if kill -0 "$endpoint_pid" 2>/dev/null; then
+                  kill -KILL "$endpoint_pid" 2>/dev/null || true
+                  for attempt in {1..20}; do
+                    if ! kill -0 "$endpoint_pid" 2>/dev/null; then
+                      break
+                    fi
+                    sleep 0.1
+                  done
+                fi
+                if kill -0 "$endpoint_pid" 2>/dev/null; then
+                  echo "::error::Loopback fake LLM process survived cleanup." >&2
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+      - name: Remove owned fixture state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${CONSOLE_FIXTURE_ROOT:-}" && "$CONSOLE_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
+            rm -rf -- "$CONSOLE_FIXTURE_ROOT"
+          fi
   detect:
     runs-on: ci-browser
     if: github.repository == 'cipher982/longhouse'

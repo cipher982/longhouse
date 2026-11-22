@@ -1184,7 +1184,7 @@ def _previous_run_baseline(platform_name: str, work_dir: Path) -> tuple[dict[str
         store = ci_receipts.store_from_environment()
     except ci_receipts.ReceiptError as exc:
         return None, {"status": "unavailable", "reason": str(exc)}
-    endpoint = f"repos/{repo}/actions/workflows/perf-proof.yml/runs?branch=main&status=completed&per_page=50"
+    endpoint = f"repos/{repo}/actions/workflows/provider-nightly.yml/runs?branch=main&status=completed&per_page=50"
     result = subprocess.run(["gh", "api", endpoint], text=True, capture_output=True, check=False)
     if result.returncode != 0:
         return None, {"status": "unavailable", "reason": (result.stderr or result.stdout or "gh api failed")[-500:]}
