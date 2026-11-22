@@ -50,7 +50,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# The runtime image ships this file alone at /schemas/, where there is no repo
+# root above it; the server only uses the shapers, so fall back to its directory.
+_HERE = Path(__file__).resolve()
+REPO_ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent
 CATALOG_DIR = REPO_ROOT / "schemas" / "transcript_shapes"
 SUPPORTED_PROVIDERS = (
     "claude",
@@ -523,6 +526,10 @@ def _load_open_readonly():
     when a closed store sits in a directory that cannot be written.
     """
     path = REPO_ROOT / "server" / "zerg" / "qa" / "provider_sqlite.py"
+    if not path.is_file():  # inside the server, where `zerg` is installed
+        from zerg.qa.provider_sqlite import open_readonly
+
+        return open_readonly
     spec = importlib.util.spec_from_file_location("longhouse_provider_sqlite", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")

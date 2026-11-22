@@ -2670,3 +2670,25 @@ def test_shape_canary_ignores_classified_shapes_and_flags_garbage():
     seen = observe_records("claude", "byte_offset", [RawRecord(i, line) for i, line in enumerate(lines)])
     assert seen == {"version": "2.1.325", "unclassified": {"<unparseable>": 1}}
     assert observe_records("cursor", "byte_offset", []) is None
+
+
+def test_transcript_census_loads_from_the_runtime_image_path():
+    # The runtime image copies the census alone to /schemas/, one level below /.
+    source = Path(__file__).resolve().parents[2] / "scripts" / "qa" / "transcript_census.py"
+    namespace = {"__file__": "/schemas/transcript_census.py", "__name__": "_census_at_image_path"}
+    exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), namespace)
+    assert callable(namespace["SHAPERS"]["claude"])
+
+
+def test_shape_canary_turns_off_instead_of_failing_when_the_census_cannot_load(tmp_path, monkeypatch):
+    import zerg.services.shape_canary as shape_canary
+
+    broken = tmp_path / "transcript_census.py"
+    broken.write_text("raise IndexError(2)\n", encoding="utf-8")
+    monkeypatch.setattr(shape_canary, "_CENSUS_CANDIDATES", (broken,))
+    shape_canary._census.cache_clear()
+    try:
+        assert shape_canary.available() is False
+        assert shape_canary.observe_records("claude", "byte_offset", []) is None
+    finally:
+        shape_canary._census.cache_clear()

@@ -60,7 +60,12 @@ def _census() -> Any | None:
         return None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - a broken census turns the canary off, never the endpoint
+        sys.modules.pop(spec.name, None)
+        logger.exception("shape canary disabled: %s failed to load", path)
+        return None
     return module
 
 
