@@ -8,7 +8,10 @@ timestamp.
 
 Fields:
 - version:      release semver (from server/pyproject.toml)
-- commit:       full git SHA (GITHUB_SHA in CI, else `git rev-parse HEAD`)
+- commit:       full git SHA (LONGHOUSE_BUILD_COMMIT, else GITHUB_SHA in CI, else
+                `git rev-parse HEAD`). Actions ignores a step's attempt to set
+                GITHUB_SHA, so a build of any commit other than the run's own
+                names it in LONGHOUSE_BUILD_COMMIT.
 - commit_short: first 8 chars of commit
 - dirty:        true iff tracked files differ from HEAD
                 (`git diff --quiet HEAD`). Untracked files ignored —
@@ -71,9 +74,10 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 def resolve_commit(repo_root: Path, env: dict[str, str]) -> str:
-    sha = env.get("GITHUB_SHA", "").strip()
-    if sha:
-        return sha
+    for name in ("LONGHOUSE_BUILD_COMMIT", "GITHUB_SHA"):
+        sha = env.get(name, "").strip()
+        if sha:
+            return sha
     return _git(["rev-parse", "HEAD"], cwd=repo_root)
 
 

@@ -160,7 +160,8 @@ jobs:
       - name: Stage build identity
         if: steps.existing.outputs.digest == ''
         env:
-          GITHUB_SHA: ${{ needs.plan.outputs.sha }}  # a run started by CI completing has main's head here, not the commit built
+          # A run started by CI completing has main's head in GITHUB_SHA, and Actions ignores a step's override of it.
+          LONGHOUSE_BUILD_COMMIT: ${{ needs.plan.outputs.sha }}
         run: python3 scripts/build/generate_build_identity.py
       - name: Resolve exact catalog schema
         id: schema
