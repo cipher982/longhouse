@@ -159,6 +159,8 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Stage build identity
         if: steps.existing.outputs.digest == ''
+        env:
+          GITHUB_SHA: ${{ needs.plan.outputs.sha }}  # a run started by CI completing has main's head here, not the commit built
         run: python3 scripts/build/generate_build_identity.py
       - name: Resolve exact catalog schema
         id: schema
