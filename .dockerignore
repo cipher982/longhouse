@@ -37,7 +37,6 @@ config/*
 
 !schemas/
 schemas/*
-!schemas/managed_providers.yml
 # The live shape canary (zerg/services/shape_canary.py) classifies transcript
 # records with the census and its catalog.
 !schemas/transcript_shapes/
@@ -80,8 +79,7 @@ docker/*
 # `docker/runtime.dockerfile` copies server/ to /app and runs with
 # PYTHONPATH=/app, so server/apscheduler/ — a hand-written stub whose scheduler
 # reports running while running nothing — shadows the real dependency inside
-# the container. Nothing on the serve path imports zerg/qa/ (the endpoint reads
-# zerg/provider_contract/provider_capability_schema.py).
+# the container. Nothing on the serve path imports zerg/qa/.
 server/tests
 server/tests/**
 server/tests_lite

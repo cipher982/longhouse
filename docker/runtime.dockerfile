@@ -247,14 +247,8 @@ WORKDIR /app
 COPY --link --from=embedding-model /out/ /
 # 2. The venv (~100 MB): dependencies, pysqlite3 and the editable project install.
 COPY --link --chown=1000:1000 --from=dependencies /app/.venv /app/.venv
-# 3. Shared config, and schemas/managed_providers.yml: read live by
-#    zerg/provider_contract/provider_capability_schema.py, which serves
-#    GET /api/agents/provider-capabilities (zerg/qa/ re-exports it but is not in
-#    this image -- see .dockerignore). Found missing here the hard way -- the
-#    endpoint's first real deploy 500'd on FileNotFoundError because this file
-#    was never part of the runtime image at all.
+# 3. Shared config and the shape census.
 COPY --link --chown=1000:1000 config/models.json config/tool-tiers.json /config/
-COPY --link --chown=1000:1000 schemas/managed_providers.yml /schemas/managed_providers.yml
 COPY --link --chown=1000:1000 schemas/transcript_shapes /schemas/transcript_shapes
 COPY --link --chown=1000:1000 scripts/qa/transcript_census.py /schemas/transcript_census.py
 # 4. The code. build-identity.json is already staged into server/zerg/ by

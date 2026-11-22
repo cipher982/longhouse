@@ -9,23 +9,13 @@
 
 export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "omp" | "opencode" | "pi";
 
-// Landing chips: lit only by live-token assertions behind every
-// backing operation. The runtime capability fields never light a chip.
-export type ProvenChips = {
+export type GeneratedProviderCapabilities = {
+  readonly id: GeneratedProviderId;
   readonly search: boolean;
   readonly launchAndSend: boolean;
   readonly interrupt: boolean;
   readonly steerMidTurn: boolean;
   readonly resume: boolean;
-};
-
-export type GeneratedProviderCapabilities = {
-  readonly id: GeneratedProviderId;
-  readonly launchAndSend: boolean;
-  readonly interrupt: boolean;
-  readonly steerMidTurn: boolean;
-  readonly resume: boolean;
-  readonly proven: ProvenChips;
   readonly cloudSessionStart: "live" | "none";
   readonly nativeLaunchCommand: string | null;
 };
@@ -33,113 +23,71 @@ export type GeneratedProviderCapabilities = {
 export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, GeneratedProviderCapabilities> = {
   antigravity: {
     id: "antigravity",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: false,
-    proven: {
-      launchAndSend: false,
-      interrupt: false,
-      steerMidTurn: false,
-      resume: false,
-      search: false,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse antigravity",
   },
   claude: {
     id: "claude",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse claude",
   },
   codex: {
     id: "codex",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse codex",
   },
   cursor: {
     id: "cursor",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse cursor",
   },
   omp: {
     id: "omp",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse omp",
   },
   opencode: {
     id: "opencode",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse opencode",
   },
   pi: {
     id: "pi",
+    search: true,
     launchAndSend: true,
     interrupt: true,
     steerMidTurn: true,
     resume: true,
-    proven: {
-      launchAndSend: true,
-      interrupt: true,
-      steerMidTurn: true,
-      resume: true,
-      search: true,
-    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse pi",
   },

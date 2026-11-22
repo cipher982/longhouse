@@ -9,12 +9,8 @@ import {
   type LaunchProviderId,
 } from "../providers";
 
-type ProofAssertion = { acceptable_evidence?: string[]; required_evidence_classes?: string[] };
-type ProofDeclaration = { disposition?: string; required_assertions?: ProofAssertion[] };
-
 type ContractProvider = {
   provider: string;
-  operation_evidence: Record<string, ProofDeclaration>;
   launch_local: boolean;
   send_input: boolean;
   interrupt: boolean;
@@ -182,32 +178,10 @@ describe("providers launch support", () => {
       expect(support!.interrupt).toBe((contract.interrupt && contract.terminate) || turnInterrupt);
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
-      // Landing chips follow live-token proof, never the runtime flags alone
-      // (scripts/generate/provider_capabilities_ts.py).
-      // Mirrors `_live` in server/zerg/services/provider_chip_edges.py: a cell that
-      // requires a live-token class counts even when it also accepts scripted evidence.
-      const isLive = (a: ProofAssertion) =>
-        Array.isArray(a.required_evidence_classes)
-          ? a.required_evidence_classes.includes("live_token") && (a.acceptable_evidence ?? []).includes("live_token")
-          : JSON.stringify(a.acceptable_evidence) === JSON.stringify(["live_token"]);
-      const liveOnly = (assertions: ProofAssertion[] | undefined) =>
-        Array.isArray(assertions) && assertions.length > 0 && assertions.every(isLive);
-      const proven = (operation: "launch_local" | "send_input" | "interrupt" | "terminate" | "steer_active_turn") =>
-        contract[operation] === true &&
-        contract.operation_evidence[operation]?.disposition === "implemented" &&
-        liveOnly(contract.operation_evidence[operation]?.required_assertions);
-      const capabilityProven = (capability: string) => {
-        const declaration = contract.capabilities[capability] as ProofDeclaration | undefined;
-        const live = (declaration?.required_assertions ?? []).filter(isLive);
-        return declaration?.disposition === "implemented" && liveOnly(live);
-      };
-      expect(support!.proven).toEqual({
-        search: capabilityProven("session.transcript.search"),
-        launchAndSend: proven("launch_local") && proven("send_input"),
-        interrupt: proven("interrupt") && proven("terminate"),
-        steerMidTurn: proven("steer_active_turn"),
-        resume: contract.can_resume && capabilityProven("session.resume.helm"),
-      });
+      expect(support!.search).toBe(
+        (contract.capabilities["session.transcript.search"] as { disposition?: string } | undefined)?.disposition ===
+          "implemented",
+      );
       expect(support!.cloudSessionStart).toBe(
         "session.turn.start" in contract.capabilities ? "live" : "none",
       );
