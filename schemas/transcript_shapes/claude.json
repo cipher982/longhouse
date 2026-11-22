@@ -1286,6 +1286,36 @@
         "type"
       ]
     },
+    "data-flow-incomplete": {
+      "classification": "state:data flow incomplete",
+      "first_seen_version": "2.1.327",
+      "last_seen_version": "2.1.329",
+      "entrypoints": [
+        "cli"
+      ],
+      "keys": [
+        "codes",
+        "sessionId",
+        "type",
+        "v"
+      ]
+    },
+    "data-flow-records": {
+      "classification": "state:data flow records",
+      "first_seen_version": "2.1.327",
+      "last_seen_version": "2.1.330",
+      "entrypoints": [
+        "cli",
+        "sdk-cli"
+      ],
+      "keys": [
+        "records",
+        "sessionId",
+        "snapshot",
+        "type",
+        "v"
+      ]
+    },
     "failed": {
       "classification": "state:workflow agent ledger",
       "first_seen_version": null,
