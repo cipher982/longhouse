@@ -58,8 +58,75 @@ fn run_inner() -> anyhow::Result<()> {
 
 /// Everything the hook does once its input is parsed.
 ///
-/// Split from `run_inner` so a test can hand it a payload instead of a stdin.
+/// Split from `run_inner` so tests can hand it a payload instead of stdin.
 fn handle_input(input: &Value) -> anyhow::Result<()> {
+    let (output, result) =
+        evaluate_input_outcome(input, crate::warp_cli_agent::is_warp_terminal(), true);
+    if let Some(output) = output {
+        println!("{output}");
+    }
+    result
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn evaluate_input(
+    input: &Value,
+    warp_enabled: bool,
+    try_tty: bool,
+) -> anyhow::Result<Option<Value>> {
+    let (output, result) = evaluate_input_outcome(input, warp_enabled, try_tty);
+    match result {
+        Ok(()) => Ok(output),
+        Err(_) if output.is_some() => Ok(output),
+        Err(error) => Err(error),
+    }
+}
+
+fn non_empty_output(map: serde_json::Map<String, Value>) -> Option<Value> {
+    (!map.is_empty()).then_some(Value::Object(map))
+}
+
+fn persist_presence_and_edges(
+    home: &Path,
+    session_id: &str,
+    event: &str,
+    child_origin: bool,
+    input: &Value,
+    payload: &Value,
+    observation: &HookObservation,
+) -> anyhow::Result<()> {
+    if !child_origin
+        && event == "PreToolUse"
+        && string(input, "tool_name").as_deref() == Some("Monitor")
+    {
+        record_monitor_invocation(home, session_id, input);
+    } else if event == "SessionEnd" {
+        clear_monitor_ledger(home, session_id);
+    }
+    if (!child_origin && observation.status.is_some())
+        || payload.get("delegation").is_some()
+        || payload.get("delegation_update").is_some()
+        || payload.get("session_usage").is_some()
+        || payload.get("session_crons").is_some()
+        || payload.get("permission_mode").is_some()
+        || payload.get("git_branch").is_some()
+        || matches!(event, "CwdChanged" | "SessionEnd")
+    {
+        crate::hook_outbox::enqueue_presence(home, payload)?;
+    }
+    if !child_origin {
+        if let Some(edge) = observation.edge.as_ref() {
+            enqueue_interaction_edge(session_id, edge)?;
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_input_outcome(
+    input: &Value,
+    warp_enabled: bool,
+    try_tty: bool,
+) -> (Option<Value>, anyhow::Result<()>) {
     let event = string(input, "hook_event_name").unwrap_or_default();
     let observation = observation_for_event(&event, input);
     let occurred_at = Utc::now().to_rfc3339();
@@ -113,7 +180,7 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     });
     if !matches!(
         event.as_str(),
-        "SessionEnd" | "CwdChanged" | "ClaudeModState"
+        "SessionEnd" | "CwdChanged" | "ClaudeModState" | "PermissionRequest"
     ) && observation.status.is_none()
         && observation.edge.is_none()
         && registry.is_none()
@@ -123,17 +190,21 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         && permission_mode.is_none()
         && git_branch.is_none()
     {
-        return Ok(());
+        return (None, Ok(()));
     }
     let Some(session_id) = session_id else {
-        return Ok(());
+        return (None, Ok(()));
     };
+    let mut hook_output = serde_json::Map::new();
+    let mut turn_control_blocked_stop = false;
     // Turn control runs before observability, which may fail and return early.
     if let Some(managed) = managed_session_id.as_deref() {
-        if let Some(output) =
+        if let Some(Value::Object(map)) =
             crate::claude_channel_control::lifecycle_hook_turn_control(managed, &event, input)
         {
-            println!("{output}");
+            turn_control_blocked_stop =
+                event == "Stop" && map.get("decision").and_then(Value::as_str) == Some("block");
+            hook_output.extend(map);
         }
     }
     // A subagent's tool events fire these same hooks and carry `agent_id`
@@ -148,20 +219,21 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // rather than served state.
     let child_origin = string(input, "agent_id").is_some();
     if child_origin && registry.is_none() && lifecycle_update.is_none() {
-        return Ok(());
+        return (non_empty_output(hook_output), Ok(()));
     }
     let transcript_path = string(input, "transcript_path");
     // A bare Claude session that started before the machine's import scope is
     // not shipped, so it is not announced either: presence carries the
     // session's folder and tool names. A session Longhouse launched is the
     // owner's own doing and always reports.
-    if managed_session_id.is_none() {
-        if let Some(path) = transcript_path.as_deref() {
-            if !crate::config::import_scope().admits_file(Path::new(path)) {
-                return Ok(());
-            }
-        }
-    }
+    let admit_presence = if managed_session_id.is_none() {
+        transcript_path
+            .as_deref()
+            .map(|path| crate::config::import_scope().admits_file(Path::new(path)))
+            .unwrap_or(true)
+    } else {
+        true
+    };
     if event == "SessionStart" {
         if let (Some(managed), Some(native)) = (
             managed_session_id.as_deref(),
@@ -259,57 +331,70 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     // time but remain separate fact families downstream. Keep both fields on
     // the producer payload: the daemon preserves the complete snapshot while
     // reducing the exact child edge independently.
-    let home = longhouse_home()?;
-    if !child_origin
-        && event == "PreToolUse"
-        && string(input, "tool_name").as_deref() == Some("Monitor")
-    {
-        record_monitor_invocation(&home, &session_id, input);
-    } else if event == "SessionEnd" {
-        clear_monitor_ledger(&home, &session_id);
-    }
-    if (!child_origin && observation.status.is_some())
-        || payload.get("delegation").is_some()
-        || payload.get("delegation_update").is_some()
-        || payload.get("session_usage").is_some()
-        || payload.get("session_crons").is_some()
-        || payload.get("permission_mode").is_some()
-        || payload.get("git_branch").is_some()
-        || matches!(event.as_str(), "CwdChanged" | "SessionEnd")
-    {
-        crate::hook_outbox::enqueue_presence(&home, &payload)?;
-    }
-    if !child_origin {
-        if let Some(edge) = observation.edge.as_ref() {
-            enqueue_interaction_edge(&session_id, edge)?;
+    let home = longhouse_home();
+    let observe_result = match home.as_ref() {
+        Ok(home) if admit_presence => persist_presence_and_edges(
+            home,
+            &session_id,
+            &event,
+            child_origin,
+            input,
+            &payload,
+            &observation,
+        ),
+        Ok(_) => Ok(()),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
+    };
+    if warp_enabled {
+        let stopping_agent_id = (event == "SubagentStop")
+            .then(|| string(input, "agent_id"))
+            .flatten();
+        let notification_type = (event == "Notification")
+            .then(|| string(input, "notification_type"))
+            .flatten();
+        if let Some(marker_event) = warp_marker_for_event_at(
+            home.as_deref().ok(),
+            &session_id,
+            &event,
+            child_origin,
+            stopping_agent_id.as_deref(),
+            payload.get("delegation"),
+            notification_type.as_deref(),
+            turn_control_blocked_stop,
+        ) {
+            let extra_owned = warp_extra_fields(marker_event, input);
+            let extra_refs: Vec<(&str, &str)> = extra_owned
+                .iter()
+                .map(|(key, value)| (*key, value.as_str()))
+                .collect();
+            let marker = crate::warp_cli_agent::session_event_marker_with_fields(
+                "claude",
+                marker_event,
+                &session_id,
+                Path::new(cwd.as_deref().unwrap_or(".")),
+                None,
+                &extra_refs,
+            );
+            let delivered_via_tty = try_tty && crate::warp_cli_agent::write_tty_marker(&marker);
+            if !delivered_via_tty {
+                hook_output.insert("terminalSequence".to_string(), Value::String(marker));
+            }
         }
     }
-    let stopping_agent_id = (event == "SubagentStop")
-        .then(|| string(input, "agent_id"))
-        .flatten();
-    if let Some(marker_event) = warp_marker_for_event(
-        &home,
-        &session_id,
-        &event,
-        child_origin,
-        stopping_agent_id.as_deref(),
-        payload.get("delegation"),
-    ) {
-        crate::warp_cli_agent::emit_tty_event(
-            "claude",
-            marker_event,
-            &session_id,
-            Path::new(cwd.as_deref().unwrap_or(".")),
-            None,
+    if event == "SessionStart"
+        && managed_session_id.is_some()
+        && coordination_bootstrap_enabled()
+        && !hook_output.contains_key("hookSpecificOutput")
+    {
+        hook_output.insert(
+            "hookSpecificOutput".to_string(),
+            json!({
+                "hookEventName": "SessionStart",
+                "additionalContext": session_start_awareness(),
+            }),
         );
     }
-    if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
-        println!(
-            "{}",
-            json!({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":session_start_awareness()}})
-        );
-    }
-    Ok(())
+    (non_empty_output(hook_output), observe_result)
 }
 
 /// Managed sessions report under the Longhouse id, so without this the
@@ -608,20 +693,29 @@ fn remaining_active_subagents(delegation: Option<&Value>, stopping_agent_id: Opt
     }
 }
 
-fn warp_marker_for_event(
-    home: &Path,
+#[allow(clippy::too_many_arguments)]
+fn warp_marker_for_event_at(
+    home: Option<&Path>,
     session_id: &str,
     event: &str,
     child_origin: bool,
     stopping_agent_id: Option<&str>,
     delegation: Option<&Value>,
+    notification_type: Option<&str>,
+    turn_control_blocked_stop: bool,
 ) -> Option<&'static str> {
-    let deferred_path = warp_deferred_stop_path(home, session_id);
+    let deferred_path = home.map(|root| warp_deferred_stop_path(root, session_id));
+    let clear_deferred = || {
+        if let Some(path) = deferred_path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+    };
     if event == "SubagentStop" {
-        if deferred_path.exists() && remaining_active_subagents(delegation, stopping_agent_id) == 0
-        {
-            let _ = std::fs::remove_file(&deferred_path);
-            return Some("stop");
+        if let Some(path) = deferred_path.as_ref() {
+            if path.exists() && remaining_active_subagents(delegation, stopping_agent_id) == 0 {
+                let _ = std::fs::remove_file(path);
+                return Some("stop");
+            }
         }
         return None;
     }
@@ -629,29 +723,114 @@ fn warp_marker_for_event(
         return None;
     }
     match event {
+        "SessionStart" => {
+            clear_deferred();
+            Some("session_start")
+        }
         "UserPromptSubmit" => {
-            let _ = std::fs::remove_file(&deferred_path);
+            clear_deferred();
             Some("prompt_submit")
         }
         "PermissionRequest" => Some("permission_request"),
+        "PostToolUse" | "PostToolUseFailure" => Some("tool_complete"),
+        "Notification" if notification_type == Some("idle_prompt") => Some("idle_prompt"),
         "SessionEnd" => {
-            let _ = std::fs::remove_file(&deferred_path);
+            clear_deferred();
             Some("stop")
         }
         "Stop" => {
+            if turn_control_blocked_stop {
+                return None;
+            }
             if remaining_active_subagents(delegation, None) == 0 {
-                let _ = std::fs::remove_file(&deferred_path);
+                clear_deferred();
                 Some("stop")
             } else {
-                if let Some(parent) = deferred_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                if let Some(path) = deferred_path.as_ref() {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(path, b"1");
                 }
-                let _ = std::fs::write(&deferred_path, b"1");
                 None
             }
         }
         _ => None,
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+fn warp_marker_for_event(
+    home: &Path,
+    session_id: &str,
+    event: &str,
+    child_origin: bool,
+    stopping_agent_id: Option<&str>,
+    delegation: Option<&Value>,
+    notification_type: Option<&str>,
+    turn_control_blocked_stop: bool,
+) -> Option<&'static str> {
+    warp_marker_for_event_at(
+        Some(home),
+        session_id,
+        event,
+        child_origin,
+        stopping_agent_id,
+        delegation,
+        notification_type,
+        turn_control_blocked_stop,
+    )
+}
+
+fn permission_summary(tool_name: Option<&str>, tool_input: Option<&Value>) -> String {
+    let tool = tool_name.unwrap_or("tool");
+    let preview = tool_input.and_then(|value| {
+        ["command", "file_path", "pattern", "url"]
+            .into_iter()
+            .find_map(|key| {
+                value
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+    });
+    match preview {
+        Some(preview) => format!("Wants to run {tool}: {preview}"),
+        None => format!("Wants to run {tool}"),
+    }
+}
+
+fn warp_extra_fields(marker_event: &str, input: &Value) -> Vec<(&'static str, String)> {
+    let mut fields = Vec::new();
+    match marker_event {
+        "prompt_submit" => {
+            if let Some(prompt) = string(input, "prompt") {
+                fields.push(("query", prompt));
+            }
+        }
+        "tool_complete" => {
+            if let Some(tool_name) = string(input, "tool_name") {
+                fields.push(("tool_name", tool_name));
+            }
+        }
+        "permission_request" => {
+            let tool_name = string(input, "tool_name");
+            let summary = permission_summary(tool_name.as_deref(), input.get("tool_input"));
+            if let Some(tool_name) = tool_name {
+                fields.push(("tool_name", tool_name));
+            }
+            fields.push(("summary", summary));
+        }
+        "idle_prompt" => {
+            let summary = string(input, "message")
+                .unwrap_or_else(|| "Claude is waiting for your input".to_string());
+            fields.push(("summary", summary));
+        }
+        _ => {}
+    }
+    fields
 }
 
 fn safe_single_line_intent(raw: &str) -> Option<String> {
@@ -2754,7 +2933,51 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let sid = "sess-warp-1";
         assert_eq!(
-            warp_marker_for_event(home.path(), sid, "Stop", false, None, None),
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "SessionStart",
+                false,
+                None,
+                None,
+                None,
+                false
+            ),
+            Some("session_start")
+        );
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "PostToolUse",
+                false,
+                None,
+                None,
+                None,
+                false
+            ),
+            Some("tool_complete")
+        );
+        assert_eq!(
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "Notification",
+                false,
+                None,
+                None,
+                Some("idle_prompt"),
+                false
+            ),
+            Some("idle_prompt")
+        );
+        assert_eq!(
+            warp_marker_for_event(home.path(), sid, "Stop", false, None, None, None, true),
+            None,
+            "Stop blocked by turn control keeps the turn alive"
+        );
+        assert_eq!(
+            warp_marker_for_event(home.path(), sid, "Stop", false, None, None, None, false),
             Some("stop")
         );
         assert_eq!(
@@ -2764,7 +2987,9 @@ mod tests {
                 "Stop",
                 false,
                 None,
-                Some(&json!({"count": 0, "kinds": {}, "items": []}))
+                Some(&json!({"count": 0, "kinds": {}, "items": []})),
+                None,
+                false
             ),
             Some("stop")
         );
@@ -2782,7 +3007,9 @@ mod tests {
                         {"id": "sh-1", "kind": "shell", "status": "running"},
                         {"id": "sh-2", "kind": "shell", "status": "running"}
                     ]
-                }))
+                })),
+                None,
+                false
             ),
             Some("stop"),
             "background shells like dev servers must not keep Warp spinning"
@@ -2795,7 +3022,9 @@ mod tests {
                 "SubagentStop",
                 true,
                 Some("fg-1"),
-                Some(&json!({"count": 0, "kinds": {}, "items": []}))
+                Some(&json!({"count": 0, "kinds": {}, "items": []})),
+                None,
+                false
             ),
             None
         );
@@ -2814,7 +3043,9 @@ mod tests {
                         {"id": "bg-1", "kind": "subagent", "status": "running"},
                         {"id": "bg-2", "kind": "subagent", "status": "running"}
                     ]
-                }))
+                })),
+                None,
+                false
             ),
             None
         );
@@ -2833,7 +3064,9 @@ mod tests {
                         {"id": "bg-1", "kind": "subagent", "status": "running"},
                         {"id": "bg-2", "kind": "subagent", "status": "running"}
                     ]
-                }))
+                })),
+                None,
+                false
             ),
             None
         );
@@ -2851,7 +3084,9 @@ mod tests {
                     "items": [
                         {"id": "bg-2", "kind": "subagent", "status": "running"}
                     ]
-                }))
+                })),
+                None,
+                false
             ),
             Some("stop")
         );
@@ -2863,14 +3098,197 @@ mod tests {
                 "Stop",
                 false,
                 None,
-                Some(&json!({"count": 1, "kinds": {"subagent": 1}}))
+                Some(&json!({"count": 1, "kinds": {"subagent": 1}})),
+                None,
+                false
             ),
             None
         );
         assert_eq!(
-            warp_marker_for_event(home.path(), sid, "SessionEnd", false, None, None),
+            warp_marker_for_event(
+                home.path(),
+                sid,
+                "SessionEnd",
+                false,
+                None,
+                None,
+                None,
+                false
+            ),
             Some("stop")
         );
+    }
+
+    fn parse_warp_terminal_sequence(output: &Value) -> Value {
+        let seq = output["terminalSequence"]
+            .as_str()
+            .expect("terminalSequence string");
+        let payload = seq
+            .strip_prefix("\x1b]777;notify;warp://cli-agent;")
+            .and_then(|value| value.strip_suffix('\x07'))
+            .expect("Warp OSC 777 framing");
+        serde_json::from_str::<Value>(payload).unwrap()
+    }
+
+    #[test]
+    fn warp_terminal_sequence_outputs_single_valid_json_when_tty_unavailable() {
+        let home = tempfile::tempdir().unwrap();
+        with_managed_home(home.path(), "lh-warp-sess", "run-warp-1", || {
+            let start = evaluate_input(
+                &json!({
+                    "hook_event_name": "SessionStart",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("SessionStart output");
+            assert_eq!(start["hookSpecificOutput"]["hookEventName"], "SessionStart");
+            let start_marker = parse_warp_terminal_sequence(&start);
+            assert_eq!(start_marker["agent"], "claude");
+            assert_eq!(start_marker["event"], "session_start");
+            assert_eq!(start_marker["session_id"], "lh-warp-sess");
+            assert_eq!(start_marker["project"], "demo-proj");
+
+            let prompt = evaluate_input(
+                &json!({
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "prompt": "fix the warp hooks",
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("UserPromptSubmit output");
+            let prompt_marker = parse_warp_terminal_sequence(&prompt);
+            assert_eq!(prompt_marker["event"], "prompt_submit");
+            assert_eq!(prompt_marker["query"], "fix the warp hooks");
+
+            let perm = evaluate_input(
+                &json!({
+                    "hook_event_name": "PermissionRequest",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "tool_name": "Bash",
+                    "tool_input": { "command": "cargo test" },
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("PermissionRequest output");
+            let perm_marker = parse_warp_terminal_sequence(&perm);
+            assert_eq!(perm_marker["event"], "permission_request");
+            assert_eq!(perm_marker["tool_name"], "Bash");
+            assert_eq!(perm_marker["summary"], "Wants to run Bash: cargo test");
+
+            let post = evaluate_input(
+                &json!({
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "tool_name": "Bash",
+                    "tool_input": { "command": "cargo test" },
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("PostToolUse output");
+            let post_marker = parse_warp_terminal_sequence(&post);
+            assert_eq!(post_marker["event"], "tool_complete");
+            assert_eq!(post_marker["tool_name"], "Bash");
+
+            let idle = evaluate_input(
+                &json!({
+                    "hook_event_name": "Notification",
+                    "notification_type": "idle_prompt",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "message": "Claude is waiting for your input",
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("Notification output");
+            let idle_marker = parse_warp_terminal_sequence(&idle);
+            assert_eq!(idle_marker["event"], "idle_prompt");
+            assert_eq!(idle_marker["summary"], "Claude is waiting for your input");
+
+            let stop = evaluate_input(
+                &json!({
+                    "hook_event_name": "Stop",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("Stop output");
+            let stop_marker = parse_warp_terminal_sequence(&stop);
+            assert_eq!(stop_marker["event"], "stop");
+
+            let deferred = evaluate_input(
+                &json!({
+                    "hook_event_name": "Stop",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "background_tasks": [{
+                        "id": "bg-1",
+                        "type": "subagent",
+                        "status": "running",
+                    }],
+                }),
+                true,
+                false,
+            )
+            .unwrap();
+            assert!(
+                deferred.is_none(),
+                "Stop with running subagent must defer Warp stop"
+            );
+
+            let released = evaluate_input(
+                &json!({
+                    "hook_event_name": "SubagentStop",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "agent_id": "bg-1",
+                    "background_tasks": [{
+                        "id": "bg-1",
+                        "type": "subagent",
+                        "status": "running",
+                    }],
+                }),
+                true,
+                false,
+            )
+            .unwrap()
+            .expect("Final SubagentStop output");
+            assert_eq!(parse_warp_terminal_sequence(&released)["event"], "stop");
+
+            let outside_warp = evaluate_input(
+                &json!({
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "native-warp",
+                    "cwd": "/tmp/demo-proj",
+                    "prompt": "ignored outside warp",
+                }),
+                false,
+                false,
+            )
+            .unwrap();
+            assert!(
+                outside_warp.is_none(),
+                "outside Warp must emit no terminalSequence"
+            );
+        });
     }
 
     fn write_transcript(dir: &std::path::Path, name: &str) -> std::path::PathBuf {

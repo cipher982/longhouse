@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 342,
+  "file_count": 343,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -572,6 +572,13 @@
         "codex",
         "omp",
         "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "engine/src/warp_cli_agent.rs",
+      "providers": [
+        "claude",
         "pi"
       ]
     },

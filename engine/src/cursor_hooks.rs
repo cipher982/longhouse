@@ -328,10 +328,7 @@ fn emit_warp_lifecycle_notification(
     cwd: Option<&str>,
     payload: &Value,
 ) {
-    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal")
-        || std::env::var_os("WARP_CLI_AGENT_PROTOCOL_VERSION").is_none()
-        || std::env::var_os("WARP_CLIENT_VERSION").is_none()
-    {
+    if !crate::warp_cli_agent::is_warp_terminal() {
         return;
     }
     let Some((osc9_text, osc777)) = warp_lifecycle_payload(event, session_id, cwd, payload) else {

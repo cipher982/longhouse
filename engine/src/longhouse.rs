@@ -55,6 +55,7 @@ mod process_identity;
 #[allow(dead_code)]
 #[path = "pty_relay.rs"]
 mod pty_relay;
+#[allow(dead_code)]
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;
 
