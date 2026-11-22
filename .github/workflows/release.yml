@@ -1,0 +1,540 @@
+name: Release
+
+# The one deploy path. A green CI run on main becomes a runtime image, is deployed to the canary, qualified,
+# and then deployed to personal dogfood (david010). Replaces Publish Runtime Image, Archive Runtime Image,
+# Deploy and Verify, Hosted Live QA and Promote Rings.
+#
+#   plan ──> build ──┬─> archive                  immutable OCI copy, off the critical path
+#                    ├─> canary                   deploy + smoke on HOSTED_CANARY_SUBDOMAIN
+#                    └─> qa                       Hosted Live QA on HOSTED_QA_SUBDOMAIN, only for a
+#                                                 range that touches a dogfood-sensitive path
+#                          └──────> dogfood       deploy + health check on david010
+#
+# Gates for dogfood (scripts/ops/release_plan.py): CI green on the exact SHA, never backwards or sideways,
+# nothing to do when no runtime input changed, QA for sensitive ranges, a Terminal Truth verdict when a
+# live-preview path changed. The production tenant (longhouse.ai) is dark; when it launches, a deploy job for it
+# is added here.
+#
+# One release at a time, never cancelled mid-run. GitHub keeps only the newest pending run, so a newer green
+# SHA replaces a waiting one (it contains it); `dogfood` refuses any SHA that does not contain what david010
+# serves.
+#
+# Manual:
+#   gh workflow run release.yml -f sha=<full sha>                canary only
+#   gh workflow run release.yml -f sha=<full sha> -f dogfood=true
+# Roll back dogfood to an earlier commit (see RELEASE.md, "Rollback" before a migration-bearing range):
+#   gh workflow run release.yml -f sha=<previous full sha> -f dogfood=true -f rollback=true
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full commit SHA to release (default: the commit this workflow runs from)"
+        required: false
+        type: string
+      dogfood:
+        description: "Also deploy to personal dogfood after the canary (the automatic path always does)"
+        required: false
+        type: boolean
+        default: false
+      rollback:
+        description: "Allow dogfood to move to a commit that does not contain what it serves (always takes the QA gate)"
+        required: false
+        type: boolean
+        default: false
+      qa:
+        description: "Run Hosted Live QA even when the range is not sensitive"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  statuses: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
+
+jobs:
+  plan:
+    name: "Plan"
+    runs-on: ci-gate
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      deploy: ${{ steps.plan.outputs.deploy }}
+      sensitive: ${{ steps.plan.outputs.sensitive }}
+      tt_commit: ${{ steps.plan.outputs.tt_commit }}
+      served: ${{ steps.plan.outputs.served }}
+      dogfood: ${{ steps.mode.outputs.dogfood }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Ancestry and the sensitive-path checks need history and trees, not blobs.
+          fetch-depth: 0
+          filter: blob:none
+          show-progress: false
+      - uses: ./.github/actions/setup-gh
+      - name: Resolve mode
+        id: mode
+        run: echo "dogfood=${{ inputs.dogfood == true }}" >> "$GITHUB_OUTPUT"
+      - name: Decide
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha || github.sha }}
+          DOGFOOD: ${{ steps.mode.outputs.dogfood }}
+          ROLLBACK: ${{ inputs.rollback == true }}
+        run: |
+          set -euo pipefail
+          args=(plan --sha "$SHA")
+          [[ "$DOGFOOD" != true ]] || args+=(--dogfood)
+          [[ "$ROLLBACK" != true ]] || args+=(--rollback)
+          python3 scripts/ops/release_plan.py "${args[@]}" | tee "$RUNNER_TEMP/plan.json"
+          {
+            echo "## Release plan"
+            echo ""
+            echo '```json'
+            jq . "$RUNNER_TEMP/plan.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: "Build runtime image"
+    needs: plan
+    if: needs.plan.outputs.deploy == 'true'
+    runs-on: ci-maint
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.digest.outputs.ref }}
+      digest: ${{ steps.digest.outputs.digest }}
+      identity: ${{ steps.digest.outputs.identity }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 1
+
+      # The persistent BuildKit daemon on cube holds the layer cache (control-plane
+      # docs/specs/runtime-image-build.md); a build imports and exports nothing.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.buildkit.svc.cluster.local:1234
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # A re-run of the same SHA (a rollback target, a dispatch after a waiting release) reuses its image.
+      - name: Look for an image already built for this SHA
+        id: existing
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE_NAME:${{ needs.plan.outputs.sha }}" --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Stage build identity
+        if: steps.existing.outputs.digest == ''
+        run: python3 scripts/build/generate_build_identity.py
+      - name: Resolve exact catalog schema
+        id: schema
+        if: steps.existing.outputs.digest == ''
+        run: python3 scripts/ops/runtime-schema.py --source-root . --github-output "$GITHUB_OUTPUT"
+      - name: Build and push
+        id: build
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/runtime.dockerfile
+          push: true
+          platforms: linux/amd64
+          # `latest` moves in the archive job, only for main's head.
+          tags: ${{ env.IMAGE_NAME }}:${{ needs.plan.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.plan.outputs.sha }}
+            org.longhouse.catalog-schema.version=${{ steps.schema.outputs.schema_version }}
+            org.longhouse.catalog-schema.min-reader=${{ steps.schema.outputs.schema_min_reader }}
+            org.longhouse.catalog-schema.max-reader=${{ steps.schema.outputs.schema_max_reader }}
+      - name: Record the immutable digest
+        id: digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no immutable image digest: '$DIGEST'" >&2; exit 1; }
+          {
+            echo "digest=$DIGEST"
+            echo "ref=$IMAGE_NAME@$DIGEST"
+            # The archive needs the identity the image was built with; an image built by an earlier release
+            # was archived by that release.
+            echo "identity=$([[ -s .build/build-identity.json ]] && jq -c . .build/build-identity.json || true)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Image: $IMAGE_NAME@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  archive:
+    name: "Archive image and move latest"
+    needs: [plan, build]
+    if: needs.build.outputs.identity != ''
+    runs-on: ci-gate
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # moving `latest`
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      # The complete OCI closure (manifests, config, layers) in the immutable object store: the rollback copy
+      # that does not depend on GHCR retention.
+      - name: Publish immutable OCI archive
+        env:
+          IMAGE_REF: ${{ needs.build.outputs.ref }}
+          IDENTITY: ${{ needs.build.outputs.identity }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+          RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
+          RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
+          RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
+          RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
+          RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$IDENTITY" > "$RUNNER_TEMP/build-identity.json"
+          out="$RUNNER_TEMP/runtime-oci-archive.json"
+          uv run --project server python scripts/ops/release-artifacts.py publish \
+            --image "$IMAGE_REF" \
+            --source-sha "$SOURCE_SHA" \
+            --build-run-id "$GITHUB_RUN_ID" \
+            --build-attempt "$GITHUB_RUN_ATTEMPT" \
+            --build-identity "$RUNNER_TEMP/build-identity.json" > "$out"
+          jq -e --arg digest "${IMAGE_REF##*@}" --arg sha "$SOURCE_SHA" '
+            .schema == "longhouse.runtime-oci-archive.v1" and .sealed == true
+            and .image_digest == $digest and .source_sha == $sha' "$out" >/dev/null || {
+            echo "no sealed archive receipt for $IMAGE_REF" >&2
+            exit 1
+          }
+          jq -c '{image_digest, source_sha, blob_count, blobs_written, manifest_reused}' "$out" | tee -a "$GITHUB_STEP_SUMMARY"
+      # `latest` is a convenience tag (every deployment is by digest). It moves only to main's head, checked a
+      # moment before the retag. Its failure never fails the release.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Move latest to main's head
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(curl --fail --silent --show-error --max-time 10 \
+            --header "Authorization: Bearer $GH_TOKEN" --header "Accept: application/vnd.github.sha" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/main")"
+          if [[ "$head" != "$SOURCE_SHA" ]]; then
+            echo "main is at $head, not $SOURCE_SHA; leaving latest alone."
+            exit 0
+          fi
+          docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${DIGEST}"
+
+  canary:
+    name: "Canary deploy and smoke"
+    needs: [plan, build]
+    runs-on: ci-deploy
+    timeout-minutes: 30
+    env:
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+    steps:
+      # Tooling comes from the commit this workflow runs from, like every deploy script before it.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+          filter: blob:none
+          show-progress: false
+      - name: Require the isolated canary
+        run: |
+          set -euo pipefail
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN
+          case "${INSTANCE_SUBDOMAIN,,}" in
+            david010|demo|"${{ vars.HOSTED_QA_SUBDOMAIN }}")
+              echo "Refusing: the canary must be its own instance, not $INSTANCE_SUBDOMAIN." >&2; exit 1 ;;
+          esac
+      - name: Deploy the exact image
+        env:
+          RUNTIME_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          RUNTIME_SOURCE_WORKFLOW: Release
+          RUNTIME_SOURCE_ORDER: ${{ github.run_number }}
+          RUNTIME_QUALIFICATION_ID: release-${{ github.run_id }}-${{ github.run_attempt }}
+          RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: release-${{ github.run_id }}-${{ github.run_attempt }}-canary
+          RUNTIME_DEPLOYMENT_REASON: release canary of ${{ needs.plan.outputs.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
+          ./scripts/ops/runtime-deploy.sh "$INSTANCE_SUBDOMAIN" --docker-ref "${{ needs.build.outputs.ref }}"
+      - name: Smoke
+        run: ./scripts/qa/smoke-prod.sh --fast --no-llm
+      - name: Canary serves the commit
+        run: |
+          got="$(curl -fsS --max-time 15 "https://${INSTANCE_SUBDOMAIN}.longhouse.ai/api/health" | jq -r '.build.commit')"
+          [[ "$got" == "${{ needs.plan.outputs.sha }}" ]] || { echo "canary serves $got" >&2; exit 1; }
+          echo "Canary ${INSTANCE_SUBDOMAIN} serves $got" >> "$GITHUB_STEP_SUMMARY"
+
+  qa:
+    name: "Hosted Live QA"
+    needs: [plan, build]
+    # Sensitive ranges (auth, migrations, deploy machinery) are qualified here before dogfood. Other ranges
+    # skip it and dogfood follows the canary; run it by hand with -f qa=true.
+    if: needs.plan.outputs.sensitive == 'true' || inputs.qa == true
+    runs-on: ci-browser
+    timeout-minutes: 25
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    env:
+      # The QA instance is a tenant of the canary control plane that only this job deploys to (one release at
+      # a time), with its own device tokens, never the deploy canary's.
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_QA_RUNTIME_TOKEN }}
+      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_QA_TELEMETRY_TOKEN }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
+      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
+      QA_ARGS_BASE: "https://${{ vars.HOSTED_QA_SUBDOMAIN }}.longhouse.ai"
+    steps:
+      # The commit under test supplies the tests; the commit this workflow runs from supplies the tooling.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: .qa-tools
+          sparse-checkout: |
+            scripts/lib/hosted-instance.sh
+            scripts/ci/wait-for-http.sh
+            scripts/ops/release-artifacts.py
+            scripts/ops/runtime-deploy.sh
+            scripts/qa/hosted-qa-verdict.py
+            scripts/qa/run-hosted-target.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Validate the dedicated QA instance
+        env:
+          DEPLOY_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+        run: |
+          set -euo pipefail
+          case "${QA_INSTANCE_SUBDOMAIN,,}" in
+            ""|david010|demo|dogfood|personal)
+              echo "::error::Configure a dedicated HOSTED_QA_SUBDOMAIN; refusing personal dogfood or demo." >&2; exit 1 ;;
+          esac
+          if [[ "${QA_INSTANCE_SUBDOMAIN,,}" == "${DEPLOY_CANARY_SUBDOMAIN,,}" ]]; then
+            echo "::error::HOSTED_QA_SUBDOMAIN is the deploy canary ($DEPLOY_CANARY_SUBDOMAIN); QA needs its own instance." >&2; exit 1
+          fi
+          for name in CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN; do
+            [[ -n "${!name}" ]] || { echo "::error::Missing required QA configuration: $name" >&2; exit 1; }
+          done
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # CI publishes the fixture image after its amd64 build, off CI's critical path; after a dependency change
+      # the release can finish first, so wait for the tag (registry calls, no API quota).
+      - name: Resolve the published fixture image
+        run: |
+          set -euo pipefail
+          key="$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')"
+          image="ghcr.io/${{ github.repository_owner }}/longhouse-test:${key}"
+          for attempt in $(seq 1 40); do
+            if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
+              break
+            fi
+            [[ "$attempt" -lt 40 ]] || { echo "fixture image $image never appeared" >&2; exit 1; }
+            echo "waiting for fixture image $image ($attempt/40)"
+            sleep 30
+          done
+          echo "LONGHOUSE_TEST_IMAGE_REF=${image%:*}@${digest}" >> "$GITHUB_ENV"
+      - name: Pull the credential-free isolation image by digest
+        id: prepare
+        run: echo "image=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
+
+      # Deploy the exact image under test to the QA instance and hold it for the run: this job is the only thing
+      # that deploys here, one release at a time.
+      - name: Deploy the image under test to the QA instance
+        id: deploy_qa
+        env:
+          INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_QA_SUBDOMAIN }}
+          RUNTIME_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          RUNTIME_SOURCE_WORKFLOW: Release
+          RUNTIME_SOURCE_ORDER: ${{ github.run_number }}
+          RUNTIME_QUALIFICATION_ID: release-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: release-${{ github.run_id }}-${{ github.run_attempt }}-qa
+          RUNTIME_DEPLOYMENT_REASON: release QA of ${{ needs.plan.outputs.sha }}
+          RUNTIME_DEPLOY_TIMEOUT: "600"
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: .qa-tools/scripts/ops/runtime-deploy.sh "$INSTANCE_SUBDOMAIN" --docker-ref "${{ needs.build.outputs.ref }}"
+      - name: Verify the QA instance serves the commit under test
+        id: runtime_before
+        env:
+          EXPECTED_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Any deployment overlapping the run after this instant replaced the thing under test.
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          health="$(curl --fail --silent --show-error --max-time 15 --retry 3 --retry-all-errors --retry-delay 3 "$QA_ARGS_BASE/api/health")"
+          printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
+          actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
+          [[ "$actual_sha" == "$EXPECTED_SHA" ]] || { echo "The QA instance serves $actual_sha, not $EXPECTED_SHA" >&2; exit 1; }
+          echo "runtime_sha=$actual_sha" >> "$GITHUB_OUTPUT"
+          echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
+
+      # The four steps that touch the instance are continue-on-error: their outcomes are judged together,
+      # against the instance's deployment receipts, by the verdict step.
+      - name: Run hosted live QA
+        id: qa_live
+        continue-on-error: true
+        env:
+          QA_IMAGE: ${{ steps.prepare.outputs.image }}
+        run: |
+          attempts=0
+          until .qa-tools/scripts/qa/run-hosted-target.sh qa-live "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN"; do
+            attempts=$((attempts + 1))
+            [[ "$attempts" -lt 2 ]] || exit 1
+            echo "qa-live failed; retrying once after 5s..." >&2
+            sleep 5
+          done
+      - name: Run hosted mixed live/archive shipper bench
+        id: hosted_shipper_bench
+        continue-on-error: true
+        if: always() && steps.qa_live.outcome == 'success'
+        env:
+          QA_IMAGE: ${{ steps.prepare.outputs.image }}
+          CARGO_PROFILE: ci
+        run: .qa-tools/scripts/qa/run-hosted-target.sh hosted-shipper-mixed-bench "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN"
+      - name: Run render-canary SLA check
+        id: render_canary
+        continue-on-error: true
+        if: always() && steps.qa_live.outcome == 'success' && env.LONGHOUSE_CANARY_TOKEN != ''
+        env:
+          QA_IMAGE: ${{ steps.prepare.outputs.image }}
+        run: .qa-tools/scripts/qa/run-hosted-target.sh render-canary "SMOKE_RUNTIME_TOKEN LONGHOUSE_CANARY_TOKEN"
+      - name: Validate cohort journey contracts
+        id: cohort_contracts
+        # Never touches the QA instance.
+        if: always() && steps.qa_live.outcome == 'success'
+        run: python3 scripts/qa/test-isolation.py --target validate-cohort-journey
+      - name: Run privacy-safe isolated cohort journey
+        id: cohort_journey
+        continue-on-error: true
+        if: always() && steps.qa_live.outcome == 'success'
+        env:
+          QA_IMAGE: ${{ steps.prepare.outputs.image }}
+        run: .qa-tools/scripts/qa/run-hosted-target.sh cohort-journey "CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN" \
+          --set "LONGHOUSE_JOURNEY_OUTPUT=/work/artifacts/cohort-journey/cohort-journey.json"
+
+      # Passed, superseded (something else deployed to the instance mid-run: it says nothing about this
+      # commit) or failed. Dogfood proceeds only on `passed`.
+      - name: Decide verdict
+        id: verdict
+        if: always() && steps.runtime_before.outcome == 'success'
+        env:
+          EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
+          QA_STARTED_AT: ${{ steps.runtime_before.outputs.started_at }}
+          OWN_DEPLOYMENT: ${{ steps.deploy_qa.outputs.deployment_id }}
+        run: |
+          python3 .qa-tools/scripts/qa/hosted-qa-verdict.py \
+            --expected-sha "$EXPECTED_RUNTIME_SHA" \
+            --started-at "$QA_STARTED_AT" \
+            --subdomain "$QA_INSTANCE_SUBDOMAIN" \
+            --own-deployment "$OWN_DEPLOYMENT" \
+            --step "qa_live=${{ steps.qa_live.outcome }}" \
+            --step "hosted_shipper_bench=${{ steps.hosted_shipper_bench.outcome }}" \
+            --step "render_canary=${{ steps.render_canary.outcome }}" \
+            --step "cohort_journey=${{ steps.cohort_journey.outcome }}" \
+            --step "cohort_contracts=${{ steps.cohort_contracts.outcome }}"
+
+  dogfood:
+    name: "Deploy dogfood"
+    needs: [plan, build, canary, qa]
+    # `qa` is skipped for a range that is not sensitive; when it ran, only a `passed` verdict goes on.
+    if: >-
+      !cancelled() && needs.plan.outputs.deploy == 'true' && needs.plan.outputs.dogfood == 'true' &&
+      needs.build.result == 'success' && needs.canary.result == 'success' &&
+      (needs.qa.result == 'skipped' || (needs.qa.result == 'success' && needs.qa.outputs.verdict == 'passed'))
+    runs-on: ci-deploy
+    timeout-minutes: 60
+    env:
+      CONTROL_PLANE_URL: https://control.longhouse.ai
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      INSTANCE_SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          show-progress: false
+      - uses: ./.github/actions/setup-gh
+      - name: Require the dogfood target
+        run: |
+          set -euo pipefail
+          case "${INSTANCE_SUBDOMAIN,,}" in
+            david010) ;;
+            *) echo "Refusing: dogfood is david010, got '${INSTANCE_SUBDOMAIN}'." >&2; exit 1 ;;
+          esac
+      # Terminal Truth runs beside CI and takes about as long, so a live-preview change waits here for its
+      # verdict (or a later main commit's that contains it). Failed or errored is never overridden. If the
+      # wait runs out, dogfood stays where it is and the next green release carries the change.
+      - name: Terminal Truth verdict
+        if: needs.plan.outputs.tt_commit != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ops/release_plan.py terminal-truth --commit "${{ needs.plan.outputs.tt_commit }}" --wait 1500
+      - name: Health before
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 15 "https://${INSTANCE_SUBDOMAIN}.longhouse.ai/api/health" | tee "$RUNNER_TEMP/before.json" | jq -c '{status, build}'
+          echo "- before: \`$(jq -r '.build.commit' "$RUNNER_TEMP/before.json")\`" >> "$GITHUB_STEP_SUMMARY"
+      # The same submission path every dogfood promotion used: a durable control-plane deployment, observed by
+      # id until the instance reports this exact build. The control plane fences a lower source order.
+      - name: Deploy the exact image
+        env:
+          RUNTIME_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+          RUNTIME_SOURCE_WORKFLOW: Release
+          RUNTIME_SOURCE_ORDER: ${{ github.run_number }}
+          RUNTIME_QUALIFICATION_ID: release-${{ github.run_id }}-${{ github.run_attempt }}
+          RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: release-${{ github.run_id }}-${{ github.run_attempt }}-dogfood
+          RUNTIME_DEPLOYMENT_REASON: release of ${{ needs.plan.outputs.sha }} (canary${{ needs.qa.result == 'success' && ' and QA' || '' }} qualified)
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: ./scripts/ops/runtime-deploy.sh "$INSTANCE_SUBDOMAIN" --docker-ref "${{ needs.build.outputs.ref }}"
+      # Read-only checks: unauthenticated GETs, no test tokens, nothing written to the tenant.
+      - name: Smoke and health after
+        run: |
+          set -euo pipefail
+          ./scripts/qa/smoke-prod.sh --fast --no-llm
+          got="$(curl -fsS --max-time 15 "https://${INSTANCE_SUBDOMAIN}.longhouse.ai/api/health" | tee "$RUNNER_TEMP/after.json" | jq -r '.build.commit')"
+          [[ "$got" == "${{ needs.plan.outputs.sha }}" ]] || { echo "dogfood serves $got, not the released commit" >&2; exit 1; }
+          jq -c '{status, build}' "$RUNNER_TEMP/after.json"
+          echo "- after: \`$got\`" >> "$GITHUB_STEP_SUMMARY"

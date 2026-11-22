@@ -1,0 +1,24 @@
+name: Install GitHub CLI
+description: Install a pinned, checksum-verified gh on runners that ship without it (the cube lanes)
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_VERSION: "2.101.0"
+      run: |
+        set -euo pipefail
+        command -v gh >/dev/null && exit 0
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+        esac
+        name="gh_${GH_VERSION}_linux_${arch}"
+        base="https://github.com/cli/cli/releases/download/v${GH_VERSION}"
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "${base}/${name}.tar.gz"
+        curl -fsSL "${base}/gh_${GH_VERSION}_checksums.txt" | grep " ${name}.tar.gz\$" | sha256sum -c -
+        tar -xzf "${name}.tar.gz"
+        echo "$RUNNER_TEMP/${name}/bin" >> "$GITHUB_PATH"

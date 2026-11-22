@@ -913,6 +913,7 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@python3 scripts/tests/promote-production.test.py
 	@python3 scripts/tests/ring-promoter.test.py
 	@python3 scripts/tests/terminal-truth-cover.test.py
+	@python3 scripts/tests/release-plan.test.py
 	@python3 scripts/tests/remote.test.py
 
 validate-terminal-truth-ci: ## @internal Terminal-truth CI lane: pinned provider versions, verdict script, workflow shape
@@ -960,7 +961,7 @@ validate-ops-scripts: ## @internal Ops script contracts (backup/restore retentio
 	@python3 scripts/tests/summarise-console-served-state.test.py
 	@python3 scripts/tests/console-served-state-mock-llm.test.py >/dev/null
 	@python3 scripts/tests/hosted-qa-verdict.test.py
-	@python3 scripts/tests/hosted-live-qa-isolation.test.py
+	@python3 scripts/tests/release-qa-isolation.test.py
 	@python3 scripts/tests/engine-compat-receipt.test.py
 	@cd server && uv run python ../scripts/tests/testflight.test.py
 	@python3 scripts/tests/ios-upload-preconditions.test.py
