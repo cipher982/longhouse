@@ -30,6 +30,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -162,6 +163,32 @@ def _error_code(exc: BaseException) -> str:
     return str(getattr(exc, "code", "")) or str(exc).split(":", 1)[0]
 
 
+# A 5xx or a dropped connection from the object store is transient (a MinIO 503 failed an archive job on 2026-11-22 after a
+# successful deploy). Calls retry with a doubling backoff, 5 attempts in all (about 15 s of waiting); anything else
+# (not found, conflict, auth) is final at once. A retried conditional put that had actually landed reads back as an
+# already-existing identical object, which put_immutable already accepts.
+_TRANSIENT_CODES = frozenset({"500", "502", "503", "504", "InternalError", "ServiceUnavailable", "SlowDown", "RequestTimeout",
+                              "RequestTimeoutException", "EndpointConnectionError", "ConnectionClosedError", "ReadTimeoutError",
+                              "ConnectTimeoutError"})
+_RETRY_ATTEMPTS = 5
+_RETRY_BASE_DELAY_S = 1.0
+_sleep = time.sleep
+
+
+def _is_transient(exc: BaseException) -> bool:
+    return _error_code(exc) in _TRANSIENT_CODES or isinstance(exc, (ConnectionError, TimeoutError))
+
+
+def _retrying(call: Callable[[], Any]) -> Any:
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return call()
+        except Exception as exc:  # boto3-compatible clients expose ClientError lazily.
+            if attempt + 1 == _RETRY_ATTEMPTS or not _is_transient(exc):
+                raise
+            _sleep(_RETRY_BASE_DELAY_S * 2**attempt)
+
+
 class S3ArchiveStore:
     """Content-addressed immutable storage over a boto3-compatible client."""
 
@@ -182,7 +209,7 @@ class S3ArchiveStore:
 
     def _head_existing(self, key: str) -> tuple[int, Mapping[str, Any]] | None:
         try:
-            response = self.client.head_object(Bucket=self.bucket, Key=self._key(key))
+            response = _retrying(lambda: self.client.head_object(Bucket=self.bucket, Key=self._key(key)))
         except Exception as exc:  # boto3-compatible clients expose ClientError lazily.
             if _error_code(exc) in _NOT_FOUND_CODES:
                 return None
@@ -195,7 +222,7 @@ class S3ArchiveStore:
 
     def _read_existing(self, key: str) -> bytes | None:
         try:
-            response = self.client.get_object(Bucket=self.bucket, Key=self._key(key))
+            response = _retrying(lambda: self.client.get_object(Bucket=self.bucket, Key=self._key(key)))
         except Exception as exc:  # boto3-compatible clients expose ClientError lazily.
             if _error_code(exc) in _NOT_FOUND_CODES:
                 return None
@@ -217,7 +244,7 @@ class S3ArchiveStore:
         return data
     def get_stream(self, key: str) -> BinaryIO:
         try:
-            response = self.client.get_object(Bucket=self.bucket, Key=self._key(key))
+            response = _retrying(lambda: self.client.get_object(Bucket=self.bucket, Key=self._key(key)))
         except Exception as exc:
             raise ArtifactError(f"archive object read failed: {_error_code(exc)}") from exc
         body = response.get("Body") if isinstance(response, Mapping) else None
@@ -269,7 +296,12 @@ class S3ArchiveStore:
             "Metadata": {"sha256": sha256},
         }
         try:
-            self.client.put_object(**request, IfNoneMatch="*")
+            def put() -> None:
+                if hasattr(data, "seek"):
+                    data.seek(0)  # a retry re-reads the body from the start
+                self.client.put_object(**request, IfNoneMatch="*")
+
+            _retrying(put)
         except Exception as exc:
             code = _error_code(exc)
             if code in _CONFLICT_CODES:

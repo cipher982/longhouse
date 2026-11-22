@@ -343,6 +343,62 @@ def test_registry_redirect_uses_destination_authority_without_credentials() -> N
     assert redirected.get_header("Authorization") is None
 
 
+class _FlakyS3:
+    """A boto3-shaped client whose first calls fail with the given error code, then behave."""
+
+    def __init__(self, code: str, failures: int) -> None:
+        self.code, self.failures, self.calls, self.objects = code, failures, 0, {}
+
+    def _maybe_fail(self) -> None:
+        self.calls += 1
+        if self.calls <= self.failures:
+            exc = Exception(self.code)
+            exc.response = {"Error": {"Code": self.code}}  # type: ignore[attr-defined]
+            raise exc
+
+    def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        self._maybe_fail()
+        if Key not in self.objects:
+            exc = Exception("404")
+            exc.response = {"Error": {"Code": "404"}}  # type: ignore[attr-defined]
+            raise exc
+        body, meta = self.objects[Key]
+        return {"ContentLength": len(body), "Metadata": meta}
+
+    def put_object(self, **kw: Any) -> None:
+        self.objects[kw["Key"]] = (kw["Body"], kw["Metadata"])
+
+
+def test_transient_object_store_errors_are_retried_with_backoff_and_others_are_not() -> None:
+    slept: list[float] = []
+    real_sleep, release_artifacts._sleep = release_artifacts._sleep, slept.append
+    try:
+        client = _FlakyS3("503", failures=3)
+        store = release_artifacts.S3ArchiveStore(client, bucket="b", prefix="p")
+        assert store.put_immutable("k", b"data", content_type="x") is True
+        assert slept == [1.0, 2.0, 4.0]
+        # five straight 503s still fail, with the original message
+        slept.clear()
+        store = release_artifacts.S3ArchiveStore(_FlakyS3("503", failures=99), bucket="b")
+        try:
+            store.put_immutable("k", b"data", content_type="x")
+        except release_artifacts.ArtifactError as exc:
+            assert "archive object head failed: 503" in str(exc)
+        else:
+            raise AssertionError("expected a failure")
+        assert len(slept) == 4
+        # an authorization error is final at once
+        slept.clear()
+        flaky = _FlakyS3("AccessDenied", failures=99)
+        try:
+            release_artifacts.S3ArchiveStore(flaky, bucket="b").put_immutable("k", b"d", content_type="x")
+        except release_artifacts.ArtifactError:
+            pass
+        assert slept == [] and flaky.calls == 1
+    finally:
+        release_artifacts._sleep = real_sleep
+
+
 if __name__ == "__main__":
     test_publish_and_fetch_complete_closure_without_registry()
     test_receipt_reads_back_a_sealed_archive_and_refuses_a_missing_one()
@@ -353,4 +409,5 @@ if __name__ == "__main__":
     test_interrupted_publication_leaves_reusable_blobs_but_no_sealed_receipt()
     test_digest_qualification_and_immutable_conflict()
     test_registry_redirect_uses_destination_authority_without_credentials()
+    test_transient_object_store_errors_are_retried_with_backoff_and_others_are_not()
     print("release artifact tests passed")
