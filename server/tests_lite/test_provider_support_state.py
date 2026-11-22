@@ -113,7 +113,9 @@ def test_support_state_counts_capability_proof_records() -> None:
     an enforcement point: `verify_ci_proof_bundle` had no non-test caller in the
     repository.
 
-    The proof records themselves are still real and still counted.
+    The proof records themselves are still real and still counted, and
+    /api/agents/provider-capabilities still serves the declared-assertion ->
+    proof-record join through provider_capability_projection.
     """
 
     contract = next(contract for contract in all_managed_provider_contracts() if contract.provider == "codex")

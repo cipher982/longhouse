@@ -6,7 +6,11 @@
  * Add new providers here when onboarding them.
  */
 
-import { GENERATED_PROVIDER_CAPABILITIES, type GeneratedProviderId } from "@/generated/provider-capabilities";
+import {
+  GENERATED_PROVIDER_CAPABILITIES,
+  type GeneratedProviderId,
+  type ProvenChips,
+} from "@/generated/provider-capabilities";
 import { lookupProviderBrand, providerDisplayName } from "@/generated/provider-brands";
 
 // Every managed provider in the contract; the Record types below fail to
@@ -21,11 +25,15 @@ export type LaunchProviderSupport = {
    * server/zerg/config/managed_provider_contracts.json — launchAndSend folds
    * launch_local + send_input, interrupt folds interrupt + terminate.
    */
-  search: boolean;
   launchAndSend: boolean;
   interrupt: boolean;
   steerMidTurn: boolean;
   resume: boolean;
+  /**
+   * Landing proof chips. Lit only by live-token assertions; the runtime flags
+   * above describe what the product can dispatch.
+   */
+  proven: ProvenChips;
   /**
    * The `longhouse <id>` command, when the native device facade actually offers
    * one. Sourced from config/native_device_entrypoints.json, NOT from the
@@ -46,7 +54,7 @@ export type LaunchProviderSupport = {
 // into ../generated/provider-capabilities.ts and merged below, because this
 // table drifted from the contract twice (4402f99ea, 6432e21fa) while its own
 // header claimed to mirror it.
-const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "marketingName" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "search" | "cloudSessionStart" | "nativeLaunchCommand">> = {
+const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "marketingName" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "proven" | "cloudSessionStart" | "nativeLaunchCommand">> = {
   claude: {
     archiveVisibility: "live",
     hooksSupport: "live",
@@ -93,11 +101,11 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
         id,
         marketingName: lookupProviderBrand(id).marketingName,
         nativeLaunchCommand: generated.nativeLaunchCommand,
-        search: generated.search,
         launchAndSend: generated.launchAndSend,
         interrupt: generated.interrupt,
         steerMidTurn: generated.steerMidTurn,
         resume: generated.resume,
+        proven: generated.proven,
         cloudSessionStart: generated.cloudSessionStart,
         ...LAUNCH_PROVIDER_PRESENTATION[id],
       },

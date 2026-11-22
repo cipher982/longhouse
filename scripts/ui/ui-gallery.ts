@@ -75,7 +75,7 @@ const JOBS: Job[] = [
   { page: "devices", scene: "devices-revoke" },
   { page: "devices", scene: "devices-list" },
   { page: "login", scene: "login" },
-  { page: "landing", scene: "provider-support" },
+  { page: "landing", scene: "provider-certification" },
   { page: "security", scene: "first-run" },
   { page: "privacy", scene: "first-run" },
 ];

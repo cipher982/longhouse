@@ -19,8 +19,13 @@ FORBIDDEN_PREFIXES = (
     "zerg/qa/",
 )
 
-# Files a shipped module must be able to import at runtime.
+# Files a shipped module must be able to import at runtime. The capability
+# endpoint reads the declared provider contract on every request, and a
+# pip-installed wheel has neither a repo checkout above it nor the runtime
+# image's /schemas — so if this is missing, /api/agents/provider-capabilities
+# 500s for every self-hoster.
 REQUIRED_MEMBERS = (
+    "zerg/_config/managed_providers.yml",
     # The live shape canary reads these; without them it reports "unavailable".
     "zerg/_config/transcript_census.py",
     "zerg/_config/transcript_shapes/claude.json",

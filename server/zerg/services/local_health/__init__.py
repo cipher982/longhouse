@@ -59,6 +59,8 @@ from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MIS
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED
 from zerg.services.managed_session_contracts import collect_managed_session_contract_diagnostics
+from zerg.services.provider_capability_remote_proof import load_cached_provider_capability_proofs
+from zerg.services.provider_capability_remote_proof import refresh_cached_provider_capability_proofs
 from zerg.services.provider_support_state import collect_provider_support_state
 from zerg.services.shipper.service import get_service_info
 from zerg.services.shipper.token import may_send_token_to
@@ -524,11 +526,25 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     provider_live_proof = collect_provider_live_proof(provider_clis, base_dir=resolved_base_dir)
     provider_release_status = collect_provider_release_status(provider_clis)
     capability_proof_records, capability_proof_summary = collect_local_capability_proofs(resolved_base_dir)
+    runtime_url = machine_state.runtime_url if machine_state else None
+    trusted_runtime_proofs = refresh_cached_provider_capability_proofs(
+        resolved_base_dir,
+        runtime_url=runtime_url,
+        token=_read_trimmed_file(get_machine_token_path(resolved_base_dir)),
+    )
+    for provider, records in trusted_runtime_proofs.records_by_provider.items():
+        merged = {record.artifact_id: record for record in capability_proof_records.get(provider, ())}
+        merged.update({record.artifact_id: record for record in records})
+        capability_proof_records[provider] = tuple(sorted(merged.values(), key=lambda record: (record.generated_at, record.artifact_id)))
+    capability_proof_summary["trusted_runtime_cache"] = trusted_runtime_proofs.summary
     for provider, records in capability_proof_records.items():
         provider_summary = capability_proof_summary["providers"].setdefault(provider, {})
         provider_summary["state"] = "present" if records else "missing"
         provider_summary["record_count"] = len(records)
         provider_summary["artifact_ids"] = [record.artifact_id for record in records]
+        provider_summary["trusted_record_count"] = sum(
+            record.artifact_id in trusted_runtime_proofs.trusted_artifact_ids for record in records
+        )
     provider_executable_identities = {
         provider: executable_identity(info.get("path")) if capability_proof_records.get(provider) else None
         for provider, info in provider_clis.items()

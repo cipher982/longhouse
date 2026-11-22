@@ -1065,6 +1065,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/internal/provider-capability-proofs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Provider Capability Proofs */
+        post: operations["publish_provider_capability_proofs_internal_provider_capability_proofs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-capability-proofs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Provider Capability Proofs */
+        get: operations["list_provider_capability_proofs_agents_provider_capability_proofs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-version-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Version Evidence
+         * @description Facts only: the proof records one provider version has (with store
+         *     integrity) and the assertions the chip certification requires. Whether a cell
+         *     is failing now is the certification's fold (/public/provider-certification),
+         *     not this route's: cell verdicts carry no version and a second fold would drift.
+         */
+        get: operations["get_provider_version_evidence_agents_provider_version_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-field-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Field Versions
+         * @description Facts only: which provider CLI releases this owner's sessions ran in the window.
+         *
+         *     Counts and first/last seen per (provider, provider_version). Whether a version
+         *     has been proven is the provider factory's comparison, not this route's.
+         */
+        get: operations["get_provider_field_versions_agents_provider_field_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-capability-proofs/blobs/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Provider Capability Proof Blob */
+        get: operations["get_provider_capability_proof_blob_agents_provider_capability_proofs_blobs__sha256__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/provider-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Provider Capabilities
+         * @description Capability projection from the contract, proof status attached
+         *     separately. Every
+         *     declared capability assertion for every managed provider gets exactly
+         *     one row, whether or not it has ever been proven -- the schema is the
+         *     source of truth for what should exist.
+         */
+        get: operations["list_provider_capabilities_agents_provider_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/provider-certification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Certification
+         * @description Unauthenticated: the landing page reads this. It exposes proof
+         *     status and identities only -- never evidence blobs or artifact paths.
+         */
+        get: operations["get_provider_certification_public_provider_certification_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/send-live": {
         parameters: {
             query?: never;
@@ -12385,6 +12527,193 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_provider_capability_proofs_internal_provider_capability_proofs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_provider_capability_proofs_agents_provider_capability_proofs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_provider_version_evidence_agents_provider_version_evidence_get: {
+        parameters: {
+            query: {
+                provider: string;
+                version: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_provider_field_versions_agents_provider_field_versions_get: {
+        parameters: {
+            query?: {
+                /** @description Window in days, by session start */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_provider_capability_proof_blob_agents_provider_capability_proofs_blobs__sha256__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_provider_capabilities_agents_provider_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_provider_certification_public_provider_certification_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

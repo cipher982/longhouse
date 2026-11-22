@@ -267,6 +267,23 @@ class Settings:  # noqa: D401 – simple data container
     # workspace stream also requires owner-bound machine authentication.
     canary_token: str | None = None
 
+    # Provider capability qualification factory -------------------------
+    # Optional by design: ordinary OSS/self-hosted runtimes do not publish
+    # globally trusted executable-provider qualification records.
+    provider_capability_factory_token: str | None = None
+    # Optional exact subject fence for the public proof projection. The
+    # factory supplies these at a synchronized deployment; absent values are
+    # reported as an unfenced diagnostic projection rather than guessed.
+    provider_capability_expected_longhouse_sha: str | None = None
+    provider_capability_expected_epoch_digest: str | None = None
+    # Read-only provider-factory CAS resolver. All five values are explicit;
+    # the resolver never uses ambient AWS credentials.
+    provider_capability_blob_s3_endpoint: str | None = None
+    provider_capability_blob_s3_bucket: str | None = None
+    provider_capability_blob_s3_region: str = "us-east-1"
+    provider_capability_blob_s3_access_key_id: str | None = None
+    provider_capability_blob_s3_secret_access_key: str | None = None
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_available(self) -> bool:
@@ -558,6 +575,14 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         apns_private_key_p8=os.getenv("APNS_PRIVATE_KEY_P8"),
         apns_topic=os.getenv("APNS_TOPIC", "ai.longhouse.ios"),
         canary_token=os.getenv("LONGHOUSE_CANARY_TOKEN"),
+        provider_capability_factory_token=os.getenv("PROVIDER_CAPABILITY_FACTORY_TOKEN"),
+        provider_capability_expected_longhouse_sha=os.getenv("PROVIDER_CAPABILITY_EXPECTED_LONGHOUSE_SHA"),
+        provider_capability_expected_epoch_digest=os.getenv("PROVIDER_CAPABILITY_EXPECTED_EPOCH_DIGEST"),
+        provider_capability_blob_s3_endpoint=os.getenv("PROVIDER_CAPABILITY_BLOB_S3_ENDPOINT"),
+        provider_capability_blob_s3_bucket=os.getenv("PROVIDER_CAPABILITY_BLOB_S3_BUCKET"),
+        provider_capability_blob_s3_region=os.getenv("PROVIDER_CAPABILITY_BLOB_S3_REGION", "us-east-1"),
+        provider_capability_blob_s3_access_key_id=os.getenv("PROVIDER_CAPABILITY_BLOB_S3_ACCESS_KEY_ID"),
+        provider_capability_blob_s3_secret_access_key=os.getenv("PROVIDER_CAPABILITY_BLOB_S3_SECRET_ACCESS_KEY"),
     )
 
 

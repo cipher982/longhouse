@@ -14,7 +14,7 @@ counterpart and stay hand-maintained in providers.ts, now visibly separated
 from the derived ones instead of interleaved with them.
 
 Sources:
-  - server/zerg/config/managed_provider_contracts.json (capability flags)
+  - server/zerg/config/managed_provider_contracts.json (capability flags, proof edges)
   - config/native_device_entrypoints.json (which `longhouse <provider>` exists)
 Output:
   - web/src/generated/provider-capabilities.ts
@@ -30,6 +30,16 @@ REPO = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 ENTRYPOINTS = REPO / "config" / "native_device_entrypoints.json"
 TS_OUT = REPO / "web" / "src" / "generated" / "provider-capabilities.ts"
+
+# The chip -> proof edge definition is shared with the Runtime Host's
+# certification rollup, so the covered and certified layers read one graph.
+sys.path.insert(0, str(REPO / "server"))
+from zerg.provider_contract.provider_chip_edges import CHIP_CAPABILITIES  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import CHIP_OPERATIONS  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import capability_proven  # noqa: E402,F401
+from zerg.provider_contract.provider_chip_edges import chip_states  # noqa: E402
+from zerg.provider_contract.provider_chip_edges import operation_proven  # noqa: E402,F401
+
 
 def _native_launch_commands() -> dict[str, str]:
     """`longhouse <provider>` per provider, for entrypoints that actually ship.
@@ -52,11 +62,6 @@ def _native_launch_commands() -> dict[str, str]:
     return out
 
 
-def _implemented(capabilities: object, name: str) -> bool:
-    declaration = capabilities.get(name) if isinstance(capabilities, dict) else None
-    return isinstance(declaration, dict) and declaration.get("disposition") == "implemented"
-
-
 def _rows() -> list[dict[str, object]]:
     payload = json.loads(CONTRACTS.read_text(encoding="utf-8"))
     launch_commands = _native_launch_commands()
@@ -73,12 +78,12 @@ def _rows() -> list[dict[str, object]]:
                 # Runtime capability, for reference docs. Both folds admit the
                 # Console lane, not just the live one: Pi is the case that forces
                 # it -- `longhouse pi` ships and its Console turns start and
-                # interrupt.
+                # interrupt. These never light a landing chip; `proven` does.
                 "launchAndSend": bool(provider["launch_local"]) and (bool(provider["send_input"]) or bool(provider["turn_start"])),
                 "interrupt": (bool(provider["interrupt"]) and bool(provider["terminate"])) or turn_interrupt,
                 "steerMidTurn": bool(provider["steer_active_turn"]),
                 "resume": bool(provider["can_resume"]),
-                "search": _implemented(capabilities, "session.transcript.search"),
+                "proven": chip_states(provider),
                 # The low-level turn_start flag describes adapter inventory.
                 # User-facing Console admission requires an implemented
                 # session.turn.start capability; Antigravity deliberately has
@@ -105,13 +110,23 @@ def render_ts() -> str:
         "",
         f"export type GeneratedProviderId = {ids};",
         "",
-        "export type GeneratedProviderCapabilities = {",
-        "  readonly id: GeneratedProviderId;",
+        "// Landing chips: lit only by live-token assertions behind every",
+        "// backing operation. The runtime capability fields never light a chip.",
+        "export type ProvenChips = {",
         "  readonly search: boolean;",
         "  readonly launchAndSend: boolean;",
         "  readonly interrupt: boolean;",
         "  readonly steerMidTurn: boolean;",
         "  readonly resume: boolean;",
+        "};",
+        "",
+        "export type GeneratedProviderCapabilities = {",
+        "  readonly id: GeneratedProviderId;",
+        "  readonly launchAndSend: boolean;",
+        "  readonly interrupt: boolean;",
+        "  readonly steerMidTurn: boolean;",
+        "  readonly resume: boolean;",
+        "  readonly proven: ProvenChips;",
         '  readonly cloudSessionStart: "live" | "none";',
         "  readonly nativeLaunchCommand: string | null;",
         "};",
@@ -125,11 +140,13 @@ def render_ts() -> str:
             [
                 f"  {row['id']}: {{",
                 f'    id: "{row["id"]}",',
-                f"    search: {str(row['search']).lower()},",
                 f"    launchAndSend: {str(row['launchAndSend']).lower()},",
                 f"    interrupt: {str(row['interrupt']).lower()},",
                 f"    steerMidTurn: {str(row['steerMidTurn']).lower()},",
                 f"    resume: {str(row['resume']).lower()},",
+                "    proven: {",
+                *(f"      {chip}: {str(value).lower()}," for chip, value in row["proven"].items()),
+                "    },",
                 f'    cloudSessionStart: "{row["cloudSessionStart"]}",',
                 f"    nativeLaunchCommand: {command_literal},",
                 "  },",

@@ -145,16 +145,15 @@ describe("prerendered routes", () => {
     }
   });
 
-  it("the landing page carries the headline and the iOS download, and the provider support rails", async () => {
+  it("the landing page carries the headline and the iOS download, and no claim about live certification", async () => {
     const { html } = await renderRoute("/");
 
     expect(html).toContain("Remote control for");
     expect(html).toContain("your coding agents.");
     expect(html).toContain("Download on iOS");
     expect(html).toContain("Control support, provider by provider.");
-    // Support is generated from the provider contract, so the static page carries it.
-    expect(html).toContain("landing-provider-capability");
-    expect(html).not.toMatch(/Certification status|data-certification/);
+    // Certification is served live; the static page must not say it is unavailable or lit.
+    expect(html).not.toMatch(/Certification status|data-certification|is-supported/);
     // Demos mount after hydration, so no demo chrome and no streaming instructions in the HTML.
     expect(html).not.toContain("Starting a disposable Linux sandbox");
     expect(html).not.toMatch(/\$RC\(|<template id="B:/);
