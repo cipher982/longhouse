@@ -423,7 +423,7 @@ def gate_plan(root: Path, result: dict[str, Any], *, backend_select: Any | None 
                           "remote",
                           f"Terminal Truth paths changed ({tt_hits[0]}{' ...' if len(tt_hits) > 1 else ''}): harness selfcheck, no provider"))
         ci_only.append("Terminal Truth real-provider cells (the stock provider CLIs never run on the laptop or the ci VM guest): "
-                       "the post-push run is the verdict and the main-repair bot reverts a deterministic failure")
+                       "the post-push run is the verdict and a red main is fixed forward by the author")
     for cat, text in (
         ("ios", "iOS tests on wisp"),
         ("e2e", "Core E2E (Playwright)"),

@@ -120,20 +120,11 @@ A commit that spans lanes needs each lane run and verified on its own.
 7. Without WAIT, a zero exit means the push stood, not that CI passed. A non-zero
    exit means ship failed; do not report it as success.
 
-When main goes red anyway: the workflow `main-repair.yml` runs when CI or Terminal
-Truth fails on a main push (`scripts/ci/main_repair.py`). It acts only if that run
-is the newest non-cancelled run of its workflow (a newer green run containing the
-commit means someone already fixed forward; a newer run in progress reports for
-itself), reruns the failed jobs once and only acts on a second failure, finds the
-range since the last green ancestor, bisects it by running the failing check (a
-Terminal Truth failure is attributed only when exactly one commit in the range
-touches its paths), and reverts the culprit with a fast-forward push of
-`refs/heads/main`. It never reverts a revert or a commit marked `[no-auto-revert]`,
-stops after two automatic reverts in six hours, abstains on a conflicting revert,
-and never touches tags. The revert commit says why and carries a log excerpt; the
-Sauron job `longhouse-ship-watch` relays it to the session that shipped the culprit.
-Re-land your change with the fix on top. Dry run against any red run:
-`GITHUB_TOKEN=$(gh auth token) python3 scripts/ci/main_repair.py --run-id <id> --dry-run`.
+When main goes red anyway: nothing reverts it. The Sauron job `longhouse-ship-watch` messages the
+session that shipped each commit the red CI or Terminal Truth run covers (a cancelled run is followed to
+the run that contains the commit), with the failing run, jobs and a log excerpt. Fix forward with a new
+commit. If the notice says the failure is infrastructure (full runner disk, lost runner, network timeout,
+rate limit), rerun the failed jobs with `gh run rerun --failed <run-id>` instead.
 
 Waiting rules: use a completion event or blocking wait once and move on; no
 `pgrep`/`curl` loops. Never run `gh run watch` (it polls every 3 s, and even with
