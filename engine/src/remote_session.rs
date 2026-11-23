@@ -4,7 +4,7 @@
 //! remote host without coupling hostnames or private aliases into Longhouse.
 
 use std::fs::{File, OpenOptions};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -36,7 +36,7 @@ pub struct RemoteTargetArgs {
     /// Override the base name used for the remote session socket.
     #[arg(long, requires = "on", value_name = "NAME")]
     pub remote_name: Option<String>,
-    /// Fast-forward clean git checkouts on the remote host before launching a new session.
+    /// Fast-forward the remote folder's clean git checkout, or each clean repo directly inside a folder that is not one, before launching a new session.
     #[arg(long, requires = "on")]
     pub pull: bool,
 }
@@ -255,48 +255,73 @@ pub fn build_remote_shell_command(
     parts.join("; ")
 }
 
-fn warn_local_git_divergence(cwd: &Path, target: &str) {
-    let Ok(in_repo) = Command::new("git")
-        .current_dir(cwd)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-    else {
-        return;
+/// The git checkouts a session in `dir` works on, each with the prefix its
+/// messages carry: `dir`'s own repo (no prefix), or, when `dir` is not inside
+/// a repo, each direct child folder that is one, skipping names that start
+/// with `.` or `_`.
+fn git_checkouts(dir: &Path) -> Vec<(PathBuf, String)> {
+    let is_repo = |path: &Path| {
+        Command::new("git")
+            .current_dir(path)
+            .args(["rev-parse", "--git-dir"])
+            .output()
+            .is_ok_and(|out| out.status.success())
     };
-    if !in_repo.status.success() {
-        return;
+    if is_repo(dir) {
+        return vec![(dir.to_path_buf(), String::new())];
     }
-    if let Ok(status) = Command::new("git")
-        .current_dir(cwd)
-        .args(["status", "--porcelain"])
-        .output()
-    {
-        if status.status.success() {
-            let dirty = String::from_utf8_lossy(&status.stdout)
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .count();
-            if dirty > 0 {
-                eprintln!(
-                    "longhouse: local checkout has {dirty} uncommitted change(s); {target} will not see them."
-                );
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut repos: Vec<(PathBuf, String)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let path = entry.path();
+            (!name.starts_with(['.', '_']) && path.is_dir() && is_repo(&path))
+                .then(|| (path, format!("{name}: ")))
+        })
+        .collect();
+    repos.sort();
+    repos
+}
+
+fn warn_local_git_divergence(cwd: &Path, target: &str, out: &mut impl Write) {
+    for (repo, scope) in git_checkouts(cwd) {
+        if let Ok(status) = Command::new("git")
+            .current_dir(&repo)
+            .args(["status", "--porcelain"])
+            .output()
+        {
+            if status.status.success() {
+                let dirty = String::from_utf8_lossy(&status.stdout)
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count();
+                if dirty > 0 {
+                    let _ = writeln!(
+                        out,
+                        "longhouse: {scope}local checkout has {dirty} uncommitted change(s); {target} will not see them."
+                    );
+                }
             }
         }
-    }
-    if let Ok(rev) = Command::new("git")
-        .current_dir(cwd)
-        .args(["rev-list", "--count", "@{u}..HEAD"])
-        .output()
-    {
-        if rev.status.success() {
-            let ahead: usize = String::from_utf8_lossy(&rev.stdout)
-                .trim()
-                .parse()
-                .unwrap_or(0);
-            if ahead > 0 {
-                eprintln!(
-                    "longhouse: local checkout has {ahead} unpushed commit(s); push them for {target} to see them."
-                );
+        if let Ok(rev) = Command::new("git")
+            .current_dir(&repo)
+            .args(["rev-list", "--count", "@{u}..HEAD"])
+            .output()
+        {
+            if rev.status.success() {
+                let ahead: usize = String::from_utf8_lossy(&rev.stdout)
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+                if ahead > 0 {
+                    let _ = writeln!(
+                        out,
+                        "longhouse: {scope}local checkout has {ahead} unpushed commit(s); push them for {target} to see them."
+                    );
+                }
             }
         }
     }
@@ -320,7 +345,7 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
     let resolved_cwd = std::fs::canonicalize(&spec.cwd)
         .with_context(|| format!("resolve working directory {}", spec.cwd.display()))?;
     if spec.remote.remote_attach.is_none() {
-        warn_local_git_divergence(&resolved_cwd, target);
+        warn_local_git_divergence(&resolved_cwd, target, &mut std::io::stderr());
     }
     let mapped_cwd = map_cwd_for_remote(&resolved_cwd, local_home_dir().as_deref())?;
     let mut remote_args = vec![
@@ -651,48 +676,47 @@ fn ensure_dtach_on_path() -> anyhow::Result<()> {
     }
 }
 
-fn maybe_pull_remote_checkout(cwd: &Path) {
-    let Ok(in_repo) = Command::new("git")
-        .current_dir(cwd)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-    else {
-        return;
-    };
-    if !in_repo.status.success() {
-        return;
-    }
-    let dirty = Command::new("git")
-        .current_dir(cwd)
-        .args(["status", "--porcelain"])
-        .output()
-        .map(|out| !String::from_utf8_lossy(&out.stdout).trim().is_empty())
-        .unwrap_or(false);
-    if dirty {
-        eprintln!("longhouse: remote checkout has uncommitted changes; skipping git pull");
-    } else if let Ok(pull) = Command::new("git")
-        .current_dir(cwd)
-        .args(["pull", "--ff-only", "-q"])
-        .output()
-    {
-        if !pull.status.success() {
-            let msg = String::from_utf8_lossy(&pull.stderr).trim().to_string();
-            if msg.is_empty() {
-                eprintln!("longhouse: git pull --ff-only exited with {}", pull.status);
-            } else {
-                eprintln!("longhouse: git pull --ff-only warning: {msg}");
+fn maybe_pull_remote_checkout(cwd: &Path, out: &mut impl Write) {
+    for (repo, scope) in git_checkouts(cwd) {
+        let dirty = Command::new("git")
+            .current_dir(&repo)
+            .args(["status", "--porcelain"])
+            .output()
+            .map(|status| !String::from_utf8_lossy(&status.stdout).trim().is_empty())
+            .unwrap_or(false);
+        if dirty {
+            let _ = writeln!(
+                out,
+                "longhouse: {scope}remote checkout has uncommitted changes; skipping git pull"
+            );
+        } else if let Ok(pull) = Command::new("git")
+            .current_dir(&repo)
+            .args(["pull", "--ff-only", "-q"])
+            .output()
+        {
+            if !pull.status.success() {
+                let msg = String::from_utf8_lossy(&pull.stderr).trim().to_string();
+                if msg.is_empty() {
+                    let _ = writeln!(
+                        out,
+                        "longhouse: {scope}git pull --ff-only exited with {}",
+                        pull.status
+                    );
+                } else {
+                    let _ = writeln!(out, "longhouse: {scope}git pull --ff-only warning: {msg}");
+                }
             }
         }
-    }
-    if let Ok(head) = Command::new("git")
-        .current_dir(cwd)
-        .args(["log", "-1", "--format=%h %cr"])
-        .output()
-    {
-        if head.status.success() {
-            let text = String::from_utf8_lossy(&head.stdout).trim().to_string();
-            if !text.is_empty() {
-                eprintln!("longhouse: remote at {text}");
+        if let Ok(head) = Command::new("git")
+            .current_dir(&repo)
+            .args(["log", "-1", "--format=%h %cr"])
+            .output()
+        {
+            if head.status.success() {
+                let text = String::from_utf8_lossy(&head.stdout).trim().to_string();
+                if !text.is_empty() {
+                    let _ = writeln!(out, "longhouse: {scope}remote at {text}");
+                }
             }
         }
     }
@@ -804,7 +828,7 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
         SessionSelection::New { .. } => {
             if args.pull {
                 if let Some(dir) = target_cwd.as_deref() {
-                    maybe_pull_remote_checkout(dir);
+                    maybe_pull_remote_checkout(dir, &mut std::io::stderr());
                 }
             }
             eprintln!("longhouse: new {} session {name}", args.provider);
@@ -986,6 +1010,172 @@ mod tests {
         assert!(cmd.contains("export ANTHROPIC_MODEL='o'\\''pus'"));
         assert!(
             cmd.contains("exec longhouse '__remote-session' '--cwd' '~/git/foo bar' '--' '--flag'")
+        );
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.name=Longhouse Test"])
+            .args(["-c", "user.email=test@example.invalid"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(repo: &Path, text: &str) {
+        std::fs::write(repo.join("file.txt"), text).unwrap();
+        git(repo, &["add", "file.txt"]);
+        git(repo, &["commit", "-q", "-m", text]);
+    }
+
+    /// Clone a new repo with one commit, from a bare upstream under `remotes`,
+    /// to `checkout`. Returns a second clone that pushes new upstream commits.
+    fn cloned_repo(remotes: &Path, name: &str, checkout: &Path) -> PathBuf {
+        let pusher = remotes.join(format!("{name}-pusher"));
+        std::fs::create_dir_all(&pusher).unwrap();
+        git(&pusher, &["init", "-q", "-b", "main"]);
+        commit(&pusher, "first");
+        let upstream = remotes.join(format!("{name}.git"));
+        let upstream = upstream.to_str().unwrap();
+        git(
+            remotes,
+            &["clone", "-q", "--bare", pusher.to_str().unwrap(), upstream],
+        );
+        git(&pusher, &["remote", "add", "origin", upstream]);
+        git(
+            remotes,
+            &["clone", "-q", upstream, checkout.to_str().unwrap()],
+        );
+        pusher
+    }
+
+    fn push_new_commit(pusher: &Path, text: &str) {
+        commit(pusher, text);
+        git(pusher, &["push", "-q", "origin", "main"]);
+    }
+
+    fn head(repo: &Path) -> String {
+        git(repo, &["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn pull_fast_forwards_each_clean_repo_in_a_folder_of_repos() {
+        let remotes = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let repo = |name: &str| folder.path().join(name);
+        let names = ["clean", "dirty", ".hidden", "_parked"];
+        let pushers: Vec<PathBuf> = names
+            .iter()
+            .map(|name| cloned_repo(remotes.path(), name, &repo(name)))
+            .collect();
+        std::fs::create_dir(repo("notes")).unwrap();
+        let before: Vec<String> = names.iter().map(|name| head(&repo(name))).collect();
+        pushers
+            .iter()
+            .for_each(|pusher| push_new_commit(pusher, "second"));
+        std::fs::write(repo("dirty").join("file.txt"), "local edit").unwrap();
+
+        let mut out = Vec::new();
+        maybe_pull_remote_checkout(folder.path(), &mut out);
+        let out = String::from_utf8(out).unwrap();
+
+        assert_eq!(head(&repo("clean")), head(&pushers[0]));
+        for (name, before) in names.iter().zip(&before).skip(1) {
+            assert_eq!(&head(&repo(name)), before, "{name} moved");
+        }
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "{out}");
+        assert!(
+            lines[0].starts_with("longhouse: clean: remote at "),
+            "{out}"
+        );
+        assert_eq!(
+            lines[1],
+            "longhouse: dirty: remote checkout has uncommitted changes; skipping git pull"
+        );
+        assert!(
+            lines[2].starts_with("longhouse: dirty: remote at "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn pull_in_a_repo_works_on_that_repo_alone_as_before() {
+        let remotes = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join("repo");
+        let pusher = cloned_repo(remotes.path(), "repo", &repo);
+        // A repo nested in the launch repo is not a child to pull.
+        let nested = repo.join("nested");
+        let nested_pusher = cloned_repo(remotes.path(), "nested", &nested);
+        std::fs::write(repo.join(".git/info/exclude"), "nested/\n").unwrap();
+        let nested_before = head(&nested);
+        push_new_commit(&pusher, "second");
+        push_new_commit(&nested_pusher, "second");
+        std::fs::create_dir(repo.join("sub")).unwrap();
+
+        // From a subfolder of the repo, as before.
+        let mut out = Vec::new();
+        maybe_pull_remote_checkout(&repo.join("sub"), &mut out);
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(head(&repo), head(&pusher));
+        assert_eq!(head(&nested), nested_before);
+        assert_eq!(out.lines().count(), 1, "{out}");
+        assert!(out.starts_with("longhouse: remote at "), "{out}");
+
+        push_new_commit(&pusher, "third");
+        std::fs::write(repo.join("file.txt"), "local edit").unwrap();
+        let before = head(&repo);
+        let mut out = Vec::new();
+        maybe_pull_remote_checkout(&repo, &mut out);
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(head(&repo), before);
+        assert_eq!(
+            out.lines().next(),
+            Some("longhouse: remote checkout has uncommitted changes; skipping git pull")
+        );
+    }
+
+    #[test]
+    fn launch_warning_names_local_work_in_each_child_repo() {
+        let remotes = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let repo = |name: &str| folder.path().join(name);
+        for name in ["ahead", "edited", "synced", "_parked"] {
+            cloned_repo(remotes.path(), name, &repo(name));
+        }
+        commit(&repo("ahead"), "local commit");
+        commit(&repo("_parked"), "local commit");
+        std::fs::write(repo("edited").join("file.txt"), "local edit").unwrap();
+        std::fs::write(repo("edited").join("new.txt"), "new file").unwrap();
+
+        let mut out = Vec::new();
+        warn_local_git_divergence(folder.path(), "devbox", &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "longhouse: ahead: local checkout has 1 unpushed commit(s); push them for devbox to see them.\n\
+             longhouse: edited: local checkout has 2 uncommitted change(s); devbox will not see them.\n"
+        );
+
+        // A folder that is a repo warns as before, with no name.
+        let mut out = Vec::new();
+        warn_local_git_divergence(&repo("ahead"), "devbox", &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "longhouse: local checkout has 1 unpushed commit(s); push them for devbox to see them.\n"
         );
     }
 
