@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SwiftUI
 
 public enum SnapshotRefreshReason: Sendable {
@@ -40,6 +41,8 @@ public final class SnapshotStore: ObservableObject {
     /// session within a second or two. Rows from other machines it has not
     /// mentioned by then ended while this Mac was not listening.
     static let remoteReplaySweepSeconds: TimeInterval = 10
+
+    private static let logger = Logger(subsystem: "ai.longhouse.desktop", category: "snapshot-store")
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -89,6 +92,8 @@ public final class SnapshotStore: ObservableObject {
     private var remoteReplaySweepTask: Task<Void, Never>?
     private var remoteMachinesTask: Task<Void, Never>?
     private var remoteMachinesConnection: RealtimeConnectionSnapshot?
+    /// The other machines' rows last written to the unified log.
+    private var loggedRemoteRows: [String] = []
     private var localStatusMonitor: LocalStatusMonitor?
     private var latestLocalProjection: LocalStatusMonitor.Projection?
     private var localStatusPath: String?
@@ -789,7 +794,20 @@ public final class SnapshotStore: ObservableObject {
               (snapshot.remoteSessions ?? []).contains(where: { !seen.contains($0.sessionId ?? "") })
         else { return }
         self.snapshot = snapshot.keepingRemoteSessions(seen)
+        logRemoteRowsIfChanged()
         armPresentationDeadline()
+    }
+
+    /// One line whenever the set of other machines' rows changes, so the
+    /// installed app's view of the account can be read with `log show`.
+    private func logRemoteRowsIfChanged() {
+        let rows = (snapshot?.remoteSessions ?? [])
+            .map { "\($0.deviceId ?? "?")/\($0.sessionId ?? "?")" }
+            .sorted()
+        guard rows != loggedRemoteRows else { return }
+        loggedRemoteRows = rows
+        let listed = rows.joined(separator: " ")
+        Self.logger.info("Other machines' live sessions: \(rows.count, privacy: .public) \(listed, privacy: .public)")
     }
 
     /// Other machines' status lines come from the machines summary, read once
@@ -905,6 +923,7 @@ public final class SnapshotStore: ObservableObject {
         }
         guard updated != snapshot else { return }
         snapshot = updated
+        logRemoteRowsIfChanged()
         armPresentationDeadline()
         persistCachedSnapshot(updated)
     }
