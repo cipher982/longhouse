@@ -707,7 +707,8 @@ public struct MenuBarPanelView: View {
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             seed: Self.stableSeed(session.id),
             openAction: managedOpenAction(for: session),
-            subagentLinks: subagentLinks
+            subagentLinks: subagentLinks,
+            machine: session.isRemote ? session.deviceId.map(snapshot.machineLabel(forDeviceId:)) : nil
         )
     }
 
@@ -726,15 +727,7 @@ public struct MenuBarPanelView: View {
         return compactDetailParts([context, status])
     }
 
-    /// A row from another machine leads with that machine's name, so the one
-    /// list can mix machines without a row being mistaken for a local one.
     func hearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
-        let subtitle = localHearthSubtitle(session, kind: kind)
-        guard session.isRemote, let deviceId = session.deviceId else { return subtitle }
-        return compactDetailParts([snapshot.machineLabel(forDeviceId: deviceId), subtitle])
-    }
-
-    private func localHearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
         let workspace = managedSessionWorkspaceContext(session)
         let label = session.presentation?.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {

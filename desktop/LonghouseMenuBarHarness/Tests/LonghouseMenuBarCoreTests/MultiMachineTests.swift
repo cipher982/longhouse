@@ -95,11 +95,13 @@ struct MultiMachineTests {
         #expect(entries.map(\.id) == ["sess-remote-ask", "sess-local-api", "sess-remote-build", "sess-local-notes"])
         #expect(entries.map(\.kind) == [.needsYou, .working, .working, .quiet])
         // Rows from another machine lead with its name; this Mac's rows do not.
-        #expect(entries[0].subtitle == "workstation · Waiting for your answer")
+        #expect(entries.map(\.machine) == ["workstation", nil, "workstation", nil])
+        #expect(entries[0].subtitle == "Waiting for your answer")
+        #expect(entries[0].rowSubtitle == "workstation · Waiting for your answer")
         #expect(entries[0].provider == "claude")
-        #expect(entries[1].subtitle == "acme-api / main · Bash")
-        #expect(entries[2].subtitle == "workstation · longhouse / menubar · Thinking")
-        #expect(entries[3].subtitle == "notes")
+        #expect(entries[1].rowSubtitle == "acme-api / main · Bash")
+        #expect(entries[2].rowSubtitle == "workstation · longhouse / menubar · Thinking")
+        #expect(entries[3].rowSubtitle == "notes")
         #expect(entries.allSatisfy { $0.openAction != nil })
 
         // build-box is offline and was used today; old-mini has been off all

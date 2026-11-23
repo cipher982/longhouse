@@ -77,6 +77,8 @@ struct HearthSessionEntry: Identifiable {
     let seed: Int
     let openAction: (() -> Void)?
     let subagentLinks: [HearthSubagentLink]
+    /// The machine hosting a session from another machine; nil for this Mac.
+    let machine: String?
 
     init(
         id: String,
@@ -92,7 +94,8 @@ struct HearthSessionEntry: Identifiable {
         ageLabel: String,
         seed: Int,
         openAction: (() -> Void)?,
-        subagentLinks: [HearthSubagentLink] = []
+        subagentLinks: [HearthSubagentLink] = [],
+        machine: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -108,13 +111,21 @@ struct HearthSessionEntry: Identifiable {
         self.seed = seed
         self.openAction = openAction
         self.subagentLinks = subagentLinks
+        self.machine = machine
+    }
+
+    /// A row from another machine leads with that machine's name, so one list
+    /// can mix machines without a row being mistaken for this Mac's.
+    var rowSubtitle: String {
+        guard let machine, !machine.isEmpty else { return subtitle }
+        return subtitle.isEmpty ? machine : "\(machine) · \(subtitle)"
     }
 
     /// What a row says to VoiceOver: the title plus the subtitle, which is
     /// where state that is not drawn (waiting, no live status, lost control)
     /// lives.
     var accessibilityOpenLabel: String {
-        let parts = [subtitle, detail ?? ""].filter { !$0.isEmpty }
+        let parts = [rowSubtitle, detail ?? ""].filter { !$0.isEmpty }
         return parts.isEmpty
             ? "Open \(title) in Longhouse"
             : "Open \(title) in Longhouse, \(parts.joined(separator: ", "))"
@@ -149,8 +160,9 @@ struct HearthFocusCard: View {
                     HStack(spacing: 4) {
                         ProviderGlyph(provider: entry.provider, size: 11, variant: .bare)
                         // Last activity, not when the wait began: nothing
-                        // served says when the question was asked.
-                        Text(entry.ageLabel == "-" ? HealthSnapshot.providerDisplayName(entry.provider) : "\(HealthSnapshot.providerDisplayName(entry.provider)) · active \(entry.ageLabel) ago")
+                        // served says when the question was asked. The amber
+                        // line above stays whole; another machine is named here.
+                        Text(focusIdentityLine)
                             .lineLimit(1)
                     }
                     .font(.system(size: 11))
@@ -186,8 +198,17 @@ struct HearthFocusCard: View {
         .onHover { hovered = $0 }
         .contextMenu { HearthSessionMenu(entry: entry) }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(entry.title), \(entry.subtitle)"))
+        .accessibilityLabel(Text("\(entry.title), \(entry.rowSubtitle)"))
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var focusIdentityLine: String {
+        var parts = [HealthSnapshot.providerDisplayName(entry.provider)]
+        if let machine = entry.machine, !machine.isEmpty {
+            parts.append("on \(machine)")
+        }
+        let identity = parts.joined(separator: " ")
+        return entry.ageLabel == "-" ? identity : "\(identity) · active \(entry.ageLabel) ago"
     }
 }
 
@@ -220,7 +241,7 @@ struct HearthSessionRow: View {
                         .lineLimit(1)
                     HStack(spacing: 4) {
                         ProviderGlyph(provider: entry.provider, size: 11, variant: .bare)
-                        Text(entry.subtitle)
+                        Text(entry.rowSubtitle)
                             .lineLimit(1)
                     }
                     .font(.system(size: 11))
@@ -281,8 +302,8 @@ struct HearthQuietRow: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Color.primary.opacity(0.85))
                     .lineLimit(1)
-                if !entry.subtitle.isEmpty {
-                    Text(entry.subtitle)
+                if !entry.rowSubtitle.isEmpty {
+                    Text(entry.rowSubtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(Color.secondary)
                         .lineLimit(1)
