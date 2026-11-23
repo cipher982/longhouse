@@ -678,6 +678,33 @@ def _interaction_projection(interaction: dict[str, Any]) -> dict[str, Any]:
     return projection
 
 
+async def _resolve_answered_interaction(
+    *,
+    session_id: uuid.UUID,
+    interaction_id: str,
+    status_value: str,
+    response_payload: dict[str, Any],
+    response_text: str | None,
+) -> dict[str, Any]:
+    try:
+        return await _resolve_catalog_interaction(
+            session_id=session_id,
+            interaction_id=interaction_id,
+            status_value=status_value,
+            response_payload=response_payload,
+            response_text=response_text,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if exc.status_code != status.HTTP_409_CONFLICT or detail.get("code") != "pause_request_not_pending":
+            raise
+    interactions = await _catalog_interactions(session_id=session_id, status_filter=None)
+    current = next((item for item in interactions if str(item.get("id") or "") == interaction_id), None)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pause request not found for this session")
+    return current
+
+
 async def _resolve_catalog_interaction(
     *,
     session_id: uuid.UUID,
@@ -859,11 +886,23 @@ async def _respond_to_live_pause_request(
         answers=answers,
         content=body.content,
         message=message,
-        provider_request_id=(
-            str(interaction.get("provider_request_id") or "").strip() if interaction.get("source") == "opencode_bridge" else None
-        ),
+        # The provider's own id for the wait (OpenCode's permission id, Claude's
+        # tool_use_id), so an answer can never land on a newer question.
+        provider_request_id=str(interaction.get("provider_request_id") or "").strip() or None,
         request_id=f"pause-{pause_request_id}",
     )
+    if not result.ok and result.failure_reason == "question_not_answerable":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "pause_request_not_answerable",
+                "error_code": "pause_request_not_answerable",
+                "message": str(result.error or "This question can only be answered in the terminal now."),
+                "pause_request_id": pause_request_id,
+                "retryable": False,
+                "refetch_required": True,
+            },
+        )
     if not result.ok:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -889,7 +928,10 @@ async def _respond_to_live_pause_request(
             "bridge_response": bridge_response or None,
         }
     response_text = str(bridge_response.get("response_text") or message or "").strip() or None
-    resolved = await _resolve_catalog_interaction(
+    # The machine delivered the answer. The provider may report the question
+    # closed before this resolve lands (Claude's mod reports it at once); that
+    # is the same outcome, not a conflict, so the answer still succeeds.
+    resolved = await _resolve_answered_interaction(
         session_id=source_session.id,
         interaction_id=pause_request_id,
         status_value=status_value,

@@ -1176,7 +1176,7 @@ def test_a_question_resolution_that_arrives_first_cannot_be_revived_by_its_openi
         payload={
             "provider_request_id": provider_request_id,
             "provider_ref": {"source": "claude_hook", "reply_transport": "terminal"},
-            "kind": "question",
+            "kind": "structured_question",
             "title": "Claude needs an answer",
             "summary": "Answer this in the original terminal.",
             "can_respond": False,

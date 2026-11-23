@@ -387,7 +387,7 @@ describe("rows", () => {
 
   it("renders a question with its answer options", () => {
     render({ items: [{ id: "q", kind: "question", title: "Pick one", calls: [{ title: "Yes", subtitle: "do it" }, { title: "No" }] }] });
-    expect(root().querySelector(".question-subtitle")?.textContent).toBe("Answer in terminal");
+    expect(root().querySelector(".question-subtitle")?.textContent).toBe("Waiting for your answer");
     expect(Array.from(root().querySelectorAll(".question-option-title")).map((n) => n.textContent)).toEqual(["Yes", "No"]);
   });
 });

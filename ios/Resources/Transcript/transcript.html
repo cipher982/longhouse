@@ -1610,7 +1610,7 @@ details.trail .tool-meta {
         <article class="row question">
           <div class="question-eyebrow">Needs answer</div>
           <div class="question-title">${escapeHtml(item.title || "Question")}</div>
-          <div class="question-subtitle">${escapeHtml(item.subtitle || "Answer in terminal")}</div>
+          <div class="question-subtitle">${escapeHtml(item.subtitle || "Waiting for your answer")}</div>
           <div class="question-body">${escapeHtml(item.body || "Claude is waiting for your answer.")}</div>
           ${options ? `<div class="question-options" aria-label="Answer options">${options}</div>` : ""}
         </article>
@@ -4746,7 +4746,7 @@ details.trail .tool-meta {
 		const body = questions.map((entry) => entry.question).join("\n\n");
 		const row = baseRow(id, "question");
 		row.title = questions[0]?.header ?? "Question";
-		row.subtitle = hasResult ? "Answered in terminal" : "Answer in terminal";
+		row.subtitle = hasResult ? "Answered" : "Waiting for your answer";
 		row.body = body || "Claude is waiting for your answer.";
 		row.status = hasResult ? "answered" : "waiting";
 		row.calls = questions.flatMap((entry) => entry.options).map((option) => ({

@@ -493,7 +493,7 @@ function questionRow(id: string, call: AgentEvent, hasResult: boolean): Presente
   const body = questions.map((entry) => entry.question).join("\n\n");
   const row = baseRow(id, "question");
   row.title = questions[0]?.header ?? "Question";
-  row.subtitle = hasResult ? "Answered in terminal" : "Answer in terminal";
+  row.subtitle = hasResult ? "Answered" : "Waiting for your answer";
   row.body = body || "Claude is waiting for your answer.";
   row.status = hasResult ? "answered" : "waiting";
   row.calls = questions

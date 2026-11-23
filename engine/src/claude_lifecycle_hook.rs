@@ -1707,7 +1707,11 @@ fn permission_request_key(tool_name: &str, tool_input: &Value) -> String {
 /// already uses, which is what makes a resolution survive a dropped hook, a
 /// killed process, or a restart: replaceable status may be lost, an obligation
 /// may not.
-fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value {
+///
+/// `answerable` says Longhouse's Claude Code mod is racing this question's
+/// dialog against an answer from the app, so the app may answer it; otherwise
+/// only the terminal can.
+fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge, answerable: bool) -> Value {
     let runtime_key = format!("claude:{session_id}");
     let occurred_at = chrono::Utc::now().to_rfc3339();
     let (kind, tool_name, payload) = match edge {
@@ -1719,14 +1723,23 @@ fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value 
             PAUSE_TOOL_NAME.to_string(),
             json!({
                 "provider_request_id": tool_use_id,
-                "provider_ref": {"source": PAUSE_SOURCE, "reply_transport": "terminal"},
-                "kind": "question",
+                "provider_ref": {
+                    "source": PAUSE_SOURCE,
+                    "reply_transport": if answerable { "managed_push" } else { "terminal" },
+                },
+                // The Runtime Host's word for a structured question; any other
+                // kind is dropped from the session's pending interaction.
+                "kind": "structured_question",
                 "title": "Claude needs an answer",
-                "summary": "Answer this in the original terminal.",
+                "summary": if answerable {
+                    "Answer here or in the terminal."
+                } else {
+                    "Answer this in the original terminal."
+                },
                 "request_payload": request_payload,
-                // The dialog is in the provider's terminal. Longhouse surfaced
-                // it; it did not gain the authority to answer it.
-                "can_respond": false,
+                // Without the mod the dialog lives only in the provider's
+                // terminal: Longhouse surfaces it but cannot answer it.
+                "can_respond": answerable,
                 "single_active": true,
             }),
         ),
@@ -1736,7 +1749,7 @@ fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value 
             json!({
                 "provider_request_id": tool_use_id,
                 "status": "resolved",
-                "response_text": "Answered in the original terminal.",
+                "response_text": "Answered.",
             }),
         ),
         InteractionEdge::OpenPermission {
@@ -1797,7 +1810,16 @@ fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value 
 }
 
 fn enqueue_interaction_edge(session_id: &str, edge: &InteractionEdge) -> anyhow::Result<()> {
-    let event = interaction_runtime_event(session_id, edge);
+    let answerable = match edge {
+        InteractionEdge::OpenQuestion { tool_use_id, .. } => {
+            crate::claude_channel_control::open_question(session_id, None)
+                .ok()
+                .flatten()
+                .is_some_and(|open| &open.tool_use_id == tool_use_id)
+        }
+        _ => false,
+    };
+    let event = interaction_runtime_event(session_id, edge, answerable);
     crate::outbox::enqueue_runtime_event(
         &crate::config::get_agent_runtime_events_outbox_dir()?,
         &event,
@@ -1886,7 +1908,7 @@ fn transcript_resolution_event(
         "payload": {
             "provider_request_id": tool_use_id,
             "status": "resolved",
-            "response_text": "Answered in the original terminal.",
+            "response_text": "Answered.",
         },
     })
 }
@@ -2191,11 +2213,12 @@ mod tests {
                 tool_use_id: "toolu_01abc".to_string(),
                 request_payload: json!({"questions": [{"question": "which?"}]}),
             },
+            false,
         );
         assert_eq!(event["kind"], "pause_request");
         assert_eq!(event["runtime_key"], "claude:session-1");
         assert_eq!(event["phase"], Value::Null);
-        assert_eq!(event["payload"]["kind"], "question");
+        assert_eq!(event["payload"]["kind"], "structured_question");
         assert_eq!(event["payload"]["provider_request_id"], "toolu_01abc");
         // The dialog is the provider's. Longhouse surfaced a wait; it did not
         // gain the authority to answer it.
@@ -2205,6 +2228,28 @@ mod tests {
             event["dedupe_key"],
             "claude-hook:open-question:session-1:toolu_01abc"
         );
+        assert_eq!(
+            event["payload"]["provider_ref"]["reply_transport"],
+            "terminal"
+        );
+    }
+
+    #[test]
+    fn a_question_the_mod_races_is_answerable_from_longhouse() {
+        let event = interaction_runtime_event(
+            "session-1",
+            &InteractionEdge::OpenQuestion {
+                tool_use_id: "toolu_01abc".to_string(),
+                request_payload: json!({"questions": [{"question": "which?"}]}),
+            },
+            true,
+        );
+        assert_eq!(event["payload"]["can_respond"], true);
+        assert_eq!(
+            event["payload"]["provider_ref"]["reply_transport"],
+            "managed_push"
+        );
+        assert_eq!(event["payload"]["provider_ref"]["source"], PAUSE_SOURCE);
     }
 
     #[test]

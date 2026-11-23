@@ -13,6 +13,11 @@
 // hook changes how Claude paints, so the `turn.step` stream is the source.
 // Only reply text goes: thinking, tool names and tool arguments are dropped.
 //
+// It also lets the owner answer Claude's AskUserQuestion dialog from the app:
+// the dialog stays in the terminal, and whichever answers first, the terminal
+// or the app, wins. A message the owner sends while the dialog is open is their
+// free-text answer.
+//
 // longhouse-engine owns the queue and the record of what was delivered
 // (engine/src/claude_owner_input.rs). `claude-owner-input watch` streams this
 // session's owner inputs as JSON lines; `claude-owner-input claim` takes one
@@ -28,6 +33,9 @@ const REFUSAL_WINDOW_MS = 200
 
 let engine
 let sessionId
+// This copy of the module. A question it opens is answerable only while its
+// watcher is the session's current one: a reloaded mod has no open dialogs.
+const instance = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
 // The main loop's running turn, from turn.start to turn.complete.
 let turnId
 // The turn the owner aborted from Longhouse, until its turn.complete.
@@ -36,9 +44,9 @@ let abortedByOwner
 // this copy records the delivery when it does.
 const awaitingTurn = new Map()
 
-async function engineRun($, args) {
+async function engineRun($, args, options) {
   try {
-    return await $.process.run([engine, 'claude-owner-input', ...args, '--session', sessionId])
+    return await $.process.run([engine, 'claude-owner-input', ...args, '--session', sessionId], options)
   } catch (error) {
     $.ui.log('longhouse: ' + String(error), { to: 'debug' })
     return { exitCode: -1, stdout: '', stderr: String(error) }
@@ -220,6 +228,110 @@ async function reportTurnEnd($, turn, aborted = false) {
   }
 }
 
+// ---- Questions answered from Longhouse ----------------------------------
+//
+// tool_use_id -> { settle, decided }, for each AskUserQuestion dialog this
+// copy has open. `decided` is set the moment either side answers, so an app
+// answer that arrives after the terminal's is refused, never reported answered.
+const openQuestions = new Map()
+// Set when the watcher gave up: questions stay in the terminal from then on.
+let watcherStopped = false
+
+async function answer($, input) {
+  if (input.state === 'claimed') {
+    // A question this copy holds is this copy's to report on.
+    if (openQuestions.has((input.answer || {}).tool_use_id)) return
+    // An earlier copy took it and reloaded before answering: its dialog is gone.
+    await ack($, input.id, 'failed', { detail: 'the Longhouse mod reloaded before answering' })
+    return
+  }
+  if (!(await claim($, input.id))) return
+  const reply = input.answer || {}
+  const open = openQuestions.get(reply.tool_use_id)
+  if (open === undefined || open.decided) {
+    await ack($, input.id, 'failed', { detail: 'the question was already answered in the terminal' })
+    return
+  }
+  open.decided = true
+  open.settle(reply)
+  await ack($, input.id, 'answered')
+}
+
+// Longhouse learns a question closed from Claude's PostToolUse hook. A call the
+// mod answered may never reach that hook, so it says so itself; a repeat is
+// ignored.
+async function reportQuestionAnswered($, toolUseId, questions) {
+  try {
+    const payload = {
+      hook_event_name: 'PostToolUse',
+      session_id: await $.session.id(),
+      cwd: await $.session.cwd(),
+      tool_name: 'AskUserQuestion',
+      tool_use_id: toolUseId,
+      tool_input: { questions },
+    }
+    await $.process.run([engine, 'claude-lifecycle-hook'], { stdin: JSON.stringify(payload) })
+  } catch (error) {
+    $.ui.log('longhouse: answered question not reported: ' + String(error), { to: 'debug' })
+  }
+}
+
+// Races the terminal dialog (`next(e)`) against an answer from the app. The
+// question is recorded before the dialog opens, so Claude's PreToolUse hook,
+// which runs beneath this one, tells Longhouse the app may answer it. When the
+// app answers first this hook settles, which abandons the dialog beneath it.
+async function askUserQuestion($, e, next) {
+  // Without a running watcher no answer from the app could reach the dialog.
+  if (!engine || !sessionId || watcherStopped || e.agentId !== undefined || typeof e.tool_use_id !== 'string') {
+    return next(e)
+  }
+  const toolUseId = e.tool_use_id
+  const questions = Array.isArray(e.questions) ? e.questions : []
+  const open = { decided: false, settle: undefined }
+  const fromApp = new Promise((resolve) => {
+    open.settle = resolve
+  })
+  openQuestions.set(toolUseId, open)
+  try {
+    const opened = await engineRun($, ['question-open', '--tool-use-id', toolUseId, '--instance', instance], {
+      stdin: JSON.stringify(questions),
+    })
+    if (opened.exitCode !== 0) {
+      open.decided = true
+      $.ui.log('longhouse: question not offered to the app: ' + opened.stderr, { to: 'debug' })
+      return await next(e)
+    }
+    const inTerminal = next(e)
+    inTerminal.catch(() => {})
+    const won = await Promise.race([
+      inTerminal.then(
+        (result) => {
+          open.decided = true
+          return { from: 'terminal', result }
+        },
+        (error) => {
+          open.decided = true
+          throw error
+        },
+      ),
+      fromApp.then((reply) => ({ from: 'app', reply })),
+    ])
+    if (won.from === 'terminal') return won.result
+    const reply = won.reply
+    // A decline comes only from the app's answer route, which records it as
+    // declined itself; reporting it here would record it as answered.
+    if (reply.declined) return { deny: 'The user declined to answer this question from the Longhouse app.' }
+    void reportQuestionAnswered($, toolUseId, questions)
+    const result = { questions, answers: reply.answers || {} }
+    if (typeof reply.response === 'string' && reply.response !== '') result.response = reply.response
+    return { result }
+  } finally {
+    openQuestions.delete(toolUseId)
+    // Awaited, so an owner message sent right after the answer is a message.
+    await engineRun($, ['question-close', '--tool-use-id', toolUseId])
+  }
+}
+
 async function handle($, line) {
   let input
   try {
@@ -230,10 +342,13 @@ async function handle($, line) {
   }
   if (input.kind === 'send') await send($, input)
   else if (input.kind === 'abort') await abort($, input)
+  else if (input.kind === 'answer') await answer($, input)
 }
 
 async function watchOnce($) {
-  const stream = $.process.spawn({ argv: [engine, 'claude-owner-input', 'watch', '--session', sessionId] })
+  const stream = $.process.spawn({
+    argv: [engine, 'claude-owner-input', 'watch', '--session', sessionId, '--instance', instance],
+  })
   let buffered = ''
   for await (const { stream: pipe, text } of stream) {
     if (pipe !== 'stdout') {
@@ -266,7 +381,10 @@ function watch($, quickRestarts) {
     const quick = (await $.clock.now()) - began < QUICK_RUN_MS
     const restarts = quick ? quickRestarts + 1 : 0
     if (restarts < MAX_QUICK_RESTARTS) watch($, restarts)
-    else $.ui.status('owner messages from the Longhouse app now arrive through its channel')
+    else {
+      watcherStopped = true
+      $.ui.status('owner messages from the Longhouse app now arrive through its channel')
+    }
   })
 }
 
@@ -399,6 +517,8 @@ export function register(on) {
   try {
     on('turn.step', liveTurnStep)
   } catch (error) {}
+
+  on('tool.call', { tool: 'AskUserQuestion' }, askUserQuestion)
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId !== undefined) {

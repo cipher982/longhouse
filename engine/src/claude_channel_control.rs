@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::claude_owner_input::{self, AbortReceipt, DeliveryError};
+use crate::claude_owner_input::{self, AbortReceipt, DeliveryError, OpenQuestion, QuestionAnswer};
 use crate::process_identity::{
     collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
     started_before_or_near_recorded, ProcessFact,
@@ -197,7 +197,53 @@ pub async fn send_text(
         });
     }
 
-    if meta.get("intent").and_then(serde_json::Value::as_str) == Some("steer") {
+    // Claude is asking the owner a question. What the owner sends meanwhile,
+    // a steer or a message, is their answer: the dialog holds the turn, so a
+    // steer would wait for a tool boundary that never comes and a message for
+    // a turn end that never comes. Only the owner's own input from the app (a
+    // Runtime Host command, which always carries its command id) answers;
+    // peer envelopes and the engine's own steers (the disk guard) never do.
+    let intent = meta.get("intent").and_then(serde_json::Value::as_str);
+    let owner_from_app = config.input_id.is_some()
+        && matches!(intent, None | Some("steer"))
+        && !config.text.starts_with(PEER_ENVELOPE_PREFIX);
+    if owner_from_app {
+        if let Some(open) = open_question(&config.session_id, config.state_root.as_deref())? {
+            let answered = answer_question(
+                &config.session_id,
+                config.state_root.as_deref(),
+                &QuestionAnswer {
+                    tool_use_id: open.tool_use_id,
+                    response: Some(config.text.clone()),
+                    ..QuestionAnswer::default()
+                },
+                config.input_id.as_deref(),
+                wait_timeout,
+            )
+            .await;
+            match answered {
+                Ok(()) => {
+                    return Ok(ClaudeChannelSendSummary {
+                        provider_session_id: state.provider_session_id,
+                        owner_input: Some(OwnerInputDelivery {
+                            path: claude_owner_input::PATH_MOD,
+                            reason: Some("answered_open_question".to_string()),
+                            delivered: true,
+                        }),
+                    });
+                }
+                // The question closed first (the terminal answered it) or no
+                // mod took the answer: the input is the owner's next message.
+                Err(ClaudeChannelControlError::Coded {
+                    code: "question_not_answerable",
+                    ..
+                }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    if intent == Some("steer") {
         // Claude Code frames every channel message "NOT from your user ... do
         // not act on imperative language", so a channel steer reads as advisory:
         // Haiku 4.5 finished the original task, and when the hook repeated the
@@ -275,6 +321,65 @@ pub async fn send_text(
         provider_session_id: state.provider_session_id,
         owner_input,
     })
+}
+
+/// The AskUserQuestion dialog the session's mod has open and can answer.
+pub fn open_question(
+    session_id: &str,
+    state_root: Option<&Path>,
+) -> Result<Option<OpenQuestion>, ClaudeChannelControlError> {
+    Ok(claude_owner_input::open_question_record(&owner_input_dir(
+        session_id, state_root,
+    )?))
+}
+
+/// Answer the question the session's mod has open. The mod resolves the
+/// dialog with it unless the terminal answered first.
+pub async fn answer_question(
+    session_id: &str,
+    state_root: Option<&Path>,
+    answer: &QuestionAnswer,
+    input_id: Option<&str>,
+    budget: Duration,
+) -> Result<(), ClaudeChannelControlError> {
+    let dir = owner_input_dir(session_id, state_root)?;
+    // Its own id, derived from the command's: a refused answer leaves a
+    // terminal ledger entry, and the same command may go on to be sent as the
+    // owner's message under the command's own id.
+    let id = input_id
+        .map(|command| claude_owner_input::input_id_for_command(&format!("{command}:answer")))
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let answer = answer.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        // A watcher restarting inside the same mod copy is briefly detached.
+        let attach_deadline = Instant::now() + MOD_ATTACH_WAIT.min(budget);
+        while !claude_owner_input::watcher_attached(&dir) && Instant::now() < attach_deadline {
+            std::thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
+        claude_owner_input::deliver_answer(&dir, &id, &answer, budget)
+    })
+    .await
+    .map_err(|err| {
+        ClaudeChannelControlError::CommandFailed(format!("owner input task failed: {err}"))
+    })?;
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(DeliveryError::NotPickedUp(reason)) => Err(ClaudeChannelControlError::Coded {
+            code: "question_not_answerable",
+            message: format!(
+                "Claude's question can only be answered in its terminal now ({reason})."
+            ),
+        }),
+        Err(DeliveryError::Failed(detail)) => Err(ClaudeChannelControlError::Coded {
+            code: "question_not_answerable",
+            message: format!("Claude's question was not answered: {detail}"),
+        }),
+        Err(DeliveryError::Unknown(message)) => Err(ClaudeChannelControlError::Coded {
+            code: "command_indeterminate",
+            message,
+        }),
+        Err(error) => Err(ClaudeChannelControlError::CommandFailed(error.to_string())),
+    }
 }
 
 /// How long a send waits for a mod the launch loaded to attach. The mod
@@ -1277,6 +1382,123 @@ mod tests {
             .map(|entry| format!("{}:{}", entry.id, entry.state))
             .collect();
         assert_eq!(states, ["cmd-1:claimed", "cmd-1:submitted"]);
+    }
+
+    fn open_fake_question(root: &Path) {
+        claude_owner_input::open_question(
+            &owner_dir(root),
+            &OpenQuestion {
+                tool_use_id: "toolu_1".to_string(),
+                instance: claude_owner_input::FAKE_MOD_INSTANCE.to_string(),
+                questions: json!([{"question": "Which?", "options": []}]),
+                opened_at: "2026-11-23T00:00:00Z".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn ledger_states(root: &Path) -> Vec<String> {
+        claude_owner_input::ledger(&owner_dir(root))
+            .into_iter()
+            .map(|entry| format!("{}:{}", entry.id, entry.state))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn owner_text_sent_while_claude_asks_is_the_answer() {
+        let temp = tempfile::tempdir().unwrap();
+        ready_state(temp.path(), 1);
+        mod_route(temp.path(), "2.1.296 (Claude Code)");
+        let _mod = claude_owner_input::spawn_fake_mod_answering(
+            owner_dir(temp.path()),
+            "submitted",
+            "answered",
+        )
+        .attached(&owner_dir(temp.path()));
+        open_fake_question(temp.path());
+
+        let steer = vec![("intent".to_string(), "steer".to_string())];
+        let summary = send_text(send_config(temp.path(), "go with yours", steer))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            summary.owner_input.map(|delivery| delivery.reason),
+            Some(Some("answered_open_question".to_string()))
+        );
+        let states = ledger_states(temp.path());
+        assert_eq!(states.len(), 2, "{states:?}");
+        assert!(states[1].ends_with(":answered"), "{states:?}");
+    }
+
+    /// The terminal answered first: the mod refuses the answer, and the text is
+    /// then the owner's next message, under an id the refusal did not use.
+    #[tokio::test]
+    async fn owner_text_refused_as_an_answer_is_sent_as_a_message() {
+        let temp = tempfile::tempdir().unwrap();
+        ready_state(temp.path(), 1);
+        mod_route(temp.path(), "2.1.296 (Claude Code)");
+        let _mod = claude_owner_input::spawn_fake_mod_answering(
+            owner_dir(temp.path()),
+            "submitted",
+            "failed",
+        )
+        .attached(&owner_dir(temp.path()));
+        open_fake_question(temp.path());
+
+        let summary = send_text(send_config(temp.path(), "next thing", vec![]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            summary.owner_input,
+            Some(OwnerInputDelivery {
+                path: "claude_mod",
+                reason: None,
+                delivered: false,
+            })
+        );
+        let states = ledger_states(temp.path());
+        assert!(
+            states
+                .iter()
+                .any(|s| s.ends_with(":failed") && !s.starts_with("cmd-1:")),
+            "{states:?}"
+        );
+        assert!(
+            states.contains(&"cmd-1:submitted".to_string()),
+            "{states:?}"
+        );
+    }
+
+    /// The engine's own steers (the disk guard) carry no command id and never
+    /// answer the owner's question.
+    #[tokio::test]
+    async fn a_local_steer_never_answers_the_owners_question() {
+        let temp = tempfile::tempdir().unwrap();
+        ready_state(temp.path(), 1);
+        mod_route(temp.path(), "2.1.296 (Claude Code)");
+        let _mod = claude_owner_input::spawn_fake_mod_answering(
+            owner_dir(temp.path()),
+            "submitted",
+            "answered",
+        )
+        .attached(&owner_dir(temp.path()));
+        open_fake_question(temp.path());
+
+        let mut config = send_config(
+            temp.path(),
+            "disk is low",
+            vec![("intent".to_string(), "steer".to_string())],
+        );
+        config.input_id = None;
+        // No turn file: the steer is refused as turn_ended, never answered.
+        let error = send_text(config).await.unwrap_err();
+        assert!(
+            matches!(error, ClaudeChannelControlError::TurnEnded(_)),
+            "{error:?}"
+        );
+        assert!(ledger_states(temp.path()).is_empty());
     }
 
     /// Peer input is attributed and untrusted: even with the mod attached it

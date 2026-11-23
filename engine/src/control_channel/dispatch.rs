@@ -905,7 +905,9 @@ pub(super) async fn execute_command(
                     meta: vec![("intent".to_string(), "steer".to_string())],
                     state_root: None,
                     wait_timeout: None,
-                    input_id: None,
+                    // A replayed steer that answers an open question is
+                    // recognised by its command id, like a send.
+                    input_id: durable_command_id.map(str::to_owned),
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -1084,38 +1086,51 @@ pub(super) async fn execute_command(
                 }));
             }
             if provider == "claude" {
-                let request_key = payload_required_string(&payload, "request_key")?;
-                let decision = payload_optional_string(&payload, "decision")
-                    .unwrap_or_else(|| "answer".to_string());
-                let text = claude_pause_response_text(&payload)?;
-                let response_text = text.clone();
-                let summary = claude_channel_send_text(ClaudeChannelSendConfig {
-                    session_id: session_id.clone(),
-                    text,
-                    meta: vec![
-                        ("intent".to_string(), "pause_response".to_string()),
-                        ("request_key".to_string(), request_key.clone()),
-                        ("decision".to_string(), decision.clone()),
-                    ],
-                    state_root: None,
-                    wait_timeout: None,
-                    input_id: None,
-                })
+                let open = crate::claude_channel_control::open_question(&session_id, None)
+                    .map_err(claude_channel_error_to_command_error)?
+                    .ok_or_else(|| CommandError {
+                        code: "question_not_answerable".to_string(),
+                        message: "Claude has no question open that Longhouse can answer; \
+                                  answer it in the terminal."
+                            .to_string(),
+                    })?;
+                if let Some(asked) = payload_optional_string(&payload, "provider_request_id") {
+                    if asked != open.tool_use_id {
+                        return Err(CommandError {
+                            code: "question_not_answerable".to_string(),
+                            message: "Claude is no longer asking that question.".to_string(),
+                        });
+                    }
+                }
+                let answer = claude_question_answer(&payload, &open)?;
+                crate::claude_channel_control::answer_question(
+                    &session_id,
+                    None,
+                    &answer,
+                    frame.get("command_id").and_then(Value::as_str),
+                    crate::control_wait::control_wait(CLAUDE_ANSWER_WAIT),
+                )
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
+                let response_text = claude_answer_text(&answer);
+                let status = if answer.declined {
+                    "rejected"
+                } else {
+                    "resolved"
+                };
                 return Ok({
-                    let mut result = claude_channel_control_result(summary.provider_session_id);
+                    let mut result = claude_channel_control_result(None);
                     if let Some(obj) = result.as_object_mut() {
+                        obj.insert("transport".to_string(), json!("claude_mod"));
                         obj.insert(
                             "pause_response".to_string(),
                             json!({
-                                "status": "resolved",
+                                "status": status,
                                 "response_text": response_text,
                                 "response_payload": {
-                                    "decision": decision,
-                                    "answers": payload.get("answers").cloned(),
-                                    "content": payload.get("content").cloned(),
-                                    "message": payload_optional_string(&payload, "message"),
+                                    "answers": answer.answers,
+                                    "response": answer.response,
+                                    "declined": answer.declined,
                                 }
                             }),
                         );
@@ -1359,57 +1374,100 @@ pub(super) async fn run_archive_backlog_control_command(
     }))
 }
 
-pub(super) fn claude_pause_response_text(
+/// How long a Longhouse answer waits for the mod to resolve Claude's dialog.
+const CLAUDE_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Turn a Longhouse pause answer into AskUserQuestion's answer. The app keys
+/// answers by the projection's question id (`question_<n>`, 1-based) or by the
+/// question text; Claude keys them by the question text, the chosen labels
+/// comma-joined. Free text with no structured answer is Claude's `response`.
+pub(super) fn claude_question_answer(
     payload: &Value,
-) -> std::result::Result<String, CommandError> {
+    open: &crate::claude_owner_input::OpenQuestion,
+) -> std::result::Result<crate::claude_owner_input::QuestionAnswer, CommandError> {
     let decision = payload_optional_string(payload, "decision")
         .unwrap_or_else(|| "answer".to_string())
         .to_ascii_lowercase();
-    if let Some(message) = payload_optional_string(payload, "message") {
-        if !message.trim().is_empty() {
-            return Ok(message);
-        }
+    let mut answer = crate::claude_owner_input::QuestionAnswer {
+        tool_use_id: open.tool_use_id.clone(),
+        ..Default::default()
+    };
+    if decision == "reject" || decision == "cancel" {
+        answer.declined = true;
+        return Ok(answer);
     }
-    if let Some(content) = payload.get("content") {
-        if let Some(text) = content.as_str() {
-            if !text.trim().is_empty() {
-                return Ok(text.trim().to_string());
-            }
-        } else if !content.is_null() {
-            let text = content.to_string();
-            if !text.trim().is_empty() {
-                return Ok(text.trim().to_string());
-            }
-        }
-    }
+    let texts: Vec<String> = open
+        .questions
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    item.get("question")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(answers) = payload.get("answers").and_then(Value::as_object) {
-        let mut entries: Vec<_> = answers.iter().collect();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-        let parts: Vec<String> = entries
-            .into_iter()
-            .filter_map(|(key, value)| {
-                let label = key.trim();
-                if label.is_empty() {
-                    return None;
-                }
-                let values = claude_pause_answer_values(value);
-                if values.is_empty() {
-                    return None;
-                }
-                Some(format!("{label}: {}", values.join(", ")))
-            })
-            .collect();
-        if !parts.is_empty() {
-            return Ok(parts.join("; "));
+        for (key, value) in answers {
+            let key = key.trim();
+            let question = key
+                .strip_prefix("question_")
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|index| texts.get(index))
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .or_else(|| texts.iter().find(|text| text.as_str() == key).cloned());
+            let Some(question) = question else {
+                return Err(CommandError {
+                    code: "invalid_command".to_string(),
+                    message: format!("answer key {key:?} names none of Claude's questions"),
+                });
+            };
+            let values = claude_pause_answer_values(value);
+            if !values.is_empty() {
+                answer.answers.insert(question, values.join(", "));
+            }
         }
     }
-    if decision == "cancel" || decision == "reject" {
-        return Ok("Cancelled in Longhouse.".to_string());
+    if answer.answers.is_empty() {
+        let text = payload_optional_string(payload, "message")
+            .or_else(|| match payload.get("content") {
+                Some(Value::String(text)) => Some(text.clone()),
+                Some(Value::Null) | None => None,
+                Some(other) => Some(other.to_string()),
+            })
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+        let Some(text) = text else {
+            return Err(CommandError {
+                code: "invalid_command".to_string(),
+                message: "Claude pause responses require an answer".to_string(),
+            });
+        };
+        answer.response = Some(text);
     }
-    Err(CommandError {
-        code: "invalid_command".to_string(),
-        message: "Claude pause responses require a non-empty answer message".to_string(),
-    })
+    Ok(answer)
+}
+
+/// The answer as one line, for the pause request's response text.
+pub(super) fn claude_answer_text(answer: &crate::claude_owner_input::QuestionAnswer) -> String {
+    if answer.declined {
+        return "Declined in Longhouse.".to_string();
+    }
+    if let Some(response) = &answer.response {
+        return response.clone();
+    }
+    answer
+        .answers
+        .iter()
+        .map(|(question, label)| format!("{question} {label}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 pub(super) fn claude_channel_control_result(provider_session_id: Option<String>) -> Value {

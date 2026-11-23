@@ -659,7 +659,8 @@ def is_user_facing_pause_request(row: SessionPauseRequest) -> bool:
     source = _clean_str(ref.get("source"))
     # Answerable Claude permission prompts (PreToolUse gate) are real, user-facing
     # decisions even though they originate from a hook. Always surface them.
-    if source in {"claude_permission_gate", "cursor_permission_gate"} and bool(row.can_respond):
+    if source in {"claude_permission_gate", "cursor_permission_gate", "claude_hook"} and bool(row.can_respond):
+        # A claude_hook question is answerable when Longhouse's mod holds its dialog.
         return True
     if source == "claude_hook":
         return False

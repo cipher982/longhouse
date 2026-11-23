@@ -554,6 +554,16 @@ async def _dispatch_engine_channel(
             failure_kind=DISPATCH_FAILURE_PRECONDITION,
             failure_reason=code,
         )
+    if code == "question_not_answerable":
+        # The provider's question closed (answered in its terminal) or the
+        # adapter that could answer it is gone: final, never retryable.
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error=error,
+            failure_kind=DISPATCH_FAILURE_PRECONDITION,
+            failure_reason=code,
+        )
     if code == "delivery_unknown":
         return ManagedControlDispatchResult(
             ok=False,

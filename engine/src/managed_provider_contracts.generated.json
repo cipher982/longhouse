@@ -1680,9 +1680,9 @@
         },
         "answer_pause": {
           "level": "hermetic",
-          "source": "Claude channel bridge pause-answer command tests",
+          "source": "Longhouse Claude Code mod races AskUserQuestion's terminal dialog against an app answer (engine claude_owner_input answer tests, claude-mod.test.ts)",
           "disposition": "implemented",
-          "owner_action": "claude live-token pause-answer transcript canary",
+          "owner_action": "claude Helm live-token AskUserQuestion answer canary",
           "blocker": "budget"
         },
         "terminate": {

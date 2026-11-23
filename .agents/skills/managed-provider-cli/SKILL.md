@@ -60,9 +60,17 @@ lands, never whether it survives. Full contract:
   `longhouse-engine claude-owner-input watch`; the engine owns the queue and ledger
   in `~/.claude/channels/longhouse/sessions/<session>.owner-input/` (`route.json`
   = chosen path and why; `ledger.jsonl` = claimed, submitted, delivered). Peer
-  envelopes, steers and pause answers never use this path. Without the mod, sends
+  envelopes and steers never use this path. Without the mod, sends
   use the channel; every send result names the path (`owner_input_path`,
   `owner_input_reason`). A leading `/` is refused (`owner_input_leading_slash`).
+- Claude's AskUserQuestion is answerable from the app only through the mod. Its
+  `tool.call` hook writes `question.json` in the same directory, then races the
+  terminal dialog against an `answer` input; the first to answer wins, and an app
+  answer abandons the dialog. The lifecycle hook marks the question
+  `can_respond`/`managed_push` only when that record names its `tool_use_id`. While a
+  question is open, an owner send or steer is its free-text answer
+  (`owner_input_reason: answered_open_question`), never parked behind a tool boundary
+  the dialog holds. Without the mod the question stays terminal-only.
 - Never SIGINT a Claude Helm process: Claude Code treats it as shutdown. Interrupt
   with the mod calls `$.turn.abort` and terminates the foreground Bash tool's
   process group. Without it, interrupt writes `<session>.interrupt.json` beside the

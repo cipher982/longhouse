@@ -19,12 +19,15 @@ async function loadMod(
     noTurnStep?: boolean;
     agents?: unknown[] | (() => Promise<unknown[]>);
     sessionUsage?: unknown | (() => Promise<unknown>);
+    /** The watcher streams nothing until this settles. */
+    gate?: Promise<void>;
   } = {},
 ) {
   loads += 1;
   const { register } = await import(`./claude-mod/hooks/register.js?copy=${loads}`);
   const hooks = new Map<string, Hook>();
-  register((event: string, hook: Hook) => {
+  register((event: string, matcherOrHook: unknown, maybeHook?: Hook) => {
+    const hook = (maybeHook ?? matcherOrHook) as Hook;
     // A Claude Code before `turn.step` has no such event to subscribe to.
     if (options.noTurnStep && event === "turn.step") throw new Error("unknown event: turn.step");
     hooks.set(event, hook);
@@ -72,6 +75,7 @@ async function loadMod(
       spawn: ({ argv }: { argv: string[] }) => {
         runs.push(argv);
         return (async function* () {
+          if (options.gate) await options.gate;
           for (const text of lines) yield { stream: "stdout", text };
           streamEnded();
         })();
@@ -129,7 +133,7 @@ async function loadMod(
   const acks = () =>
     runs
       .filter((argv) => argv[1] === "claude-owner-input" && argv[2] !== "watch")
-      .map((argv) => argv.slice(2).join(" "));
+      .map((argv) => argv.slice(2).join(" ").replace(/--instance \S+/, "--instance <copy>"));
   // One model request: `chunks` come up through the mod's turn.step hook, which
   // must hand every one on unchanged. Returns what the hook yielded.
   const step = async (e: Record<string, unknown>, chunks: Array<Record<string, unknown>>) => {
@@ -147,23 +151,64 @@ async function loadMod(
     return yielded;
   };
   const sent = () => fetches.flatMap((call) => JSON.parse(call.body) as Array<Record<string, unknown>>);
-  return { fire, settle, runs, submits, aborts, appended, acks, step, fetches, sent, hooks, resolveTurn: () => resolveTurn() };
+  return { $, fire, settle, runs, submits, aborts, appended, acks, step, fetches, sent, hooks, resolveTurn: () => resolveTurn() };
 }
 
 const line = (value: object) => JSON.stringify(value) + "\n";
+
+const QUESTIONS = [
+  {
+    question: "How should cube-ws fetch the image?",
+    header: "Image paste",
+    options: [
+      { label: "SSH on each paste", description: "ssh cinder per paste" },
+      { label: "Longhouse tunnel", description: "a tunnel per session" },
+    ],
+    multiSelect: false,
+  },
+];
+
+/** Opens AskUserQuestion through the mod, then lets the watcher stream `lines`. */
+async function askWith(lines: string[], terminal: Promise<unknown> = new Promise(() => undefined)) {
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const mod = await loadMod(lines, { gate });
+  await mod.fire("session.start");
+  const passedToTerminal: unknown[] = [];
+  const call = mod.hooks.get("tool.call")!(
+    mod.$,
+    { tool: "AskUserQuestion", tool_use_id: "toolu_q1", questions: QUESTIONS },
+    async (e) => {
+      passedToTerminal.push(e);
+      return terminal;
+    },
+  );
+  // Observed later by the test; a rejection is not unhandled meanwhile.
+  call.catch(() => undefined);
+  // The question is recorded before the dialog opens.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  open();
+  await mod.settle();
+  return { mod, call, passedToTerminal };
+}
 
 describe("Longhouse Claude mod", () => {
   it("runs the engine's watcher for this session", async () => {
     const mod = await loadMod([line({ kind: "ready" })]);
     await mod.fire("session.start");
     await mod.settle();
-    expect(mod.runs[0]).toEqual([
+    expect(mod.runs[0].slice(0, 6)).toEqual([
       "/opt/longhouse-engine",
       "claude-owner-input",
       "watch",
       "--session",
       "session-1",
+      "--instance",
     ]);
+    // Each copy of the module names itself, so a reload drops what the last copy held.
+    expect(mod.runs[0][6]).toMatch(/^[a-z0-9]+-[a-z0-9]+$/);
   });
 
   it("claims an owner message, submits it as the user's words, and records its turn", async () => {
@@ -390,7 +435,7 @@ describe("Longhouse Claude mod: source Claude Code accepts", () => {
   it("subscribes with a literal event name from the events Claude Code has", () => {
     const events = [...source.matchAll(/\bon\(\s*([^,)]*)/g)].map((match) => match[1].trim());
     expect(events.length).toBeGreaterThan(0);
-    for (const event of events) expect(event).toMatch(/^'(session\.start|turn\.(start|step|complete))'$/);
+    for (const event of events) expect(event).toMatch(/^'(session\.start|tool\.call|turn\.(start|step|complete))'$/);
   });
 });
 
@@ -541,5 +586,140 @@ describe("Longhouse Claude mod: live reply text", () => {
     const pieces = [text(0, "a"), text(0, "b"), text(0, "c")];
     const yielded = await mod.step({ turnId: "t1", index: 0, model: "m", messageCount: 1 }, pieces);
     expect(yielded).toEqual(pieces);
+  });
+});
+
+describe("Longhouse Claude mod: questions answered from the app", () => {
+  it("answers Claude's question from the app when the app answers first", async () => {
+    const { mod, call, passedToTerminal } = await askWith([
+      line({
+        id: "cmd-a",
+        kind: "answer",
+        state: "pending",
+        answer: { tool_use_id: "toolu_q1", answers: { "How should cube-ws fetch the image?": "SSH on each paste" } },
+      }),
+    ]);
+    expect(await call).toEqual({
+      result: { questions: QUESTIONS, answers: { "How should cube-ws fetch the image?": "SSH on each paste" } },
+    });
+    // The terminal dialog was opened as asked, unchanged.
+    expect(passedToTerminal).toEqual([{ tool: "AskUserQuestion", tool_use_id: "toolu_q1", questions: QUESTIONS }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mod.acks()).toEqual([
+      `question-open --tool-use-id toolu_q1 --instance <copy> --session session-1 stdin=${JSON.stringify(QUESTIONS)}`,
+      "claim --id cmd-a --session session-1",
+      "ack --id cmd-a --state answered --session session-1",
+      "question-close --tool-use-id toolu_q1 --session session-1",
+    ]);
+    // Longhouse hears the question closed even if Claude's PostToolUse never fires.
+    const reported = mod.runs.find((argv) => argv[1] === "claude-lifecycle-hook");
+    expect(JSON.parse(reported![2].slice("stdin=".length))).toEqual({
+      hook_event_name: "PostToolUse",
+      session_id: "provider-1",
+      cwd: "/work",
+      tool_name: "AskUserQuestion",
+      tool_use_id: "toolu_q1",
+      tool_input: { questions: QUESTIONS },
+    });
+  });
+
+  it("hands Claude a free-text answer, and a declined question as a refusal", async () => {
+    const free = await askWith([
+      line({ id: "cmd-f", kind: "answer", state: "pending", answer: { tool_use_id: "toolu_q1", response: "Let's go with your recommendation" } }),
+    ]);
+    expect(await free.call).toEqual({
+      result: { questions: QUESTIONS, answers: {}, response: "Let's go with your recommendation" },
+    });
+
+    const declined = await askWith([
+      line({ id: "cmd-d", kind: "answer", state: "pending", answer: { tool_use_id: "toolu_q1", declined: true } }),
+    ]);
+    expect(await declined.call).toEqual({
+      deny: "The user declined to answer this question from the Longhouse app.",
+    });
+    // The answer route records the decline; the mod must not record it as answered.
+    expect(declined.mod.runs.some((argv) => argv[1] === "claude-lifecycle-hook")).toBe(false);
+  });
+
+  it("keeps the terminal's answer when the terminal answers first", async () => {
+    const fromTerminal = { result: { questions: QUESTIONS, answers: { q: "Longhouse tunnel" } } };
+    const { mod, call } = await askWith([], Promise.resolve(fromTerminal));
+    expect(await call).toBe(fromTerminal);
+    expect(mod.runs.some((argv) => argv[1] === "claude-lifecycle-hook")).toBe(false);
+    expect(mod.acks().at(-1)).toBe("question-close --tool-use-id toolu_q1 --session session-1");
+  });
+
+  it("refuses an answer for a question that is no longer open", async () => {
+    const mod = await loadMod([
+      line({ id: "cmd-late", kind: "answer", state: "pending", answer: { tool_use_id: "toolu_gone", answers: {} } }),
+    ]);
+    await mod.fire("session.start");
+    await mod.settle();
+    expect(mod.acks()).toEqual([
+      "claim --id cmd-late --session session-1",
+      "ack --id cmd-late --state failed --detail the question was already answered in the terminal --session session-1",
+    ]);
+  });
+
+  it("leaves a subagent's question to the terminal", async () => {
+    const mod = await loadMod([]);
+    await mod.fire("session.start");
+    const result = await mod.hooks.get("tool.call")!(
+      mod.$,
+      { tool: "AskUserQuestion", tool_use_id: "toolu_s", questions: QUESTIONS, agentId: "sub-1" },
+      async () => "terminal",
+    );
+    expect(result).toBe("terminal");
+    expect(mod.acks()).toEqual([]);
+  });
+
+  it("refuses an app answer that arrives after the terminal answered", async () => {
+    let terminalAnswered: (value: unknown) => void = () => undefined;
+    const terminal = new Promise((resolve) => {
+      terminalAnswered = resolve;
+    });
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const mod = await loadMod(
+      [line({ id: "cmd-late", kind: "answer", state: "pending", answer: { tool_use_id: "toolu_q1", response: "too late" } })],
+      { gate },
+    );
+    await mod.fire("session.start");
+    const call = mod.hooks.get("tool.call")!(
+      mod.$,
+      { tool: "AskUserQuestion", tool_use_id: "toolu_q1", questions: QUESTIONS },
+      async () => terminal,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const fromTerminal = { result: { questions: QUESTIONS, answers: { q: "Longhouse tunnel" } } };
+    terminalAnswered(fromTerminal);
+    // The answer reaches the mod while the terminal's is being handed back.
+    open();
+    await mod.settle();
+    expect(await call).toBe(fromTerminal);
+    expect(mod.acks()).toContain(
+      "ack --id cmd-late --state failed --detail the question was already answered in the terminal --session session-1",
+    );
+    expect(mod.acks()).not.toContain("ack --id cmd-late --state answered --session session-1");
+  });
+
+  it("tells the sender when an earlier copy took the answer and reloaded", async () => {
+    const mod = await loadMod([
+      line({ id: "cmd-old", kind: "answer", state: "claimed", answer: { tool_use_id: "toolu_q1", response: "x" } }),
+    ]);
+    await mod.fire("session.start");
+    await mod.settle();
+    expect(mod.acks()).toEqual([
+      "ack --id cmd-old --state failed --detail the Longhouse mod reloaded before answering --session session-1",
+    ]);
+  });
+
+  it("passes a terminal failure through unchanged", async () => {
+    const failed = Promise.reject(new Error("dialog failed"));
+    failed.catch(() => undefined);
+    const { call } = await askWith([], failed);
+    await expect(call).rejects.toThrow("dialog failed");
   });
 });

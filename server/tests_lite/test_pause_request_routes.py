@@ -383,3 +383,145 @@ def test_unknown_pause_request_id_is_not_found(live_catalog, live_catalog_client
     )
 
     assert response.status_code == 404, response.text
+
+
+def _seed_claude_question(live: LiveCatalog) -> _SeededPause:
+    """Exactly what the Claude lifecycle hook ships when Longhouse's mod holds the dialog."""
+
+    owner_id = live.create_user(OWNER_EMAIL)
+    seeded = live.commit_session(owner_id=owner_id, device_id=DEVICE_ID)
+    session_id = seeded.session_id
+    live.rpc(
+        "session.runtime.apply.v2",
+        {"events": [_claude_question_event(session_id)]},
+    )
+    listed = live.rpc("interaction.list.v2", {"session_id": str(session_id), "status": "pending", "limit": 20})
+    assert listed["total"] == 1, listed
+    return _SeededPause(owner_id=owner_id, email=OWNER_EMAIL, session_id=session_id, interaction=listed["interactions"][0])
+
+
+def _claude_question_event(session_id: UUID, *, kind: str = "pause_request") -> dict:
+    payload = (
+        {
+            "provider_request_id": "toolu_01abc",
+            "provider_ref": {"source": "claude_hook", "reply_transport": "managed_push"},
+            "kind": "structured_question",
+            "title": "Claude needs an answer",
+            "summary": "Answer here or in the terminal.",
+            "request_payload": {"questions": [{k: v for k, v in _QUESTIONS[0].items() if k != "id"}]},
+            "can_respond": True,
+            "single_active": True,
+        }
+        if kind == "pause_request"
+        else {"provider_request_id": "toolu_01abc", "status": "resolved", "response_text": "Answered."}
+    )
+    return {
+        "runtime_key": f"claude:{session_id}",
+        "session_id": str(session_id),
+        "provider": "claude",
+        "device_id": DEVICE_ID,
+        "source": "claude_hook",
+        "kind": kind,
+        "phase": None,
+        "tool_name": "AskUserQuestion",
+        "occurred_at": datetime.now(UTC).isoformat(),
+        "dedupe_key": f"claude-hook:{kind}:{session_id}:toolu_01abc",
+        "payload": payload,
+    }
+
+
+def test_claude_question_closed_in_the_terminal_is_a_final_conflict(monkeypatch, live_catalog, live_catalog_client):  # noqa: F811
+    pause = _seed_claude_question(live_catalog)
+
+    async def closed(**kwargs):
+        return ManagedLocalSendResult(ok=False, error="Claude is no longer asking that question.", failure_reason="question_not_answerable")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", closed)
+    response = live_catalog_client.post(
+        f"/sessions/{pause.session_id}/pause-requests/{pause.interaction_id}/response",
+        json={"decision": "answer", "answers": {"question_1": ["SQLite"]}},
+        cookies=_browser_cookies(live_catalog, pause),
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "pause_request_not_answerable"
+    assert response.json()["detail"]["retryable"] is False
+
+
+def test_claude_answer_succeeds_when_the_provider_reported_the_close_first(monkeypatch, live_catalog, live_catalog_client):  # noqa: F811
+    pause = _seed_claude_question(live_catalog)
+
+    async def answered_and_reported(**kwargs):
+        # The mod answers and reports the close before the route resolves it.
+        live_catalog.rpc("session.runtime.apply.v2", {"events": [_claude_question_event(pause.session_id, kind="pause_resolution")]})
+        return _resolved_answer(request_key=pause.request_key, provider_request_id="toolu_01abc")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", answered_and_reported)
+    response = live_catalog_client.post(
+        f"/sessions/{pause.session_id}/pause-requests/{pause.interaction_id}/response",
+        json={"decision": "answer", "answers": {"question_1": ["SQLite"]}},
+        cookies=_browser_cookies(live_catalog, pause),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["pause_request"]["status"] == "resolved"
+
+
+def test_claude_question_the_mod_races_is_answered_through_the_machine(monkeypatch, live_catalog, live_catalog_client):  # noqa: F811
+    """Exactly what the Claude lifecycle hook ships when Longhouse's mod holds the dialog."""
+
+    owner_id = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(owner_id=owner_id, device_id=DEVICE_ID)
+    session_id = seeded.session_id
+    live_catalog.rpc(
+        "session.runtime.apply.v2",
+        {
+            "events": [
+                {
+                    "runtime_key": f"claude:{session_id}",
+                    "session_id": str(session_id),
+                    "provider": "claude",
+                    "device_id": DEVICE_ID,
+                    "source": "claude_hook",
+                    "kind": "pause_request",
+                    "phase": None,
+                    "tool_name": "AskUserQuestion",
+                    "occurred_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+                    "dedupe_key": f"claude-hook:open-question:{session_id}:toolu_01abc",
+                    "payload": {
+                        "provider_request_id": "toolu_01abc",
+                        "provider_ref": {"source": "claude_hook", "reply_transport": "managed_push"},
+                        "kind": "structured_question",
+                        "title": "Claude needs an answer",
+                        "summary": "Answer here or in the terminal.",
+                        "request_payload": {"questions": [{k: v for k, v in _QUESTIONS[0].items() if k != "id"}]},
+                        "can_respond": True,
+                        "single_active": True,
+                    },
+                }
+            ]
+        },
+    )
+    listed = live_catalog.rpc("interaction.list.v2", {"session_id": str(session_id), "status": "pending", "limit": 20})
+    assert listed["total"] == 1, listed
+    interaction = listed["interactions"][0]
+    pause = _SeededPause(owner_id=owner_id, email=OWNER_EMAIL, session_id=session_id, interaction=interaction)
+    assert interaction["can_respond"] is True
+    calls: list[dict[str, object]] = []
+
+    async def fake_answer(**kwargs):
+        calls.append(kwargs)
+        return _resolved_answer(request_key=pause.request_key, provider_request_id="toolu_01abc")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
+
+    response = live_catalog_client.post(
+        f"/sessions/{session_id}/pause-requests/{pause.interaction_id}/response",
+        json={"decision": "answer", "answers": {"question_1": ["SQLite"]}},
+        cookies=_browser_cookies(live_catalog, pause),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "resolved"
+    assert len(calls) == 1
+    # The tool_use_id goes with the answer, so it can never land on a newer question.
+    assert calls[0]["provider_request_id"] == "toolu_01abc"
+    assert calls[0]["answers"] == {"question_1": ["SQLite"]}

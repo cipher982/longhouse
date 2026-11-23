@@ -2793,14 +2793,14 @@ mod tests {
             &test_config(),
         )
         .await;
-        assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["pause_response"]["status"], "resolved");
-        let request = rx.recv().await.unwrap();
-        let body: Value = serde_json::from_str(&request.body).unwrap();
-        assert_eq!(body["content"], "Use the smaller plan");
-        assert_eq!(body["meta"]["intent"], "pause_response");
-        assert_eq!(body["meta"]["request_key"], "pause-key");
-        assert_eq!(body["meta"]["decision"], "answer");
+        // No mod holds a question open: an answer could only be a chat
+        // message, which cannot close Claude's dialog, so it is refused.
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "question_not_answerable");
+        assert!(
+            rx.try_recv().is_err(),
+            "a pause answer must never reach the channel as a message"
+        );
 
         if let Some(value) = old_home {
             std::env::set_var("HOME", value);
@@ -3905,19 +3905,48 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
         });
     }
 
+    fn open_claude_question() -> crate::claude_owner_input::OpenQuestion {
+        crate::claude_owner_input::OpenQuestion {
+            tool_use_id: "toolu_01".to_string(),
+            instance: "copy-1".to_string(),
+            questions: json!([
+                {"question": "Which timeline?", "header": "Timeline", "options": [], "multiSelect": true},
+                {"question": "What counts as success?", "header": "Success", "options": [], "multiSelect": false},
+            ]),
+            opened_at: "2026-11-23T00:00:00Z".to_string(),
+        }
+    }
+
     #[test]
-    fn claude_pause_response_text_derives_structured_answers() {
+    fn claude_question_answer_keys_answers_by_question_text() {
         let payload = json!({
             "answers": {
-                "timeline": ["Two weeks", "Show HN"],
-                "success_metric": "Real users + feedback",
+                "question_1": ["Two weeks", "Show HN"],
+                "What counts as success?": "Real users",
             },
         });
+        let answer = claude_question_answer(&payload, &open_claude_question()).unwrap();
+        assert_eq!(answer.tool_use_id, "toolu_01");
+        assert_eq!(answer.answers["Which timeline?"], "Two weeks, Show HN");
+        assert_eq!(answer.answers["What counts as success?"], "Real users");
+        assert_eq!(answer.response, None);
+        assert!(!answer.declined);
+    }
 
-        assert_eq!(
-            claude_pause_response_text(&payload).unwrap(),
-            "success_metric: Real users + feedback; timeline: Two weeks, Show HN"
-        );
+    #[test]
+    fn claude_question_answer_takes_free_text_and_declines() {
+        let open = open_claude_question();
+        let free = claude_question_answer(&json!({"message": " ship it "}), &open).unwrap();
+        assert_eq!(free.response.as_deref(), Some("ship it"));
+        assert!(free.answers.is_empty());
+
+        let declined = claude_question_answer(&json!({"decision": "reject"}), &open).unwrap();
+        assert!(declined.declined);
+
+        let unknown = claude_question_answer(&json!({"answers": {"question_9": "x"}}), &open);
+        assert_eq!(unknown.unwrap_err().code, "invalid_command");
+        let empty = claude_question_answer(&json!({}), &open);
+        assert_eq!(empty.unwrap_err().code, "invalid_command");
     }
 
     #[test]

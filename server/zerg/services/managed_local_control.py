@@ -944,6 +944,7 @@ async def answer_pause_request_on_managed_local_session(
         return ManagedLocalSendResult(
             ok=False,
             error=result.error or "Failed to dispatch pause response command",
+            failure_reason=result.failure_reason,
         )
 
     data = result.data or {}

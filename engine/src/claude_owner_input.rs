@@ -53,15 +53,31 @@ pub const MOD_NAME: &str = "longhouse";
 pub const ENGINE_ENV: &str = "LONGHOUSE_OWNER_INPUT_ENGINE";
 
 const ROUTE_FILE: &str = "route.json";
+const QUESTION_FILE: &str = "question.json";
+const WATCHER_FILE: &str = "watcher.json";
 const LOCK_FILE: &str = "watch.lock";
 const LEDGER_FILE: &str = "ledger.jsonl";
 const PENDING_DIR: &str = "pending";
 const CLAIMED_DIR: &str = "claimed";
 
 /// Ledger states that end an input. A claimed file is removed once one lands.
-const TERMINAL_STATES: &[&str] = &["delivered", "failed", "aborted", "no_turn", "withdrawn"];
+const TERMINAL_STATES: &[&str] = &[
+    "delivered",
+    "failed",
+    "aborted",
+    "no_turn",
+    "answered",
+    "withdrawn",
+];
 /// States the mod may record with `ack`. `claimed` goes through [`claim`].
-pub const ACK_STATES: &[&str] = &["submitted", "delivered", "failed", "aborted", "no_turn"];
+pub const ACK_STATES: &[&str] = &[
+    "submitted",
+    "delivered",
+    "failed",
+    "aborted",
+    "no_turn",
+    "answered",
+];
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// After the mod claimed an input it submits it at once; this bounds how long
@@ -228,10 +244,13 @@ pub fn watcher_attached(_dir: &Path) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerInputItem {
     pub id: String,
-    /// `send` or `abort`.
+    /// `send`, `abort` or `answer`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// For `answer`: the question it answers and how.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<QuestionAnswer>,
     pub enqueued_at: String,
 }
 
@@ -403,6 +422,8 @@ pub struct WatchLine {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<QuestionAnswer>,
     /// `pending`: claim and submit it. `claimed`: an earlier copy of the mod
     /// took it; do not submit it again, only record when its turn starts.
     pub state: String,
@@ -412,7 +433,12 @@ pub struct WatchLine {
 /// says stop. Holds the lock for its whole life: one watcher per session, and a
 /// free lock tells the engine no mod is attached.
 #[cfg(unix)]
-pub fn watch(dir: &Path, out: &mut impl Write, keep: impl Fn() -> bool) -> io::Result<()> {
+pub fn watch(
+    dir: &Path,
+    instance: &str,
+    out: &mut impl Write,
+    keep: impl Fn() -> bool,
+) -> io::Result<()> {
     use std::collections::HashSet;
     use std::os::fd::AsRawFd;
 
@@ -428,6 +454,7 @@ pub fn watch(dir: &Path, out: &mut impl Write, keep: impl Fn() -> bool) -> io::R
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    claim_watcher_instance(dir, instance)?;
 
     let mut offered = HashSet::new();
     // Inputs an earlier copy of the mod claimed and has not finished: this copy
@@ -438,7 +465,10 @@ pub fn watch(dir: &Path, out: &mut impl Write, keep: impl Fn() -> bool) -> io::R
         .map(|entry| entry.id)
         .collect();
     for item in items_in(dir, CLAIMED_DIR) {
-        if item.kind == "send" && !finished.contains(&item.id) {
+        // A claimed answer is re-offered so the copy that holds the question
+        // now can say it never answered it; otherwise its sender would wait
+        // for an outcome nobody will report.
+        if (item.kind == "send" || item.kind == "answer") && !finished.contains(&item.id) {
             emit(out, &item, "claimed")?;
         }
         offered.insert(item.id);
@@ -463,6 +493,7 @@ fn emit(out: &mut impl Write, item: &OwnerInputItem, state: &str) -> io::Result<
         id: item.id.clone(),
         kind: item.kind.clone(),
         text: item.text.clone(),
+        answer: item.answer.clone(),
         state: state.to_string(),
     };
     writeln!(out, "{}", serde_json::to_string(&line)?)?;
@@ -540,6 +571,7 @@ pub fn deliver_send(
             id: id.to_string(),
             kind: "send".to_string(),
             text: Some(text.to_string()),
+            answer: None,
             enqueued_at: chrono::Utc::now().to_rfc3339(),
         },
     )?;
@@ -584,6 +616,7 @@ pub fn deliver_abort(
             id: id.to_string(),
             kind: "abort".to_string(),
             text: None,
+            answer: None,
             enqueued_at: chrono::Utc::now().to_rfc3339(),
         },
     )?;
@@ -595,6 +628,142 @@ pub fn deliver_abort(
     }
     if entries.iter().any(|entry| entry.state == "no_turn") {
         return Ok(AbortReceipt::NoTurn);
+    }
+    let detail = entries
+        .iter()
+        .find(|entry| entry.state == "failed")
+        .and_then(|entry| entry.detail.clone())
+        .unwrap_or_else(|| "no reason given".to_string());
+    Err(DeliveryError::Failed(detail))
+}
+
+// --- A question Claude is asking --------------------------------------------
+//
+// While Claude's AskUserQuestion dialog is open the mod races it against an
+// answer from Longhouse: the terminal and the app can both answer, and the
+// first one wins. The mod records the open question here so the lifecycle hook
+// can mark it answerable and the engine can route an answer, or an owner
+// message sent meanwhile, to it. Claude asks one question at a time.
+
+/// The question the mod has open, as the model asked it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenQuestion {
+    pub tool_use_id: String,
+    /// The copy of the mod that holds the dialog. Only that copy can answer
+    /// it: a reloaded mod starts with no open dialogs.
+    #[serde(default)]
+    pub instance: String,
+    /// AskUserQuestion's `questions` input.
+    pub questions: serde_json::Value,
+    pub opened_at: String,
+}
+
+/// How a question is answered: `answers` maps each question's text to the
+/// chosen label (labels comma-joined for multi-select), `response` is free
+/// text in place of the structured answers, and `declined` turns the question
+/// down.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionAnswer {
+    pub tool_use_id: String,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub answers: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub declined: bool,
+}
+
+pub fn open_question(dir: &Path, question: &OpenQuestion) -> io::Result<()> {
+    if !valid_id(&question.tool_use_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "tool_use_id {:?} is not a plain token",
+                question.tool_use_id
+            ),
+        ));
+    }
+    fs::create_dir_all(dir)?;
+    write_atomic(&dir.join(QUESTION_FILE), &serde_json::to_vec(question)?)
+}
+
+/// Close the record only if it is still this question's.
+pub fn close_question(dir: &Path, tool_use_id: &str) -> io::Result<()> {
+    let path = dir.join(QUESTION_FILE);
+    match read_question_file(&path) {
+        Some(open) if open.tool_use_id == tool_use_id => match fs::remove_file(&path) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
+/// The question the session's current mod copy has open. A record another
+/// copy left behind (the mod reloaded, or Claude restarted) is not open:
+/// nothing could answer it. The current copy is the one whose watcher started
+/// last; a watcher restarting inside the same copy keeps its questions.
+pub fn open_question_record(dir: &Path) -> Option<OpenQuestion> {
+    let open = read_question_file(&dir.join(QUESTION_FILE))?;
+    let current = current_instance(dir)?;
+    (!open.instance.is_empty() && open.instance == current).then_some(open)
+}
+
+fn current_instance(dir: &Path) -> Option<String> {
+    let watcher: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join(WATCHER_FILE)).ok()?).ok()?;
+    watcher
+        .get("instance")
+        .and_then(serde_json::Value::as_str)
+        .filter(|instance| !instance.is_empty())
+        .map(str::to_owned)
+}
+
+/// Record which mod copy owns the watcher, and drop a question another copy
+/// left open: that copy is gone and its dialog with it.
+fn claim_watcher_instance(dir: &Path, instance: &str) -> io::Result<()> {
+    if instance.is_empty() {
+        return Ok(());
+    }
+    write_atomic(
+        &dir.join(WATCHER_FILE),
+        &serde_json::to_vec(&json!({"instance": instance}))?,
+    )?;
+    if let Some(open) = read_question_file(&dir.join(QUESTION_FILE)) {
+        if open.instance != instance {
+            match fs::remove_file(dir.join(QUESTION_FILE)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_question_file(path: &Path) -> Option<OpenQuestion> {
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+/// Hand an answer to the mod and wait until it answered the open question.
+pub fn deliver_answer(
+    dir: &Path,
+    id: &str,
+    answer: &QuestionAnswer,
+    budget: Duration,
+) -> Result<(), DeliveryError> {
+    let pending = enqueue_once(
+        dir,
+        &OwnerInputItem {
+            id: id.to_string(),
+            kind: "answer".to_string(),
+            text: None,
+            answer: Some(answer.clone()),
+            enqueued_at: chrono::Utc::now().to_rfc3339(),
+        },
+    )?;
+    let entries = await_states(dir, id, &pending, budget, &["answered", "failed"])?;
+    if entries.iter().any(|entry| entry.state == "answered") {
+        return Ok(());
     }
     let detail = entries
         .iter()
@@ -685,8 +854,23 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// A stand-in for the mod in tests: runs the real watcher and answers every
 /// pending input it streams with `outcome` (`submitted` for a send,
 /// `aborted`/`no_turn` for an abort), until the returned guard drops.
+/// The mod copy a [`spawn_fake_mod`] watcher stands for.
+#[cfg(all(test, unix))]
+pub(crate) const FAKE_MOD_INSTANCE: &str = "fake-mod";
+
 #[cfg(all(test, unix))]
 pub(crate) fn spawn_fake_mod(dir: PathBuf, outcome: &'static str) -> FakeMod {
+    spawn_fake_mod_answering(dir, outcome, outcome)
+}
+
+/// A [`spawn_fake_mod`] that reports `answer_outcome` for question answers and
+/// `outcome` for everything else.
+#[cfg(all(test, unix))]
+pub(crate) fn spawn_fake_mod_answering(
+    dir: PathBuf,
+    outcome: &'static str,
+    answer_outcome: &'static str,
+) -> FakeMod {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -713,7 +897,7 @@ pub(crate) fn spawn_fake_mod(dir: PathBuf, outcome: &'static str) -> FakeMod {
     let watch_dir = dir.clone();
     let watcher = std::thread::spawn(move || {
         let mut out = Lines(lines_tx, Vec::new());
-        let _ = watch(&watch_dir, &mut out, || {
+        let _ = watch(&watch_dir, FAKE_MOD_INSTANCE, &mut out, || {
             watch_running.load(Ordering::SeqCst)
         });
     });
@@ -727,6 +911,11 @@ pub(crate) fn spawn_fake_mod(dir: PathBuf, outcome: &'static str) -> FakeMod {
                 continue;
             };
             if input.state == "pending" && claim(&dir, &input.id).unwrap_or(false) {
+                let outcome = if input.kind == "answer" {
+                    answer_outcome
+                } else {
+                    outcome
+                };
                 let turn = (outcome == "aborted").then_some("turn-1");
                 let _ = append_ledger(&dir, &input.id, outcome, None, turn);
             }
@@ -889,6 +1078,7 @@ mod tests {
             id: "cmd-1".into(),
             kind: "send".into(),
             text: Some("hello".into()),
+            answer: None,
             enqueued_at: "t".into(),
         };
         enqueue(&dir, &item).unwrap();
@@ -933,6 +1123,7 @@ mod tests {
                 id: "a-x".into(),
                 kind: "send".into(),
                 text: Some("one".into()),
+                answer: None,
                 enqueued_at: "t".into(),
             },
         )
@@ -950,6 +1141,7 @@ mod tests {
                 id: id.into(),
                 kind: "send".into(),
                 text: Some("x".into()),
+                answer: None,
                 enqueued_at: "t".into(),
             };
             assert!(enqueue(&dir, &item).is_err(), "{id:?} was accepted");
@@ -966,6 +1158,7 @@ mod tests {
                 id: "cmd-1".into(),
                 kind: "send".into(),
                 text: Some("hello".into()),
+                answer: None,
                 enqueued_at: "t".into(),
             },
         )
@@ -1035,6 +1228,114 @@ mod tests {
         mod_thread.join().unwrap();
     }
 
+    fn question(tool_use_id: &str) -> OpenQuestion {
+        OpenQuestion {
+            tool_use_id: tool_use_id.to_string(),
+            instance: FAKE_MOD_INSTANCE.to_string(),
+            questions: json!([{"question": "Which?", "options": []}]),
+            opened_at: "2026-11-23T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_question_is_open_only_while_a_mod_can_answer_it() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        // No mod copy has started a watcher: nothing could answer it.
+        open_question(&dir, &question("toolu_1")).unwrap();
+        assert_eq!(open_question_record(&dir), None);
+        let _mod = spawn_fake_mod(dir.clone(), "answered").attached(&dir);
+        assert_eq!(open_question_record(&dir), Some(question("toolu_1")));
+        // Its watcher restarting inside the same copy keeps the question.
+        claim_watcher_instance(&dir, FAKE_MOD_INSTANCE).unwrap();
+        assert!(open_question_record(&dir).is_some());
+        // Another call's close leaves this question open; its own closes it.
+        close_question(&dir, "toolu_other").unwrap();
+        assert!(open_question_record(&dir).is_some());
+        close_question(&dir, "toolu_1").unwrap();
+        assert_eq!(open_question_record(&dir), None);
+        assert!(open_question(&dir, &question("../escape")).is_err());
+    }
+
+    #[test]
+    fn a_reloaded_mod_drops_the_question_its_previous_copy_held() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        fs::create_dir_all(&dir).unwrap();
+        claim_watcher_instance(&dir, "copy-1").unwrap();
+        let held = OpenQuestion {
+            instance: "copy-1".to_string(),
+            ..question("toolu_1")
+        };
+        open_question(&dir, &held).unwrap();
+        assert_eq!(open_question_record(&dir), Some(held));
+        // The mod reloads: the new copy's watcher starts. The old dialog went
+        // with the old copy, so owner messages are messages again.
+        claim_watcher_instance(&dir, "copy-2").unwrap();
+        assert_eq!(open_question_record(&dir), None);
+        assert!(!dir.join(QUESTION_FILE).exists());
+    }
+
+    #[test]
+    fn an_answer_reaches_the_mod_with_the_question_it_answers() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        let _mod = spawn_fake_mod(dir.clone(), "answered").attached(&dir);
+        let answer = QuestionAnswer {
+            tool_use_id: "toolu_1".to_string(),
+            answers: [("Which?".to_string(), "A, B".to_string())].into(),
+            ..QuestionAnswer::default()
+        };
+        deliver_answer(&dir, "cmd-a", &answer, Duration::from_secs(5)).unwrap();
+        let states: Vec<String> = states_for(&dir, "cmd-a")
+            .into_iter()
+            .map(|e| e.state)
+            .collect();
+        assert_eq!(states, ["claimed", "answered"]);
+        // An answered input is finished, so its claimed file is gone.
+        assert!(items_in(&dir, CLAIMED_DIR).is_empty());
+
+        // The watcher hands the mod the answer with the question it answers.
+        let mut out = Vec::new();
+        let item = OwnerInputItem {
+            id: "cmd-b".to_string(),
+            kind: "answer".to_string(),
+            text: None,
+            answer: Some(answer.clone()),
+            enqueued_at: "2026-11-23T00:00:00Z".to_string(),
+        };
+        emit(&mut out, &item, "pending").unwrap();
+        let line: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(
+            line,
+            json!({
+                "id": "cmd-b",
+                "kind": "answer",
+                "state": "pending",
+                "answer": {"tool_use_id": "toolu_1", "answers": {"Which?": "A, B"}},
+            })
+        );
+    }
+
+    #[test]
+    fn an_answer_the_mod_could_not_use_is_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = spool_dir(root.path(), "s1");
+        let mod_thread = fake_mod(dir.clone(), "failed");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !watcher_attached(&dir) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let answer = QuestionAnswer {
+            tool_use_id: "toolu_1".to_string(),
+            response: Some("go".to_string()),
+            ..QuestionAnswer::default()
+        };
+        let error = deliver_answer(&dir, "cmd-a", &answer, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, DeliveryError::Failed("because".into()));
+        mod_thread.join().unwrap();
+    }
+
     #[test]
     fn send_without_a_mod_is_withdrawn_and_never_offered() {
         let root = tempfile::tempdir().unwrap();
@@ -1065,6 +1366,7 @@ mod tests {
             id: "cmd-1".into(),
             kind: "send".into(),
             text: Some("hello".into()),
+            answer: None,
             enqueued_at: "t".into(),
         };
         enqueue(&dir, &item).unwrap();
@@ -1156,6 +1458,7 @@ mod tests {
             id: "old".into(),
             kind: "send".into(),
             text: Some("claimed earlier".into()),
+            answer: None,
             enqueued_at: "t".into(),
         };
         enqueue(&dir, &base).unwrap();
@@ -1165,6 +1468,7 @@ mod tests {
             &OwnerInputItem {
                 id: "new".into(),
                 text: Some("fresh".into()),
+                answer: None,
                 ..base.clone()
             },
         )
@@ -1174,6 +1478,7 @@ mod tests {
             &OwnerInputItem {
                 id: "done".into(),
                 text: Some("finished".into()),
+                answer: None,
                 ..base
             },
         )
@@ -1183,7 +1488,7 @@ mod tests {
 
         let passes = std::sync::atomic::AtomicUsize::new(0);
         let mut out = Vec::new();
-        watch(&dir, &mut out, || {
+        watch(&dir, "test-copy", &mut out, || {
             passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3
         })
         .unwrap();

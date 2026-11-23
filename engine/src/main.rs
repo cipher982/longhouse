@@ -199,6 +199,7 @@ fn run_claude_owner_input(command: ClaudeOwnerInputCommands) -> anyhow::Result<(
     match command {
         ClaudeOwnerInputCommands::Watch {
             session,
+            instance,
             state_root,
         } => {
             let dir = dir(&session, state_root)?;
@@ -211,7 +212,7 @@ fn run_claude_owner_input(command: ClaudeOwnerInputCommands) -> anyhow::Result<(
             #[cfg(not(unix))]
             let keep = || true;
             let mut out = std::io::stdout().lock();
-            match claude_owner_input::watch(&dir, &mut out, keep) {
+            match claude_owner_input::watch(&dir, &instance, &mut out, keep) {
                 Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
                 other => other.map_err(Into::into),
             }
@@ -224,6 +225,35 @@ fn run_claude_owner_input(command: ClaudeOwnerInputCommands) -> anyhow::Result<(
             if !claude_owner_input::claim(&dir(&session, state_root)?, &id)? {
                 std::process::exit(3);
             }
+            Ok(())
+        }
+        ClaudeOwnerInputCommands::QuestionOpen {
+            session,
+            tool_use_id,
+            instance,
+            state_root,
+        } => {
+            let mut raw = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)?;
+            let questions: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| anyhow::anyhow!("stdin is not the questions JSON: {e}"))?;
+            claude_owner_input::open_question(
+                &dir(&session, state_root)?,
+                &claude_owner_input::OpenQuestion {
+                    tool_use_id,
+                    instance,
+                    questions,
+                    opened_at: chrono::Utc::now().to_rfc3339(),
+                },
+            )?;
+            Ok(())
+        }
+        ClaudeOwnerInputCommands::QuestionClose {
+            session,
+            tool_use_id,
+            state_root,
+        } => {
+            claude_owner_input::close_question(&dir(&session, state_root)?, &tool_use_id)?;
             Ok(())
         }
         ClaudeOwnerInputCommands::Ack {
@@ -1085,6 +1115,11 @@ enum ClaudeOwnerInputCommands {
         #[arg(long)]
         session: String,
 
+        /// The mod copy running this watcher; questions another copy left
+        /// open are dropped when it starts
+        #[arg(long, default_value = "")]
+        instance: String,
+
         #[arg(long)]
         state_root: Option<PathBuf>,
     },
@@ -1096,6 +1131,35 @@ enum ClaudeOwnerInputCommands {
 
         #[arg(long)]
         id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Record the AskUserQuestion dialog the mod has open; reads its
+    /// `questions` input as JSON on stdin
+    QuestionOpen {
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        tool_use_id: String,
+
+        /// The mod copy holding the dialog
+        #[arg(long)]
+        instance: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Clear the open question record if it is still this call's
+    QuestionClose {
+        #[arg(long)]
+        session: String,
+
+        #[arg(long)]
+        tool_use_id: String,
 
         #[arg(long)]
         state_root: Option<PathBuf>,

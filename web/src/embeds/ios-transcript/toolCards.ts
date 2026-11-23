@@ -207,7 +207,7 @@ export function question(item: TranscriptItem): string {
         <article class="row question">
           <div class="question-eyebrow">Needs answer</div>
           <div class="question-title">${escapeHtml(item.title || "Question")}</div>
-          <div class="question-subtitle">${escapeHtml(item.subtitle || "Answer in terminal")}</div>
+          <div class="question-subtitle">${escapeHtml(item.subtitle || "Waiting for your answer")}</div>
           <div class="question-body">${escapeHtml(item.body || "Claude is waiting for your answer.")}</div>
           ${options ? `<div class="question-options" aria-label="Answer options">${options}</div>` : ""}
         </article>
