@@ -13,6 +13,7 @@ The code is split by responsibility; this module is the command line and re-expo
 - ``terminal_truth_providers``: provider drivers, per-provider home setup, the scratch Runtime Host and scripted model;
 - ``terminal_truth_scenarios``: one cell, a pass of cells sharing a host and engine, a suite (one cell cold, the rest shared);
 - ``terminal_truth_verdicts``: stages, the verdict rule, the ledger expectations, results and tables;
+- ``terminal_truth_question``: Claude's AskUserQuestion answered from Longhouse (the question and question_steer scenarios);
 - ``terminal_truth_mutations``: the five 2026-11-11 defects put back, each of which must fail its cell.
 
 Expectations (live reply text expected, known-bad with a reason, not measurable) come from ``live_stream_signals`` in
@@ -98,6 +99,9 @@ from zerg.qa.terminal_truth_pty import screen_text  # noqa: F401 - re-exported: 
 from zerg.qa.terminal_truth_pty import (  # noqa: F401 - re-exported: this module is the entry point and the public surface
     terminal_first_seen,
 )
+from zerg.qa.terminal_truth_question import SCENARIOS as QUESTION_SCENARIOS
+from zerg.qa.terminal_truth_question import render_question
+from zerg.qa.terminal_truth_question import run_question_suite
 from zerg.qa.terminal_truth_scenarios import (  # noqa: F401 - re-exported: this module is the entry point and the public surface
     HOME_EXCLUSIVE,
 )
@@ -187,7 +191,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument(
         "--reasoning-tokens", type=int, default=5, help="reasoning words streamed before the reply, on every protocol (0 turns it off)"
     )
-    run.add_argument("--scenario", choices=["long_reply", "two_message", "thinking", "tool", "subagent"], default="long_reply")
+    run.add_argument(
+        "--scenario", choices=["long_reply", "two_message", "thinking", "tool", "subagent", *QUESTION_SCENARIOS], default="long_reply"
+    )
     run.add_argument(
         "--kinds-mutation",
         choices=["no_thinking", "no_tool", "no_subagent"],
@@ -317,6 +323,25 @@ def main(argv: list[str] | None = None) -> int:
     for item in args.ready_text:
         provider, _, text = item.partition("=")
         drivers[provider] = dataclasses.replace(drivers[provider], ready_text=text)
+    if args.scenario in QUESTION_SCENARIOS:  # a question answered from Longhouse: pass or fail per cell, no timing
+        question_results = run_question_suite(
+            declared,
+            engine=args.engine,
+            longhouse_cli=args.longhouse_cli,
+            keep=args.keep,
+            ready_timeout=args.ready_timeout,
+            drivers=drivers,
+            host_environment=host_environment,
+            engine_environment=engine_environment,
+            log=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+        print(render_question(question_results))
+        if args.out:
+            args.out.write_text(json.dumps(question_results, indent=2) + "\n")
+        # A run that measured nothing proved nothing: every declared cell not_measured is a failure too.
+        code = 1 if any(r["outcome"] == "fail" for r in question_results) or all(r["outcome"] != "pass" for r in question_results) else 0
+        print(f"\nterminal truth {args.scenario}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
+        return code
     if args.scenario in SCENARIOS:  # the live-kinds scenarios: measurements with preflight checks, no budgets yet
         kind_results = run_kinds_suite(
             declared,

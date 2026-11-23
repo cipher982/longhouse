@@ -7,7 +7,7 @@
 A cell is one of:
   * a Terminal Truth cell, ``provider/mode`` with an optional ``:scenario`` (long_reply when omitted), for example
     ``claude/helm``, ``claude/helm:tool``, ``codex/console:thinking``. Scenarios: long_reply, two_message, thinking,
-    tool, subagent. Judged by ``zerg.qa.terminal_truth`` exactly as the Terminal Truth gate judges it.
+    tool, subagent, question, question_steer (Claude Helm only: AskUserQuestion answered from Longhouse). Judged by ``zerg.qa.terminal_truth`` exactly as the Terminal Truth gate judges it.
   * a factory producer cell, an assertion id such as ``pi_helm_steer_active``, run by its producer
     (``server/zerg/qa``) against a scratch Runtime Host with the credential-free scripted model. A producer runs
     its whole lifecycle once and every named cell of it is read from that one result.
@@ -67,7 +67,7 @@ PROOF_BASE = ".cache/longhouse-prove"  # relative to the proof host user's home
 LOCAL_OUT = Path("/tmp/agents/prove")
 ORIGIN_URL = "https://github.com/cipher982/longhouse.git"
 
-TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent")
+TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent", "question", "question_steer")
 KIND_SCENARIOS = ("thinking", "tool", "subagent")
 TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity")
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")

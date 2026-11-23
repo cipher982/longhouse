@@ -422,10 +422,10 @@ class RuntimeApi:
         finally:
             connection.close()
 
-    def post_raw(self, path: str, payload: dict[str, Any]) -> tuple[int, str]:
+    def post_raw(self, path: str, payload: dict[str, Any], *, browser: bool = False) -> tuple[int, str]:
         connection = http.client.HTTPConnection(self.host, self.port, timeout=30)
         try:
-            headers = {**self._headers(False), "Content-Type": "application/json"}
+            headers = {**self._headers(browser), "Content-Type": "application/json"}
             connection.request("POST", path, json.dumps(payload), headers)
             response = connection.getresponse()
             return response.status, response.read().decode("utf-8", errors="replace")
