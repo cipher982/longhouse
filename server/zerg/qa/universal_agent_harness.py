@@ -2953,7 +2953,9 @@ class UniversalProviderAdapter:
                         "answers": {"approach": "Small adapter path"},
                         "message": answer_text,
                     }
-                    if self.config.provider == "opencode":
+                    # The provider's own id for the wait travels with every
+                    # answer that has one, so it can never land on a newer wait.
+                    if raw_active.get("provider_request_id"):
                         expected_payload["provider_request_id"] = raw_active.get("provider_request_id")
                     # The command must carry the grant minted from the bound lease.
                     sent_payload = {key: value for key, value in (request.get("payload") or {}).items() if key != "longhouse_control_grant"}
