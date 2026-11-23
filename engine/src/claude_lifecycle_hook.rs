@@ -393,20 +393,62 @@ fn evaluate_input_outcome(
             }
         }
     }
-    if event == "SessionStart"
-        && managed_session_id.is_some()
-        && coordination_bootstrap_enabled()
-        && !hook_output.contains_key("hookSpecificOutput")
-    {
-        hook_output.insert(
-            "hookSpecificOutput".to_string(),
-            json!({
-                "hookEventName": "SessionStart",
-                "additionalContext": session_start_awareness(),
-            }),
-        );
+    if event == "SessionStart" {
+        let mut context = Vec::new();
+        if managed_session_id.is_some()
+            && coordination_bootstrap_enabled()
+            && !hook_output.contains_key("hookSpecificOutput")
+        {
+            context.push(session_start_awareness());
+        }
+        context.extend(prelaunch_session_context(input));
+        add_session_start_context(&mut hook_output, context);
     }
     (non_empty_output(hook_output), observe_result)
+}
+
+/// The prelaunch hook's output for the session `longhouse claude` started,
+/// on its first start and when it is resumed (not after `/clear` or a
+/// compaction). See `prelaunch.rs`.
+fn prelaunch_session_context(input: &Value) -> Option<String> {
+    if !matches!(
+        string(input, "source").as_deref(),
+        None | Some("startup" | "resume")
+    ) {
+        return None;
+    }
+    let text = crate::prelaunch::read_context(
+        std::env::var_os(crate::prelaunch::CONTEXT_ENV),
+        std::env::var("LONGHOUSE_PROVIDER_SESSION_ID")
+            .ok()
+            .as_deref(),
+        string(input, "session_id").as_deref(),
+    )?;
+    Some(format!(
+        "Output of this machine's prelaunch hook, which ran before this session started:\n\n{text}"
+    ))
+}
+
+/// Append SessionStart context after whatever this hook already says.
+fn add_session_start_context(
+    hook_output: &mut serde_json::Map<String, Value>,
+    context: Vec<String>,
+) {
+    if context.is_empty() {
+        return;
+    }
+    let addition = context.join("\n\n");
+    let specific = hook_output
+        .entry("hookSpecificOutput")
+        .or_insert_with(|| json!({ "hookEventName": "SessionStart" }));
+    let Some(specific) = specific.as_object_mut() else {
+        return;
+    };
+    let combined = match specific.get("additionalContext").and_then(Value::as_str) {
+        Some(existing) if !existing.is_empty() => format!("{existing}\n\n{addition}"),
+        _ => addition,
+    };
+    specific.insert("additionalContext".to_string(), Value::String(combined));
 }
 
 /// Managed sessions report under the Longhouse id, so without this the
@@ -1929,6 +1971,118 @@ fn coordination_bootstrap_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run a SessionStart through the hook with the environment `longhouse
+    /// claude` gives its provider: the prelaunch context file and the provider
+    /// session it belongs to, managed or not, with the bootstrap on or off.
+    fn session_start_with_prelaunch(
+        managed: bool,
+        bootstrap: Option<&str>,
+        context: Option<&std::path::Path>,
+        source: &str,
+        native_session_id: &str,
+    ) -> Option<Value> {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = crate::console_adapter::agent_state_guard();
+        let os = |value: &str| Some(std::ffi::OsString::from(value));
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(home.path().as_os_str().to_owned())),
+                (
+                    "LONGHOUSE_MANAGED_SESSION_ID",
+                    managed.then(|| "lh-prelaunch-1".into()),
+                ),
+                (
+                    "LONGHOUSE_MANAGED_PROVIDER",
+                    managed.then(|| "claude".into()),
+                ),
+                (
+                    "LONGHOUSE_RUN_ID",
+                    managed.then(|| "run-prelaunch-1".into()),
+                ),
+                ("LONGHOUSE_PROVIDER_SESSION_ID", os("native-launched")),
+                ("LONGHOUSE_COORDINATION_BOOTSTRAP", bootstrap.and_then(os)),
+                (
+                    crate::prelaunch::CONTEXT_ENV,
+                    context.map(|path| path.as_os_str().to_owned()),
+                ),
+            ],
+            || {
+                evaluate_input(
+                    &json!({
+                        "hook_event_name": "SessionStart",
+                        "session_id": native_session_id,
+                        "cwd": home.path(),
+                        "source": source,
+                    }),
+                    false,
+                    false,
+                )
+                .unwrap()
+            },
+        )
+    }
+
+    fn additional_context(output: &Option<Value>) -> Option<String> {
+        output.as_ref()?["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    #[test]
+    fn session_start_appends_prelaunch_output_after_the_awareness_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = dir.path().join("prelaunch.txt");
+        std::fs::write(&context, "PRELAUNCH-CANARY pulled two checkouts\n").unwrap();
+        let prelaunch = "Output of this machine's prelaunch hook, which ran before this session started:\n\nPRELAUNCH-CANARY pulled two checkouts";
+
+        for source in ["startup", "resume"] {
+            let output =
+                session_start_with_prelaunch(true, None, Some(&context), source, "native-launched");
+            assert_eq!(
+                output.as_ref().unwrap()["hookSpecificOutput"]["hookEventName"],
+                "SessionStart"
+            );
+            assert_eq!(
+                additional_context(&output).unwrap(),
+                format!("{}\n\n{prelaunch}", session_start_awareness()),
+                "{source}"
+            );
+        }
+        // Bootstrap off or an unmanaged session: the output stands alone.
+        for (managed, bootstrap) in [(true, Some("0")), (false, None)] {
+            let output = session_start_with_prelaunch(
+                managed,
+                bootstrap,
+                Some(&context),
+                "startup",
+                "native-launched",
+            );
+            assert_eq!(additional_context(&output).as_deref(), Some(prelaunch));
+        }
+    }
+
+    #[test]
+    fn prelaunch_output_is_not_replayed_after_clear_or_into_another_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = dir.path().join("prelaunch.txt");
+        std::fs::write(&context, "PRELAUNCH-CANARY").unwrap();
+        let awareness = Some(session_start_awareness());
+        for source in ["clear", "compact"] {
+            let output =
+                session_start_with_prelaunch(true, None, Some(&context), source, "native-launched");
+            assert_eq!(additional_context(&output), awareness, "{source}");
+        }
+        // A `claude` run inside the session inherits the variable, not the session.
+        let output =
+            session_start_with_prelaunch(true, None, Some(&context), "startup", "native-child");
+        assert_eq!(additional_context(&output), awareness);
+        // No hook output: SessionStart says exactly what it said before.
+        let output = session_start_with_prelaunch(true, None, None, "startup", "native-launched");
+        assert_eq!(additional_context(&output), awareness);
+        let output = session_start_with_prelaunch(false, None, None, "startup", "native-launched");
+        assert_eq!(additional_context(&output), None);
+    }
 
     /// The engine hook and the shipper hook share one awareness note: the
     /// coordination contract's session_start, byte for byte.

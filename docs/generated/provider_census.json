@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 343,
+  "file_count": 344,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -394,6 +394,13 @@
         "cursor",
         "omp",
         "pi"
+      ]
+    },
+    {
+      "path": "engine/src/prelaunch.rs",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

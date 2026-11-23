@@ -44,6 +44,8 @@ mod managed_launch_payload;
 mod managed_terminal;
 #[path = "plaintext_http.rs"]
 mod plaintext_http;
+#[path = "prelaunch.rs"]
+mod prelaunch;
 // Antigravity Helm runs agy under this PTY relay; the rest of its surface
 // belongs to the engine's Cursor and Claude Helm.
 #[path = "antigravity_helm_pty.rs"]
@@ -1565,6 +1567,11 @@ fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
             );
         }
     }
+    // Cursor, Pi and OMP Helm resume only from their retained workspace, so the
+    // requested directory is the session's.
+    if let Ok(cwd) = std::fs::canonicalize(&args.cwd) {
+        run_prelaunch_hook(ManagedProvider::Cursor, &cwd);
+    }
     let mut command = Command::new(paired_engine_path()?);
     command
         .args(["cursor-helm", "launch", "--cwd"])
@@ -1784,6 +1791,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         "--antigravity-bin",
     )?;
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+    run_prelaunch_hook(ManagedProvider::Antigravity, &cwd);
 
     let mut payload = ManagedLaunchRegistration {
         provider: "antigravity",
@@ -2245,6 +2253,23 @@ fn write_claude_mcp_config(
     Ok(PrivateTempFile { path })
 }
 
+/// Run the user's prelaunch hook, if any, for a `provider` session about to
+/// start in `cwd`. Returns what the hook printed, for providers that can hand
+/// it to the session; every provider prints it to the terminal.
+fn run_prelaunch_hook(provider: ManagedProvider, cwd: &Path) -> Option<String> {
+    prelaunch::run(provider.as_str(), cwd, longhouse_home().ok().as_deref())
+}
+
+/// The prelaunch hook's output for Claude's SessionStart hook to read
+/// (`prelaunch::CONTEXT_ENV`), removed when the launch ends.
+fn write_prelaunch_context(session_id: &str, text: &str) -> anyhow::Result<PrivateTempFile> {
+    let path = longhouse_home()?
+        .join("run/prelaunch")
+        .join(format!("{session_id}-{}.txt", Uuid::new_v4()));
+    write_private_text(&path, text)?;
+    Ok(PrivateTempFile { path })
+}
+
 fn claude_registration_issue(
     response: &ManagedLaunchResponse,
     expected_provider_session_id: Option<&str>,
@@ -2378,6 +2403,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         payload["session_id"] = json!(Uuid::new_v4().to_string());
         payload["provider_session_id"] = json!(Uuid::new_v4().to_string());
     }
+    // The session's directory is final here (a resume moves it). Running the
+    // hook before registration keeps its run time from holding a launch open.
+    let prelaunch_context = run_prelaunch_hook(ManagedProvider::Claude, &cwd);
     let mut degraded_registration: Option<managed_launch_lifecycle::ManagedRegistrationRetry> =
         None;
     // Deferred degradation/recovery notices: the retry thread must not write
@@ -2528,6 +2556,18 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .and_then(|response| response.coordination_token())
         .map(str::to_owned);
     let mcp_config = write_claude_mcp_config(&session_id, coordination_token.as_deref())?;
+    let prelaunch_file = prelaunch_context.as_deref().and_then(|text| {
+        write_prelaunch_context(&session_id, text)
+            .map_err(|error| {
+                eprintln!(
+                    "Longhouse warning: could not hand the prelaunch hook output to Claude: {error}"
+                )
+            })
+            .ok()
+    });
+    let prelaunch_path = prelaunch_file
+        .as_ref()
+        .map(|file| file.path.to_string_lossy().into_owned());
     let mut command = Command::new(&binary);
     let engine_path = paired_engine_path()?.display().to_string();
     if owner_input_route.uses_mod() {
@@ -2589,6 +2629,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     ];
     if let Some(hook_token) = hook_token {
         identity_env.push(("LONGHOUSE_HOOK_TOKEN", hook_token));
+    }
+    if let Some(path) = prelaunch_path.as_deref() {
+        identity_env.push((prelaunch::CONTEXT_ENV, path));
     }
     if owner_input_route.uses_mod() {
         identity_env.push((claude_owner_input::ENGINE_ENV, &engine_path));
@@ -2665,6 +2708,8 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         }
     };
     drop(live_relay);
+    // Removed now: a non-zero exit below leaves through process::exit.
+    drop(prelaunch_file);
     warp_cli_agent::emit_session_event(
         "claude",
         "stop",
@@ -2742,6 +2787,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .as_ref()
         .map(|target| acquire_provider_session_lock("opencode", &target.session_id))
         .transpose()?;
+    run_prelaunch_hook(ManagedProvider::Opencode, &cwd);
     let extra = match &resume_target {
         Some(target) => vec![
             ("session_id", json!(target.session_id)),
@@ -3539,6 +3585,9 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         );
     }
     let (url, token, _) = resolve_codex_config(args.url.clone(), None)?;
+    if let Ok(cwd) = std::fs::canonicalize(&args.cwd) {
+        run_prelaunch_hook(ManagedProvider::Pi, &cwd);
+    }
     let mut command = Command::new(paired_engine_path()?);
     command
         .args(["pi-helm", "launch", "--cwd"])
@@ -3585,6 +3634,9 @@ fn launch_managed_omp(args: OmpLaunchArgs) -> anyhow::Result<()> {
         anyhow::bail!("longhouse omp Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console.");
     }
     let (url, token, _) = resolve_codex_config(args.url.clone(), args.token.clone())?;
+    if let Ok(cwd) = std::fs::canonicalize(&args.cwd) {
+        run_prelaunch_hook(ManagedProvider::Omp, &cwd);
+    }
     let mut command = Command::new(paired_engine_path()?);
     command
         .args(["omp-helm", "launch", "--cwd"])
@@ -3642,6 +3694,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
             &codex_bin,
         );
     }
+    run_prelaunch_hook(ManagedProvider::Codex, &cwd);
     let payload = ManagedLaunchRegistration {
         provider: "codex",
         cwd: &cwd,
@@ -3908,6 +3961,7 @@ fn launch_managed_codex_resume(
         anyhow::bail!("managed Codex resume currently requires an interactive attached terminal");
     }
     let target = validate_codex_resume_target(args, session_id, cwd, codex_bin)?;
+    run_prelaunch_hook(ManagedProvider::Codex, cwd);
     let resume_attempt_id = Uuid::new_v4().to_string();
     let payload = ManagedLaunchRegistration {
         provider: "codex",
