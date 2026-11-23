@@ -138,18 +138,11 @@ public struct SpyHealthActionSink: HealthActionSink {
     public let logURL: URL?
     public let uiURL: URL?
     public let effectMode: HarnessEffectMode
-    /// Carries server requests (a stop for another machine's session).
-    let serverSession: URLSession
 
     public init(logURL: URL?, uiURL: URL?, effectMode: HarnessEffectMode = .live) {
-        self.init(logURL: logURL, uiURL: uiURL, effectMode: effectMode, serverSession: .shared)
-    }
-
-    init(logURL: URL?, uiURL: URL?, effectMode: HarnessEffectMode, serverSession: URLSession) {
         self.logURL = logURL
         self.uiURL = uiURL
         self.effectMode = effectMode
-        self.serverSession = serverSession
     }
 
     public func handle(_ action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback? {
@@ -337,16 +330,8 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         }
 
-        let canonicalSession = snapshot.allSessions.first {
+        let canonicalSession = snapshot.currentManagedSessions.first {
             $0.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines) == sessionID
-        }
-        if let canonicalSession, canonicalSession.isRemote {
-            return requestRemoteStop(
-                sessionID: sessionID,
-                session: canonicalSession,
-                label: label,
-                snapshot: snapshot
-            )
         }
         switch startStopManagedBridge(
             sessionID: sessionID,
@@ -376,35 +361,6 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "Longhouse could not start `\(stopCommandDescription(sessionID: sessionID, provider: provider, controlPlane: canonicalSession?.control?.controlPlane))` on this Mac."
             )
         }
-    }
-
-    /// A session on another machine is stopped by the server, which routes the
-    /// terminate to the machine that owns it. Nothing runs on this Mac.
-    private func requestRemoteStop(
-        sessionID: String,
-        session: ManagedSessionSnapshot,
-        label: String,
-        snapshot: HealthSnapshot
-    ) -> HealthActionFeedback? {
-        let machine = session.deviceId.map(snapshot.machineLabel(forDeviceId:)) ?? "its machine"
-        let target = label.isEmpty ? sessionID : label
-        guard let connection = snapshot.realtime,
-              let request = try? RemoteSessionTerminate.request(connection: connection, sessionID: sessionID)
-        else {
-            return feedback(
-                for: .stopManagedBridge,
-                style: .failure,
-                title: "Stop could not be sent",
-                detail: "This Mac has no usable Longhouse server connection to ask \(machine) to stop \(target)."
-            )
-        }
-        RemoteSessionTerminate.send(request, session: serverSession)
-        return feedback(
-            for: .stopManagedBridge,
-            style: .info,
-            title: "Stop requested",
-            detail: "Longhouse asked the server to stop \(target) on \(machine)."
-        )
     }
 
     public func handleStopManagedBridges(

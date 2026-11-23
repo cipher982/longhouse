@@ -67,9 +67,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     /// never reports these: the store fills them from the server's session
     /// stream, so this Mac's engine stays the only source of local rows.
     public var remoteSessions: [ManagedSessionSnapshot]?
-    /// The account's other machines and their server-reported status, from
-    /// the machines summary. Read for per-machine health lines and labels.
-    public var remoteMachines: [RemoteMachineSnapshot]?
 
     public init(
         schemaVersion: Int?,
@@ -96,8 +93,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         build: BuildIdentitySnapshot? = nil,
         updateInfo: UpdateInfoSnapshot? = nil,
         hostLink: HostLinkSnapshot? = nil,
-        remoteSessions: [ManagedSessionSnapshot]? = nil,
-        remoteMachines: [RemoteMachineSnapshot]? = nil
+        remoteSessions: [ManagedSessionSnapshot]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -124,7 +120,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.updateInfo = updateInfo
         self.hostLink = hostLink
         self.remoteSessions = remoteSessions
-        self.remoteMachines = remoteMachines
     }
 
     public var parsedSeverity: HarnessSeverity {
@@ -167,13 +162,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             build: build,
             updateInfo: updateInfo,
             hostLink: hostLink,
-            remoteSessions: remoteSessions,
-            remoteMachines: remoteMachines
+            remoteSessions: remoteSessions
         )
     }
 
     func removingSession(_ sessionId: String) -> HealthSnapshot {
-        replacingManagedSessions(managedSessions?.filter { $0.sessionId != sessionId })
+        var updated = replacingManagedSessions(managedSessions?.filter { $0.sessionId != sessionId })
+        updated.remoteSessions = remoteSessions?.filter { $0.sessionId != sessionId }
+        return updated
     }
 
     /// Every live session on the account: this Mac's engine rows first, then
@@ -205,33 +201,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return updated
     }
 
-    func removingRemoteSession(_ sessionId: String) -> HealthSnapshot {
-        guard remoteSessions?.contains(where: { $0.sessionId == sessionId }) == true else { return self }
-        var updated = self
-        updated.remoteSessions = remoteSessions?.filter { $0.sessionId != sessionId }
-        return updated
-    }
-
-    /// Drop other machines' rows the server did not mention since the stream
-    /// (re)connected. Its replay re-sends every recent session, so a row it
-    /// left out ended while this Mac was not listening.
-    func keepingRemoteSessions(_ sessionIds: Set<String>) -> HealthSnapshot {
-        guard let remoteSessions else { return self }
-        var updated = self
-        updated.remoteSessions = remoteSessions.filter { session in
-            session.sessionId.map { sessionIds.contains($0) } ?? false
-        }
-        return updated
-    }
-
     /// The cache is last-known evidence for this Mac. Other machines' rows are
     /// only as good as the live stream, so a cold launch waits for its replay
     /// instead of showing rows that may have ended hours ago.
-    func withoutRemoteState() -> HealthSnapshot {
-        guard remoteSessions != nil || remoteMachines != nil else { return self }
+    func withoutRemoteSessions() -> HealthSnapshot {
+        guard remoteSessions != nil else { return self }
         var updated = self
         updated.remoteSessions = nil
-        updated.remoteMachines = nil
         return updated
     }
 
@@ -365,8 +341,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             build: build,
             updateInfo: updateInfo,
             hostLink: hostLink,
-            remoteSessions: remoteSessions,
-            remoteMachines: remoteMachines
+            remoteSessions: remoteSessions
         )
     }
 
@@ -473,10 +448,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
               realtime != nil,
               realtime == previous.realtime
         else { return refreshed }
-        // `local-health` never reports other machines; their rows and status
-        // live only in what the server has streamed since this connection began.
+        // `local-health` never reports other machines; their rows live only in
+        // what the server has streamed since this connection began.
         refreshed.remoteSessions = previous.remoteSessions
-        refreshed.remoteMachines = previous.remoteMachines
         guard let previousSessions = previous.managedSessions else { return refreshed }
 
         let previousById = Self.sessionsById(previousSessions)
@@ -543,7 +517,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             realtime: realtime, transport: transport, heartbeatTransport: heartbeatTransport,
             unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
             launchReadiness: launchReadiness, build: build, updateInfo: updateInfo,
-            hostLink: hostLink, remoteSessions: remoteSessions, remoteMachines: remoteMachines
+            hostLink: hostLink, remoteSessions: remoteSessions
         )
     }
 
@@ -1699,93 +1673,6 @@ public struct RealtimeConnectionSnapshot: Codable, Equatable, Sendable {
     /// (`longhouse auth --allow-insecure-http`); see `PlaintextHTTP`. Emitted
     /// only when true.
     public var allowInsecureHttp: Bool? = nil
-}
-
-/// Another machine on the account, as the server's machines summary reports
-/// it. `tone`, `label` and `hint` are the server's own status words
-/// (`control-plane/docs/specs/machines-surface.md`); the menu bar does not
-/// rederive them.
-public struct RemoteMachineSnapshot: Codable, Equatable, Sendable {
-    public let deviceId: String
-    public let machineName: String?
-    /// The machine's live control channel is connected.
-    public let online: Bool?
-    public let tone: String?
-    public let label: String?
-    public let hint: String?
-    /// Offline and nothing started on it today: folded away by the server.
-    public let quiet: Bool?
-
-    public init(
-        deviceId: String,
-        machineName: String?,
-        online: Bool?,
-        tone: String?,
-        label: String?,
-        hint: String?,
-        quiet: Bool?
-    ) {
-        self.deviceId = deviceId
-        self.machineName = machineName
-        self.online = online
-        self.tone = tone
-        self.label = label
-        self.hint = hint
-        self.quiet = quiet
-    }
-
-    public var displayName: String {
-        let name = (machineName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? deviceId : name
-    }
-}
-
-/// One line for another machine whose engine is offline or needs repair.
-public struct RemoteMachineNotice: Identifiable, Equatable, Sendable {
-    public let id: String
-    public let text: String
-    public let hint: String?
-    public let isFault: Bool
-}
-
-extension HealthSnapshot {
-    /// The name to print beside a row from another machine.
-    public func machineLabel(forDeviceId deviceId: String) -> String {
-        remoteMachines?.first { $0.deviceId == deviceId }?.displayName ?? deviceId
-    }
-
-    /// Other machines that need a line: any the server says needs repair, and
-    /// any whose live control is offline while it has rows here or was used
-    /// today. A machine that has simply been off all day stays out of the way.
-    public var remoteMachineNotices: [RemoteMachineNotice] {
-        let rowDevices = Set((remoteSessions ?? []).compactMap(\.deviceId))
-        return (remoteMachines ?? []).compactMap { machine in
-            let name = machine.displayName
-            let hint = machine.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let usableHint = hint?.isEmpty == false ? hint : nil
-            if machine.tone == "fault" {
-                let label = machine.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return RemoteMachineNotice(
-                    id: machine.deviceId,
-                    text: "\(name) · \(label?.isEmpty == false ? label! : "Needs repair")",
-                    hint: usableHint,
-                    isFault: true
-                )
-            }
-            if machine.online == false,
-               machine.quiet != true || rowDevices.contains(machine.deviceId) {
-                return RemoteMachineNotice(
-                    id: machine.deviceId,
-                    text: "\(name) · Offline",
-                    hint: rowDevices.contains(machine.deviceId)
-                        ? "Its sessions show their last reported state."
-                        : usableHint,
-                    isFault: false
-                )
-            }
-            return nil
-        }
-    }
 }
 
 public struct NativeTransportSnapshot: Codable, Equatable, Sendable {

@@ -27,10 +27,6 @@ public enum LonghouseMenuBarAccessibilityID {
         public static let quietSessions = "LonghouseMenuBar.Hearth.QuietSessions"
         public static let unmanagedAgents = "LonghouseMenuBar.Hearth.UnmanagedAgents"
         public static let healthLine = "LonghouseMenuBar.Hearth.HealthLine"
-
-        public static func remoteMachine(_ deviceId: String) -> String {
-            "LonghouseMenuBar.Hearth.RemoteMachine.\(deviceId)"
-        }
     }
 
     public enum Feedback {

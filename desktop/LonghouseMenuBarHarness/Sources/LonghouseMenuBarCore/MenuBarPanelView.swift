@@ -507,8 +507,7 @@ public struct MenuBarPanelView: View {
     }
 
     /// Why the list is empty, when it is. Absent evidence is never shown as
-    /// an observed absence, and the claim names only what was observed: other
-    /// machines count only while the server's session view is current.
+    /// an observed absence.
     private var emptySessionsText: String? {
         guard snapshot.allSessions.isEmpty else { return nil }
         if !dataTrust.isCurrent {
@@ -519,9 +518,6 @@ public struct MenuBarPanelView: View {
         }
         if snapshot.sessionDiscoveryAttention {
             return nil
-        }
-        if snapshot.realtime != nil && projectionTrust.isCurrent {
-            return "No managed sessions are running on your machines."
         }
         return "No managed sessions are running on this Mac."
     }
@@ -556,8 +552,6 @@ public struct MenuBarPanelView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                 }
-
-                ForEach(snapshot.remoteMachineNotices) { remoteMachineLine($0) }
 
                 let unmanaged = unmanagedActivityEntries
                 if !unmanaged.isEmpty {
@@ -611,29 +605,6 @@ public struct MenuBarPanelView: View {
         if noStatus == 0 { return "\(quiet.count) quiet" }
         if noStatus == quiet.count { return "\(quiet.count) without live status" }
         return "\(quiet.count - noStatus) quiet, \(noStatus) without live status"
-    }
-
-    /// Another machine whose engine is offline or needs repair. Gray when it
-    /// is simply offline; the system warning colour when the server says it
-    /// needs repair. Never amber, which belongs to sessions waiting on you.
-    private func remoteMachineLine(_ notice: RemoteMachineNotice) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: notice.isFault ? "exclamationmark.triangle.fill" : "desktopcomputer")
-                .font(.system(size: 11))
-                .foregroundStyle(notice.isFault ? HearthPalette.warning : Color.secondary)
-                .frame(width: 26)
-            Text(notice.text)
-                .font(.system(size: 12))
-                .foregroundStyle(notice.isFault ? Color.primary.opacity(0.85) : Color.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 6)
-        }
-        .padding(.leading, 2)
-        .padding(.vertical, 4)
-        .help(notice.hint ?? "")
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(notice.hint.map { "\(notice.text). \($0)" } ?? notice.text))
-        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Hearth.remoteMachine(notice.id))
     }
 
     private func unmanagedRow(_ entry: UnmanagedActivityEntry) -> some View {
@@ -708,7 +679,7 @@ public struct MenuBarPanelView: View {
             seed: Self.stableSeed(session.id),
             openAction: managedOpenAction(for: session),
             subagentLinks: subagentLinks,
-            machine: session.isRemote ? session.deviceId.map(snapshot.machineLabel(forDeviceId:)) : nil
+            machine: session.isRemote ? session.deviceId : nil
         )
     }
 

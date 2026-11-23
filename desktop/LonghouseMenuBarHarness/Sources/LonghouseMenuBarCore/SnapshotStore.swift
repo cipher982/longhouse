@@ -37,11 +37,6 @@ public final class SnapshotStore: ObservableObject {
     /// tick.
     public static let presentationUpdateIntervalSeconds: TimeInterval = 5
 
-    /// After the session stream (re)connects, its replay re-sends every recent
-    /// session within a second or two. Rows from other machines it has not
-    /// mentioned by then ended while this Mac was not listening.
-    static let remoteReplaySweepSeconds: TimeInterval = 10
-
     private static let logger = Logger(subsystem: "ai.longhouse.desktop", category: "snapshot-store")
 
     @Published public private(set) var snapshot: HealthSnapshot?
@@ -84,15 +79,7 @@ public final class SnapshotStore: ObservableObject {
     private var realtimeSessionIds: [String] = []
     private var pendingRealtimeProjections: [String: SessionProjection] = [:]
     private var pendingRealtimeRemovals: Set<String> = []
-    private var pendingRemoteProjections: [String: SessionProjection] = [:]
-    private var pendingRemoteRemovals: Set<String> = []
-    /// Other machines' sessions the stream has mentioned since it last
-    /// connected. Nil outside the replay window.
-    private var remoteReplaySeen: Set<String>?
-    private var remoteReplaySweepTask: Task<Void, Never>?
-    private var remoteMachinesTask: Task<Void, Never>?
-    private var remoteMachinesConnection: RealtimeConnectionSnapshot?
-    /// The other machines' rows last written to the unified log.
+    /// Other machines' rows last written to the unified log.
     private var loggedRemoteRows: [String] = []
     private var localStatusMonitor: LocalStatusMonitor?
     private var latestLocalProjection: LocalStatusMonitor.Projection?
@@ -224,10 +211,9 @@ public final class SnapshotStore: ObservableObject {
         projectionState.trust(relativeTo: date, deadline: projectionDeadline)
     }
 
-    /// A signed-in Mac always streams, because other machines' sessions come
-    /// only from the server. A stream that is still making its first
-    /// connection with no rows on screen qualifies nothing, so it reads as
-    /// current; once it has failed, the session view really is incomplete.
+    /// A signed-in Mac always streams: other machines' sessions come only from
+    /// the server. A first connection still in flight with no rows on screen
+    /// qualifies nothing; once it has failed, the session view is incomplete.
     public func projectionTrustForPresentation(relativeTo date: Date = Date()) -> DataTrust {
         guard let snapshot, snapshot.realtime != nil else {
             return .current
@@ -244,8 +230,6 @@ public final class SnapshotStore: ObservableObject {
         bootGraceTask?.cancel()
         realtimeTask?.cancel()
         realtimeFlushTask?.cancel()
-        remoteReplaySweepTask?.cancel()
-        remoteMachinesTask?.cancel()
         transientRetryTask?.cancel()
         setupFollowUpTask?.cancel()
         trustBackstopTask?.cancel()
@@ -495,7 +479,6 @@ public final class SnapshotStore: ObservableObject {
                     snapshot.realtime,
                     sessionIds: (snapshot.managedSessions ?? []).compactMap(\.sessionId)
                 )
-                self.pollRemoteMachinesIfNeeded(snapshot.realtime)
                 self.monitorLocalStatusIfNeeded(snapshot.engineStatus?.path)
                 self.appendHistorySample(for: snapshot)
                 self.persistCachedSnapshot(snapshot)
@@ -670,10 +653,6 @@ public final class SnapshotStore: ObservableObject {
         // above carry every classification change a reconciliation makes.
     }
 
-    /// The stream opens whenever this Mac is signed in, with or without local
-    /// sessions: it is also the only source of other machines' sessions. It
-    /// restarts when the local session set changes so its replay hydrates a
-    /// newly started local row.
     private func connectRealtimeIfNeeded(
         _ connection: RealtimeConnectionSnapshot?,
         sessionIds: [String]
@@ -693,6 +672,8 @@ public final class SnapshotStore: ObservableObject {
         clearQueuedRealtimeEvents()
         realtimeConnection = connection
         realtimeSessionIds = normalizedSessionIds
+        // Open even with no local sessions: the stream is also the only source
+        // of other machines' sessions.
         guard let connection,
               connection.runtimeUrl != nil,
               connection.tokenPath != nil
@@ -704,11 +685,7 @@ public final class SnapshotStore: ObservableObject {
             for await event in SessionProjectionStream.projections(connection: connection) {
                 guard !Task.isCancelled, let self else { return }
                 switch event {
-                case .connected:
-                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
-                    self.beginRemoteReplay()
-                    self.armPresentationDeadline()
-                case .alive:
+                case .connected, .alive:
                     self.projectionState = self.projectionState.recordingSuccess(at: Date())
                     self.armPresentationDeadline()
                 case let .failed(message):
@@ -722,19 +699,18 @@ public final class SnapshotStore: ObservableObject {
                     )
                     self.armPresentationDeadline()
                 case let .delta(projection):
-                    // This Mac's engine owns which local rows exist; the
-                    // server only adds their presentation and control.
-                    if localSessionIds.contains(projection.sessionId) {
+                    // This Mac's engine owns which local rows exist. Of other
+                    // machines' sessions, only a live one, or one retiring a
+                    // row already shown, can change the panel.
+                    let isLocal = localSessionIds.contains(projection.sessionId)
+                    let isOtherMachine = Self.isOtherMachine(projection.deviceId, localDeviceId: localDeviceId)
+                    if isLocal || (isOtherMachine && (projection.isLiveManagedSession
+                        || self.snapshot?.remoteSessions?.contains { $0.sessionId == projection.sessionId } == true
+                        || self.pendingRealtimeProjections[projection.sessionId] != nil)) {
                         self.queueRealtimeProjection(projection)
-                    } else if Self.isOtherMachine(projection.deviceId, localDeviceId: localDeviceId) {
-                        self.queueRemoteProjection(projection)
                     }
                 case let .remove(sessionId):
-                    if localSessionIds.contains(sessionId) {
-                        self.queueRealtimeRemoval(sessionId)
-                    } else {
-                        self.queueRemoteRemoval(sessionId)
-                    }
+                    self.queueRealtimeRemoval(sessionId)
                 }
             }
         }
@@ -743,117 +719,10 @@ public final class SnapshotStore: ObservableObject {
     /// A session hosted by another machine on the account. Without this Mac's
     /// own device id nothing can be told apart, so nothing counts as remote.
     static func isOtherMachine(_ deviceId: String?, localDeviceId: String?) -> Bool {
-        guard let localDeviceId = localDeviceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !localDeviceId.isEmpty,
-              let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !deviceId.isEmpty
+        guard let localDeviceId, !localDeviceId.isEmpty,
+              let deviceId, !deviceId.isEmpty
         else { return false }
         return deviceId != localDeviceId
-    }
-
-    /// The stream carries every session on the account, most of them Shadow
-    /// or long ended. Only a live one, or one that retires a row already on
-    /// screen (or queued), can change what the panel shows.
-    private func queueRemoteProjection(_ projection: SessionProjection) {
-        let sessionId = projection.sessionId
-        guard projection.isLiveManagedSession || hasRemoteRow(sessionId) else { return }
-        remoteReplaySeen?.insert(sessionId)
-        pendingRemoteRemovals.remove(sessionId)
-        pendingRemoteProjections[sessionId] = projection
-        scheduleRealtimeFlush()
-    }
-
-    private func queueRemoteRemoval(_ sessionId: String) {
-        guard hasRemoteRow(sessionId) else { return }
-        pendingRemoteProjections.removeValue(forKey: sessionId)
-        pendingRemoteRemovals.insert(sessionId)
-        scheduleRealtimeFlush()
-    }
-
-    private func hasRemoteRow(_ sessionId: String) -> Bool {
-        pendingRemoteProjections[sessionId] != nil
-            || snapshot?.remoteSessions?.contains { $0.sessionId == sessionId } == true
-    }
-
-    private func beginRemoteReplay() {
-        remoteReplaySeen = []
-        remoteReplaySweepTask?.cancel()
-        remoteReplaySweepTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.remoteReplaySweepSeconds))
-            guard !Task.isCancelled, let self else { return }
-            self.remoteReplaySweepTask = nil
-            self.finishRemoteReplay()
-        }
-    }
-
-    private func finishRemoteReplay() {
-        guard let seen = remoteReplaySeen else { return }
-        remoteReplaySeen = nil
-        flushQueuedRealtimeEvents()
-        guard let snapshot,
-              (snapshot.remoteSessions ?? []).contains(where: { !seen.contains($0.sessionId ?? "") })
-        else { return }
-        self.snapshot = snapshot.keepingRemoteSessions(seen)
-        logRemoteRowsIfChanged()
-        armPresentationDeadline()
-    }
-
-    /// One line whenever the set of other machines' rows changes, so the
-    /// installed app's view of the account can be read with `log show`.
-    private func logRemoteRowsIfChanged() {
-        let rows = (snapshot?.remoteSessions ?? [])
-            .map { "\($0.deviceId ?? "?")/\($0.sessionId ?? "?")" }
-            .sorted()
-        guard rows != loggedRemoteRows else { return }
-        loggedRemoteRows = rows
-        let listed = rows.joined(separator: " ")
-        Self.logger.info("Other machines' live sessions: \(rows.count, privacy: .public) \(listed, privacy: .public)")
-    }
-
-    /// Other machines' status lines come from the machines summary, read once
-    /// a minute while this Mac is signed in.
-    private func pollRemoteMachinesIfNeeded(_ connection: RealtimeConnectionSnapshot?) {
-        guard source.supportsLiveMonitoring else {
-            remoteMachinesTask?.cancel()
-            remoteMachinesTask = nil
-            remoteMachinesConnection = nil
-            return
-        }
-        guard connection != remoteMachinesConnection || remoteMachinesTask == nil else { return }
-        remoteMachinesTask?.cancel()
-        remoteMachinesTask = nil
-        remoteMachinesConnection = connection
-        guard let connection,
-              connection.runtimeUrl != nil,
-              connection.tokenPath != nil,
-              connection.machineName != nil
-        else { return }
-        remoteMachinesTask = Task { [weak self] in
-            while !Task.isCancelled {
-                // A failed read clears the lines: no evidence is not "offline".
-                let machines = try? await RemoteMachinesClient.fetch(connection: connection)
-                guard !Task.isCancelled,
-                      self?.applyRemoteMachines(machines, for: connection) == true
-                else { return }
-                try? await Task.sleep(for: .seconds(RemoteMachinesClient.pollSeconds))
-            }
-        }
-    }
-
-    /// Returns whether the poll for `connection` should continue.
-    private func applyRemoteMachines(
-        _ machines: [RemoteMachineSnapshot]?,
-        for connection: RealtimeConnectionSnapshot
-    ) -> Bool {
-        guard connection == remoteMachinesConnection else { return false }
-        guard var updated = snapshot,
-              updated.realtime == connection,
-              updated.remoteMachines != machines
-        else { return true }
-        updated.remoteMachines = machines
-        snapshot = updated
-        armPresentationDeadline()
-        return true
     }
 
     /// Coalesce projection traffic before invalidating the full SwiftUI tree and
@@ -888,39 +757,26 @@ public final class SnapshotStore: ObservableObject {
         guard var updated = snapshot else {
             pendingRealtimeProjections.removeAll(keepingCapacity: true)
             pendingRealtimeRemovals.removeAll(keepingCapacity: true)
-            pendingRemoteProjections.removeAll(keepingCapacity: true)
-            pendingRemoteRemovals.removeAll(keepingCapacity: true)
             return
         }
-        guard !pendingRealtimeProjections.isEmpty || !pendingRealtimeRemovals.isEmpty
-                || !pendingRemoteProjections.isEmpty || !pendingRemoteRemovals.isEmpty else {
+        guard !pendingRealtimeProjections.isEmpty || !pendingRealtimeRemovals.isEmpty else {
             return
         }
 
         let projections = Array(pendingRealtimeProjections.values)
         let removals = Array(pendingRealtimeRemovals)
-        // Most recent first, so new rows from other machines land in a stable
-        // order rather than in dictionary order.
-        let remoteProjections = pendingRemoteProjections.values.sorted {
-            ($0.lastActivityAt ?? "", $0.sessionId) > ($1.lastActivityAt ?? "", $1.sessionId)
-        }
-        let remoteRemovals = Array(pendingRemoteRemovals)
         pendingRealtimeProjections.removeAll(keepingCapacity: true)
         pendingRealtimeRemovals.removeAll(keepingCapacity: true)
-        pendingRemoteProjections.removeAll(keepingCapacity: true)
-        pendingRemoteRemovals.removeAll(keepingCapacity: true)
+        let localDeviceId = realtimeConnection?.machineName
         for projection in projections {
-            updated = updated.applying(projection)
+            updated = Self.isOtherMachine(projection.deviceId, localDeviceId: localDeviceId)
+                ? updated.applyingRemote(projection)
+                : updated.applying(projection)
         }
         for sessionId in removals {
             updated = updated.removingSession(sessionId)
         }
-        for projection in remoteProjections {
-            updated = updated.applyingRemote(projection)
-        }
-        for sessionId in remoteRemovals {
-            updated = updated.removingRemoteSession(sessionId)
-        }
+        // Most traffic is for sessions on no row; it must not republish the panel.
         guard updated != snapshot else { return }
         snapshot = updated
         logRemoteRowsIfChanged()
@@ -928,16 +784,23 @@ public final class SnapshotStore: ObservableObject {
         persistCachedSnapshot(updated)
     }
 
+    /// One unified-log line whenever the set of other machines' rows changes,
+    /// so the installed app's view of the account can be read with `log show`.
+    private func logRemoteRowsIfChanged() {
+        let rows = (snapshot?.remoteSessions ?? [])
+            .map { "\($0.deviceId ?? "?")/\($0.sessionId ?? "?")" }
+            .sorted()
+        guard rows != loggedRemoteRows else { return }
+        loggedRemoteRows = rows
+        let listed = rows.joined(separator: " ")
+        Self.logger.info("Other machines' live sessions: \(rows.count, privacy: .public) \(listed, privacy: .public)")
+    }
+
     private func clearQueuedRealtimeEvents() {
         realtimeFlushTask?.cancel()
         realtimeFlushTask = nil
         pendingRealtimeProjections.removeAll(keepingCapacity: true)
         pendingRealtimeRemovals.removeAll(keepingCapacity: true)
-        pendingRemoteProjections.removeAll(keepingCapacity: true)
-        pendingRemoteRemovals.removeAll(keepingCapacity: true)
-        remoteReplaySweepTask?.cancel()
-        remoteReplaySweepTask = nil
-        remoteReplaySeen = nil
     }
 
     private func completeRefresh(reason: SnapshotRefreshReason) {
@@ -1098,7 +961,9 @@ public final class SnapshotStore: ObservableObject {
         guard let cacheURL else {
             return
         }
-        let snapshot = fullSnapshot.withoutRemoteState()
+        // Other machines' rows are only as good as the live stream; a cold
+        // launch waits for its replay instead of showing ended sessions.
+        let snapshot = fullSnapshot.withoutRemoteSessions()
         let headline = [snapshot.healthState, snapshot.severity, snapshot.headline]
         let now = ProcessInfo.processInfo.systemUptime
         if headline == lastCachedSnapshotHeadline,

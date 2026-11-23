@@ -269,35 +269,6 @@
       }
     }
   ],
-  "remote_machines": [
-    {
-      "device_id": "workstation",
-      "machine_name": "workstation",
-      "online": true,
-      "tone": "live",
-      "label": "2 live",
-      "hint": null,
-      "quiet": false
-    },
-    {
-      "device_id": "build-box",
-      "machine_name": "build-box",
-      "online": false,
-      "tone": "off",
-      "label": "Offline",
-      "hint": null,
-      "quiet": false
-    },
-    {
-      "device_id": "old-mini",
-      "machine_name": "old-mini",
-      "online": false,
-      "tone": "off",
-      "label": "Offline",
-      "hint": null,
-      "quiet": true
-    }
-  ],
   "orphan_bridges": [],
   "launch_readiness": {
     "state": "ready",

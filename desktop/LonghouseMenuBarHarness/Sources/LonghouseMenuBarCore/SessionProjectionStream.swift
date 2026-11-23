@@ -21,10 +21,10 @@ struct SessionProjection: Sendable {
     let activity: SessionActivitySnapshot?
     let delegation: SessionDelegationSnapshot?
     let control: SessionControlSnapshot?
-    /// The machine that hosts the session (the server's routing id).
+    /// The machine hosting the session, and what a row from another machine
+    /// needs to draw itself.
     let deviceId: String?
     let provider: String?
-    /// Workspace label the server records for the session.
     let project: String?
     let gitBranch: String?
     /// `run.lifecycle`: starting, running, ended or unknown.
@@ -33,7 +33,7 @@ struct SessionProjection: Sendable {
     var activityObservedAt: String? { activity?.observedAt }
 
     /// Alive on its machine: a managed (not Shadow) session whose run has not
-    /// ended. The same set a machine's own engine lists as managed sessions.
+    /// ended, the same set that machine's own engine lists.
     var isLiveManagedSession: Bool {
         mode != "shadow" && (runLifecycle == "starting" || runLifecycle == "running")
     }
@@ -269,8 +269,8 @@ enum SessionProjectionStream {
         }
     }
 
-    /// Every session on the account, from every machine. The store decides
-    /// which belong to this Mac's engine rows and which are other machines'.
+    /// Every session on the account, from every machine; the store decides
+    /// which are this Mac's rows and which are other machines'.
     ///
     /// - Parameter session: Optional caller-owned URLSession override. A
     ///   supplied session must be dedicated to this stream because the stale
@@ -353,15 +353,37 @@ enum SessionProjectionStream {
         liveness: LivenessFlag,
         idleTimeout: TimeInterval
     ) async throws {
-        var request = try RuntimeHostRequest.make(
-            connection: connection,
-            path: "/api/agents/sessions/stream",
-            queryItems: [
-                URLQueryItem(name: "limit", value: "100"),
-                URLQueryItem(name: "skip_initial_replay", value: "false"),
-            ]
-        )
+        guard let rawURL = connection.runtimeUrl,
+              let baseURL = URL(string: rawURL),
+              let tokenPath = connection.tokenPath
+        else { throw URLError(.badURL) }
+        // The token rides this request as a header, so a plain-http address is
+        // judged by the same rule as every other native client. (https needs
+        // no judgement; any other scheme is a test URLProtocol.)
+        if baseURL.scheme?.lowercased() == "http" {
+            let transport = PlaintextHTTP.check(rawURL, allowInsecureHTTP: connection.allowInsecureHttp == true)
+            guard transport.isUsable else {
+                throw PlaintextHTTPRefusal(message: PlaintextHTTP.refusalMessage(rawURL, outcome: transport))
+            }
+            if transport == .allowedWarn {
+                logger.warning("\(PlaintextHTTP.insecureWarning(rawURL), privacy: .public)")
+            }
+        }
+        let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
+
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/agents/sessions/stream"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: "100"),
+            URLQueryItem(name: "skip_initial_replay", value: "false"),
+        ]
+        var request = URLRequest(url: components.url!)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
 
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
