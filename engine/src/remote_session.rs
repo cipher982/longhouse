@@ -698,54 +698,15 @@ fn maybe_pull_remote_checkout(cwd: &Path) {
     }
 }
 
-/// What `dtach` is asked to do for a selected session.
-#[derive(Debug, PartialEq, Eq)]
-struct DtachInvocation {
-    args: Vec<String>,
-    /// The process a new session runs: this binary as `__remote-host`, which
-    /// starts `longhouse <provider>` and so the prelaunch hook. Reattaching
-    /// only joins the running session and starts nothing.
-    program: Option<(PathBuf, Vec<String>)>,
-}
-
-fn dtach_invocation(
-    selection: &SessionSelection,
-    sock: &str,
-    self_exe: &Path,
-    state_path: &Path,
-    provider: &str,
-    provider_args: &[String],
-) -> DtachInvocation {
-    let flag = match selection {
-        SessionSelection::Reattach { .. } => "-a",
-        SessionSelection::New { .. } => "-c",
-    };
-    let args = [flag, sock, "-r", "winch", "-z"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    let program = match selection {
-        SessionSelection::Reattach { .. } => None,
-        SessionSelection::New { .. } => {
-            let mut host_args = vec![
-                "__remote-host".to_string(),
-                "--state-file".to_string(),
-                state_path.to_string_lossy().into_owned(),
-                "--".to_string(),
-                provider.to_string(),
-            ];
-            host_args.extend(provider_args.iter().cloned());
-            Some((self_exe.to_path_buf(), host_args))
-        }
-    };
-    DtachInvocation { args, program }
-}
-
-fn run_dtach_command(invocation: &DtachInvocation) -> anyhow::Result<i32> {
+fn run_dtach_command(
+    args: &[&str],
+    program: Option<&Path>,
+    child_args: &[String],
+) -> anyhow::Result<i32> {
     let mut cmd = Command::new("dtach");
-    cmd.args(&invocation.args);
-    if let Some((program, child_args)) = &invocation.program {
-        cmd.arg(program);
+    cmd.args(args);
+    if let Some(prog) = program {
+        cmd.arg(prog);
         cmd.args(child_args);
     }
     #[cfg(unix)]
@@ -834,10 +795,11 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
     }
 
     let sock_str = sock_path.to_string_lossy().into_owned();
-    match selection {
+    let code = match selection {
         SessionSelection::Reattach { .. } => {
             eprintln!("longhouse: reattaching to {name}");
             warp_cli_agent::emit_replay_markers(&warp_path);
+            run_dtach_command(&["-a", &sock_str, "-r", "winch", "-z"], None, &[])?
         }
         SessionSelection::New { .. } => {
             if args.pull {
@@ -846,17 +808,22 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
                 }
             }
             eprintln!("longhouse: new {} session {name}", args.provider);
+            let self_exe = std::env::current_exe().context("resolve current longhouse binary")?;
+            let mut host_args = vec![
+                "__remote-host".to_string(),
+                "--state-file".to_string(),
+                state_path.to_string_lossy().into_owned(),
+                "--".to_string(),
+                args.provider,
+            ];
+            host_args.extend(args.provider_args);
+            run_dtach_command(
+                &["-c", &sock_str, "-r", "winch", "-z"],
+                Some(&self_exe),
+                &host_args,
+            )?
         }
-    }
-    let self_exe = std::env::current_exe().context("resolve current longhouse binary")?;
-    let code = run_dtach_command(&dtach_invocation(
-        &selection,
-        &sock_str,
-        &self_exe,
-        &state_path,
-        &args.provider,
-        &args.provider_args,
-    ))?;
+    };
     drop(viewer_guard);
     Ok(code)
 }
@@ -1019,63 +986,6 @@ mod tests {
         assert!(cmd.contains("export ANTHROPIC_MODEL='o'\\''pus'"));
         assert!(
             cmd.contains("exec longhouse '__remote-session' '--cwd' '~/git/foo bar' '--' '--flag'")
-        );
-    }
-
-    #[test]
-    fn only_a_new_remote_session_starts_a_launch_and_its_prelaunch_hook() {
-        let exe = Path::new("/opt/longhouse/bin/longhouse");
-        let state = Path::new("/state/remote-sessions/claude-demo.json");
-        let provider_args = vec!["--resume".to_string(), "abc".to_string()];
-        let reattach = dtach_invocation(
-            &SessionSelection::Reattach {
-                name: "claude-demo".into(),
-                provider: "claude".into(),
-            },
-            "/state/claude-demo.sock",
-            exe,
-            state,
-            "claude",
-            &provider_args,
-        );
-        assert_eq!(
-            reattach,
-            DtachInvocation {
-                args: vec![
-                    "-a".into(),
-                    "/state/claude-demo.sock".into(),
-                    "-r".into(),
-                    "winch".into(),
-                    "-z".into()
-                ],
-                program: None,
-            }
-        );
-        let new = dtach_invocation(
-            &SessionSelection::New {
-                name: "claude-demo".into(),
-            },
-            "/state/claude-demo.sock",
-            exe,
-            state,
-            "claude",
-            &provider_args,
-        );
-        assert_eq!(new.args[0], "-c");
-        assert_eq!(
-            new.program,
-            Some((
-                exe.to_path_buf(),
-                vec![
-                    "__remote-host".to_string(),
-                    "--state-file".into(),
-                    state.display().to_string(),
-                    "--".into(),
-                    "claude".into(),
-                    "--resume".into(),
-                    "abc".into(),
-                ]
-            ))
         );
     }
 

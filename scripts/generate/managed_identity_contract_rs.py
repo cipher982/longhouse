@@ -71,9 +71,6 @@ NEVER_INHERITED = [
     "LONGHOUSE_CURSOR_PRINT_MODE",
     "LONGHOUSE_ANTIGRAVITY_STATE_DIR",
     "LONGHOUSE_ANTIGRAVITY_INBOX_DIR",
-    # The prelaunch hook output one Claude launch hands its own SessionStart
-    # hook; another launch inheriting it would replay that output.
-    "LONGHOUSE_PRELAUNCH_CONTEXT",
 ]
 
 

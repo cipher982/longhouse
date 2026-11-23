@@ -104,10 +104,6 @@ mod pi_print;
 mod pi_session;
 mod pipeline;
 mod plaintext_http;
-// Shared with the longhouse launcher, which runs the hook; the engine only
-// reads its output back for Claude's SessionStart hook.
-#[allow(dead_code)]
-mod prelaunch;
 mod process_group;
 mod process_identity;
 mod provider_auth;

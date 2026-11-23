@@ -81,15 +81,6 @@ Managed sessions keep the provider's native client and identity and add a sessio
 
 What each provider supports is declared in [`schemas/managed_providers.yml`](schemas/managed_providers.yml) and shown in the product's provider view. This README does not repeat it.
 
-### Run a command before each session starts
-
-If `~/.longhouse/prelaunch` (under `$LONGHOUSE_HOME` when that is set) exists and is executable, `longhouse <provider>` runs it in the session's working directory just before the provider starts, for a new session and for a resume. With `--on <host>` it runs on that host. Reattaching to a remote session that is still running does not run it, and neither do Console turns.
-
-- It gets `LONGHOUSE_PROVIDER` (for example `claude`) and `LONGHOUSE_SESSION_CWD` in its environment and no standard input. Its standard error goes to your terminal.
-- What it prints to standard output, up to 16 KiB, is shown in the terminal before the provider starts. A Claude session also receives it as SessionStart context. Other providers show it in the terminal only.
-- It never blocks a launch. If it exits non-zero, cannot start, or runs past 30 seconds (it is then killed), the launch continues and one line such as `prelaunch hook exited 1` is printed and passed on with any output.
-- `LONGHOUSE_PRELAUNCH=/path/to/command` runs a different file and `LONGHOUSE_PRELAUNCH=` (empty) turns the hook off. `LONGHOUSE_PRELAUNCH_TIMEOUT_SECS` changes the timeout.
-
 The web UI is at `http://localhost:8080` for a local Runtime Host. Server-side commands use `longhouse-server`:
 
 ```bash
