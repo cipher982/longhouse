@@ -93,8 +93,7 @@ struct PlaintextHTTPTests {
                 machineName: nil,
                 tokenPath: tokenURL.path,
                 allowInsecureHttp: allowInsecureHttp
-            ),
-            sessionIds: ["session-1"]
+            )
         )
         return await withTaskGroup(of: String?.self) { group -> String? in
             group.addTask {

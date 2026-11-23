@@ -21,8 +21,22 @@ struct SessionProjection: Sendable {
     let activity: SessionActivitySnapshot?
     let delegation: SessionDelegationSnapshot?
     let control: SessionControlSnapshot?
+    /// The machine that hosts the session (the server's routing id).
+    let deviceId: String?
+    let provider: String?
+    /// Workspace label the server records for the session.
+    let project: String?
+    let gitBranch: String?
+    /// `run.lifecycle`: starting, running, ended or unknown.
+    let runLifecycle: String?
 
     var activityObservedAt: String? { activity?.observedAt }
+
+    /// Alive on its machine: a managed (not Shadow) session whose run has not
+    /// ended. The same set a machine's own engine lists as managed sessions.
+    var isLiveManagedSession: Bool {
+        mode != "shadow" && (runLifecycle == "starting" || runLifecycle == "running")
+    }
 
     init(
         sessionId: String,
@@ -43,7 +57,12 @@ struct SessionProjection: Sendable {
         presentation: SessionPresentationSnapshot? = nil,
         activity: SessionActivitySnapshot? = nil,
         delegation: SessionDelegationSnapshot? = nil,
-        control: SessionControlSnapshot? = nil
+        control: SessionControlSnapshot? = nil,
+        deviceId: String? = nil,
+        provider: String? = nil,
+        project: String? = nil,
+        gitBranch: String? = nil,
+        runLifecycle: String? = nil
     ) {
         self.sessionId = sessionId
         self.timelineTitle = timelineTitle
@@ -64,6 +83,11 @@ struct SessionProjection: Sendable {
         self.activity = activity
         self.delegation = delegation
         self.control = control
+        self.deviceId = deviceId
+        self.provider = provider
+        self.project = project
+        self.gitBranch = gitBranch
+        self.runLifecycle = runLifecycle
     }
 }
 
@@ -217,7 +241,14 @@ enum SessionProjectionStream {
         let activity: SessionActivitySnapshot?
         let delegation: SessionDelegationSnapshot?
         let control: SessionControlSnapshot?
+        let deviceId: String?
+        let provider: String?
+        let project: String?
+        let gitBranch: String?
+        let run: Run?
     }
+
+    private struct Run: Decodable { let lifecycle: String? }
 
     private struct Remove: Decodable { let sessionId: String }
 
@@ -238,12 +269,14 @@ enum SessionProjectionStream {
         }
     }
 
+    /// Every session on the account, from every machine. The store decides
+    /// which belong to this Mac's engine rows and which are other machines'.
+    ///
     /// - Parameter session: Optional caller-owned URLSession override. A
     ///   supplied session must be dedicated to this stream because the stale
     ///   watchdog cancels every task on it.
     static func projections(
         connection: RealtimeConnectionSnapshot,
-        sessionIds: [String],
         session: URLSession? = nil,
         idleTimeout: TimeInterval = 45
     ) -> AsyncStream<SessionProjectionEvent> {
@@ -257,7 +290,6 @@ enum SessionProjectionStream {
                     }
                 }
                 var backoff = Duration.milliseconds(250)
-                let allowedSessionIds = Set(sessionIds)
                 var retryPolicy = ProjectionRetryPolicy()
                 while !Task.isCancelled {
                     let liveness = LivenessFlag()
@@ -266,7 +298,6 @@ enum SessionProjectionStream {
                         try await drain(
                             connection: connection,
                             session: session,
-                            allowedSessionIds: allowedSessionIds,
                             continuation: continuation,
                             liveness: liveness,
                             idleTimeout: idleTimeout
@@ -318,46 +349,19 @@ enum SessionProjectionStream {
     private static func drain(
         connection: RealtimeConnectionSnapshot,
         session: URLSession,
-        allowedSessionIds: Set<String>,
         continuation: AsyncStream<SessionProjectionEvent>.Continuation,
         liveness: LivenessFlag,
         idleTimeout: TimeInterval
     ) async throws {
-        guard let rawURL = connection.runtimeUrl,
-              let baseURL = URL(string: rawURL),
-              let tokenPath = connection.tokenPath
-        else { throw URLError(.badURL) }
-        // The token rides this request as a header, so a plain-http address is
-        // judged by the same rule as every other native client. (https needs
-        // no judgement; any other scheme is a test URLProtocol.)
-        if baseURL.scheme?.lowercased() == "http" {
-            let transport = PlaintextHTTP.check(rawURL, allowInsecureHTTP: connection.allowInsecureHttp == true)
-            guard transport.isUsable else {
-                throw PlaintextHTTPRefusal(message: PlaintextHTTP.refusalMessage(rawURL, outcome: transport))
-            }
-            if transport == .allowedWarn {
-                logger.warning("\(PlaintextHTTP.insecureWarning(rawURL), privacy: .public)")
-            }
-        }
-        let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
-
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent("/api/agents/sessions/stream"),
-            resolvingAgainstBaseURL: false
-        )!
-        var queryItems = [
-            URLQueryItem(name: "limit", value: "100"),
-            URLQueryItem(name: "skip_initial_replay", value: "false"),
-        ]
-        if let machineName = connection.machineName {
-            queryItems.append(URLQueryItem(name: "device_id", value: machineName))
-        }
-        components.queryItems = queryItems
-        var request = URLRequest(url: components.url!)
+        var request = try RuntimeHostRequest.make(
+            connection: connection,
+            path: "/api/agents/sessions/stream",
+            queryItems: [
+                URLQueryItem(name: "limit", value: "100"),
+                URLQueryItem(name: "skip_initial_replay", value: "false"),
+            ]
+        )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
 
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -412,11 +416,6 @@ enum SessionProjectionStream {
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
                     let delta = try decoder.decode(Delta.self, from: data)
-                    guard allowedSessionIds.contains(delta.sessionId) else {
-                        eventName = ""
-                        dataLines.removeAll(keepingCapacity: true)
-                        continue
-                    }
                     continuation.yield(
                         .delta(SessionProjection(
                             sessionId: delta.sessionId,
@@ -437,7 +436,12 @@ enum SessionProjectionStream {
                             presentation: delta.presentation,
                             activity: delta.activity,
                             delegation: delta.delegation,
-                            control: delta.control
+                            control: delta.control,
+                            deviceId: delta.deviceId,
+                            provider: delta.provider,
+                            project: delta.project,
+                            gitBranch: delta.gitBranch,
+                            runLifecycle: delta.run?.lifecycle
                         ))
                     )
                 } else if eventName == "session_remove", !dataLines.isEmpty {
@@ -445,9 +449,7 @@ enum SessionProjectionStream {
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
                     let sessionId = try decoder.decode(Remove.self, from: data).sessionId
-                    if allowedSessionIds.contains(sessionId) {
-                        continuation.yield(.remove(sessionId: sessionId))
-                    }
+                    continuation.yield(.remove(sessionId: sessionId))
                 }
                 eventName = ""
                 dataLines.removeAll(keepingCapacity: true)

@@ -929,6 +929,11 @@ def project_machine_session_delta(
     payload: dict[str, Any] = {
         "session_id": session.id,
         "device_id": session.device_id,
+        # Identity a client needs to draw a session from another machine,
+        # where no local engine row supplies the provider or workspace.
+        "provider": getattr(session, "provider", None),
+        "project": getattr(session, "project", None),
+        "git_branch": getattr(session, "git_branch", None),
         "timeline_title": session.timeline_title,
         "title_state": session.title_state,
         "title_source": session.title_source,

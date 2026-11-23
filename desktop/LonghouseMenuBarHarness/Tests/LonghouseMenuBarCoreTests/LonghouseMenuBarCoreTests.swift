@@ -1498,7 +1498,6 @@ struct LonghouseMenuBarCoreTests {
         )
         let stream = SessionProjectionStream.projections(
             connection: connection,
-            sessionIds: ["session-1"],
             session: session,
             idleTimeout: 0.25
         )

@@ -167,7 +167,9 @@ extension HealthSnapshot {
         localEvidenceTrust: DataTrust = .current,
         projectionTrust: DataTrust = .current
     ) -> MenuBarPresentation {
-        let sessions = currentManagedSessions
+        // Every machine on the account: a session waiting on the user on
+        // another machine needs the user just the same.
+        let sessions = allSessions
         var needsUser = 0
         var working = 0
         var background = 0

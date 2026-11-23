@@ -148,6 +148,9 @@ def test_canonical_machine_session_delta_carries_server_presentation_and_action_
     session = SimpleNamespace(
         id="633a0114-de2d-4b3d-b1b9-dfa7f314e300",
         device_id="cinder",
+        provider="claude",
+        project="zerg",
+        git_branch="main",
         timeline_title="Investigate state",
         title_state="ready",
         title_source="ai",
@@ -163,6 +166,13 @@ def test_canonical_machine_session_delta_carries_server_presentation_and_action_
 
     assert len(encoded) <= 2_048
     assert payload["authority"] == "runtime_host"
+    # A desktop draws rows from every machine on the account; a row from
+    # another machine has no local engine row to supply its identity.
+    assert payload["device_id"] == "cinder"
+    assert payload["provider"] == "claude"
+    assert payload["project"] == "zerg"
+    assert payload["git_branch"] == "main"
+    assert payload["run"] == {"id": "run-1", "lifecycle": "running"}
     assert payload["presentation"]["primary"]["key"] == "activity_unknown"
     # The menu bar draws the served attention axis; it must not rebuild it.
     assert payload["presentation"]["signal"] == {"state": "unknown", "valid_until": None}

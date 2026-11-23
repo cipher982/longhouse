@@ -502,14 +502,15 @@ public struct MenuBarPanelView: View {
 
     private var showsRuntimeSurface: Bool {
         !snapshot.isSetupRequired
-            || !(snapshot.managedSessions ?? []).isEmpty
+            || !snapshot.allSessions.isEmpty
             || !unmanagedActivityEntries.isEmpty
     }
 
     /// Why the list is empty, when it is. Absent evidence is never shown as
-    /// an observed absence.
+    /// an observed absence, and the claim names only what was observed: other
+    /// machines count only while the server's session view is current.
     private var emptySessionsText: String? {
-        guard snapshot.currentManagedSessions.isEmpty else { return nil }
+        guard snapshot.allSessions.isEmpty else { return nil }
         if !dataTrust.isCurrent {
             return "Current session evidence is unavailable on this Mac."
         }
@@ -518,6 +519,9 @@ public struct MenuBarPanelView: View {
         }
         if snapshot.sessionDiscoveryAttention {
             return nil
+        }
+        if snapshot.realtime != nil && projectionTrust.isCurrent {
+            return "No managed sessions are running on your machines."
         }
         return "No managed sessions are running on this Mac."
     }
@@ -552,6 +556,8 @@ public struct MenuBarPanelView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                 }
+
+                ForEach(snapshot.remoteMachineNotices) { remoteMachineLine($0) }
 
                 let unmanaged = unmanagedActivityEntries
                 if !unmanaged.isEmpty {
@@ -599,12 +605,35 @@ public struct MenuBarPanelView: View {
     /// how many rows have no live status, and those rows say so themselves.
     private func quietTitle(_ quiet: [HearthSessionEntry]) -> String {
         let quietIDs = Set(quiet.map(\.id))
-        let noStatus = snapshot.currentManagedSessions
+        let noStatus = snapshot.allSessions
             .filter { quietIDs.contains($0.id) && $0.menuBarAttentionKind(asOf: presentationDate) == .phaseUnavailable }
             .count
         if noStatus == 0 { return "\(quiet.count) quiet" }
         if noStatus == quiet.count { return "\(quiet.count) without live status" }
         return "\(quiet.count - noStatus) quiet, \(noStatus) without live status"
+    }
+
+    /// Another machine whose engine is offline or needs repair. Gray when it
+    /// is simply offline; the system warning colour when the server says it
+    /// needs repair. Never amber, which belongs to sessions waiting on you.
+    private func remoteMachineLine(_ notice: RemoteMachineNotice) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: notice.isFault ? "exclamationmark.triangle.fill" : "desktopcomputer")
+                .font(.system(size: 11))
+                .foregroundStyle(notice.isFault ? HearthPalette.warning : Color.secondary)
+                .frame(width: 26)
+            Text(notice.text)
+                .font(.system(size: 12))
+                .foregroundStyle(notice.isFault ? Color.primary.opacity(0.85) : Color.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+        }
+        .padding(.leading, 2)
+        .padding(.vertical, 4)
+        .help(notice.hint ?? "")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(notice.hint.map { "\(notice.text). \($0)" } ?? notice.text))
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Hearth.remoteMachine(notice.id))
     }
 
     private func unmanagedRow(_ entry: UnmanagedActivityEntry) -> some View {
@@ -627,7 +656,7 @@ public struct MenuBarPanelView: View {
 
     var hearthEntries: [HearthSessionEntry] {
         let ranked: [(offset: Int, session: ManagedSessionSnapshot, kind: HearthSessionKind)] =
-            snapshot.currentManagedSessions.enumerated().map {
+            snapshot.allSessions.enumerated().map {
                 ($0.offset, $0.element, $0.element.hearthKind(asOf: presentationDate))
             }
         let sorted = ranked.sorted { lhs, rhs in
@@ -697,7 +726,15 @@ public struct MenuBarPanelView: View {
         return compactDetailParts([context, status])
     }
 
+    /// A row from another machine leads with that machine's name, so the one
+    /// list can mix machines without a row being mistaken for a local one.
     func hearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
+        let subtitle = localHearthSubtitle(session, kind: kind)
+        guard session.isRemote, let deviceId = session.deviceId else { return subtitle }
+        return compactDetailParts([snapshot.machineLabel(forDeviceId: deviceId), subtitle])
+    }
+
+    private func localHearthSubtitle(_ session: ManagedSessionSnapshot, kind: HearthSessionKind) -> String {
         let workspace = managedSessionWorkspaceContext(session)
         let label = session.presentation?.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {
@@ -723,6 +760,9 @@ public struct MenuBarPanelView: View {
             return managedSessionDetail(session)
         case .quiet:
             switch session.menuBarAttentionKind(asOf: presentationDate) {
+            case .unknown(let reason) where session.isRemote:
+                // No local engine state to explain it: say what the server said.
+                return compactDetailParts([workspace, reason.replacingOccurrences(of: "_", with: " ")])
             case .unknown:
                 return managedSessionDetail(session)
             case .phaseUnavailable:
