@@ -19,6 +19,7 @@ from zerg.qa import claude_helm_lifecycle
 from zerg.qa import claude_live_session_support
 from zerg.qa import codex_provider_release_canary
 from zerg.qa import cursor_helm_product_e2e
+from zerg.qa import live_kit
 from zerg.qa import opencode_helm_lifecycle
 from zerg.qa import provider_console_lifecycle
 from zerg.qa import provider_native_resume
@@ -38,6 +39,31 @@ MARKER = "LH_FIXTURE_REPLY_abc"
 
 
 # --- the declaration itself ---------------------------------------------------
+
+
+class _Clock:
+    """A clock the waits below advance only by sleeping: they poll fixed fakes until a deadline, and what they
+    declare at that deadline is the same whether the deadline passed in real time or not."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return 1_800_000_000.0 + self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def virtual_clock(monkeypatch) -> _Clock:
+    clock = _Clock()
+    for module in (live_kit, opencode_helm_lifecycle, provider_native_resume, claude_live_session_support, provider_console_lifecycle):
+        monkeypatch.setattr(module, "time", clock)
+    return clock
 
 
 def test_an_expired_wait_keeps_its_type_and_message_and_carries_its_kind() -> None:
@@ -115,7 +141,7 @@ def _opencode_rows(*rows: dict[str, object]) -> list[dict[str, object]]:
     return [{"tool_commands": [], "finish": None, "error": None, "parent_id": None, "text": "", **row} for row in rows]
 
 
-def test_opencode_waits_on_the_providers_turn_once_the_provider_holds_the_prompt(monkeypatch) -> None:
+def test_opencode_waits_on_the_providers_turn_once_the_provider_holds_the_prompt(monkeypatch, virtual_clock) -> None:
     prompt = f"Reply with exactly {MARKER} and nothing else."
     held = _opencode_rows({"id": "u1", "role": "user", "text": prompt}, {"id": "a1", "role": "assistant", "parent_id": "u1"})
     monkeypatch.setattr(opencode_helm_lifecycle, "_messages", lambda _state: [])
@@ -183,7 +209,7 @@ def test_a_claude_send_never_archived_says_which_side_stopped() -> None:
     assert claude_helm_lifecycle.unanswered_send_waited_on([], marker=MARKER, prompt=prompt, outcome="pending") is None
 
 
-def test_the_claude_wait_helper_declares_what_its_caller_says_and_nothing_otherwise(monkeypatch) -> None:
+def test_the_claude_wait_helper_declares_what_its_caller_says_and_nothing_otherwise(monkeypatch, virtual_clock) -> None:
     with pytest.raises(claude_live_session_support.ScenarioError, match="timed out waiting for the end of the turn") as stalled:
         claude_live_session_support.wait_until(lambda: None, timeout=0.2, description="the end of the turn", waited_on=PROVIDER_TURN)
     assert waited_on(stalled.value) == PROVIDER_TURN
@@ -266,7 +292,7 @@ def _cursor_resume_fixture(tmp_path: Path, *events: tuple[str, dict[str, object]
     return state, {"LONGHOUSE_HOME": str(tmp_path)}
 
 
-def test_the_cursor_hook_sequence_wait_reads_the_hooks_to_say_what_it_waited_on(tmp_path) -> None:
+def test_the_cursor_hook_sequence_wait_reads_the_hooks_to_say_what_it_waited_on(tmp_path, virtual_clock) -> None:
     prompt = f"Reply with exactly {MARKER}"
 
     def sequence(*events: tuple[str, dict[str, object]], typed: bool, claim_status: str = "observed") -> BaseException:
@@ -354,7 +380,7 @@ def test_a_wait_that_cannot_determine_its_kind_declares_nothing_and_keeps_its_ti
     assert waited_on(raised.value) is None
 
 
-def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path) -> None:
+def test_a_console_claim_wait_reads_the_claim_to_say_what_it_waited_on(tmp_path, virtual_clock) -> None:
     path = tmp_path / "claim.json"
     terminal = frozenset({"terminal", "failed"})
 
