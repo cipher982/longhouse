@@ -678,12 +678,40 @@ MEMORY_TMP_TARGETS = frozenset(
 )
 
 
+# Lanes that drive a browser. Playwright launches Chromium with
+# --disable-dev-shm-usage (Docker's /dev/shm is 64 MB), so Chromium keeps its
+# shared-memory segments, like the profile, as mmapped files under TMPDIR. On
+# a disk-backed overlay that puts every compositor frame on the disk's write
+# path, and on overlay over btrfs the browser never starts: a pool thread sits
+# in uninterruptible I/O and the lane hangs until its timeout. TMPDIR holds
+# only scratch; the artifacts these lanes keep are under /work/artifacts and
+# /tmp/longhouse-test/artifacts, which stay on disk for collection.
+BROWSER_TMP_TARGETS = frozenset(
+    {
+        "qa-oss",
+        "test-ios-transcript-stability",
+        "test-transcript-stability",
+        "test-ui-sweep",
+        "test-web-send-handoff",
+        "test-web-transcript-stability",
+    }
+)
+BROWSER_TMPDIR = "/tmp/longhouse-test/tmp:rw,exec,nosuid,size=2g,mode=1777"
+
+
 def memory_backed_tmp(target: str) -> list[str]:
     if target.startswith("test-e2e"):
         # Core E2E keeps its logs and traces in /tmp/longhouse-test/artifacts, which are collected after the container
         # stops, so /tmp itself must stay on disk. The databases are scratch: on the shared CI disk a create_device
         # write held the catalogd writer 1.3 s and failed a device-token request (run 43810898738).
-        return ["--tmpfs", "/tmp/longhouse-test/e2e-db:rw,exec,nosuid,size=2g,mode=1777"]
+        return [
+            "--tmpfs",
+            "/tmp/longhouse-test/e2e-db:rw,exec,nosuid,size=2g,mode=1777",
+            "--tmpfs",
+            BROWSER_TMPDIR,
+        ]
+    if target in BROWSER_TMP_TARGETS:
+        return ["--tmpfs", BROWSER_TMPDIR]
     if target not in MEMORY_TMP_TARGETS:
         return []
     return ["--tmpfs", "/tmp:rw,exec,nosuid,size=2g,mode=1777"]
