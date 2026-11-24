@@ -23,24 +23,38 @@ mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 DERIVED_DATA_PATH="${LH_DERIVED_DATA_PATH:-/tmp/lh-previews-derived-data}"
 RESULT_BUNDLE="${DERIVED_DATA_PATH}.xcresult"
-SIM_NAME="${LH_SIM_NAME:-iPhone 17 Pro}"
 
 cd "$IOS_DIR"
 
-# Boot the simulator if it isn't already (simctl boot is idempotent-ish).
-SIM_ID="$(xcrun simctl list devices available | awk -v name="$SIM_NAME" '
-  $0 ~ name && /\(.*\)/ { match($0, /\([A-F0-9-]{36}\)/); print substr($0, RSTART+1, RLENGTH-2); exit }
-')"
-if [ -z "$SIM_ID" ]; then
-  echo "Could not find simulator named '$SIM_NAME'" >&2
-  exit 1
+if [ -n "${LH_SIM_NAME:-}" ]; then
+  SIM_NAME="$LH_SIM_NAME"
+  SIM_ID="$(xcrun simctl list devices available | awk -v name="$SIM_NAME" '
+    $0 ~ name && /\(.*\)/ { match($0, /\([A-F0-9-]{36}\)/); print substr($0, RSTART+1, RLENGTH-2); exit }
+  ')"
+  if [ -z "$SIM_ID" ]; then
+    echo "Could not find simulator named '$SIM_NAME'" >&2
+    exit 1
+  fi
+  DESTINATION="platform=iOS Simulator,id=$SIM_ID"
+else
+  DESTINATION="${IOS_DESTINATION:-$(python3 "$REPO_ROOT/scripts/ci/select_ios_simulator.py" "$IOS_DIR/XcodeHarness/LonghouseIOS.xcodeproj" LonghousePreviews)}"
+  if [[ ",${DESTINATION}," != *",platform=iOS Simulator,"* ]]; then
+    echo "render-previews.sh only supports iOS Simulator destinations; got '$DESTINATION'" >&2
+    exit 2
+  fi
+  SIM_ID="$(printf '%s\n' "$DESTINATION" | sed -n 's/.*id=\([^,]*\).*/\1/p')"
+  SIM_NAME="${DESTINATION}"
 fi
-xcrun simctl boot "$SIM_ID" 2>/dev/null || true
-# Wait for the boot to finish before xcodebuild installs onto it; a stuck
-# boot fails here, named, instead of stalling the test launch.
-if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIM_ID" -b >/dev/null; then
-  echo "Simulator $SIM_ID did not finish booting within 300 s" >&2
-  exit 1
+
+if [ -n "$SIM_ID" ]; then
+  # Boot the simulator if it isn't already (simctl boot is idempotent-ish).
+  xcrun simctl boot "$SIM_ID" 2>/dev/null || true
+  # Wait for the boot to finish before xcodebuild installs onto it; a stuck
+  # boot fails here, named, instead of stalling the test launch.
+  if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIM_ID" -b >/dev/null; then
+    echo "Simulator $SIM_ID did not finish booting within 300 s" >&2
+    exit 1
+  fi
 fi
 
 # Wipe prior artifacts. Keep previews isolated from Xcode's shared DerivedData
@@ -48,7 +62,7 @@ fi
 rm -rf "$RESULT_BUNDLE" "$OUT_DIR" "$DERIVED_DATA_PATH"
 mkdir -p "$OUT_DIR"
 
-echo ">> Running snapshot tests on $SIM_NAME ($SIM_ID)"
+echo ">> Running snapshot tests on $SIM_NAME"
 # SnapshotPreviews discovers previews at runtime, so a "test" failure isn't
 # necessarily a UI bug: a preview can crash or hang during render. We still
 # want the attachments either way. The full log goes to the output directory;
@@ -60,7 +74,7 @@ set +e
 perl -e 'alarm shift; exec @ARGV' 1200 xcodebuild test \
   -project XcodeHarness/LonghouseIOS.xcodeproj \
   -scheme LonghousePreviews \
-  -destination "platform=iOS Simulator,id=$SIM_ID" \
+  -destination "$DESTINATION" \
   -configuration Debug \
   -only-testing:LonghousePreviewTests/PreviewSnapshots \
   -test-timeouts-enabled YES \
