@@ -4,8 +4,8 @@ A hosted CI runner has four slow vCPUs, and the whole suite on one of them
 takes ~5 minutes even under xdist. Runners are free and parallel, so CI runs
 n jobs: known heavy test files are greedily balanced (LPT) across shards and
 the remaining files hash to an index. Whole files stay together because
-module-scoped fixtures and --dist=loadfile assume it. Every xdist worker in
-a job keeps the exact same deterministic partition.
+module-scoped fixtures assume it. Every xdist worker in a job keeps the
+exact same deterministic partition.
 
 Unset (every local run), nothing is deselected.
 """
@@ -14,22 +14,22 @@ import os
 import zlib
 
 
-# Known slow multi-process/lifecycle files in seconds so LPT bin-packing keeps
-# them off the same CI shard instead of letting filename CRC32 stack them.
+# Known slow files and the seconds their tests take in all, so LPT bin-packing keeps them off the same CI
+# shard instead of letting filename CRC32 stack them. Listed heaviest first (LPT places them in this order).
+# Measured 2026-11-24: the whole suite in the test container, 8 xdist workers, sum of --durations over 0.3 s.
 _HEAVY_FILE_WEIGHTS: tuple[tuple[str, float], ...] = (
-    ("tests_lite/test_pi_family_helm_fake_lifecycle.py", 150.0),
-    ("tests_lite/test_pi_family_turn_oracle.py", 55.0),
-    ("tests_lite/test_runtime_evidence.py", 35.0),
-    ("tests_lite/test_wait_kind.py", 28.0),
-    ("tests_lite/test_universal_agent_harness.py", 22.0),
-    ("tests_lite/test_provider_harness_qualification.py", 16.0),
-    ("tests_lite/test_title_dependency_assurance_producers.py", 15.0),
-    ("tests_lite/test_codex_helm_launch_visibility.py", 14.0),
-    ("tests_lite/test_fact_reducer_differential.py", 12.0),
-    ("tests_lite/test_claude_coordination_directed_input.py", 10.0),
-    ("tests_lite/test_provider_native_resume.py", 9.0),
-    ("tests_lite/test_cursor_coordination_producer.py", 8.0),
-    ("tests_lite/test_catalogd_supervisor.py", 8.0),
+    ("tests_lite/test_universal_agent_harness.py", 199.0),
+    ("tests_lite/test_pi_family_turn_oracle.py", 167.0),
+    ("tests_lite/test_pi_family_helm_fake_lifecycle.py", 164.0),
+    ("tests_lite/test_provider_observed_install_qualification.py", 145.0),
+    ("tests_lite/test_provider_harness_qualification.py", 81.0),
+    ("tests_lite/test_provider_resume_factory.py", 61.0),
+    ("tests_lite/test_scripted_model_pacing.py", 20.0),
+    ("tests_lite/test_agents_storage_v2.py", 14.0),
+    ("tests_lite/test_omp_qa_producers.py", 12.0),
+    ("tests_lite/test_render_shadow.py", 11.0),
+    ("tests_lite/test_catalogd_supervisor.py", 9.0),
+    ("tests_lite/test_terminal_truth_kinds.py", 8.0),
 )
 
 

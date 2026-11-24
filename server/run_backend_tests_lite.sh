@@ -82,10 +82,11 @@ for arg in "$@"; do
 done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
-    # One xdist worker per guest CPU, whole files per worker (--dist=loadfile).
-    # xdist hands files out by test count, largest first, so a file of a few
-    # long tests starts last and adds its whole time to the run: put a long
-    # test in a file that has many.
+    # One xdist worker per guest CPU, one test at a time (--dist=loadgroup):
+    # tests_lite/_xdist_schedule.py keeps the users of a shared (module or
+    # broader) fixture on one worker and starts the slowest files first.
+    # Under --dist=loadfile a file's long tests ran back to back on one worker
+    # while the others idled, and that file was the job's tail.
     # LONGHOUSE_TEST_CPUS is the guest's --cpus, exported by the isolation
     # launcher: `-n auto` would count the Docker VM's CPUs instead (16 workers
     # in an 8-CPU guest, slower and 3x the memory). A worker costs ~0.7 GiB;
@@ -94,8 +95,8 @@ if [ "$has_xdist_arg" -eq 0 ]; then
     # startup costs more than it saves. PYTEST_XDIST_WORKERS overrides either
     # way, 0 forces serial, and an explicit -n argument runs exactly as typed.
     # A crashed worker (pytest-timeout kills a hung one) ends the run at once:
-    # xdist's replacement worker under loadfile went idle with three files
-    # unassigned and the run sat for the whole job timeout.
+    # xdist's replacement worker went idle with work unassigned and the run
+    # sat for the whole job timeout.
     if [ -n "${PYTEST_XDIST_WORKERS:-}" ]; then
         xdist_workers="$PYTEST_XDIST_WORKERS"
     elif [ -n "${LONGHOUSE_TEST_TARGET:-}" ] && [ "${#test_targets[@]}" -le 1 ]; then
@@ -107,7 +108,7 @@ if [ "$has_xdist_arg" -eq 0 ]; then
         ""|0|1|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
         *)
-            pytest_args+=(-n "$xdist_workers" --dist=loadfile --max-worker-restart=0)
+            pytest_args+=(-n "$xdist_workers" --dist=loadgroup --max-worker-restart=0)
             ;;
     esac
 fi
