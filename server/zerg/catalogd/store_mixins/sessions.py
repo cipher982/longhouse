@@ -1794,6 +1794,12 @@ class SessionsMixin:
                 if len(references) >= _SESSION_READ_DELEGATION_FACT_LIMIT:
                     break
 
+            def _meta_str(meta: Mapping[str, Any], key: str) -> str | None:
+                raw_val = meta.get(key)
+                if isinstance(raw_val, str) and raw_val.strip():
+                    return raw_val.strip()
+                return None
+
             children: list[dict[str, Any]] = []
             for row in rows:
                 cid = str(row["session_id"])
@@ -1824,6 +1830,14 @@ class SessionsMixin:
                         delta_ms = int(round((ended_dt - started_dt).total_seconds() * 1000))
                         if delta_ms >= 0:
                             duration_ms = delta_ms
+                is_antigravity = str(row["provider"] or "").strip().lower() == "antigravity"
+                agent_type = extra.get("agent_type") or _meta_str(merged_metadata, "agent_type")
+                if not agent_type and is_antigravity:
+                    agent_type = _meta_str(merged_metadata, "role")
+                description = extra.get("description") or _meta_str(merged_metadata, "description")
+                if not description and is_antigravity:
+                    description = _meta_str(merged_metadata, "name")
+                model = extra.get("model") or _meta_str(merged_metadata, "model")
                 children.append(
                     {
                         "session_id": cid,
@@ -1833,9 +1847,9 @@ class SessionsMixin:
                         "parent_tool_call_id": row["subagent_parent_tool_call_id"],
                         "parent_agent_id": parent_agent_id,
                         "run_id": row["subagent_run_id"],
-                        "agent_type": extra.get("agent_type"),
-                        "description": extra.get("description"),
-                        "model": extra.get("model"),
+                        "agent_type": agent_type,
+                        "description": description,
+                        "model": model,
                         "is_fork": extra.get("is_fork"),
                         "spawn_depth": extra.get("spawn_depth"),
                         "finished": extra.get("finished"),

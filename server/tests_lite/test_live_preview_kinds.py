@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from datetime import timezone
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -54,7 +53,7 @@ def _fresh_memory():
 def test_kind_follows_what_a_stored_preview_carries() -> None:
     assert lp.preview_kind(None) == "reply"
     assert lp.preview_kind("Bash") == "tool"
-    for name in ("Agent", "Task", "task", "spawn_agent"):
+    for name in ("Agent", "Task", "task", "spawn_agent", "invoke_subagent", "swarm"):
         assert lp.preview_kind(name) == "subagent"
 
 

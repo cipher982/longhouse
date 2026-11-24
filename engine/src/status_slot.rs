@@ -80,7 +80,7 @@ pub struct StatusPreview {
 /// from the same names (`SUBAGENT_TOOL_NAMES`).
 pub fn tool_preview_kind(tool_name: &str) -> &'static str {
     match tool_name.trim().to_ascii_lowercase().as_str() {
-        "agent" | "task" | "spawn_agent" | "invoke_subagent" => "subagent",
+        "agent" | "task" | "spawn_agent" | "invoke_subagent" | "swarm" => "subagent",
         _ => "tool",
     }
 }
@@ -89,7 +89,14 @@ pub fn tool_preview_kind(tool_name: &str) -> &'static str {
 /// command, a subagent's description, a path, pattern or query, else the JSON.
 pub fn tool_arguments_summary(name: &str, input: &Value) -> String {
     let keys: &[&str] = if tool_preview_kind(name) == "subagent" {
-        &["description", "prompt", "subagent_type"]
+        &[
+            "description",
+            "name",
+            "brief",
+            "prompt",
+            "subagent_type",
+            "action",
+        ]
     } else {
         &[
             "command",

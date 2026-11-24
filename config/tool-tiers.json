@@ -63,7 +63,12 @@
     "multi_replace_file_content": { "tier": "action", "aggregate": null, "icon": "E", "label": "Edit", "color": "brand" },
     "write_to_file":    { "tier": "action",  "aggregate": null,     "icon": "W", "label": "Write",     "color": "success" },
     "read_url_content": { "tier": "context", "aggregate": null,     "icon": "W", "label": "Fetch",     "color": "cyan" },
-    "invoke_subagent":  { "tier": "action",  "aggregate": null,     "icon": "A", "label": "Agent",     "color": "tertiary" }
+    "invoke_subagent":  { "tier": "action",  "aggregate": null,     "icon": "A", "label": "Agent",     "color": "tertiary" },
+    "swarm":            { "tier": "action",  "aggregate": null,     "icon": "S", "label": "Swarm",     "color": "tertiary" },
+    "post_message":     { "tier": "action",  "aggregate": null,     "icon": "B", "label": "Board",     "color": "secondary" },
+    "read_board":       { "tier": "noise",   "aggregate": "read",   "icon": "B", "label": "Board",     "color": "muted" },
+    "swarm_wait":       { "tier": "noise",   "aggregate": "wait",   "icon": "…", "label": "Wait",      "color": "tertiary" },
+    "swarm_note":       { "tier": "action",  "aggregate": null,     "icon": "+", "label": "Swarm",     "color": "accent" }
   },
   "_final_answer_tools": "Tools whose call input IS the agent's final answer rather than a side effect. A schema-constrained agent (Claude subagent/workflow) returns by calling one of these; the tool result is a bare ack. Timeline builders render the payload as the closing assistant message instead of an opaque tool row, so a finished session does not read as truncated. See control-plane/docs/specs/final-answer-tool-rendering.md.",
   "final_answer_tools": ["StructuredOutput"],

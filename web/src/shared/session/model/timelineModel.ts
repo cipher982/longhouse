@@ -871,6 +871,67 @@ export function getActivityGroupTiming(group: ActivityGroup): { duration: string
   };
 }
 
+function unwrapArgString(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "string") return parsed.trim();
+    } catch {
+      // keep raw string when not valid JSON
+    }
+  }
+  return trimmed;
+}
+
+function summarizeSwarmTool(toolName: string, input: Record<string, unknown>): string | null {
+  if (toolName === "swarm") {
+    const action = unwrapArgString(input.action).toLowerCase();
+    const name = unwrapArgString(input.name);
+    const title = unwrapArgString(input.title);
+    const model = unwrapArgString(input.model);
+    const workspace = unwrapArgString(input.workspace);
+    const taskCount = Array.isArray(input.tasks)
+      ? input.tasks.length
+      : typeof input.n === "number" && input.n > 1
+        ? input.n
+        : 0;
+    if (action === "add") {
+      const target = name || "worker";
+      const countSuffix = taskCount > 1 ? ` × ${taskCount}` : "";
+      const wsSuffix = workspace && workspace !== "inherit" ? ` (${workspace})` : "";
+      return `add ${target}${countSuffix}${wsSuffix}`.slice(0, 120);
+    }
+    if (action === "kill" && name) return `kill ${name}`.slice(0, 120);
+    if (action === "title" && title) return `title: ${title}`.slice(0, 120);
+    if (action === "model") {
+      if (name && model) return `model ${name} → ${model}`.slice(0, 120);
+      if (model) return `model ${model}`.slice(0, 120);
+    }
+    if (action) return action.slice(0, 120);
+    return null;
+  }
+  if (toolName === "post_message") {
+    const text = unwrapArgString(input.text);
+    const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+    return firstLine ? firstLine.slice(0, 120) : null;
+  }
+  if (toolName === "read_board") {
+    if (typeof input.since === "number") return `since #${input.since}`.slice(0, 120);
+    const sinceStr = unwrapArgString(input.since);
+    return sinceStr ? `since #${sinceStr}`.slice(0, 120) : "read board";
+  }
+  if (toolName === "swarm_note") {
+    for (const field of ["title", "goal", "text", "note"]) {
+      const text = unwrapArgString(input[field]);
+      const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+      if (firstLine) return firstLine.slice(0, 120);
+    }
+  }
+  return null;
+}
+
 /**
  * Short one-line label for a tool call. Prefers the most semantic input field
  * (file path, command, query) over raw JSON.
@@ -893,6 +954,12 @@ export function getToolSummary(interaction: ToolInteraction): string {
   if (projectedInput) {
     const input = getToolInputRecord(projectedInput);
     if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
+    const hasMcpNamespace = Boolean(interaction.presentation?.mcp_namespace) || interaction.toolName.startsWith("mcp__");
+    if (!hasMcpNamespace) {
+      const lowerTool = (interaction.presentation?.tool_name ?? interaction.toolName).toLowerCase();
+      const swarmSummary = summarizeSwarmTool(lowerTool, input);
+      if (swarmSummary) return swarmSummary;
+    }
     if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
     if ("patch" in input && typeof input.patch === "string") {
       const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1].trim());

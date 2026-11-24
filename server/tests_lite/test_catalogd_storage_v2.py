@@ -5343,3 +5343,85 @@ async def test_turn_index_reads_settled_turn_lists_and_marks_what_needs_decoding
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_first", [False, True])
+async def test_antigravity_swarm_spawn_hides_worker_and_exposes_roster_metadata(daemon_paths, child_first):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id, worker_id = uuid4(), uuid4()
+    parent_native_id = "11111111-1111-4111-8111-111111111111"
+    worker_native_id = "22222222-2222-4222-8222-222222222222"
+    parent = _raw_params(
+        epoch=uuid4(),
+        session_id=parent_id,
+        start=0,
+        end=10,
+        records=(b"swarm-add",),
+        sealed_at=now,
+        provider="antigravity",
+        provider_session_id=parent_native_id,
+        opaque_source_id="path-sha256:swarm-parent",
+        provider_facts=(
+            {
+                "kind": "delegation.spawn",
+                "at": now.isoformat(),
+                "source_position": 6,
+                "payload": {
+                    "children": [
+                        {
+                            "provider_session_id": worker_native_id,
+                            "parent_tool_call_id": "antigravity-20-1",
+                            "metadata": {
+                                "name": "data-worker",
+                                "role": "swarm",
+                                "model": "gemini-2.5-pro",
+                            },
+                        }
+                    ]
+                },
+            },
+        ),
+    )
+    worker = _raw_params(
+        epoch=uuid4(),
+        session_id=worker_id,
+        start=0,
+        end=10,
+        records=(b"worker-turn",),
+        sealed_at=now,
+        provider="antigravity",
+        provider_session_id=worker_native_id,
+        opaque_source_id="path-sha256:swarm-worker",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = _catalog_client(socket_path)
+    try:
+        for raw in (worker, parent) if child_first else (parent, worker):
+            await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    try:
+        with Session(engine) as db:
+            worker_row = db.get(StorageSession, str(worker_id))
+            assert worker_row is not None
+            assert worker_row.subagent_parent_session_id == str(parent_id)
+            assert worker_row.subagent_parent_tool_call_id == "antigravity-20-1"
+            assert worker_row.is_subagent == 1
+            assert worker_row.hidden_from_default_timeline == 1
+
+        graph = CatalogStore(engine).list_session_subagents(session_id=str(parent_id), owner_id="42")
+        assert len(graph["children"]) == 1
+        child = graph["children"][0]
+        assert child["session_id"] == str(worker_id)
+        assert child["parent_tool_call_id"] == "antigravity-20-1"
+        assert child["description"] == "data-worker"
+        assert child["agent_type"] == "swarm"
+        assert child["model"] == "gemini-2.5-pro"
+    finally:
+        engine.dispose()

@@ -87,6 +87,11 @@ public enum ToolTiers {
         "write_to_file": ToolTierMeta(tier: .action, aggregate: nil, icon: "W", label: "Write", color: .success),
         "read_url_content": ToolTierMeta(tier: .context, aggregate: nil, icon: "W", label: "Fetch", color: .cyan),
         "invoke_subagent": ToolTierMeta(tier: .action, aggregate: nil, icon: "A", label: "Agent", color: .tertiary),
+        "swarm": ToolTierMeta(tier: .action, aggregate: nil, icon: "S", label: "Swarm", color: .tertiary),
+        "post_message": ToolTierMeta(tier: .action, aggregate: nil, icon: "B", label: "Board", color: .secondary),
+        "read_board": ToolTierMeta(tier: .noise, aggregate: .read, icon: "B", label: "Board", color: .muted),
+        "swarm_wait": ToolTierMeta(tier: .noise, aggregate: .wait, icon: "…", label: "Wait", color: .tertiary),
+        "swarm_note": ToolTierMeta(tier: .action, aggregate: nil, icon: "+", label: "Swarm", color: .accent),
     ]
 
     public static let mcpNamespaces: [String: McpNamespaceMeta] = [

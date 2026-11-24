@@ -5871,6 +5871,7 @@ fn antigravity_tool_name_from_type(event_type: &str) -> String {
 struct PendingAntigravityCall {
     id: String,
     name: String,
+    action: Option<String>,
 }
 
 #[derive(Default)]
@@ -5882,50 +5883,165 @@ struct AntigravityPending {
     next_result_step: Option<u64>,
 }
 
+fn antigravity_unwrap_quoted_str(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        if let Ok(decoded) = serde_json::from_str::<String>(trimmed) {
+            return decoded.trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 fn antigravity_is_invoke_subagent(name: &str) -> bool {
     name.eq_ignore_ascii_case("invoke_subagent")
         || name.eq_ignore_ascii_case("invoke-subagent")
         || name.eq_ignore_ascii_case("INVOKE_SUBAGENT")
 }
 
-/// The INVOKE_SUBAGENT result is prose followed by one or more JSON objects.
-/// Parse only objects that carry the provider's own child identity; never use
-/// the log URI as a path to read another transcript.
-fn antigravity_spawn_children(text: &str, source: &str, parent_tool_call_id: &str) -> Vec<Value> {
-    fn collect(value: &Value, source: &str, parent_tool_call_id: &str, children: &mut Vec<Value>) {
-        let Some(object) = value.as_object() else {
-            return;
-        };
-        let conversation_id = object
-            .get("conversationId")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|id| !id.is_empty());
-        let has_child_locator =
-            object.get("logAbsoluteUri").is_some() || object.get("workspaceUris").is_some();
-        if let Some(conversation_id) = conversation_id.filter(|id| {
-            has_child_locator
-                && !children.iter().any(|child| {
-                    child.get("provider_session_id").and_then(Value::as_str) == Some(*id)
-                })
-        }) {
-            let mut metadata = object.clone();
-            // Prose stays in the raw source and rendered result, not copied
-            // once per child where it could crowd native identities out.
-            if !source.trim().is_empty() {
-                metadata.insert("source".to_string(), Value::from(source.to_string()));
+fn antigravity_is_swarm_tool(name: &str) -> bool {
+    name.eq_ignore_ascii_case("swarm")
+}
+
+fn antigravity_is_spawn_tool(name: &str) -> bool {
+    antigravity_is_invoke_subagent(name) || antigravity_is_swarm_tool(name)
+}
+
+fn antigravity_swarm_child_metadata(
+    object: &serde_json::Map<String, Value>,
+    source: &str,
+) -> Value {
+    let mut metadata = serde_json::Map::new();
+    for key in ["name", "role", "model", "model_display_name", "workspace"] {
+        if let Some(value) = object.get(key) {
+            if !value.is_null() {
+                metadata.insert(key.to_string(), value.clone());
             }
-            children.push(json!({
-                "provider_session_id": conversation_id,
-                "parent_tool_call_id": parent_tool_call_id,
-                "metadata": metadata,
-            }));
         }
-        for nested in object.values() {
-            collect(nested, source, parent_tool_call_id, children);
-            if children.len() >= 64 {
-                break;
+    }
+    metadata
+        .entry("role".to_string())
+        .or_insert_with(|| Value::from("swarm"));
+    if !source.trim().is_empty() {
+        metadata.insert("source".to_string(), Value::from(source.to_string()));
+    }
+    Value::Object(metadata)
+}
+
+#[derive(Copy, Clone)]
+enum AntigravitySpawnMode {
+    InvokeSubagent,
+    Swarm { action_is_add: bool },
+}
+
+/// Extract provider-native child conversation identities from Antigravity
+/// `INVOKE_SUBAGENT` and `swarm(action="add")` results. Never follow a log URI
+/// or workspace path to read another transcript.
+fn antigravity_spawn_children(
+    text: &str,
+    source: &str,
+    parent_tool_call_id: &str,
+    self_session_id: &str,
+    mode: AntigravitySpawnMode,
+) -> Vec<Value> {
+    fn collect(
+        value: &Value,
+        source: &str,
+        parent_tool_call_id: &str,
+        self_session_id: &str,
+        mode: AntigravitySpawnMode,
+        in_added: bool,
+        children: &mut Vec<Value>,
+    ) {
+        if children.len() >= 64 {
+            return;
+        }
+        match value {
+            Value::Array(items) if matches!(mode, AntigravitySpawnMode::Swarm { .. }) => {
+                for item in items {
+                    collect(
+                        item,
+                        source,
+                        parent_tool_call_id,
+                        self_session_id,
+                        mode,
+                        in_added,
+                        children,
+                    );
+                    if children.len() >= 64 {
+                        break;
+                    }
+                }
             }
+            Value::Object(object) => {
+                let (candidate_id, metadata_opt, next_added) = match mode {
+                    AntigravitySpawnMode::InvokeSubagent => {
+                        let cid = object
+                            .get("conversationId")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|id| !id.is_empty());
+                        let has_locator = object.get("logAbsoluteUri").is_some()
+                            || object.get("workspaceUris").is_some();
+                        let meta = cid.filter(|_| has_locator).map(|_| {
+                            let mut m = object.clone();
+                            if !source.trim().is_empty() {
+                                m.insert("source".to_string(), Value::from(source.to_string()));
+                            }
+                            Value::Object(m)
+                        });
+                        (cid.filter(|_| has_locator), meta, false)
+                    }
+                    AntigravitySpawnMode::Swarm { action_is_add } => {
+                        let status_added = object
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .is_some_and(|s| s.eq_ignore_ascii_case("added"));
+                        let added_ctx = action_is_add || in_added || status_added;
+                        let cid = if added_ctx {
+                            object
+                                .get("conversation_id")
+                                .or_else(|| object.get("conversationId"))
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|id| !id.is_empty())
+                        } else {
+                            None
+                        };
+                        let meta = cid.map(|_| antigravity_swarm_child_metadata(object, source));
+                        (cid, meta, added_ctx)
+                    }
+                };
+                if let (Some(conversation_id), Some(metadata)) = (candidate_id, metadata_opt) {
+                    let is_self = !self_session_id.is_empty() && conversation_id == self_session_id;
+                    let already_seen = children.iter().any(|child| {
+                        child.get("provider_session_id").and_then(Value::as_str)
+                            == Some(conversation_id)
+                    });
+                    if !is_self && !already_seen {
+                        children.push(json!({
+                            "provider_session_id": conversation_id,
+                            "parent_tool_call_id": parent_tool_call_id,
+                            "metadata": metadata,
+                        }));
+                    }
+                }
+                for nested in object.values() {
+                    collect(
+                        nested,
+                        source,
+                        parent_tool_call_id,
+                        self_session_id,
+                        mode,
+                        next_added,
+                        children,
+                    );
+                    if children.len() >= 64 {
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -5940,7 +6056,15 @@ fn antigravity_spawn_children(text: &str, source: &str, parent_tool_call_id: &st
         };
         let consumed = stream.byte_offset();
         cursor = start.saturating_add(consumed.max(1));
-        collect(&value, source, parent_tool_call_id, &mut children);
+        collect(
+            &value,
+            source,
+            parent_tool_call_id,
+            self_session_id,
+            mode,
+            false,
+            &mut children,
+        );
         if children.len() >= 64 {
             break;
         }
@@ -6112,19 +6236,25 @@ fn extract_antigravity_events(
                 continue;
             };
             let call_id = format!("antigravity-{step}-{idx}");
+            let parsed_args = call
+                .args
+                .as_ref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok());
+            let action = parsed_args
+                .as_ref()
+                .and_then(|args| args.get("action").and_then(Value::as_str))
+                .map(antigravity_unwrap_quoted_str)
+                .filter(|value| !value.is_empty());
             fresh.push_back(PendingAntigravityCall {
                 id: call_id.clone(),
                 name: tool_name.to_string(),
+                action,
             });
-            let intent = call
-                .args
-                .as_ref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
-                .and_then(|args| {
-                    args.get("toolSummary")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
+            let intent = parsed_args.as_ref().and_then(|args| {
+                args.get("toolSummary")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
             events.push(ParsedEvent {
                 item: ItemFacts::intent(intent.as_deref()),
                 uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
@@ -6197,9 +6327,24 @@ fn extract_antigravity_events(
         }
         if let Some(call) = result_call
             .as_ref()
-            .filter(|call| antigravity_is_invoke_subagent(&call.name))
+            .filter(|call| antigravity_is_spawn_tool(&call.name))
         {
-            let children = antigravity_spawn_children(text, source, &call.id);
+            let spawn_mode = if antigravity_is_swarm_tool(&call.name) {
+                match call.action.as_deref() {
+                    Some(action) if !action.eq_ignore_ascii_case("add") => None,
+                    Some(_) => Some(AntigravitySpawnMode::Swarm {
+                        action_is_add: true,
+                    }),
+                    None => Some(AntigravitySpawnMode::Swarm {
+                        action_is_add: false,
+                    }),
+                }
+            } else {
+                Some(AntigravitySpawnMode::InvokeSubagent)
+            };
+            let children = spawn_mode
+                .map(|mode| antigravity_spawn_children(text, source, &call.id, session_id, mode))
+                .unwrap_or_default();
             if !children.is_empty() {
                 if let Some(at) = obj
                     .created_at
@@ -12048,6 +12193,171 @@ please research the steering shaft options"#;
             .events
             .iter()
             .any(|event| event.tool_output_text.as_deref() == Some(output.as_str())));
+    }
+
+    #[test]
+    fn test_antigravity_swarm_add_emits_child_spawn_facts_and_ignores_non_add_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "11111111-1111-4111-8111-111111111111";
+        let add_with_ws = json!({
+            "status": "added",
+            "name": "data-worker",
+            "model": "gemini-2.5-pro",
+            "model_display_name": "Gemini 2.5 Pro",
+            "conversation_id": "22222222-2222-4222-8222-222222222222",
+            "workspace": "/tmp/worktrees/swarm-data-worker",
+            "open_board": "Run /swarm board",
+            "note": "Long coordinator instruction prose that should stay out of compact spawn metadata."
+        });
+        let add_inherit = json!({
+            "status": "added",
+            "name": "monitor",
+            "model": "gemini-2.5-pro",
+            "conversation_id": "33333333-3333-4333-8333-333333333333"
+        });
+        let batch_add = json!({
+            "members": [
+                {
+                    "name": "coordinator-echo",
+                    "model": "gemini-2.5-pro",
+                    "conversation_id": conversation_id
+                },
+                {
+                    "name": "worker-1",
+                    "model": "gemini-2.5-pro",
+                    "conversation_id": "44444444-4444-4444-8444-444444444444"
+                },
+                {
+                    "name": "worker-2",
+                    "model": "gemini-2.5-pro",
+                    "conversation_id": "55555555-5555-4555-8555-555555555555"
+                }
+            ]
+        });
+        let status_result = json!({
+            "title": "Sample Swarm",
+            "members": [
+                {
+                    "name": "data-worker",
+                    "role": "worker",
+                    "conversation_id": "99999999-9999-4999-8999-999999999999",
+                    "state": "working"
+                }
+            ]
+        });
+        let kill_result = json!({
+            "status": "killed",
+            "name": "data-worker",
+            "conversation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        });
+        let lines = [
+            serde_json::json!({
+                "step_index": 20, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [
+                    {"name": "swarm", "args": {"action": "title", "title": "Sample Swarm"}},
+                    {"name": "swarm", "args": {"action": "add", "name": "data-worker", "workspace": "share"}},
+                    {"name": "swarm", "args": {"action": "add", "name": "monitor"}},
+                    {"name": "swarm", "args": {"action": "add", "name": "worker", "n": 2}},
+                    {"name": "swarm", "args": {"action": "status"}},
+                    {"name": "swarm", "args": {"action": "kill", "name": "data-worker"}}
+                ]
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 21, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z",
+                "content": r#"{"status":"titled","title":"Sample Swarm"}"#
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 22, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z",
+                "content": format!("Created At: 2026-05-21T18:27:42-04:00\nCompleted At: 2026-05-21T18:27:44-04:00\n{add_with_ws}")
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 23, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:45Z",
+                "content": add_inherit.to_string()
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 24, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:46Z",
+                "content": batch_add.to_string()
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 25, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:47Z",
+                "content": status_result.to_string()
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 26, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "created_at": "2026-05-21T22:27:48Z",
+                "content": kill_result.to_string()
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let spawn_facts: Vec<_> = result
+            .provider_facts
+            .iter()
+            .filter(|fact| fact.kind == "delegation.spawn")
+            .collect();
+        assert_eq!(
+            spawn_facts.len(),
+            3,
+            "only swarm add results emit spawn facts"
+        );
+
+        let first = &spawn_facts[0].payload["children"][0];
+        assert_eq!(
+            first["provider_session_id"].as_str(),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(
+            first["parent_tool_call_id"].as_str(),
+            Some("antigravity-20-1")
+        );
+        assert_eq!(first["metadata"]["name"].as_str(), Some("data-worker"));
+        assert_eq!(first["metadata"]["role"].as_str(), Some("swarm"));
+        assert_eq!(first["metadata"]["model"].as_str(), Some("gemini-2.5-pro"));
+        assert!(first["metadata"].get("note").is_none());
+        assert!(first["metadata"].get("open_board").is_none());
+
+        let second = &spawn_facts[1].payload["children"][0];
+        assert_eq!(
+            second["provider_session_id"].as_str(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+        assert_eq!(
+            second["parent_tool_call_id"].as_str(),
+            Some("antigravity-20-2")
+        );
+        assert_eq!(second["metadata"]["name"].as_str(), Some("monitor"));
+
+        let batch_ids: Vec<&str> = spawn_facts[2].payload["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["provider_session_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            batch_ids,
+            vec![
+                "44444444-4444-4444-8444-444444444444",
+                "55555555-5555-4555-8555-555555555555"
+            ]
+        );
+        assert_eq!(
+            spawn_facts[2].payload["children"][0]["parent_tool_call_id"].as_str(),
+            Some("antigravity-20-3")
+        );
     }
 
     #[test]

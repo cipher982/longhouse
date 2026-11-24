@@ -74,6 +74,11 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "write_to_file": { tier: "action", aggregate: null, icon: "W", label: "Write", color: "success" },
   "read_url_content": { tier: "context", aggregate: null, icon: "W", label: "Fetch", color: "cyan" },
   "invoke_subagent": { tier: "action", aggregate: null, icon: "A", label: "Agent", color: "tertiary" },
+  "swarm": { tier: "action", aggregate: null, icon: "S", label: "Swarm", color: "tertiary" },
+  "post_message": { tier: "action", aggregate: null, icon: "B", label: "Board", color: "secondary" },
+  "read_board": { tier: "noise", aggregate: "read", icon: "B", label: "Board", color: "muted" },
+  "swarm_wait": { tier: "noise", aggregate: "wait", icon: "\u2026", label: "Wait", color: "tertiary" },
+  "swarm_note": { tier: "action", aggregate: null, icon: "+", label: "Swarm", color: "accent" },
 };
 
 export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {
