@@ -467,3 +467,139 @@ def test_claiming_still_takes_a_fresh_input(orm: Session):
 
     assert claimed is not None
     assert claimed.id == fresh.id
+
+
+def test_console_queued_turn_receipt_does_not_expire_while_blocking_turn_is_active(orm: Session):
+    from uuid import UUID
+
+    from zerg.models.live_store import LiveConsoleTurn
+    from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+    from zerg.services.live_session_inputs import expire_stale_live_receipts
+    from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    active_receipt_id = str(uuid4())
+    queued_receipt_id = str(uuid4())
+    old = datetime.now(UTC) - MAX_DELIVERY_AGE - timedelta(hours=2)
+
+    orm.add_all(
+        [
+            LiveSessionInputReceipt(
+                id=active_receipt_id,
+                owner_id=1,
+                session_id=session_id,
+                thread_id=thread_id,
+                provider="antigravity",
+                intent="auto",
+                status="delivered",
+                text="/swarm",
+                created_at=old,
+                updated_at=old,
+            ),
+            LiveSessionInputReceipt(
+                id=queued_receipt_id,
+                owner_id=1,
+                session_id=session_id,
+                thread_id=thread_id,
+                provider="antigravity",
+                intent="auto",
+                status="queued",
+                text="follow up after swarm",
+                created_at=old + timedelta(minutes=1),
+                updated_at=old + timedelta(minutes=1),
+            ),
+            LiveConsoleTurn(
+                id=str(uuid4()),
+                session_id=session_id,
+                thread_id=thread_id,
+                receipt_id=active_receipt_id,
+                run_id=str(uuid4()),
+                state="active",
+                provider="antigravity",
+                device_id="workbench",
+                cwd="/tmp/work",
+                created_at=old,
+                updated_at=old,
+            ),
+            LiveConsoleTurn(
+                id=str(uuid4()),
+                session_id=session_id,
+                thread_id=thread_id,
+                receipt_id=queued_receipt_id,
+                run_id=None,
+                state="queued",
+                provider="antigravity",
+                device_id="workbench",
+                cwd="/tmp/work",
+                created_at=old + timedelta(minutes=1),
+                updated_at=old + timedelta(minutes=1),
+            ),
+        ]
+    )
+    orm.commit()
+
+    # Helm recovery must not scan, expire, or steal a queued Console turn while
+    # its thread's active turn is still running.
+    assert UUID(session_id) not in list_session_ids_with_queued_live_receipts(orm, limit=20)
+    assert expire_stale_live_receipts(orm, session_id=session_id) == 0
+    assert claim_next_live_queued_receipt(orm, session_id=session_id, delivery_request_id="helm-1") is None
+
+    queued_row = orm.get(LiveSessionInputReceipt, queued_receipt_id)
+    assert queued_row is not None
+    assert queued_row.status == "queued"
+    assert queued_row.error_json is None
+
+
+def test_helm_queued_receipt_survives_long_active_turn_via_extend_and_claims_at_boundary(orm: Session):
+    from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+    from zerg.services.live_session_inputs import expire_stale_live_receipts
+    from zerg.services.live_session_inputs import extend_active_turn_live_receipts
+    from zerg.services.live_session_inputs import requeue_live_receipt
+
+    session_id = str(uuid4())
+    receipt_id = str(uuid4())
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    row = LiveSessionInputReceipt(
+        id=receipt_id,
+        owner_id=1,
+        session_id=session_id,
+        provider="claude",
+        intent="queue",
+        status="queued",
+        text="next task after long turn",
+        created_at=t0,
+        updated_at=t0,
+    )
+    orm.add(row)
+    orm.commit()
+
+    # Turn runs for 2 hours; recovery observes live activity and rolls expires_at forward.
+    now = datetime.now(UTC)
+    assert extend_active_turn_live_receipts(orm, session_id=session_id, now=now) == 1
+    # Throttled: an immediate second tick does not rewrite.
+    assert extend_active_turn_live_receipts(orm, session_id=session_id, now=now + timedelta(seconds=10)) == 0
+
+    # Turn ends 2 minutes later: receipt is NOT expired and IS claimable.
+    at_turn_end = now + timedelta(minutes=2)
+    assert expire_stale_live_receipts(orm, session_id=session_id, now=at_turn_end) == 0
+    claimed = claim_next_live_queued_receipt(
+        orm,
+        session_id=session_id,
+        delivery_request_id="attempt-1",
+        now=at_turn_end,
+    )
+    assert claimed is not None
+    assert claimed.id == receipt_id
+
+    # A transient delivery failure right at turn end requeues instead of aging out on created_at.
+    snap, requeued = requeue_live_receipt(orm, receipt_id=receipt_id, error="busy", now=at_turn_end + timedelta(seconds=5))
+    assert requeued is True
+    assert snap is not None and snap.status == "queued"
+
+    # If the machine then goes offline past the extended deadline, it expires cleanly.
+    after_offline = now + MAX_DELIVERY_AGE + timedelta(minutes=1)
+    assert expire_stale_live_receipts(orm, session_id=session_id, now=after_offline) == 1
+    orm.refresh(row)
+    assert row.status == "failed"
+    assert '"delivery_expired"' in (row.error_json or "")

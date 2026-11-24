@@ -190,12 +190,14 @@ public struct WorkspaceSuggestionsResponse: Decodable, Sendable {
 public struct RecentModel: Codable, Sendable, Hashable, Identifiable {
     public let model: String
     public let lastUsedAt: String?
+    public let deviceId: String?
 
     public var id: String { model }
 
-    public init(model: String, lastUsedAt: String? = nil) {
+    public init(model: String, lastUsedAt: String? = nil, deviceId: String? = nil) {
         self.model = model
         self.lastUsedAt = lastUsedAt
+        self.deviceId = deviceId
     }
 }
 

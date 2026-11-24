@@ -267,6 +267,10 @@ struct LaunchSessionSheet: View {
                         ModelSelectionView(
                             models: $recentModels,
                             selectedModel: normalizedModel,
+                            currentDeviceId: selectedDeviceId,
+                            machineNamesByDeviceId: Dictionary(
+                                uniqueKeysWithValues: machines.map { ($0.deviceId, $0.machineName) }
+                            ),
                             loading: $loadingModels,
                             errorMessage: $modelError
                         ) { model in
@@ -755,9 +759,25 @@ private func previewRecentModels() -> [RecentModel] {
     let formatter = ISO8601DateFormatter()
     let now = Date()
     return [
-        RecentModel(model: "gpt-5.6-luna", lastUsedAt: formatter.string(from: now.addingTimeInterval(-2 * 60 * 60))),
-        RecentModel(model: "gpt-5.5", lastUsedAt: formatter.string(from: now.addingTimeInterval(-26 * 60 * 60))),
+        RecentModel(model: "gpt-5.6-luna", lastUsedAt: formatter.string(from: now.addingTimeInterval(-2 * 60 * 60)), deviceId: "preview-dev"),
+        RecentModel(model: "gpt-5.5", lastUsedAt: formatter.string(from: now.addingTimeInterval(-26 * 60 * 60)), deviceId: "other-mac"),
     ]
+}
+
+#Preview("Model picker · borrowed") {
+    NavigationStack {
+        ModelSelectionView(
+            models: .constant(previewRecentModels()),
+            selectedModel: nil,
+            currentDeviceId: "preview-dev",
+            machineNamesByDeviceId: ["preview-dev": "Workbench", "other-mac": "MacBook"],
+            loading: .constant(false),
+            errorMessage: .constant(nil),
+            onSelect: { _ in }
+        )
+    }
+    .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Launch session · sign-in required") {

@@ -92,17 +92,40 @@ class InputsMixin:
         """Check drainability and claim exactly one queued input receipt."""
 
         from zerg.services.live_control_catalog import load_live_control_session
-        from zerg.services.live_session_inputs import MAX_DELIVERY_AGE
+        from zerg.services.live_session_inputs import _console_queued_receipt_ids_waiting_on_active_turn
+        from zerg.services.live_session_inputs import _queued_receipt_fresh_clause
         from zerg.services.live_session_inputs import _snapshot
         from zerg.services.live_session_inputs import claim_next_live_queued_receipt
         from zerg.services.live_session_inputs import expire_stale_live_receipts
+        from zerg.services.live_session_inputs import extend_active_turn_live_receipts
+        from zerg.services.live_session_inputs import sweep_stale_delivering_live_receipts
         from zerg.services.session_state_contract import SEND_DISPATCHABLE_ACTIVITY_STATES
+        from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
         from zerg.services.session_state_contract import input_activity_state
 
         observed_at = datetime.now(UTC)
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
+                session = load_live_control_session(orm, session_id)
+                projection = (
+                    self._served_session_projection(connection, session, observed_at=observed_at)
+                    if session is not None
+                    else None
+                )
+                activity_state = input_activity_state(projection) if projection is not None else None
+                # While a live turn is actively running, keep queued inputs alive
+                # instead of expiring them at MAX_DELIVERY_AGE; still sweep any
+                # wedged delivering receipts.
+                if activity_state in STEERABLE_ACTIVITY_STATES:
+                    sweep_stale_delivering_live_receipts(orm, session_id=session_id, now=observed_at)
+                    extend_active_turn_live_receipts(orm, session_id=session_id, now=observed_at)
+                    orm.rollback()
+                    return {
+                        "claimed": False,
+                        "reason": "activity_not_drainable",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
                 expire_stale_live_receipts(orm, session_id=session_id, now=observed_at)
                 replay_receipt = (
                     orm.query(LiveSessionInputReceipt.id)
@@ -114,12 +137,14 @@ class InputsMixin:
                     .first()
                 )
                 if replay_receipt is None:
+                    waiting_console = _console_queued_receipt_ids_waiting_on_active_turn(orm, session_id=session_id)
                     fresh_receipt = (
                         orm.query(LiveSessionInputReceipt.id)
                         .filter(
                             LiveSessionInputReceipt.session_id == session_id,
                             LiveSessionInputReceipt.status == "queued",
-                            LiveSessionInputReceipt.created_at >= observed_at - MAX_DELIVERY_AGE,
+                            ~LiveSessionInputReceipt.id.in_(waiting_console),
+                            _queued_receipt_fresh_clause(observed_at),
                         )
                         .first()
                     )
@@ -130,7 +155,6 @@ class InputsMixin:
                             "reason": "queue_empty",
                             "commit_seq": str(_current_commit_seq(connection)),
                         }
-                session = load_live_control_session(orm, session_id)
                 if session is None:
                     orm.rollback()
                     return {
@@ -138,8 +162,7 @@ class InputsMixin:
                         "reason": "session_not_found",
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                projection = self._served_session_projection(connection, session, observed_at=observed_at)
-                if projection is None or input_activity_state(projection) not in SEND_DISPATCHABLE_ACTIVITY_STATES:
+                if projection is None or activity_state not in SEND_DISPATCHABLE_ACTIVITY_STATES:
                     orm.rollback()
                     return {
                         "claimed": False,

@@ -328,6 +328,8 @@ struct ModelSelectionView: View {
     // on an empty list with no spinner.
     @Binding var models: [RecentModel]
     let selectedModel: String?
+    var currentDeviceId: String? = nil
+    var machineNamesByDeviceId: [String: String] = [:]
     @Binding var loading: Bool
     @Binding var errorMessage: String?
     let onSelect: (String?) -> Void
@@ -344,6 +346,34 @@ struct ModelSelectionView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    static func recentModelSubtitle(
+        for recent: RecentModel,
+        currentDeviceId: String?,
+        machineNamesByDeviceId: [String: String] = [:],
+        relativeLastUsed: String?
+    ) -> String? {
+        let sourceId = recent.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let targetId = currentDeviceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let borrowedLabel: String?
+        if !sourceId.isEmpty, !targetId.isEmpty, sourceId != targetId {
+            let name = machineNamesByDeviceId[sourceId]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            borrowedLabel = "From \((name?.isEmpty == false ? name! : sourceId))"
+        } else {
+            borrowedLabel = nil
+        }
+
+        switch (borrowedLabel, relativeLastUsed) {
+        case let (borrowed?, lastUsed?):
+            return "\(borrowed) · Last used \(lastUsed)"
+        case let (borrowed?, nil):
+            return borrowed
+        case let (nil, lastUsed?):
+            return "Last used \(lastUsed)"
+        case (nil, nil):
+            return nil
+        }
     }
 
     var body: some View {
@@ -388,8 +418,13 @@ struct ModelSelectionView: View {
                                     Text(recent.model)
                                         .foregroundStyle(Ember.text)
                                         .lineLimit(1)
-                                    if let lastUsed = relativeLastUsed(recent.lastUsedAt) {
-                                        Text("Last used \(lastUsed)")
+                                    if let subtitle = Self.recentModelSubtitle(
+                                        for: recent,
+                                        currentDeviceId: currentDeviceId,
+                                        machineNamesByDeviceId: machineNamesByDeviceId,
+                                        relativeLastUsed: relativeLastUsed(recent.lastUsedAt)
+                                    ) {
+                                        Text(subtitle)
                                             .font(.caption)
                                             .foregroundStyle(Ember.textMuted)
                                     }

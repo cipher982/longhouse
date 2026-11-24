@@ -257,6 +257,7 @@ struct SessionView: View {
                 ModelSelectionView(
                     models: $recentComposerModels,
                     selectedModel: composerModel,
+                    currentDeviceId: viewModel.detail?.deviceId,
                     loading: $loadingComposerModels,
                     errorMessage: $composerModelError
                 ) { model in

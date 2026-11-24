@@ -12,6 +12,8 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import and_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module
@@ -262,10 +264,76 @@ def count_live_queued_receipts(db: Session, *, session_id: UUID | str) -> int:
     )
 
 
+def _console_queued_receipt_ids_waiting_on_active_turn(
+    db: Session,
+    *,
+    session_id: UUID | str | None = None,
+):
+    """Queued Console-turn receipts whose thread currently has an active turn.
+
+    Console manages its own FIFO turn queue via ``LiveConsoleTurn``; a follow-up
+    parked behind a long-running ``/swarm`` or ``/goal`` turn is not abandoned
+    and must not be swept or expired by the Helm recovery loop while that turn
+    is still active.
+    """
+
+    active_threads = db.query(LiveConsoleTurn.thread_id).filter(
+        LiveConsoleTurn.state.in_(
+            (
+                SESSION_TURN_STATE_STARTING,
+                SESSION_TURN_STATE_ACTIVE,
+                SESSION_TURN_STATE_DRAINING,
+            )
+        ),
+    )
+    if session_id is not None:
+        active_threads = active_threads.filter(LiveConsoleTurn.session_id == _session_key(session_id))
+    query = db.query(LiveConsoleTurn.receipt_id).filter(
+        LiveConsoleTurn.state == SESSION_TURN_STATE_QUEUED,
+        LiveConsoleTurn.receipt_id.isnot(None),
+        LiveConsoleTurn.thread_id.in_(active_threads),
+    )
+    if session_id is not None:
+        query = query.filter(LiveConsoleTurn.session_id == _session_key(session_id))
+    return query
+
+
+def _queued_receipt_expired_clause(observed_at: datetime):
+    cutoff = observed_at - MAX_DELIVERY_AGE
+    return or_(
+        and_(
+            LiveSessionInputReceipt.expires_at.isnot(None),
+            LiveSessionInputReceipt.expires_at < observed_at,
+        ),
+        and_(
+            LiveSessionInputReceipt.expires_at.is_(None),
+            LiveSessionInputReceipt.created_at < cutoff,
+        ),
+    )
+
+
+def _queued_receipt_fresh_clause(observed_at: datetime):
+    cutoff = observed_at - MAX_DELIVERY_AGE
+    return or_(
+        and_(
+            LiveSessionInputReceipt.expires_at.isnot(None),
+            LiveSessionInputReceipt.expires_at >= observed_at,
+        ),
+        and_(
+            LiveSessionInputReceipt.expires_at.is_(None),
+            LiveSessionInputReceipt.created_at >= cutoff,
+        ),
+    )
+
+
 def list_session_ids_with_queued_live_receipts(db: Session, *, limit: int) -> list[UUID]:
+    waiting_console = _console_queued_receipt_ids_waiting_on_active_turn(db)
     rows = (
         db.query(LiveSessionInputReceipt.session_id)
-        .filter(LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED)
+        .filter(
+            LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
+            ~LiveSessionInputReceipt.id.in_(waiting_console),
+        )
         .distinct()
         .limit(max(1, int(limit)))
         .all()
@@ -284,20 +352,23 @@ def claim_next_live_queued_receipt(
     *,
     session_id: UUID | str,
     delivery_request_id: str,
+    now: datetime | None = None,
 ) -> LiveInputReceiptSnapshot | None:
     # Age is enforced here, not only after a failed dispatch. A receipt that was
     # never claimable — offline machine, activity that never became drainable —
     # would otherwise sit untouched for hours and then be injected the moment
     # the session woke up. Nobody wants a prompt they sent this morning arriving
     # after lunch.
-    expire_stale_live_receipts(db, session_id=session_id)
-    cutoff = datetime.now(timezone.utc) - MAX_DELIVERY_AGE
+    observed_at = now or datetime.now(timezone.utc)
+    expire_stale_live_receipts(db, session_id=session_id, now=observed_at)
+    waiting_console = _console_queued_receipt_ids_waiting_on_active_turn(db, session_id=session_id)
     candidate = (
         db.query(LiveSessionInputReceipt)
         .filter(
             LiveSessionInputReceipt.session_id == _session_key(session_id),
             LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
-            LiveSessionInputReceipt.created_at >= cutoff,
+            ~LiveSessionInputReceipt.id.in_(waiting_console),
+            _queued_receipt_fresh_clause(observed_at),
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())
         .first()
@@ -317,7 +388,7 @@ def claim_next_live_queued_receipt(
                 "delivery_request_id": str(delivery_request_id),
                 "updated_at": now,
             },
-            synchronize_session=False,
+            synchronize_session="fetch",
         )
     )
     db.commit()
@@ -454,6 +525,48 @@ def sweep_stale_delivering_live_receipts(
     return len(rows)
 
 
+ACTIVE_TURN_EXPIRY_REFRESH_STEP = timedelta(minutes=5)
+
+
+def extend_active_turn_live_receipts(
+    db: Session,
+    *,
+    session_id: UUID | str,
+    now: datetime | None = None,
+) -> int:
+    """Pause queued-input expiry while a session's turn is actively executing.
+
+    Rolling ``expires_at`` forward keeps queued follow-ups alive through long
+    running turns (``/swarm``, ``/goal``, training runs) while still expiring
+    them ``MAX_DELIVERY_AGE`` after the session goes offline or stops reporting
+    live activity. Writes are throttled to at most once per refresh step.
+    """
+
+    observed_at = now or datetime.now(timezone.utc)
+    target_expires_at = observed_at + MAX_DELIVERY_AGE
+    refresh_before = target_expires_at - ACTIVE_TURN_EXPIRY_REFRESH_STEP
+    waiting_console = _console_queued_receipt_ids_waiting_on_active_turn(db, session_id=session_id)
+    rows = (
+        db.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.session_id == _session_key(session_id),
+            LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
+            ~LiveSessionInputReceipt.id.in_(waiting_console),
+            or_(
+                LiveSessionInputReceipt.expires_at.is_(None),
+                LiveSessionInputReceipt.expires_at < refresh_before,
+            ),
+        )
+        .all()
+    )
+    for row in rows:
+        row.expires_at = target_expires_at
+        row.updated_at = observed_at
+    if rows:
+        db.commit()
+    return len(rows)
+
+
 def expire_stale_live_receipts(
     db: Session,
     *,
@@ -474,13 +587,14 @@ def expire_stale_live_receipts(
         session_id=session_id,
         now=observed_at,
     )
-    cutoff = observed_at - MAX_DELIVERY_AGE
+    waiting_console = _console_queued_receipt_ids_waiting_on_active_turn(db, session_id=session_id)
     rows = (
         db.query(LiveSessionInputReceipt)
         .filter(
             LiveSessionInputReceipt.session_id == _session_key(session_id),
             LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED,
-            LiveSessionInputReceipt.created_at < cutoff,
+            ~LiveSessionInputReceipt.id.in_(waiting_console),
+            _queued_receipt_expired_clause(observed_at),
         )
         .all()
     )
@@ -528,8 +642,12 @@ def requeue_live_receipt(
     row.updated_at = observed_at
     message = str(error or "session input delivery failed")[:500]
 
+    expires_at = normalize_utc(row.expires_at)
     created_at = normalize_utc(row.created_at)
-    aged_out = created_at is not None and (observed_at - created_at) > MAX_DELIVERY_AGE
+    if expires_at is not None:
+        aged_out = observed_at > expires_at
+    else:
+        aged_out = created_at is not None and (observed_at - created_at) > MAX_DELIVERY_AGE
     exhausted = attempts >= MAX_DELIVERY_ATTEMPTS
     if aged_out or exhausted:
         row.status = INPUT_STATUS_FAILED

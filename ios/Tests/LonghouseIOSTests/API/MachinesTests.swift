@@ -138,6 +138,60 @@ struct MachinesTests {
         #expect(status.detail == nil)
     }
 
+    @Test
+    func recentModelsDecodeSourceDeviceAndLabelBorrowedEntries() throws {
+        let data = try #require("""
+        {
+          "device_id": "workbench",
+          "provider": "omp",
+          "days_back": 45,
+          "models": [
+            {"model": "gemini-4-neon", "last_used_at": "2026-11-23T19:05:00Z", "device_id": "laptop"},
+            {"model": "claude-opus-5-5", "last_used_at": "2026-11-23T18:00:00Z", "device_id": "workbench"},
+            {"model": "legacy-model", "last_used_at": null}
+          ]
+        }
+        """.data(using: .utf8))
+
+        let response = try JSONDecoder.snakeCase.decode(RecentModelsResponse.self, from: data)
+        #expect(response.models.count == 3)
+        #expect(response.models[0].deviceId == "laptop")
+        #expect(response.models[1].deviceId == "workbench")
+        #expect(response.models[2].deviceId == nil)
+
+        #expect(
+            ModelSelectionView.recentModelSubtitle(
+                for: response.models[0],
+                currentDeviceId: "workbench",
+                machineNamesByDeviceId: ["laptop": "MacBook Pro"],
+                relativeLastUsed: "2h ago"
+            ) == "From MacBook Pro · Last used 2h ago"
+        )
+        #expect(
+            ModelSelectionView.recentModelSubtitle(
+                for: response.models[0],
+                currentDeviceId: "workbench",
+                machineNamesByDeviceId: [:],
+                relativeLastUsed: nil
+            ) == "From laptop"
+        )
+        #expect(
+            ModelSelectionView.recentModelSubtitle(
+                for: response.models[1],
+                currentDeviceId: "workbench",
+                machineNamesByDeviceId: ["workbench": "Workbench"],
+                relativeLastUsed: "3h ago"
+            ) == "Last used 3h ago"
+        )
+        #expect(
+            ModelSelectionView.recentModelSubtitle(
+                for: response.models[2],
+                currentDeviceId: "workbench",
+                relativeLastUsed: nil
+            ) == nil
+        )
+    }
+
     private func machine(
         online: Bool,
         lastSeenAt: String? = "2026-10-03T16:40:00Z",
