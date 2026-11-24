@@ -125,6 +125,9 @@ pub fn shell_quote(value: &str) -> String {
 /// Exit code `__remote-session` uses when the viewer left but the session is
 /// still running (detach key, or the attach client was killed).
 const DETACHED_EXIT: i32 = 75;
+/// Exit code `__remote-session` uses when asked to attach to a session that
+/// is not running.
+const NOT_RUNNING_EXIT: i32 = 76;
 /// What `ssh` itself returns when the connection fails or drops.
 const SSH_CONNECTION_LOST: i32 = 255;
 
@@ -153,6 +156,7 @@ fn exit_hint(code: i32, name: &str, target: &str) -> String {
         SSH_CONNECTION_LOST => format!("longhouse: connection to {host} lost.\n{back}"),
         DETACHED_EXIT => format!("longhouse: detached; {name} is still running on {host}.\n{back}"),
         0 => format!("longhouse: {name} ended on {host}.\n"),
+        NOT_RUNNING_EXIT => format!("longhouse: {name} is not running on {host}.\n"),
         other => format!("longhouse: {name} on {host} stopped (exit code {other}).\n"),
     }
 }
@@ -161,7 +165,7 @@ fn exit_hint(code: i32, name: &str, target: &str) -> String {
 /// died under it (alternate screen, hidden cursor, mouse and paste modes), so
 /// the hint lands on the normal screen and stays visible.
 const TERMINAL_RESET: &str =
-    "\x1b[0m\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[<u\r\n";
+    "\x1b[0m\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[<u";
 
 pub fn validate_session_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() || name.len() > MAX_SESSION_NAME_LEN {
@@ -408,6 +412,20 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
     run_remote_viewer(target, &name, &remote_cmd)
 }
 
+/// The remote command that reattaches a viewer to session `name`.
+fn attach_shell_command(name: &str) -> String {
+    let remote_args = vec![
+        "__remote-session".to_string(),
+        "--cwd".to_string(),
+        ".".to_string(),
+        "--provider".to_string(),
+        ManagedProvider::Claude.as_str().to_string(),
+        "--attach".to_string(),
+        name.to_string(),
+    ];
+    build_remote_shell_command(&collect_forwarded_env(None), &remote_args)
+}
+
 pub fn run_remote_command(command: RemoteCommand) -> anyhow::Result<i32> {
     match command {
         RemoteCommand::Ls { on, json } => {
@@ -423,17 +441,7 @@ pub fn run_remote_command(command: RemoteCommand) -> anyhow::Result<i32> {
                 anyhow::bail!("longhouse remote attach requires an interactive terminal");
             }
             validate_session_name(&name)?;
-            let remote_args = vec![
-                "__remote-session".to_string(),
-                "--cwd".to_string(),
-                ".".to_string(),
-                "--provider".to_string(),
-                ManagedProvider::Claude.as_str().to_string(),
-                "--attach".to_string(),
-                name.clone(),
-            ];
-            let cmd = build_remote_shell_command(&collect_forwarded_env(None), &remote_args);
-            run_remote_viewer(&on, &name, &cmd)
+            run_remote_viewer(&on, &name, &attach_shell_command(&name))
         }
     }
 }
@@ -461,29 +469,57 @@ const VIEWER_SSH_OPTIONS: &[&str] = &[
     "-o",
     "ControlPath=none",
     "-o",
+    "ConnectTimeout=5",
+    "-o",
     "ServerAliveInterval=5",
     "-o",
     "ServerAliveCountMax=3",
-    "-o",
-    "LogLevel=ERROR",
 ];
 
-/// Run an interactive viewer over ssh, then always tell the user what
-/// happened and how to get back to the session.
-fn run_remote_viewer(target: &str, name: &str, remote_cmd: &str) -> anyhow::Result<i32> {
+/// A viewer that stayed connected this long was really attached, so a later
+/// drop starts a fresh reconnect episode with a short first wait.
+const ATTACHED_RESET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Seconds to wait before reconnect attempt `attempt` (1-based).
+fn reconnect_delay(attempt: u32) -> std::time::Duration {
+    let secs = 1u64 << attempt.saturating_sub(1).min(4);
+    std::time::Duration::from_secs(secs.min(10))
+}
+
+#[cfg(unix)]
+static STOP_RECONNECT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn request_stop(_: libc::c_int) {
+    STOP_RECONNECT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn stop_requested() -> bool {
+    #[cfg(unix)]
+    {
+        STOP_RECONNECT.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn run_viewer_ssh(target: &str, remote_cmd: &str, quiet: bool) -> i32 {
     let mut cmd = Command::new("ssh");
     cmd.arg("-t")
         .args(VIEWER_SSH_OPTIONS)
+        .arg("-o")
+        .arg(if quiet {
+            "LogLevel=QUIET"
+        } else {
+            "LogLevel=ERROR"
+        })
         .arg(target)
         .arg("--")
         .arg(remote_cmd);
-    // Keep this process alive through stray terminal signals so the hint
-    // always prints; ssh itself gets the default handlers back.
     #[cfg(unix)]
     unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
-        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
-        libc::signal(libc::SIGTERM, libc::SIG_IGN);
         cmd.pre_exec(|| {
             libc::signal(libc::SIGINT, libc::SIG_DFL);
             libc::signal(libc::SIGQUIT, libc::SIG_DFL);
@@ -492,20 +528,82 @@ fn run_remote_viewer(target: &str, name: &str, remote_cmd: &str) -> anyhow::Resu
         });
     }
     // An ssh killed by a signal did not end the remote session.
-    let code = match cmd.status() {
+    match cmd.status() {
         Ok(status) => status.code().unwrap_or(SSH_CONNECTION_LOST),
         Err(err) => {
             eprintln!("longhouse: could not run ssh: {err}");
             SSH_CONNECTION_LOST
         }
-    };
-    let mut err = std::io::stderr();
-    if err.is_terminal() {
-        let _ = err.write_all(TERMINAL_RESET.as_bytes());
     }
-    let _ = err.write_all(exit_hint(code, name, target).as_bytes());
+}
+
+fn write_stderr(text: &str) {
+    let mut err = std::io::stderr();
+    let _ = err.write_all(text.as_bytes());
     let _ = err.flush();
-    Ok(code)
+}
+
+/// Run an interactive viewer over ssh. When the connection is lost, print how
+/// to get back, then keep reattaching to the same session until it works, the
+/// session is gone, or the user presses Ctrl+C. A deliberate detach or the
+/// agent exiting ends the viewer.
+fn run_remote_viewer(target: &str, name: &str, first_cmd: &str) -> anyhow::Result<i32> {
+    // Ctrl+C reaches this process only while ssh is not in raw mode (while it
+    // connects, or while we wait); there it means "stop reconnecting". SIGQUIT
+    // and SIGTERM are ignored so the hint always prints.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            request_stop as extern "C" fn(libc::c_int) as libc::sighandler_t,
+        );
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+    }
+    let reset = std::io::stderr().is_terminal();
+    let host = host_label(target);
+    let attach_cmd = attach_shell_command(name);
+    let mut remote_cmd = first_cmd.to_string();
+    let mut attempt = 0u32;
+    loop {
+        let started = std::time::Instant::now();
+        let code = run_viewer_ssh(target, &remote_cmd, attempt > 0);
+        if started.elapsed() >= ATTACHED_RESET {
+            attempt = 0;
+        }
+        // The remote TUI may have been mid-screen when the link died; put the
+        // terminal back to normal before writing anything.
+        if reset {
+            write_stderr(TERMINAL_RESET);
+        }
+        if code != SSH_CONNECTION_LOST {
+            write_stderr("\r\x1b[2K\r\n");
+            write_stderr(&exit_hint(code, name, target));
+            return Ok(code);
+        }
+        if attempt == 0 {
+            write_stderr("\r\n");
+            write_stderr(&exit_hint(code, name, target));
+        }
+        if stop_requested() {
+            write_stderr("\r\nlonghouse: stopped reconnecting.\n");
+            return Ok(code);
+        }
+        attempt += 1;
+        let delay = reconnect_delay(attempt);
+        write_stderr(&format!(
+            "\r\x1b[2Klonghouse: reconnecting to {name} on {host} (attempt {attempt}, Ctrl+C to stop)"
+        ));
+        let deadline = std::time::Instant::now() + delay;
+        while std::time::Instant::now() < deadline {
+            if stop_requested() {
+                write_stderr("\r\nlonghouse: stopped reconnecting.\n");
+                return Ok(code);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        remote_cmd = attach_cmd.clone();
+    }
 }
 
 fn state_file_path(root: &Path, name: &str) -> PathBuf {
@@ -815,6 +913,33 @@ fn run_dtach_command(
     Ok(status.code().unwrap_or(1))
 }
 
+/// Make the agent repaint after an attach. dtach only passes on a window size
+/// change, and an attach at the same size changes nothing, so the agent's
+/// screen stayed blank until Ctrl+L. Shortly after the attach starts, shrink
+/// this terminal by one row and restore it: the dtach client forwards both
+/// changes and the agent redraws.
+fn schedule_repaint_nudge() {
+    #[cfg(unix)]
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let fd = libc::STDIN_FILENO;
+        // SAFETY: winsize is plain data and the fd is this process's own tty.
+        unsafe {
+            let mut size: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) != 0 || size.ws_row < 2 {
+                return;
+            }
+            let mut smaller = size;
+            smaller.ws_row -= 1;
+            if libc::ioctl(fd, libc::TIOCSWINSZ, &smaller) != 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            libc::ioctl(fd, libc::TIOCSWINSZ, &size);
+        }
+    });
+}
+
 pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
     ensure_dtach_on_path()?;
     let root = remote_sessions_root()?;
@@ -839,6 +964,17 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
         (None, Some(name)) => (name, false),
         (None, None) => (generate_session_name(), false),
     };
+    if attach && !is_session_alive(&root, &requested) {
+        // A distinct exit code lets a reconnecting client stop retrying.
+        let live = list_live_names(&root);
+        let hint = if live.is_empty() {
+            "none running".to_string()
+        } else {
+            format!("active: {}", live.join(", "))
+        };
+        eprintln!("longhouse: no active remote session named {requested:?} ({hint})");
+        return Ok(NOT_RUNNING_EXIT);
+    }
     let create_lock = FileLockGuard::acquire_blocking(&root.join(".create.lock"), false)?;
     let selection = select_session(&root, &requested, attach)?;
     let name = requested;
@@ -877,6 +1013,7 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
         SessionSelection::Reattach { .. } => {
             eprintln!("longhouse: reattaching to {name}");
             warp_cli_agent::emit_replay_markers(&warp_path);
+            schedule_repaint_nudge();
             run_dtach_command(&["-a", &sock_str, "-r", "winch", "-z"], None, &[])?
         }
         SessionSelection::New { .. } => {
@@ -1297,6 +1434,15 @@ mod tests {
         assert_eq!(entries[0].viewers, 1);
         assert_eq!(entries[0].state, "starting");
         assert!(format_list_table(&entries).contains(first));
+    }
+
+    #[test]
+    fn reconnect_waits_grow_to_ten_seconds() {
+        let secs: Vec<u64> = (1..=7).map(|n| reconnect_delay(n).as_secs()).collect();
+        assert_eq!(secs, vec![1, 2, 4, 8, 10, 10, 10]);
+        let gone = exit_hint(NOT_RUNNING_EXIT, "k3f9qa", "devbox");
+        assert!(gone.contains("k3f9qa is not running on devbox"));
+        assert!(!gone.contains("remote attach"));
     }
 
     #[test]
