@@ -597,6 +597,11 @@ def _served(monkeypatch, events: list[dict[str, object]]) -> None:
     monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events})
     # A refusal has to stand; these tests wait for the second read, not for the window.
     monkeypatch.setattr("zerg.qa.console_served_state_core.SERVED_ANSWER_SETTLE_SECONDS", 0.0)
+    # The page never changes, so the wait's 0.5 s polls and 2 s stable window decide nothing real time would: on
+    # `_Clock` the loop takes the same reads and branches without sitting through them. A test that brought its
+    # own clock keeps it.
+    if not isinstance(lifecycle.time, _Clock):
+        monkeypatch.setattr(lifecycle, "time", _Clock())
 
 
 def _wait(marker: str, native: dict[str, int] | None, **kwargs: object):
@@ -814,6 +819,7 @@ def test_the_providers_own_answering_rows_are_read_from_the_record_its_claim_nam
 
 
 def test_archive_convergence_counts_the_answer_not_the_narration_that_quotes_it(monkeypatch):
+    monkeypatch.setattr(lifecycle, "time", _Clock())
     marker = "LH_CLAUDE_CONSOLE_abc"
     events = [
         {"id": "prompt", "role": "user", "content_text": f"Reply with exactly {marker} and nothing else."},
@@ -833,6 +839,7 @@ def test_archive_convergence_counts_the_answer_not_the_narration_that_quotes_it(
 
 
 def test_archive_convergence_reads_a_reply_asked_to_carry_the_stored_context(monkeypatch):
+    monkeypatch.setattr(lifecycle, "time", _Clock())
     marker, context = "LH_OMP_CONSOLE_abc", "LH_OMP_CONTEXT_def"
 
     # On one line, on two, or run together: all three are what models send.
