@@ -342,7 +342,6 @@ async def test_transient_dispatch_failure_requeues_then_delivers(monkeypatch):
     from uuid import uuid4 as _uuid4
 
     from zerg.services import live_control_catalog as lcc
-    from zerg.services.managed_control_dispatcher import DISPATCH_FAILURE_TRANSPORT
 
     session_id = str(_uuid4())
     receipt_id = str(_uuid4())

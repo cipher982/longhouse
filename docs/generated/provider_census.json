@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 346,
+  "file_count": 347,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1401,6 +1401,13 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_directed_input_delivery_durability.py",
+      "providers": [
+        "antigravity",
+        "claude"
       ]
     },
     {

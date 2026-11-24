@@ -108,11 +108,7 @@ class InputsMixin:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
                 session = load_live_control_session(orm, session_id)
-                projection = (
-                    self._served_session_projection(connection, session, observed_at=observed_at)
-                    if session is not None
-                    else None
-                )
+                projection = self._served_session_projection(connection, session, observed_at=observed_at) if session is not None else None
                 activity_state = input_activity_state(projection) if projection is not None else None
                 # While a live turn is actively running, keep queued inputs alive
                 # instead of expiring them at MAX_DELIVERY_AGE; still sweep any
