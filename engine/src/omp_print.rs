@@ -7280,7 +7280,8 @@ for line in sys.stdin:
             std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
         }
 
-        let (started, run_id) = start_fake_turn(temp.path(), "scenario=prompt-error-no-agent-end", None).await;
+        let (started, run_id) =
+            start_fake_turn(temp.path(), "scenario=prompt-error-no-agent-end", None).await;
         let summary = started.unwrap();
         let claim = wait_for_terminal(&run_id).await;
         if let Some(pgid) = summary.process_group_id {
