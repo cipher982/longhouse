@@ -7600,20 +7600,14 @@ mod tests {
             }) if on == "box"
         ));
 
-        let remote_attach = Cli::try_parse_from([
-            "longhouse",
-            "remote",
-            "attach",
-            "claude-repo",
-            "--on",
-            "box",
-        ])
-        .unwrap();
+        let remote_attach =
+            Cli::try_parse_from(["longhouse", "remote", "attach", "k3f9qa", "--on", "box"])
+                .unwrap();
         assert!(matches!(
             remote_attach.command,
             Some(Commands::Remote {
                 command: remote_session::RemoteCommand::Attach { name, on }
-            }) if name == "claude-repo" && on == "box"
+            }) if name == "k3f9qa" && on == "box"
         ));
 
         let session = Cli::try_parse_from([

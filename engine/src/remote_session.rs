@@ -30,10 +30,10 @@ pub struct RemoteTargetArgs {
     /// Run or reattach this session on a remote SSH target instead of locally.
     #[arg(long, value_name = "SSH_TARGET")]
     pub on: Option<String>,
-    /// Attach to a specific named remote session instead of auto-selecting one.
+    /// Attach to a running remote session by its name instead of starting a new one.
     #[arg(long, requires = "on", value_name = "NAME")]
     pub remote_attach: Option<String>,
-    /// Override the base name used for the remote session socket.
+    /// Name for the new remote session (default: a short random id).
     #[arg(long, requires = "on", value_name = "NAME")]
     pub remote_name: Option<String>,
     /// Fast-forward the remote folder's clean git checkout, or each clean repo directly inside a folder that is not one, before launching a new session.
@@ -122,23 +122,46 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-pub fn sanitize_session_base(raw: &str) -> String {
-    let mut cleaned = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-            cleaned.push(ch);
-        } else {
-            cleaned.push('_');
-        }
-    }
-    let trimmed = cleaned.trim_matches(|ch: char| ch == '.' || ch == '-');
-    let result = if trimmed.is_empty() {
-        "session".to_string()
-    } else {
-        trimmed.to_string()
-    };
-    result.chars().take(48).collect()
+/// Exit code `__remote-session` uses when the viewer left but the session is
+/// still running (detach key, or the attach client was killed).
+const DETACHED_EXIT: i32 = 75;
+/// What `ssh` itself returns when the connection fails or drops.
+const SSH_CONNECTION_LOST: i32 = 255;
+
+/// A short random session name. Sessions are not named after their folder:
+/// several agents routinely run in the same repo, so the folder says nothing
+/// about which session is which.
+fn generate_session_name() -> String {
+    const ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
+    Uuid::new_v4()
+        .as_bytes()
+        .iter()
+        .take(6)
+        .map(|byte| ALPHABET[*byte as usize % ALPHABET.len()] as char)
+        .collect()
 }
+
+fn host_label(target: &str) -> &str {
+    target.rsplit_once('@').map_or(target, |(_, host)| host)
+}
+
+/// The line printed after every remote viewer exits, whatever ended it.
+fn exit_hint(code: i32, name: &str, target: &str) -> String {
+    let host = host_label(target);
+    let back = format!("  back to it: longhouse remote attach {name} --on {target}\n");
+    match code {
+        SSH_CONNECTION_LOST => format!("longhouse: connection to {host} lost.\n{back}"),
+        DETACHED_EXIT => format!("longhouse: detached; {name} is still running on {host}.\n{back}"),
+        0 => format!("longhouse: {name} ended on {host}.\n"),
+        other => format!("longhouse: {name} on {host} stopped (exit code {other}).\n"),
+    }
+}
+
+/// Undo terminal modes a remote TUI may have left on when the connection
+/// died under it (alternate screen, hidden cursor, mouse and paste modes), so
+/// the hint lands on the normal screen and stays visible.
+const TERMINAL_RESET: &str =
+    "\x1b[0m\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[<u\r\n";
 
 pub fn validate_session_name(name: &str) -> anyhow::Result<()> {
     if name.is_empty() || name.len() > MAX_SESSION_NAME_LEN {
@@ -355,14 +378,24 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
         "--provider".to_string(),
         spec.provider.as_str().to_string(),
     ];
-    if let Some(attach) = spec.remote.remote_attach {
-        remote_args.push("--attach".to_string());
-        remote_args.push(attach);
-    }
-    if let Some(remote_name) = spec.remote.remote_name {
-        remote_args.push("--remote-name".to_string());
-        remote_args.push(remote_name);
-    }
+    // The client picks the name before connecting, so it can always print how
+    // to get back, even when the connection never reaches the remote side.
+    let name = match spec.remote.remote_attach {
+        Some(attach) => {
+            remote_args.push("--attach".to_string());
+            remote_args.push(attach.clone());
+            attach
+        }
+        None => {
+            let name = spec
+                .remote
+                .remote_name
+                .unwrap_or_else(generate_session_name);
+            remote_args.push("--remote-name".to_string());
+            remote_args.push(name.clone());
+            name
+        }
+    };
     if spec.remote.pull {
         remote_args.push("--pull".to_string());
     }
@@ -372,7 +405,7 @@ pub fn run_remote_launch(spec: RemoteLaunchSpec) -> anyhow::Result<i32> {
     }
     let remote_cmd =
         build_remote_shell_command(&collect_forwarded_env(Some(spec.provider)), &remote_args);
-    run_ssh(target, true, &remote_cmd)
+    run_remote_viewer(target, &name, &remote_cmd)
 }
 
 pub fn run_remote_command(command: RemoteCommand) -> anyhow::Result<i32> {
@@ -397,10 +430,10 @@ pub fn run_remote_command(command: RemoteCommand) -> anyhow::Result<i32> {
                 "--provider".to_string(),
                 ManagedProvider::Claude.as_str().to_string(),
                 "--attach".to_string(),
-                name,
+                name.clone(),
             ];
             let cmd = build_remote_shell_command(&collect_forwarded_env(None), &remote_args);
-            run_ssh(&on, true, &cmd)
+            run_remote_viewer(&on, &name, &cmd)
         }
     }
 }
@@ -415,6 +448,64 @@ fn run_ssh(target: &str, allocate_tty: bool, remote_cmd: &str) -> anyhow::Result
         .status()
         .with_context(|| format!("run ssh to {target}"))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// SSH options for an interactive remote viewer. The viewer gets its own
+/// connection instead of riding a shared ControlMaster one, so the keepalive
+/// below applies to it: after a laptop sleep or network change, ssh notices
+/// the dead link in about 15 seconds and exits instead of hanging. LogLevel
+/// hides ssh's own "connection closed" line; `exit_hint` replaces it.
+const VIEWER_SSH_OPTIONS: &[&str] = &[
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-o",
+    "LogLevel=ERROR",
+];
+
+/// Run an interactive viewer over ssh, then always tell the user what
+/// happened and how to get back to the session.
+fn run_remote_viewer(target: &str, name: &str, remote_cmd: &str) -> anyhow::Result<i32> {
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-t")
+        .args(VIEWER_SSH_OPTIONS)
+        .arg(target)
+        .arg("--")
+        .arg(remote_cmd);
+    // Keep this process alive through stray terminal signals so the hint
+    // always prints; ssh itself gets the default handlers back.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+        libc::signal(libc::SIGTERM, libc::SIG_IGN);
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            libc::signal(libc::SIGTERM, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    // An ssh killed by a signal did not end the remote session.
+    let code = match cmd.status() {
+        Ok(status) => status.code().unwrap_or(SSH_CONNECTION_LOST),
+        Err(err) => {
+            eprintln!("longhouse: could not run ssh: {err}");
+            SSH_CONNECTION_LOST
+        }
+    };
+    let mut err = std::io::stderr();
+    if err.is_terminal() {
+        let _ = err.write_all(TERMINAL_RESET.as_bytes());
+    }
+    let _ = err.write_all(exit_hint(code, name, target).as_bytes());
+    let _ = err.flush();
+    Ok(code)
 }
 
 fn state_file_path(root: &Path, name: &str) -> PathBuf {
@@ -580,7 +671,7 @@ fn acquire_viewer_lock(root: &Path, name: &str, is_warp: bool) -> anyhow::Result
 #[derive(Debug, PartialEq, Eq)]
 enum SessionSelection {
     New { name: String },
-    Reattach { name: String, provider: String },
+    Reattach { name: String },
 }
 
 fn list_live_names(root: &Path) -> Vec<String> {
@@ -608,21 +699,16 @@ fn list_live_names(root: &Path) -> Vec<String> {
     names
 }
 
-fn select_or_create_session(
-    root: &Path,
-    provider: &str,
-    base_name: &str,
-    explicit_attach: Option<&str>,
-) -> anyhow::Result<SessionSelection> {
-    if let Some(target) = explicit_attach {
-        validate_session_name(target)?;
-        if is_session_alive(root, target) {
-            let actual_provider = read_session_record(root, target)
-                .map(|record| record.provider)
-                .unwrap_or_else(|| provider.to_string());
+/// Pick the session this viewer opens. A new session takes exactly the name
+/// the client chose; it never falls back to some other session in the same
+/// folder, because several agents often share one.
+fn select_session(root: &Path, name: &str, attach: bool) -> anyhow::Result<SessionSelection> {
+    validate_session_name(name)?;
+    let alive = is_session_alive(root, name);
+    if attach {
+        if alive {
             return Ok(SessionSelection::Reattach {
-                name: target.to_string(),
-                provider: actual_provider,
+                name: name.to_string(),
             });
         }
         let live = list_live_names(root);
@@ -631,38 +717,22 @@ fn select_or_create_session(
         } else {
             format!("active: {}", live.join(", "))
         };
-        anyhow::bail!("no active remote session named {target:?} ({hint})");
+        anyhow::bail!("no active remote session named {name:?} ({hint})");
     }
-
-    let mut suffix = 1usize;
-    loop {
-        let candidate = if suffix == 1 {
-            base_name.to_string()
-        } else {
-            format!("{base_name}-{suffix}")
-        };
-        if !is_session_alive(root, &candidate) {
-            let sock = socket_file_path(root, &candidate);
-            if sock.to_string_lossy().len() > MAX_SOCKET_PATH_BYTES {
-                anyhow::bail!(
-                    "socket path too long ({} > {MAX_SOCKET_PATH_BYTES} bytes): {}",
-                    sock.to_string_lossy().len(),
-                    sock.display()
-                );
-            }
-            return Ok(SessionSelection::New { name: candidate });
-        }
-        let existing_provider = read_session_record(root, &candidate)
-            .map(|record| record.provider)
-            .unwrap_or_default();
-        if existing_provider == provider && count_live_viewers(root, &candidate) == 0 {
-            return Ok(SessionSelection::Reattach {
-                name: candidate,
-                provider: existing_provider,
-            });
-        }
-        suffix += 1;
+    if alive {
+        anyhow::bail!("a remote session named {name:?} is already running; attach to it with --remote-attach {name}");
     }
+    let sock = socket_file_path(root, name);
+    if sock.to_string_lossy().len() > MAX_SOCKET_PATH_BYTES {
+        anyhow::bail!(
+            "socket path too long ({} > {MAX_SOCKET_PATH_BYTES} bytes): {}",
+            sock.to_string_lossy().len(),
+            sock.display()
+        );
+    }
+    Ok(SessionSelection::New {
+        name: name.to_string(),
+    })
 }
 
 fn ensure_dtach_on_path() -> anyhow::Result<()> {
@@ -764,30 +834,14 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
         Some(canonical)
     };
 
-    let folder_name = target_cwd
-        .as_deref()
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("session");
-    let default_base = format!(
-        "{}-{}",
-        sanitize_session_base(&args.provider),
-        sanitize_session_base(folder_name)
-    );
-    let base_name = match args.remote_name.as_deref() {
-        Some(custom) => {
-            validate_session_name(custom)?;
-            custom.to_string()
-        }
-        None => default_base,
+    let (requested, attach) = match (args.attach, args.remote_name) {
+        (Some(name), _) => (name, true),
+        (None, Some(name)) => (name, false),
+        (None, None) => (generate_session_name(), false),
     };
-
     let create_lock = FileLockGuard::acquire_blocking(&root.join(".create.lock"), false)?;
-    let selection =
-        select_or_create_session(&root, &args.provider, &base_name, args.attach.as_deref())?;
-    let name = match &selection {
-        SessionSelection::New { name } | SessionSelection::Reattach { name, .. } => name.clone(),
-    };
+    let selection = select_session(&root, &requested, attach)?;
+    let name = requested;
     let viewer_guard = acquire_viewer_lock(&root, &name, warp_cli_agent::is_warp_env_current())?;
     let sock_path = socket_file_path(&root, &name);
     let state_path = state_file_path(&root, &name);
@@ -849,6 +903,11 @@ pub fn run_remote_session(args: RemoteSessionArgs) -> anyhow::Result<i32> {
         }
     };
     drop(viewer_guard);
+    // Tell the client whether the session outlived this viewer, so it can say
+    // "detached, still running" rather than "ended".
+    if is_session_alive(&root, &name) {
+        return Ok(DETACHED_EXIT);
+    }
     Ok(code)
 }
 
@@ -979,9 +1038,12 @@ mod tests {
     }
 
     #[test]
-    fn session_name_validation_and_sanitization_reject_traversal() {
-        assert_eq!(sanitize_session_base("my repo/1!"), "my_repo_1_");
-        assert_eq!(sanitize_session_base("..--"), "session");
+    fn session_names_are_short_random_and_validated() {
+        let a = generate_session_name();
+        let b = generate_session_name();
+        assert_eq!(a.len(), 6);
+        assert_ne!(a, b);
+        assert!(validate_session_name(&a).is_ok());
         assert!(validate_session_name("claude-my_repo.1").is_ok());
         assert!(validate_session_name("").is_err());
         assert!(validate_session_name("../escape").is_err());
@@ -1181,29 +1243,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn session_selection_isolates_providers_and_reattaches_idle_viewers() {
+    fn new_sessions_never_reuse_another_session_in_the_same_folder() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        let first = "k3f9qa";
 
-        let claude = ManagedProvider::Claude.as_str();
-        let omp = ManagedProvider::Omp.as_str();
-        let first_name = format!("{claude}-demo");
-
-        // Fresh state creates claude-demo.
         assert_eq!(
-            select_or_create_session(root, claude, &first_name, None).unwrap(),
+            select_session(root, first, false).unwrap(),
             SessionSelection::New {
-                name: first_name.clone()
+                name: first.to_string()
             }
         );
 
-        // Create live session with 0 viewers -> same provider reattaches cleanly.
-        std::fs::write(socket_file_path(root, &first_name), b"").unwrap();
+        // Make `first` a live session with no viewer attached, as after a
+        // laptop sleep.
+        std::fs::write(socket_file_path(root, first), b"").unwrap();
         write_private_file(
-            &state_file_path(root, &first_name),
+            &state_file_path(root, first),
             serde_json::to_vec(&RemoteSessionRecord {
-                name: first_name.clone(),
-                provider: claude.to_string(),
+                name: first.to_string(),
+                provider: ManagedProvider::Claude.as_str().to_string(),
                 cwd: "/tmp/demo".to_string(),
                 created_at: "2026-11-22T00:00:00Z".to_string(),
             })
@@ -1211,50 +1270,50 @@ mod tests {
             .as_slice(),
         )
         .unwrap();
-        let _alive =
-            FileLockGuard::acquire_blocking(&alive_lock_path(root, &first_name), true).unwrap();
+        let _alive = FileLockGuard::acquire_blocking(&alive_lock_path(root, first), true).unwrap();
 
+        // A second launch in the same folder gets its own session.
         assert_eq!(
-            select_or_create_session(root, claude, &first_name, None).unwrap(),
-            SessionSelection::Reattach {
-                name: first_name.clone(),
-                provider: claude.to_string(),
-            }
-        );
-
-        // Different provider in same directory uses its own name without colliding.
-        let omp_name = format!("{omp}-demo");
-        assert_eq!(
-            select_or_create_session(root, omp, &omp_name, None).unwrap(),
-            SessionSelection::New { name: omp_name }
-        );
-
-        // Holding a live viewer lock causes a second tab to create `-2` while `--attach` hits the original.
-        let _viewer = acquire_viewer_lock(root, &first_name, true).unwrap();
-        assert_eq!(count_live_viewers(root, &first_name), 1);
-        assert_eq!(
-            select_or_create_session(root, claude, &first_name, None).unwrap(),
+            select_session(root, "m7x2pd", false).unwrap(),
             SessionSelection::New {
-                name: format!("{first_name}-2")
+                name: "m7x2pd".to_string()
             }
         );
+        // Reusing a live name for a new session is refused, not attached.
+        assert!(select_session(root, first, false).is_err());
+        // Attaching is explicit, by name.
         assert_eq!(
-            select_or_create_session(root, claude, &first_name, Some(&first_name)).unwrap(),
+            select_session(root, first, true).unwrap(),
             SessionSelection::Reattach {
-                name: first_name.clone(),
-                provider: claude.to_string(),
+                name: first.to_string()
             }
         );
+        assert!(select_session(root, "missing", true).is_err());
 
-        // List shows the live session cleanly and drops dead ones.
+        let _viewer = acquire_viewer_lock(root, first, true).unwrap();
         let entries = collect_list_entries(root);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, first_name);
+        assert_eq!(entries[0].name, first);
         assert_eq!(entries[0].viewers, 1);
         assert_eq!(entries[0].state, "starting");
-        assert!(format_list_table(&entries).contains(&first_name));
+        assert!(format_list_table(&entries).contains(first));
+    }
 
-        // Explicit attach to missing name errors clearly.
-        assert!(select_or_create_session(root, claude, &first_name, Some("missing")).is_err());
+    #[test]
+    fn exit_hint_always_names_the_session_and_how_to_return() {
+        let target = "user@devbox";
+        let lost = exit_hint(SSH_CONNECTION_LOST, "k3f9qa", target);
+        assert!(lost.contains("connection to devbox lost"));
+        assert!(lost.contains("longhouse remote attach k3f9qa --on user@devbox"));
+
+        let detached = exit_hint(DETACHED_EXIT, "k3f9qa", target);
+        assert!(detached.contains("k3f9qa is still running on devbox"));
+        assert!(detached.contains("longhouse remote attach k3f9qa --on user@devbox"));
+
+        let ended = exit_hint(0, "k3f9qa", target);
+        assert!(ended.contains("k3f9qa ended on devbox"));
+        assert!(!ended.contains("remote attach"));
+
+        assert_eq!(host_label("devbox"), "devbox");
     }
 }
