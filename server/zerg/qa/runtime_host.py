@@ -111,16 +111,19 @@ class RuntimeHost:
             stderr=subprocess.STDOUT,
         )
         deadline = time.monotonic() + 45
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"Runtime Host exited during startup with {self.process.returncode}")
-            try:
-                response = httpx.get(f"{self.api_url}/health", timeout=1)
-                if response.status_code < 500:
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(0.1)
+        # One client for the whole poll: a bare httpx.get builds a new client, and with it a TLS context
+        # that loads the CA bundle (about 30 ms of CPU), on every 0.1 s poll of a plain-HTTP local port.
+        with httpx.Client(timeout=1) as client:
+            while time.monotonic() < deadline:
+                if self.process.poll() is not None:
+                    raise RuntimeError(f"Runtime Host exited during startup with {self.process.returncode}")
+                try:
+                    response = client.get(f"{self.api_url}/health")
+                    if response.status_code < 500:
+                        return
+                except httpx.HTTPError:
+                    pass
+                time.sleep(0.1)
         raise TimeoutError("Runtime Host did not become reachable")
 
     def stop(self) -> int | None:
