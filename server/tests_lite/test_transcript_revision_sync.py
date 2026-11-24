@@ -142,7 +142,10 @@ def _run_stream(session_id, *, cycles, transcript_revision=None, owner_id=None, 
                 break
         return frames
 
-    return asyncio.run(_run())
+    # A cycle with nothing published waits out the stream's change wait (5 s); a short one runs the same cycles,
+    # as test_workspace_projection_delta.py does.
+    with patch.object(timeline_mod, "WORKSPACE_STREAM_CHANGE_WAIT_SECONDS", 0.05):
+        return asyncio.run(_run())
 
 
 def test_attach_frames_carry_the_revision_read_at_stream_open():

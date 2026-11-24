@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from datetime import timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -229,7 +230,12 @@ def _frames(accepted: frozenset[str], previews: list[dict]) -> list[dict]:
             out.append(frame)
         return out
 
-    return [__import__("json").loads(f["data"]) for f in asyncio.run(run()) if f.get("event") == "workspace_changed"]
+    # The previews are already on the bus, so every cycle after the last one is an idle tick
+    # that waits out the stream's change wait (5 s each, 15 s a test). A short wait still runs
+    # those idle cycles, so a frame that leaked after the previews would still be caught.
+    with patch.object(timeline_mod, "WORKSPACE_STREAM_CHANGE_WAIT_SECONDS", 0.01):
+        frames = asyncio.run(run())
+    return [__import__("json").loads(f["data"]) for f in frames if f.get("event") == "workspace_changed"]
 
 
 def _preview(kind: str | None, text: str, **extra) -> dict:
