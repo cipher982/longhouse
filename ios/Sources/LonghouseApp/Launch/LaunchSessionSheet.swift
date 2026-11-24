@@ -755,11 +755,11 @@ private func previewMachine(
     .emberChrome()
 }
 
-private func previewRecentModels() -> [RecentModel] {
+private func previewRecentModels(localDeviceId: String = previewMachine().deviceId) -> [RecentModel] {
     let formatter = ISO8601DateFormatter()
     let now = Date()
     return [
-        RecentModel(model: "gpt-5.6-luna", lastUsedAt: formatter.string(from: now.addingTimeInterval(-2 * 60 * 60)), deviceId: "preview-dev"),
+        RecentModel(model: "gpt-5.6-luna", lastUsedAt: formatter.string(from: now.addingTimeInterval(-2 * 60 * 60)), deviceId: localDeviceId),
         RecentModel(model: "gpt-5.5", lastUsedAt: formatter.string(from: now.addingTimeInterval(-26 * 60 * 60)), deviceId: "other-mac"),
     ]
 }
@@ -767,7 +767,7 @@ private func previewRecentModels() -> [RecentModel] {
 #Preview("Model picker · borrowed") {
     NavigationStack {
         ModelSelectionView(
-            models: .constant(previewRecentModels()),
+            models: .constant(previewRecentModels(localDeviceId: "preview-dev")),
             selectedModel: nil,
             currentDeviceId: "preview-dev",
             machineNamesByDeviceId: ["preview-dev": "Workbench", "other-mac": "MacBook"],
