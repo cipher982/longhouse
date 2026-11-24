@@ -168,8 +168,10 @@ test-isolation: ## Exercise the real credential/filesystem/network isolation bou
 	@python3 scripts/qa/test-isolation-smoke.py
 
 
+# Each matrix cell starts its own catalogd and spends 2-4 s waiting on it: one worker per guest CPU
+# (--dist=load spreads the cells of this one file) instead of 40 cells in series.
 test-provider-contract: ## @internal Exact-SHA ordinary-CI provider contract assertions
-	@cd server && uv run --extra dev pytest -q tests_lite/test_provider_resume_factory.py
+	@cd server && uv run --extra dev pytest -q -n "$${LONGHOUSE_TEST_CPUS:-2}" --dist=load tests_lite/test_provider_resume_factory.py
 
 test-storage-v2-b2: ## Disposable real-B2 Phase 3 object/restore proof (requires scoped env)
 	@cd server && LONGHOUSE_B2_REAL_PROOF=1 uv run --extra dev pytest -q tests_lite/test_storage_v2_object_store.py tests_lite/test_catalogd_backup_restore.py
