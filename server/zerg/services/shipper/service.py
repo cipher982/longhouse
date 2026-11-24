@@ -444,6 +444,9 @@ ExecStart={exec_start}
 # Native updates exit cleanly; the replacement engine must still restart.
 Restart=always
 RestartSec=10
+# Leave spawned Console provider processes alive across an engine restart so
+# the replacement daemon can recover them instead of cutting turns off mid-flight.
+KillMode=process
 {environment_block}
 
 [Install]

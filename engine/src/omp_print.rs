@@ -1951,8 +1951,10 @@ async fn monitor_omp_print(
                 }
             }
 
-            if event.get("type").and_then(Value::as_str) == Some("agent_end")
-                && is_terminal_agent_end(&event)
+            let terminal_prompt_error = is_terminal_prompt_result_error(&event);
+            if (event.get("type").and_then(Value::as_str) == Some("agent_end")
+                && is_terminal_agent_end(&event))
+                || terminal_prompt_error
             {
                 let cancelled = crate::turn_claims::default_registry()
                     .and_then(|claims| claims.read(&invocation.latest_turn().run_id))
@@ -1961,7 +1963,9 @@ async fn monitor_omp_print(
                 // Reconcile an unknown sentinel and empty registries from OMP's
                 // authoritative bit. Once real job IDs are known, updates own
                 // the inventory; a query here can observe a later wake turn.
-                if invocation.pending_count() == 0 || async_work_placeholder {
+                if !terminal_prompt_error
+                    && (invocation.pending_count() == 0 || async_work_placeholder)
+                {
                     reconcile_omp_async_work_state(
                         child,
                         stderr_path,
@@ -3164,6 +3168,17 @@ fn is_terminal_agent_end(event: &Value) -> bool {
         .unwrap_or(true)
 }
 
+/// OMP reports pre-invocation failures (missing API key, model resolution,
+/// bad prompt) as `prompt_result` with `status: "error"` and either
+/// `agentInvoked: false` or `sessionSettled: true`, without emitting
+/// `agent_end` or exiting the persistent RPC process.
+fn is_terminal_prompt_result_error(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("prompt_result")
+        && event.get("status").and_then(Value::as_str) == Some("error")
+        && (event.get("agentInvoked").and_then(Value::as_bool) == Some(false)
+            || event.get("sessionSettled").and_then(Value::as_bool) == Some(true))
+}
+
 fn terminal_state_for_projection(
     projection: &OmpStreamProjection,
     process_succeeded: Option<bool>,
@@ -3368,8 +3383,9 @@ async fn publish_stdout_growth(
                         .await;
                 }
             }
-            if event.get("type").and_then(Value::as_str) == Some("agent_end")
-                && is_terminal_agent_end(&event)
+            if (event.get("type").and_then(Value::as_str) == Some("agent_end")
+                && is_terminal_agent_end(&event))
+                || is_terminal_prompt_result_error(&event)
             {
                 let binding = invocation.latest_turn();
                 let cancel_requested = crate::turn_claims::default_registry()
@@ -4806,6 +4822,11 @@ for line in sys.stdin:
     elif kind == "prompt":
         prompt = command["message"]
         out({"id":command.get("id"),"type":"response","command":"prompt","success":True})
+        if prompt == "scenario=prompt-error-no-agent-end":
+            msg = "No API key found for openrouter.\n\nUse /login, set an API key environment variable, or create /tmp/agent.db"
+            out({"id":command.get("id"),"type":"response","command":"prompt","success":False,"error":msg})
+            out({"type":"prompt_result","id":command.get("id"),"agentInvoked":False,"status":"error","sessionSettled":True,"error":{"message":msg,"retryable":False}})
+            continue
         if prompt == "scenario=slow-exit":
             signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.3), os._exit(0)))
         if prompt == "scenario=moved":
@@ -7247,5 +7268,41 @@ for line in sys.stdin:
             .as_str()
             .unwrap()
             .ends_with("w99 "));
+    }
+
+    #[tokio::test]
+    async fn prompt_result_error_without_agent_end_fails_immediately_instead_of_hanging() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+
+        let (started, run_id) = start_fake_turn(temp.path(), "scenario=prompt-error-no-agent-end", None).await;
+        let summary = started.unwrap();
+        let claim = wait_for_terminal(&run_id).await;
+        if let Some(pgid) = summary.process_group_id {
+            wait_for_process_group_exit(pgid).await;
+        }
+        let terminal = claim.terminal_event.expect("terminal event recorded");
+        assert_eq!(terminal["payload"]["terminal_state"], "run_failed");
+        assert_eq!(
+            terminal["payload"]["terminal_reason"],
+            crate::provider_auth::AUTH_MISSING
+        );
+        assert!(
+            terminal["payload"]["stderr_tail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("No API key found for openrouter"),
+            "unexpected terminal payload: {terminal}"
+        );
+
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
     }
 }

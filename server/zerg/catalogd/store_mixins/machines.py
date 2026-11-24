@@ -749,24 +749,26 @@ class MachinesMixin:
                     session_device_map = {str(row.session_id): str(row.device_id) for row in session_rows}
                     if not session_device_map:
                         return
+                    model_expr = func.json_extract(facts.c.payload_json, "$.model")
                     fact_rows = connection.execute(
                         select(
+                            model_expr.label("model"),
+                            func.max(facts.c.at).label("last_at"),
                             facts.c.session_id,
-                            facts.c.at,
-                            facts.c.payload_json,
                         )
                         .where(
                             facts.c.session_id.in_(list(session_device_map)),
                             facts.c.kind == "turn.usage",
+                            model_expr.is_not(None),
+                            func.typeof(model_expr) == "text",
+                            func.trim(model_expr) != "",
                         )
-                        .order_by(facts.c.at.desc(), facts.c.source_position.desc(), facts.c.id.desc())
+                        .group_by(func.lower(model_expr))
+                        .order_by(func.max(facts.c.at).desc())
+                        .limit(limit + len(seen))
                     ).all()
                     for row in fact_rows:
-                        try:
-                            payload = json.loads(row.payload_json)
-                        except (TypeError, ValueError):
-                            continue
-                        model = payload.get("model") if isinstance(payload, dict) else None
+                        model = row.model
                         if not isinstance(model, str) or not model.strip():
                             continue
                         key = model.casefold()
@@ -776,7 +778,7 @@ class MachinesMixin:
                         models.append(
                             {
                                 "model": model,
-                                "last_used_at": _encode_datetime(_as_aware_utc(row.at)),
+                                "last_used_at": _encode_datetime(_as_aware_utc(row.last_at)),
                                 "device_id": session_device_map.get(str(row.session_id), device_id),
                             }
                         )

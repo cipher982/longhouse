@@ -314,18 +314,42 @@ if (
     transcript = str(transcript_hint.with_name("transcript_full.jsonl"))
 step_index = str(data.get("stepIdx") or data.get("step_index") or "")
 managed_provider = (os.environ.get("LONGHOUSE_MANAGED_PROVIDER") or "").strip().lower()
+# Antigravity ACP Console owns the coordinator's identity, transcript binding,
+# live phase, and steering over JSON-RPC. Its child process tree (and any
+# /swarm workers or subagents it spawns) inherits LONGHOUSE_MANAGED_* env vars;
+# running the Helm hook here overwrites session_phase_state with run_id=None
+# and aliases worker conversations onto the coordinator session.
+if (os.environ.get("LONGHOUSE_ANTIGRAVITY_ACP_MODE") or "").strip() == "1":
+    print(json.dumps(default_response(event), separators=(",", ":")), flush=True)
+    raise SystemExit(0)
 # Provider subprocesses may inherit a parent Helm session environment. A
 # session id is authoritative only when the provider identity agrees; binding
 # an Antigravity transcript to an inherited Claude id corrupts source identity.
 managed_session_id = (
     os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or ""
 ) if managed_provider == "antigravity" else ""
-session_id = managed_session_id or conversation_id
 longhouse_home = os.environ.get("LONGHOUSE_HOOK_HOME", "")
 state_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_STATE_DIR") or default_antigravity_state_dir(longhouse_home)
-inbox_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or default_antigravity_inbox_dir(
-    longhouse_home,
-    session_id,
+# A Helm Antigravity session binds to one native conversation id. Swarm workers
+# and subagents spawned inside that Helm process inherit LONGHOUSE_MANAGED_*
+# and LONGHOUSE_ANTIGRAVITY_INBOX_DIR; if the state file is already bound to a
+# different conversation id, do not hijack the parent session or claim its inbox.
+inherited_child_conversation = False
+if managed_session_id and conversation_id and state_dir:
+    try:
+        existing_state = json.loads((Path(state_dir) / f"{managed_session_id}.json").read_text(encoding="utf-8"))
+        existing_conversation_id = str(existing_state.get("conversation_id") or "") if isinstance(existing_state, dict) else ""
+        if existing_conversation_id and existing_conversation_id != conversation_id:
+            managed_session_id = ""
+            inherited_child_conversation = True
+    except Exception:
+        pass
+session_id = managed_session_id or conversation_id
+inbox_dir = "" if inherited_child_conversation else (
+    os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or default_antigravity_inbox_dir(
+        longhouse_home,
+        session_id,
+    )
 )
 
 state = ""

@@ -35,7 +35,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -229,7 +229,7 @@ pub async fn start_antigravity_acp_turn(
         .stderr(Stdio::from(stderr_file));
     ManagedIdentity::new(ManagedProvider::Antigravity, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command, &[]);
+        .apply(&mut command, &[("LONGHOUSE_ANTIGRAVITY_ACP_MODE", "1")]);
     let fifo_c = std::ffi::CString::new(fifo.as_os_str().as_bytes())?;
     #[cfg(unix)]
     crate::console_sink::own_process_group(&mut command, move || {
@@ -1046,9 +1046,10 @@ async fn monitor_acp_turn(
     sink: AntigravityAcpSink,
     recovered: bool,
 ) {
-    if !recovered {
-        sink.post_phase("thinking", None).await;
-    }
+    let mut current_phase: &'static str = "thinking";
+    let mut current_tool: Option<String> = None;
+    let mut last_phase_at = Instant::now();
+    sink.post_phase(current_phase, None).await;
     let run_dir = run_dir_of(&sink.stdout_path);
     let mut stream = AcpStream::new(&sink.run_id);
     let mut wake_sent = false;
@@ -1057,10 +1058,34 @@ async fn monitor_acp_turn(
     let mut replaying = recovered;
     let mut tick = 0_u64;
     let mut cancel_at: Option<String> = None;
+    const PHASE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
     loop {
         match stream.poll(&sink.stdout_path) {
             Ok(signals) if !replaying => {
                 for signal in signals {
+                    match &signal {
+                        LiveSignal::Tool {
+                            command, completed, ..
+                        } => {
+                            if *completed {
+                                current_phase = "thinking";
+                                current_tool = None;
+                            } else {
+                                current_phase = "running";
+                                current_tool = Some(command.clone());
+                            }
+                            sink.post_phase(current_phase, current_tool.clone()).await;
+                            last_phase_at = Instant::now();
+                        }
+                        LiveSignal::Text { .. } => {
+                            if current_phase != "thinking" || current_tool.is_some() {
+                                current_phase = "thinking";
+                                current_tool = None;
+                                sink.post_phase(current_phase, None).await;
+                                last_phase_at = Instant::now();
+                            }
+                        }
+                    }
                     sink.post_event(&sink.live_event(&signal));
                 }
             }
@@ -1141,6 +1166,10 @@ async fn monitor_acp_turn(
             }
         }
         if verdict == Verdict::Pending {
+            if last_phase_at.elapsed() >= PHASE_KEEPALIVE_INTERVAL {
+                sink.post_phase(current_phase, current_tool.clone()).await;
+                last_phase_at = Instant::now();
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         }

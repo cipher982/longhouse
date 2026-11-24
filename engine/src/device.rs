@@ -4360,6 +4360,9 @@ ExecStart={exec_start}
 # same job with KeepAlive=true.
 Restart=always
 RestartSec=10
+# Leave spawned Console provider processes alive across an engine restart so
+# the replacement daemon can recover them instead of cutting turns off mid-flight.
+KillMode=process
 {environment_block}
 
 [Install]

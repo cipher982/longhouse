@@ -606,3 +606,127 @@ def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_pat
     assert completed.returncode == 0
     state = json.loads((tmp_path / "managed-local" / "antigravity" / "sessions" / f"{conversation_id}.json").read_text())
     assert state["session_id"] == conversation_id
+
+
+def test_antigravity_hook_skips_managed_state_in_acp_console_mode(tmp_path: Path) -> None:
+    script = tmp_path / "hook.sh"
+    script.write_text(
+        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    transcript = tmp_path / "brain" / "22222222-2222-4222-8222-222222222222" / ".system_generated" / "logs" / "transcript_full.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n", encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        LONGHOUSE_HOME=str(tmp_path),
+        LONGHOUSE_MANAGED_PROVIDER="antigravity",
+        LONGHOUSE_MANAGED_SESSION_ID="11111111-1111-4111-8111-111111111111",
+        LONGHOUSE_ANTIGRAVITY_ACP_MODE="1",
+    )
+
+    completed = subprocess.run(
+        [str(script), "PreInvocation"],
+        input=json.dumps(
+            {
+                "conversationId": "22222222-2222-4222-8222-222222222222",
+                "transcriptPath": str(transcript),
+                "workspacePaths": [str(tmp_path)],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {"injectSteps": []}
+    assert list((tmp_path / "agent" / "outbox").glob("prs.*.json")) == []
+    assert list((tmp_path / "managed-local" / "antigravity" / "sessions").glob("*.json")) == []
+
+
+def test_antigravity_hook_does_not_let_swarm_worker_hijack_bound_helm_session(tmp_path: Path) -> None:
+    script = tmp_path / "hook.sh"
+    script.write_text(
+        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    managed_session_id = "11111111-1111-4111-8111-111111111111"
+    primary_conversation_id = "22222222-2222-4222-8222-222222222222"
+    worker_conversation_id = "33333333-3333-4333-8333-333333333333"
+    primary_transcript = tmp_path / "brain" / primary_conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl"
+    worker_transcript = tmp_path / "brain" / worker_conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl"
+    primary_transcript.parent.mkdir(parents=True)
+    worker_transcript.parent.mkdir(parents=True)
+    primary_transcript.write_text("{}\n", encoding="utf-8")
+    worker_transcript.write_text("{}\n", encoding="utf-8")
+    state_dir = tmp_path / "managed-local" / "antigravity" / "sessions"
+    inbox_dir = tmp_path / "managed-local" / "antigravity" / "inbox" / managed_session_id
+    inbox_dir.mkdir(parents=True)
+    inbox_dir.chmod(0o700)
+    pending_msg = inbox_dir / "msg-0001.json"
+    pending_msg.write_text(json.dumps({"id": "msg-1", "text": "coordinator only", "intent": "send"}), encoding="utf-8")
+    pending_msg.chmod(0o600)
+
+    env = os.environ.copy()
+    env.update(
+        LONGHOUSE_HOME=str(tmp_path),
+        LONGHOUSE_MANAGED_PROVIDER="antigravity",
+        LONGHOUSE_MANAGED_SESSION_ID=managed_session_id,
+        LONGHOUSE_ANTIGRAVITY_STATE_DIR=str(state_dir),
+        LONGHOUSE_ANTIGRAVITY_INBOX_DIR=str(inbox_dir),
+    )
+
+    # First hook binds the Helm session to its primary conversation id.
+    first = subprocess.run(
+        [str(script), "SessionStart"],
+        input=json.dumps(
+            {
+                "conversationId": primary_conversation_id,
+                "transcriptPath": str(primary_transcript),
+                "workspacePaths": [str(tmp_path)],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+
+    # A swarm worker inherits the same env but has its own conversationId.
+    worker = subprocess.run(
+        [str(script), "PreInvocation"],
+        input=json.dumps(
+            {
+                "conversationId": worker_conversation_id,
+                "transcriptPath": str(worker_transcript),
+                "workspacePaths": [str(tmp_path)],
+            }
+        ),
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert worker.returncode == 0, worker.stderr
+    # Worker must NOT claim the coordinator's inbox message.
+    assert json.loads(worker.stdout) == {"injectSteps": []}
+    assert pending_msg.exists()
+
+    # Coordinator state file must remain bound to the primary conversation.
+    managed_state = json.loads((state_dir / f"{managed_session_id}.json").read_text(encoding="utf-8"))
+    assert managed_state["conversation_id"] == primary_conversation_id
+    assert managed_state["transcript_path"] == str(primary_transcript)
+
+    # Worker presence must be recorded under its own unmanaged conversation id.
+    worker_state = json.loads((state_dir / f"{worker_conversation_id}.json").read_text(encoding="utf-8"))
+    assert worker_state["session_id"] == worker_conversation_id
+    outbox_payloads = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "agent" / "outbox").glob("prs.*.json")]
+    worker_outbox = [p for p in outbox_payloads if p["transcript_path"] == str(worker_transcript)]
+    assert len(worker_outbox) == 1
+    assert worker_outbox[0]["session_id"] == worker_conversation_id
+    assert worker_outbox[0]["control_path"] == "unmanaged"
