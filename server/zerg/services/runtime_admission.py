@@ -184,7 +184,10 @@ class RuntimeAdmission:
                 self._claim_deadline = min(requested_deadline, self._claim_cutoff)
             return self._snapshot_unlocked()
 
-    async def wait_for_reopen(self, *, max_wait_seconds: float = PENDING_REOPEN_MAX_WAIT_SECONDS) -> bool:
+    async def wait_for_reopen(self, *, max_wait_seconds: float | None = None) -> bool:
+        if max_wait_seconds is None:
+            # Read at call time, not bound as a default, so a test can shorten the wait.
+            max_wait_seconds = PENDING_REOPEN_MAX_WAIT_SECONDS
         async with self._lock:
             admission = self._admission_unlocked()
             if admission == "open":

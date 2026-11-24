@@ -538,6 +538,9 @@ async def test_exact_activation_receipt_reopens_same_env_process_restart(monkeyp
 @pytest.mark.asyncio
 async def test_activation_receipt_mismatch_stays_closed(monkeypatch) -> None:
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    # A pending runtime holds a write up to PENDING_REOPEN_MAX_WAIT_SECONDS (10 s) for a reopen that this test
+    # never sends; the refusal is the same after a short wait.
+    monkeypatch.setattr("zerg.services.runtime_admission.PENDING_REOPEN_MAX_WAIT_SECONDS", 0.05)
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "8")
     monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "b" * 64)
     from zerg.services.runtime_admission import RuntimeAdmission
@@ -571,6 +574,9 @@ async def test_activation_receipt_mismatch_stays_closed(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_unavailable_activation_evidence_stays_closed(monkeypatch) -> None:
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    # A pending runtime holds a write up to PENDING_REOPEN_MAX_WAIT_SECONDS (10 s) for a reopen that this test
+    # never sends; the refusal is the same after a short wait.
+    monkeypatch.setattr("zerg.services.runtime_admission.PENDING_REOPEN_MAX_WAIT_SECONDS", 0.05)
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "7")
     monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "a" * 64)
     from zerg.services.runtime_admission import RuntimeAdmission
@@ -600,6 +606,8 @@ def test_mounted_control_can_reopen_while_tenant_writes_are_closed(evidence_runt
     _client, runtime, _ping = evidence_runtime
     monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
     monkeypatch.setattr(app.router, "routes", [Mount("/api", app=api_app)])
+    # The tenant write below is refused after the pending wait (10 s in production); the refusal is what is checked.
+    monkeypatch.setattr(admission_module, "PENDING_REOPEN_MAX_WAIT_SECONDS", 0.05)
     activation = {}
 
     async def catalog_probe(operation):
