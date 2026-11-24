@@ -605,6 +605,15 @@ def test_environment(run_id: str, options: dict[str, str]) -> dict[str, str]:
         "LONGHOUSE_HISTORICAL_MIN_FREE_BYTES": "0",
         "LONGHOUSE_HISTORICAL_MIN_FREE_RATIO": "0",
         "CARGO_BUILD_JOBS": CONTAINER_CPUS,
+        # Native thread pools size themselves from the CPUs the kernel reports, which inside
+        # this container is every CPU of the host (64 on a CI node), not --cpus. OpenBLAS
+        # starts that many threads in every process that imports numpy, and the server app
+        # does: each xdist worker, Runtime Host, catalogd and search child. Tests get their
+        # parallelism from workers; one thread per pool also keeps a worker far from
+        # --pids-limit (16 workers in this container hit "can't start new thread").
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
         # The backend runner sizes its xdist fanout from this, not from the
         # Docker VM's CPU count that the guest can see.
         "LONGHOUSE_TEST_CPUS": CONTAINER_CPUS,
