@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -129,8 +130,8 @@ def _load_fixture_pair(name: str) -> tuple[dict, dict]:
 # already proven by test_provider_harness_qualification.py's hand-written
 # assertions, but stored here as a reusable fixture corpus so
 # compare_scenario_results() has real baseline/candidate data to work
-# against, not synthetic guesses. Regenerate with `--write-fixtures` (see
-# test_generate_corpus below) whenever the underlying profiles change.
+# against, not synthetic guesses. Regenerate with LONGHOUSE_WRITE_SCENARIO_CORPUS=1
+# (see test_generate_corpus below) whenever the underlying profiles change.
 
 
 def _capture_tool_call_result_pair(tmp_path: Path, monkeypatch) -> tuple[dict, dict]:
@@ -195,6 +196,14 @@ def _capture_helm_interrupt_pair(tmp_path: Path, monkeypatch) -> tuple[dict, dic
     return _as_scenario_result(legacy_result), _as_scenario_result(harness_result)
 
 
+@pytest.mark.skipif(
+    os.environ.get("LONGHOUSE_WRITE_SCENARIO_CORPUS") != "1",
+    # It asserts nothing and rewrites checked-in files, so on every run it only cost 9 s. The two
+    # legacy/harness runs it captures are asserted to agree by test_provider_harness_qualification.py::
+    # test_tool_call_result_legacy_and_harness_paths_agree_on_the_same_binary and
+    # test_helm_interrupt_legacy_and_harness_paths_agree_when_bridge_credentials_are_missing.
+    reason="regenerates the corpus fixtures; set LONGHOUSE_WRITE_SCENARIO_CORPUS=1 in a writable checkout",
+)
 @pytest.mark.timeout(60)
 def test_generate_corpus(tmp_path: Path, monkeypatch) -> None:
     """Not a real assertion -- (re)captures the fixture corpus from live
