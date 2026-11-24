@@ -348,7 +348,7 @@ struct ModelSelectionView: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
-    static func recentModelSubtitle(
+    nonisolated static func recentModelSubtitle(
         for recent: RecentModel,
         currentDeviceId: String?,
         machineNamesByDeviceId: [String: String] = [:],
