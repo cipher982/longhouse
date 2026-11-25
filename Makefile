@@ -450,14 +450,12 @@ test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" sele
 ifeq ($(strip $(TEST)),)
 test-engine: test-engine-omp-helm ## Rust engine tests (~20s; TEST=filter runs one)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES)
-	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
-	@# waiting on a real daemon, nearly idle, and the test harness takes ~40s to
-	@# compile. Overlap them: compile the harness in the background while the
-	@# proof runs, then run the suite with nothing left to build.
-	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests --no-run & harness=$$!; \
-	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )" || { status=$$?; wait $$harness; exit $$status; }; \
-	wait $$harness
+	@# One cargo invocation compiles the engine binaries and every test harness:
+	@# cargo runs those crates side by side, where a `cargo build` followed by a
+	@# second invocation for the harnesses waited on the first (44 s, then 72 s,
+	@# on a 4-CPU CI guest). The integration tests need the binaries, so this
+	@# leaves longhouse-engine in place for the projection-failure proof below.
+	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests --no-run
 	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
 	@# in this repo passed only --bin longhouse-engine, so its tests -- including
@@ -471,7 +469,13 @@ test-engine: test-engine-omp-helm ## Rust engine tests (~20s; TEST=filter runs o
 	@# took ~9 min on CI; engine/.config/nextest.toml bounds a hung test). A
 	@# harness that vanishes mid-run fails nextest outright, which the old
 	@# completion-summary grep existed to catch.
-	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests
+	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
+	@# waiting on a real daemon, nearly idle, so it runs beside the suite; both
+	@# report, and either failing fails the target. One physical line on purpose:
+	@# a backslash-continued recipe hands sh a command with newlines in it, and
+	@# process_identity's procfs-versus-ps test, running meanwhile, finds ps
+	@# printing that shell's command differently from /proc.
+	@uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(ENGINE_TEST_PROFILE) --bin longhouse-engine )" & proof=$$!; status=0; $(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bins --tests || status=$$?; wait $$proof || { proof_status=$$?; echo "daemon projection-failure proof failed ($$proof_status)" >&2; status=$$proof_status; }; exit $$status
 else
 test-engine: test-engine-single ## Rust engine tests (~20s; TEST=filter runs one)
 endif
