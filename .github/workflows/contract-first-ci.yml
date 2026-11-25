@@ -59,7 +59,8 @@ jobs:
   # Skipped jobs don't block workflow success.
   # -----------------------------------------------------------------------
   changes:
-    timeout-minutes: 10
+    # The image build after a dependency change takes most of this.
+    timeout-minutes: 45
     runs-on: ci-fast
     name: "Changed paths"
     outputs:
@@ -81,6 +82,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -97,24 +99,12 @@ jobs:
       - name: Fixture image key
         id: image
         run: echo "tag=$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')" >> "$GITHUB_OUTPUT"
-
-  # The fixture image (docker/test.dockerfile) is built once on this runner by
-  # test-isolation's own local-build path and kept in the runner's Docker image
-  # cache, so every test job on the machine starts from it without a pull. Cube's
-  # amd64 lanes (Hosted Live QA) pull the same image by tag from GHCR, so it is
-  # also published there when the tag is absent (only after a dependency change).
-  test-image:
-    name: "Fixture image"
-    needs: changes
-    runs-on: ci-fast
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 1
+      # The fixture image (docker/test.dockerfile): built here by test-isolation's local-build
+      # path when its key is new, otherwise found in this pod's seeded Docker root in about 0.1 s.
+      # As its own job ("Fixture image") it cost every push a second queue wait and checkout
+      # (25 to 90 s) before any test job could start. Cube's amd64 lanes (Hosted Live QA) pull
+      # the same image by tag from GHCR, so it is also published there when the tag is absent
+      # (only after a dependency change).
       - name: Build or reuse the fixture image on this runner
         id: prepare
         run: echo "ref=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
@@ -127,7 +117,7 @@ jobs:
       - name: Publish the image for cube's lanes when its tag is absent
         env:
           LOCAL_REF: ${{ steps.prepare.outputs.ref }}
-          PUBLISHED: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ needs.changes.outputs.image_tag }}
+          PUBLISHED: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ steps.image.outputs.tag }}
         run: |
           set -euo pipefail
           if docker buildx imagetools inspect "$PUBLISHED" >/dev/null 2>&1; then
@@ -145,11 +135,8 @@ jobs:
     # date, which is exactly how twelve of its members went dark. The live
     # lifecycle proof has a real dependency boundary, so it is gated and runs as
     # its own job ("Managed launch lifecycle") in parallel with this one.
-    needs: [changes, test-image]
-    # !cancelled() and not the default `success()`: `Changed paths` runs a git
-    # fetch against GitHub, and a network timeout there used to fail it -- which
-    # would now skip this whole job, because it needs that job's outputs.
-    if: ${{ !cancelled() && needs.test-image.result == 'success' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' }}
     runs-on: ci-fast
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
@@ -260,13 +247,13 @@ jobs:
     # Split out of Validation, where it ran serially after `make validate` and
     # was the longest single stretch of the CI critical path (~73 s of a 161 s
     # job). As its own job it runs alongside Validation for one extra image pull.
-    needs: [changes, test-image]
+    needs: changes
     # Gated on the surfaces that can invalidate it. This proof starts a real
     # Runtime Host, real SQLite, real device-token auth and scripted provider
     # binaries, so only a change to those surfaces can fail it; a docs,
     # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
     # until 2026-09-24.
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
     runs-on: ci-fast
     name: "Managed launch lifecycle"
     timeout-minutes: 20
@@ -300,10 +287,8 @@ jobs:
 
   backend-shards:
     timeout-minutes: 30
-    needs: [changes, test-image]
-    # !cancelled(): an image build skipped upstream (tag already published)
-    # must not skip this job; the prepare result is the real gate.
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ci-fast
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
@@ -353,8 +338,8 @@ jobs:
     # proves the source-only provider assertions that do not belong in the
     # provider-launch factory matrix.
     timeout-minutes: 15
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' }}
     runs-on: ci-fast
     name: "Provider contract tests"
 
@@ -370,8 +355,8 @@ jobs:
 
   engine-tests:
     timeout-minutes: 45
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ci-fast
     name: "Engine tests"
 
@@ -420,8 +405,8 @@ jobs:
 
   frontend-tests:
     timeout-minutes: 20
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ci-fast
     name: "Frontend + runner tests"
 
@@ -435,8 +420,8 @@ jobs:
 
   ui-sweep:
     timeout-minutes: 15
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.ui_sweep == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.ui_sweep == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ci-fast
     # Opens every menu on every fixture scene at three sizes and fails when one
     # lands off-screen, covered or clipped (scripts/ui/popover-sweep.ts). A
@@ -502,12 +487,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - lane: unit + ui
+          # One lane while one macOS runner serves this job: two lanes ran back to back on it and the
+          # second rebuilt LonghouseSmoke and booted its simulator again (133 s of a 564 s lane,
+          # run 45448869175). With no filter xcodebuild applies the test plan's own skips.
+          - lane: all
             schemes: "Longhouse LonghouseSmoke"
-            filter: "LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/InboxCaptureUITests/testCaptureInboxGalleryLight LonghouseSmoke:skip:LonghouseIOSUITests/InboxCaptureUITests/testCaptureInboxGalleryDark"
-          - lane: ui chat
-            schemes: LonghouseSmoke
-            filter: "LonghouseSmoke:only:LonghouseIOSUITests/SessionChatUITests LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptLightScreenshot LonghouseSmoke:skip:LonghouseIOSUITests/SessionChatUITests/testCaptureToolsTranscriptDarkScreenshot"
+            filter: ""
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -532,8 +517,8 @@ jobs:
 
   e2e-core:
     timeout-minutes: 30
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ci-fast
     name: "Core E2E tests"
     env:
@@ -651,8 +636,8 @@ jobs:
     # minutes of waiting for 0.3 to 0.7 minutes of work, 2026-11-11/12) and
     # paid a checkout and a guest start apiece. Every step runs whatever the earlier ones did, so one failure
     # does not hide another; the job is red if any step is.
-    needs: [changes, test-image]
-    if: ${{ !cancelled() && needs.test-image.result == 'success' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' }}
     runs-on: ci-fast
     name: "Small checks"
     timeout-minutes: 45
