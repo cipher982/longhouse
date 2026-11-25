@@ -60,6 +60,14 @@ function formatApiErrorMessage(status: number, body: unknown): string {
     }
   } else if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
     detailMessage = body.error;
+  } else if (body && typeof body === "object" && "code" in body && typeof body.code === "string") {
+    if (body.code === "runtime_unreachable") {
+      detailMessage = "Can't reach Longhouse (runtime unreachable)";
+    } else if (body.code === "runtime_restarting") {
+      detailMessage = "Longhouse is restarting";
+    } else {
+      detailMessage = `Request failed (${status}: ${body.code})`;
+    }
   }
 
   return detailMessage;

@@ -60,6 +60,22 @@ describe('ApiError', () => {
 
     expect(error.message).toBe('text: String should have at least 1 character');
   });
+
+  it('formats K1 runtime_unreachable and runtime_restarting codes cleanly', () => {
+    const unreachable = new ApiError({
+      url: '/api/timeline/sessions',
+      status: 503,
+      body: { code: 'runtime_unreachable', retryable: true },
+    });
+    expect(unreachable.message).toBe("Can't reach Longhouse (runtime unreachable)");
+
+    const restarting = new ApiError({
+      url: '/api/timeline/sessions',
+      status: 503,
+      body: { code: 'runtime_restarting', retryable: true },
+    });
+    expect(restarting.message).toBe('Longhouse is restarting');
+  });
 });
 
 describe("host-link API observations", () => {

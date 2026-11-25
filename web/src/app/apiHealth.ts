@@ -33,7 +33,11 @@ function toError(value: unknown): Error | null {
 }
 
 function errorCode(body: unknown): string | null {
-  if (!body || typeof body !== "object" || !("detail" in body)) return null;
+  if (!body || typeof body !== "object") return null;
+  if ("code" in body && typeof (body as { code?: unknown }).code === "string") {
+    return (body as { code: string }).code;
+  }
+  if (!("detail" in body)) return null;
   const detail = (body as { detail?: unknown }).detail;
   if (detail && typeof detail === "object" && "code" in detail && typeof detail.code === "string") {
     return detail.code;
@@ -63,6 +67,21 @@ export function classifyApiHealthError(error: Error): ApiHealthProblem | null {
     };
   }
   const code = errorCode(error.body);
+  // Planned runtime restarts are surfaced calmly by HostLinkBanner; do not
+  // flash a red server-error pill over them.
+  if (error.status === 503 && code === "runtime_restarting") {
+    return null;
+  }
+  // Edge proxies return typed K1 JSON 503s when the runtime container cannot
+  // be reached after the dial hold.
+  if (error.status === 503 && code === "runtime_unreachable") {
+    return {
+      kind: "unreachable",
+      label: "Can't reach Longhouse",
+      detail: "HTTP 503 · runtime_unreachable",
+      error,
+    };
+  }
   return {
     kind: "server_error",
     label: "Longhouse had a problem",

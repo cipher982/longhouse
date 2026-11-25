@@ -130,6 +130,30 @@ describe("classifyApiHealthError", () => {
     expect(problem?.label).toBe("Can't reach Longhouse");
   });
 
+  it("treats a K1 runtime_unreachable JSON 503 as unreachable instead of a server error", () => {
+    const problem = classifyApiHealthError(
+      new ApiError({
+        url: "/api/timeline/sessions",
+        status: 503,
+        body: { code: "runtime_unreachable", retryable: true },
+      }),
+    );
+    expect(problem?.kind).toBe("unreachable");
+    expect(problem?.label).toBe("Can't reach Longhouse");
+    expect(problem?.detail).toBe("HTTP 503 · runtime_unreachable");
+  });
+
+  it("suppresses the error pill for a K1 runtime_restarting 503 handled by HostLinkBanner", () => {
+    const problem = classifyApiHealthError(
+      new ApiError({
+        url: "/api/timeline/sessions",
+        status: 503,
+        body: { code: "runtime_restarting", retryable: true },
+      }),
+    );
+    expect(problem).toBeNull();
+  });
+
   it("treats a network failure as unreachable", () => {
     const problem = classifyApiHealthError(new TypeError("Failed to fetch"));
     expect(problem?.kind).toBe("unreachable");
