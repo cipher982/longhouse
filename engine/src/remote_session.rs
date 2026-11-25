@@ -460,9 +460,12 @@ fn run_ssh(target: &str, allocate_tty: bool, remote_cmd: &str) -> anyhow::Result
 
 /// SSH options for an interactive remote viewer. The viewer gets its own
 /// connection instead of riding a shared ControlMaster one, so the keepalive
-/// below applies to it: after a laptop sleep or network change, ssh notices
-/// the dead link in about 15 seconds and exits instead of hanging. LogLevel
-/// hides ssh's own "connection closed" line; `exit_hint` replaces it.
+/// below applies to it. The keepalive gives up only after two minutes of
+/// silence: over a stable address (Tailscale) TCP carries a connection through
+/// a Wi-Fi switch or router change and delivers every byte late, while a
+/// reattach loses the agent's output from the gap and leaves its relative
+/// redraws pointing at the wrong rows (duplicated status lines, a question
+/// drawn where nobody can see it). A short outage is a pause, not a reconnect.
 const VIEWER_SSH_OPTIONS: &[&str] = &[
     "-o",
     "ControlMaster=no",
@@ -471,10 +474,23 @@ const VIEWER_SSH_OPTIONS: &[&str] = &[
     "-o",
     "ConnectTimeout=5",
     "-o",
-    "ServerAliveInterval=5",
+    "ServerAliveInterval=15",
     "-o",
-    "ServerAliveCountMax=3",
+    "ServerAliveCountMax=8",
 ];
+
+/// Drop keys typed while no ssh was running. The terminal holds them, and the
+/// next ssh would deliver them to the agent, where a stray Enter or Escape
+/// answers a question the user could not see.
+fn discard_pending_input() {
+    #[cfg(unix)]
+    if std::io::stdin().is_terminal() {
+        // SAFETY: tcflush on this process's own stdin tty.
+        unsafe {
+            libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+        }
+    }
+}
 
 /// A viewer that stayed connected this long was really attached, so a later
 /// drop starts a fresh reconnect episode with a short first wait.
@@ -603,6 +619,7 @@ fn run_remote_viewer(target: &str, name: &str, first_cmd: &str) -> anyhow::Resul
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         remote_cmd = attach_cmd.clone();
+        discard_pending_input();
     }
 }
 
@@ -1434,6 +1451,18 @@ mod tests {
         assert_eq!(entries[0].viewers, 1);
         assert_eq!(entries[0].state, "starting");
         assert!(format_list_table(&entries).contains(first));
+    }
+
+    #[test]
+    fn viewer_rides_out_two_minute_outages() {
+        let opt = |key: &str| -> u64 {
+            VIEWER_SSH_OPTIONS
+                .iter()
+                .find_map(|o| o.strip_prefix(&format!("{key}=")))
+                .and_then(|v| v.parse().ok())
+                .unwrap()
+        };
+        assert!(opt("ServerAliveInterval") * opt("ServerAliveCountMax") >= 120);
     }
 
     #[test]
