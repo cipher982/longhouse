@@ -173,6 +173,12 @@ const MANAGED_CERTIFICATE_KEEPALIVE_SECS: u64 = 45;
 pub(crate) const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
+/// Read only by a `qa-fault-injection` engine (every CI test build): the
+/// shipper E2E sets it so it can prove the presence timer arm reaches the
+/// Runtime Host without waiting out the production minute. A release engine
+/// never reads it.
+#[cfg(feature = "qa-fault-injection")]
+const QA_MACHINE_PRESENCE_INTERVAL_MS_ENV: &str = "LONGHOUSE_QA_MACHINE_PRESENCE_INTERVAL_MS";
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 /// Status sends in flight. Sessions are independent; one that keeps failing
@@ -1177,8 +1183,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         MANAGED_FULL_RECONCILIATION_INTERVAL_SECS,
     ));
     managed_full_reconciliation_timer.tick().await; // startup scan is already full
-    let mut machine_presence_timer =
-        tokio::time::interval(Duration::from_secs(MACHINE_PRESENCE_INTERVAL_SECS));
+    let mut machine_presence_timer = tokio::time::interval(machine_presence_interval());
     machine_presence_timer.tick().await; // consume first immediate tick
     let mut flight_sample_timer =
         tokio::time::interval(Duration::from_secs(FLIGHT_SAMPLE_INTERVAL_SECS));
@@ -2076,6 +2081,18 @@ fn spawn_heartbeat_post(
             task_elapsed_ms,
         }
     });
+}
+
+fn machine_presence_interval() -> Duration {
+    #[cfg(feature = "qa-fault-injection")]
+    if let Some(millis) = std::env::var(QA_MACHINE_PRESENCE_INTERVAL_MS_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+    {
+        return Duration::from_millis(millis);
+    }
+    Duration::from_secs(MACHINE_PRESENCE_INTERVAL_SECS)
 }
 
 fn spawn_machine_presence_post(

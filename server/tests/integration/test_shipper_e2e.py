@@ -654,6 +654,7 @@ def _start_connect_daemon(
     project_name: str,
     machine_name: str,
     create_codex_root: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> dict:
     session_id = str(uuid4())
     home = tmp_path / "home"
@@ -674,6 +675,7 @@ def _start_connect_daemon(
         "CODEX_HOME": str(home / ".codex"),
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
+        **(extra_env or {}),
     }
     proc = _popen_captured(
         [
@@ -1608,7 +1610,12 @@ def test_connect_daemon_exits_cleanly_on_shutdown_signal(server, tmp_path, sig):
 def test_connect_daemon_timers_reach_runtime_host_and_status_file(server, tmp_path):
     """Pins the daemon loop's timer arms end to end: the local status file is
     written, a heartbeat reaches the Runtime Host, and the periodic machine
-    presence POST lands (first tick at MACHINE_PRESENCE_INTERVAL_SECS = 60 s)."""
+    presence POST lands. The production first tick is at
+    MACHINE_PRESENCE_INTERVAL_SECS = 60 s; the CI test engine (built with
+    qa-fault-injection) takes a 1 s interval from
+    LONGHOUSE_QA_MACHINE_PRESENCE_INTERVAL_MS, so the same timer arm fires
+    without the test waiting out a minute. A release engine ignores the
+    variable and still passes inside the 100 s deadline."""
     # The test token is bound to this machine name; other tests heartbeat as it
     # too, so only rows received after this daemon starts count.
     machine_name = "shipper-e2e"
@@ -1621,7 +1628,13 @@ def test_connect_daemon_timers_reach_runtime_host_and_status_file(server, tmp_pa
     # machine_presence is one upserted row per device: wait for it to change.
     prior_presence = _live_rows(server, "SELECT received_at FROM machine_presence WHERE device_id = ?", (machine_name,))
     presence_baseline = prior_presence[0]["received_at"] if prior_presence else None
-    daemon = _start_connect_daemon(server, tmp_path, project_name="timers-project", machine_name=machine_name)
+    daemon = _start_connect_daemon(
+        server,
+        tmp_path,
+        project_name="timers-project",
+        machine_name=machine_name,
+        extra_env={"LONGHOUSE_QA_MACHINE_PRESENCE_INTERVAL_MS": "1000"},
+    )
     proc = daemon["proc"]
     log_dir = daemon["log_dir"]
     status_path = daemon["longhouse_home"] / "agent" / "engine-status.json"
