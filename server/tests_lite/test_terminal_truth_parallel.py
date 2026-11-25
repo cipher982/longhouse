@@ -625,6 +625,9 @@ def test_the_engine_and_the_qa_engine_are_built_once_per_set_of_inputs_and_copie
     def fake_build(flags: str = engine.FLAGS, target: Path | None = None) -> dict[str, Path]:
         builds.append(flags)
         targets.append(target)
+        if target is not None:  # what cargo leaves in a target: the compiled dependencies
+            (target / "ci" / "deps").mkdir(parents=True, exist_ok=True)
+            (target / "ci" / "deps" / "libdep.rlib").write_bytes(b"d" * 1000)
         made = tmp_path / "target"
         made.mkdir(exist_ok=True)
         for name in mutations.BINARIES:
@@ -633,24 +636,65 @@ def test_the_engine_and_the_qa_engine_are_built_once_per_set_of_inputs_and_copie
         return {name: made / name for name in mutations.BINARIES}
 
     digest = ["a" * 64]
+    local = tmp_path / "checkout" / ".build" / "target"
     monkeypatch.setattr(engine, "build", fake_build)
+    monkeypatch.setattr(engine, "LOCAL_TARGET", local)
+    monkeypatch.setattr(engine, "dependencies_key", lambda: "1" * 16)
     monkeypatch.setattr(mutations, "engine_inputs_digest", lambda **_k: digest[0])
     cache = tmp_path / "cache"
 
-    assert engine.provide(tmp_path / "one", cache) == ("miss", "built")
+    state, fault, written = engine.provide(tmp_path / "one", cache)
+    assert (state, fault) == ("miss", "built")
     assert builds == [engine.FLAGS, engine.FAULT_FLAGS]  # the engine, then the same engine with the fault seams
     assert "qa-fault-injection" in engine.FAULT_FLAGS and "qa-fault-injection" not in engine.FLAGS
-    assert targets == [engine.cache_target(cache)] * 2  # the dependencies stay compiled between runs
+    assert targets == [local] * 2  # built on the runner's own volume, never in the shared cache
+    kept = cache / ("cargo-target-" + "1" * 16)
+    assert (kept / "ci" / "deps" / "libdep.rlib").stat().st_size == 1000  # the compiled dependencies are kept once
+    assert written == engine._size(cache / ("a" * 24)) + 1000
     assert (tmp_path / "one" / "longhouse-engine").read_text() == "longhouse-engine build 1"
     assert (tmp_path / "one" / "fault" / "longhouse-engine").read_text() == "longhouse-engine build 2"
-    assert engine.provide(tmp_path / "two", cache) == ("hit", "cached") and len(builds) == 2
+    assert engine.provide(tmp_path / "two", cache) == ("hit", "cached", 0) and len(builds) == 2
     assert (tmp_path / "two" / "fault" / "longhouse").read_text() == "longhouse build 2"
-    assert engine.provide(tmp_path / "three", None) == ("off", "built") and len(builds) == 4
+    assert engine.provide(tmp_path / "three", None) == ("off", "built", 0) and len(builds) == 4
     assert targets[2:] == [None, None]  # no cache, the checkout's own target
 
-    digest[0] = "b" * 64  # the engine sources changed
-    assert engine.provide(tmp_path / "four", cache) == ("miss", "built") and len(builds) == 6
-    assert [entry.name for entry in cache.iterdir() if not entry.name.startswith("cargo-target-")] == ["b" * 24]  # one build is kept
+    digest[0] = "b" * 64  # the engine sources changed, on a fresh runner checkout
+    shutil.rmtree(tmp_path / "checkout")
+    state, _fault, written = engine.provide(tmp_path / "four", cache)
+    assert state == "miss" and len(builds) == 6
+    assert (local / "ci" / "deps" / "libdep.rlib").is_file()  # started from the kept target
+    assert written == engine._size(cache / ("b" * 24))  # the two binaries, and not the target again
+    assert sorted(entry.name for entry in cache.iterdir()) == ["b" * 24, kept.name]  # one build is kept
+
+
+def test_a_dependency_change_keeps_one_new_cargo_target(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_engine as engine
+
+    def fake_build(flags: str = engine.FLAGS, target: Path | None = None) -> dict[str, Path]:
+        assert target is not None
+        (target / "ci").mkdir(parents=True, exist_ok=True)
+        (target / "ci" / "dep").write_text(key[0])
+        for name in mutations.BINARIES:
+            (target / name).write_text(name)
+            (target / name).chmod(0o755)
+        return {name: target / name for name in mutations.BINARIES}
+
+    key = ["1" * 16]
+    digest = iter(f"{n}" * 64 for n in "abc")
+    monkeypatch.setattr(engine, "build", fake_build)
+    monkeypatch.setattr(engine, "LOCAL_TARGET", tmp_path / "local")
+    monkeypatch.setattr(engine, "dependencies_key", lambda: key[0])
+    monkeypatch.setattr(mutations, "engine_inputs_digest", lambda **_k: next(digest))
+    cache = tmp_path / "cache"
+    (cache / "cargo-target-0123abcd").mkdir(parents=True)  # the previous scheme's, one per checkout path
+
+    engine.provide(tmp_path / "one", cache, fault=False)
+    key[0] = "2" * 16  # Cargo.lock or the compiler changed
+    shutil.rmtree(tmp_path / "local")
+    engine.provide(tmp_path / "two", cache, fault=False)
+    targets = sorted(entry.name for entry in cache.iterdir() if entry.name.startswith("cargo-target-"))
+    assert targets == ["cargo-target-" + "2" * 16]
+    assert (cache / targets[0] / "ci" / "dep").read_text() == "2" * 16
 
 
 def test_a_run_without_mutation_checks_builds_no_qa_engine_and_leaves_the_engine_for_the_next_run(monkeypatch, tmp_path) -> None:
@@ -669,28 +713,30 @@ def test_a_run_without_mutation_checks_builds_no_qa_engine_and_leaves_the_engine
 
     monkeypatch.setattr(engine, "build", fake_build)
     monkeypatch.setattr(mutations, "engine_inputs_digest", lambda **_k: "c" * 64)
+    monkeypatch.setattr(engine, "LOCAL_TARGET", tmp_path / "local")
+    monkeypatch.setattr(engine, "dependencies_key", lambda: "1" * 16)
     cache = tmp_path / "cache"
 
-    assert engine.provide(tmp_path / "cells", cache, fault=False) == ("miss", "skipped")
+    assert engine.provide(tmp_path / "cells", cache, fault=False)[:2] == ("miss", "skipped")
     assert builds == [engine.FLAGS] and not (tmp_path / "cells" / "fault").exists()
-    assert engine.provide(tmp_path / "cells-again", cache, fault=False) == ("hit", "skipped") and len(builds) == 1
+    assert engine.provide(tmp_path / "cells-again", cache, fault=False)[:2] == ("hit", "skipped") and len(builds) == 1
     # A run with mutation checks on the same inputs builds only the QA engine, and keeps it beside the measured one.
-    assert engine.provide(tmp_path / "mutations", cache) == ("miss", "built") and builds == [engine.FLAGS, engine.FAULT_FLAGS]
+    assert engine.provide(tmp_path / "mutations", cache)[:2] == ("miss", "built") and builds == [engine.FLAGS, engine.FAULT_FLAGS]
     assert (tmp_path / "mutations" / "longhouse-engine").read_text() == "longhouse-engine measured build 1"
     assert (tmp_path / "mutations" / "fault" / "longhouse-engine").read_text() == "longhouse-engine qa build 2"
-    assert engine.provide(tmp_path / "mutations-again", cache) == ("hit", "cached") and len(builds) == 2
+    assert engine.provide(tmp_path / "mutations-again", cache)[:2] == ("hit", "cached") and len(builds) == 2
 
 
 def test_the_engine_lines_name_the_measured_engine_as_the_qa_engine_when_none_is_built(monkeypatch, tmp_path, capsys) -> None:
     from zerg.qa import terminal_truth_engine as engine
 
-    def fake_provide(out: Path, cache: Path | None, *, fault: bool = True) -> tuple[str, str]:
+    def fake_provide(out: Path, cache: Path | None, *, fault: bool = True) -> tuple[str, str, int]:
         for directory in [out, *([out / engine.FAULT_DIR] if fault else [])]:
             directory.mkdir(parents=True, exist_ok=True)
             for name in mutations.BINARIES:
                 (directory / name).write_text(name)
                 (directory / name).chmod(0o755)
-        return "off", "built" if fault else "skipped"
+        return "off", "built" if fault else "skipped", 0
 
     monkeypatch.setattr(engine, "provide", fake_provide)
     monkeypatch.setenv("TT_MUTATIONS", "0")  # the CI action's decision: this run has no mutation checks
@@ -703,16 +749,24 @@ def test_the_engine_lines_name_the_measured_engine_as_the_qa_engine_when_none_is
     assert lines["fault_engine"] == str(tmp_path / "b" / "fault" / "longhouse-engine") and lines["fault"] == "built"
 
 
-def test_a_cached_cargo_target_over_its_bound_is_started_again(monkeypatch, tmp_path) -> None:
+def test_the_dependencies_key_ignores_the_engine_version_and_follows_registry_packages(monkeypatch, tmp_path) -> None:
     from zerg.qa import terminal_truth_engine as engine
 
-    target = tmp_path / "cargo-target-x"
-    (target / "ci").mkdir(parents=True)
-    (target / "ci" / "big").write_bytes(b"x" * 2048)
-    monkeypatch.setattr(engine, "TARGET_KEEP_BYTES", 4096)
-    assert engine._bounded(target) == target and target.exists()
-    (target / "ci" / "bigger").write_bytes(b"x" * 4096)
-    assert engine._bounded(target) == target and not target.exists()
+    (tmp_path / "engine").mkdir()
+    manifest = '[package]\nname = "longhouse-engine"\nversion = "{v}"\n\n[dependencies.serde]\nversion = "1"\n'
+    lock = (
+        'version = 4\n\n[[package]]\nname = "longhouse-engine"\nversion = "{v}"\ndependencies = ["serde"]\n\n'
+        '[[package]]\nname = "serde"\nversion = "{serde}"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n'
+    )
+
+    def key(v: str, serde: str = "1.0.1") -> str:
+        (tmp_path / "engine" / "Cargo.toml").write_text(manifest.format(v=v))
+        (tmp_path / "engine" / "Cargo.lock").write_text(lock.format(v=v, serde=serde))
+        return engine.dependencies_key(tmp_path)
+
+    assert key("0.1.83") == key("0.1.84")  # a release
+    assert key("0.1.84") != key("0.1.84", serde="1.0.2")  # a dependency bump
+    assert 'version = "1"' in engine._without_package_version(manifest.format(v="9"))
 
 
 def test_the_engine_and_the_qa_engine_are_keyed_by_different_flags_over_the_same_inputs(monkeypatch) -> None:
