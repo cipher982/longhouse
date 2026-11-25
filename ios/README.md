@@ -38,3 +38,9 @@ Test: `make test-ios`. Previews: `make ios-previews`. Renderer benchmark:
 [`RELEASE.md`](../RELEASE.md)).
 For a focused bench run, `make ios-unit TEST=LonghouseIOSTests/SessionModelsTests`
 selects a suite; append `/testName` to select one case.
+
+The merge gate's schemes and targets are in [`ios.mk`](ios.mk). On the wisp CI
+runner, `scripts/qa/native-test-bootstrap.py` keeps Xcode's derived data between
+jobs (one directory per Xcode build, emptied above 30 GiB or after a build fails
+in it) and a simulator template that each job clones, so a job compiles only what
+changed and does not wait for a new simulator's first boot.
