@@ -30,6 +30,13 @@ fn resumable_provider(provider: &str, path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"));
     }
+    if lower == "codex" && crate::compressed_source::is_compressed_transcript(path) {
+        // Compressed rollouts (`*.jsonl.zst`) are keyed under their plain `.jsonl`
+        // identity in `prepare_compressed_codex_envelope` and are not raw byte-offset
+        // streams; checking raw `.zst` bytes against host epochs always misses and
+        // fires redundant `/sources/resume` requests on every reconciliation scan.
+        return false;
+    }
     lower == "claude" || lower == "codex"
 }
 
@@ -637,6 +644,35 @@ mod tests {
             &capabilities(false),
             &path,
             "claude",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        assert!(!adopted);
+        assert_eq!(state.lock().unwrap().resume_calls, 0);
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn compressed_codex_rollout_skips_source_resume() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = Arc::new(Mutex::new(HostState::default()));
+        let host = spawn_host(listener, state.clone());
+        let client = client_for(address);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-11-01-018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl.zst");
+        // Write > 64 KiB so only resumable_provider gates the network call.
+        std::fs::write(&path, vec![0x28u8; 96 * 1024]).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let adopted = adopt_host_epoch_if_unshipped(
+            &mut conn,
+            &client,
+            &capabilities(true),
+            &path,
+            "codex",
             Duration::from_secs(10),
         )
         .await

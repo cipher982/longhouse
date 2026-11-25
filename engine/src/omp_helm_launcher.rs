@@ -2770,7 +2770,58 @@ pub fn resolve_binary(explicit: Option<String>) -> Result<String> {
     anyhow::bail!("OMP executable not found. Install stock `omp` or set --omp-bin.")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BinaryFileStamp {
+    len: u64,
+    modified_secs: i64,
+    modified_nanos: u32,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+}
+
+fn binary_file_stamp(metadata: &fs::Metadata) -> Option<BinaryFileStamp> {
+    let modified = metadata.modified().ok()?;
+    let (modified_secs, modified_nanos) = match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
+        Err(err) => {
+            let dur = err.duration();
+            (-(dur.as_secs() as i64), dur.subsec_nanos())
+        }
+    };
+    #[cfg(unix)]
+    let (dev, ino) = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    };
+    Some(BinaryFileStamp {
+        len: metadata.len(),
+        modified_secs,
+        modified_nanos,
+        #[cfg(unix)]
+        dev,
+        #[cfg(unix)]
+        ino,
+    })
+}
+
 pub(crate) fn provider_binary_sha256(path: &Path) -> Result<String> {
+    static CACHE: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (BinaryFileStamp, String)>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+    let stamp = fs::metadata(path).ok().and_then(|m| binary_file_stamp(&m));
+    if let Some(stamp) = stamp {
+        if let Ok(cache) = CACHE.lock() {
+            if let Some((cached_stamp, cached_hash)) = cache.get(path) {
+                if *cached_stamp == stamp {
+                    return Ok(cached_hash.clone());
+                }
+            }
+        }
+    }
+
     let mut file = File::open(path).with_context(|| {
         format!(
             "open OMP executable for integrity check: {}",
@@ -2786,7 +2837,17 @@ pub(crate) fn provider_binary_sha256(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..bytes_read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    let digest = format!("{:x}", hasher.finalize());
+
+    if let Some(stamp) = stamp {
+        if let Ok(mut cache) = CACHE.lock() {
+            if cache.len() >= 64 {
+                cache.clear();
+            }
+            cache.insert(path.to_path_buf(), (stamp, digest.clone()));
+        }
+    }
+    Ok(digest)
 }
 
 pub(crate) fn verify_resume_binary_identity(

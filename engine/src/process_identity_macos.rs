@@ -1158,11 +1158,54 @@ fn has_controlling_tty(device: u32) -> bool {
     device != 0 && device != u32::MAX
 }
 
+/// Resolve a controlling TTY `dev_t` to its `/dev` name with thread-safe
+/// `devname_r`, memoized for 60 seconds.
+///
+/// Uncached `devname()` scans `/dev` with `readdir` + `lstat` on every call
+/// (and uses a non-thread-safe static buffer). PTY minor numbers map 1:1 to
+/// `ttysNNN`, so memoizing by `dev_t` removes the dominant kernel leaf under
+/// macOS process inventory scans.
 fn tty_name(device: u32) -> String {
     if !has_controlling_tty(device) {
         return "??".to_string();
     }
-    let name = unsafe { libc::devname(device as libc::dev_t, libc::S_IFCHR as libc::mode_t) };
+    static MEMO: std::sync::Mutex<Option<(std::time::Instant, HashMap<u32, String>)>> =
+        std::sync::Mutex::new(None);
+    if let Ok(mut memo) = MEMO.lock() {
+        let (since, names) =
+            memo.get_or_insert_with(|| (std::time::Instant::now(), HashMap::new()));
+        if since.elapsed() >= std::time::Duration::from_secs(60) || names.len() >= 512 {
+            *since = std::time::Instant::now();
+            names.clear();
+        }
+        if let Some(name) = names.get(&device) {
+            return name.clone();
+        }
+        let name = tty_name_uncached(device);
+        names.insert(device, name.clone());
+        return name;
+    }
+    tty_name_uncached(device)
+}
+
+fn tty_name_uncached(device: u32) -> String {
+    extern "C" {
+        fn devname_r(
+            dev: libc::dev_t,
+            mode: libc::mode_t,
+            buf: *mut libc::c_char,
+            len: libc::c_int,
+        ) -> *mut libc::c_char;
+    }
+    let mut buf = [0 as libc::c_char; 64];
+    let name = unsafe {
+        devname_r(
+            device as libc::dev_t,
+            libc::S_IFCHR as libc::mode_t,
+            buf.as_mut_ptr(),
+            buf.len() as libc::c_int,
+        )
+    };
     if name.is_null() {
         "??".to_string()
     } else {
