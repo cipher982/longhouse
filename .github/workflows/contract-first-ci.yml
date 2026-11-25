@@ -461,24 +461,15 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
     # The wisp bench Mac: hosted macOS is metered 10x for a private repository. The runner takes
-    # one job at a time, so the two lanes below run back to back. Measured on wisp, warm: compile
-    # 31 s, unit 32 s, all 35 UI tests 398 s.
+    # one job at a time. native-test-bootstrap.py keeps Xcode's derived data between its jobs, and
+    # ios/ios.mk says which schemes run and on how many simulators (one: two clones were slower on
+    # its 8 GB). Earlier layouts (hosted VMs, two and three lanes) and why they went: git log of
+    # this file. The matrix can still split the gate by test class (IOS_TEST_SCHEMES and
+    # IOS_TEST_FILTER, `Scheme:only:Id` or `Scheme:skip:Id`); any command-line filter replaces the
+    # test plan's own skippedTests, so a split lane repeats them, and
+    # scripts/tests/ios-test-lanes.test.py fails if the lanes stop covering IOS_MERGE_TEST_SCHEMES
+    # in ios/ios.mk or drop a skip.
     runs-on: wisp
-    # One hosted VM ran both merge schemes back to back: 10 to 25 minutes depending on
-    # the hosted VM (measured 2026-09-20..29: 106 successes, median 17.7 min, max
-    # 24.8). Two lanes: the unit scheme plus the small UI test classes, and
-    # SessionChatUITests (26 of the 35 enabled UI tests, about 75% of their time) by itself.
-    # `skip` and `only` name the same class, so a test added anywhere else runs in
-    # the first lane. Any command-line filter replaces the test plan's own skippedTests
-    # (run 36653276780 ran the four screenshot-capture tests the plan skips), so each
-    # lane repeats them; the lanes test reads the plan and fails if one is missed. Splitting a scheme's tests one by one (an enumeration and a
-    # stride) cost each lane 3.5 minutes to enumerate them; three lanes needed a
-    # third macOS runner, and this account's 5 macOS jobs at once were often taken
-    # by other CI runs and agents' dispatches: lanes waited 5 to 15 minutes to
-    # start. A VM cannot overlap its own steps (booting the simulator during the
-    # compile made both slower on a 3-core VM).
-    # scripts/tests/ios-test-lanes.test.py fails if these lanes stop covering
-    # IOS_MERGE_TEST_SCHEMES in the Makefile.
     # The timeout was 25 and cancelled healthy runs (the v0.1.56 and v0.1.58
     # release gates); 40 leaves headroom over the slowest success.
     timeout-minutes: 40
@@ -505,7 +496,7 @@ jobs:
         run: scripts/ci/install_xcodegen.sh
 
       # The other place this runs (test-ios-helper) is gated on backend paths, so
-      # an edit to only this matrix or the Makefile would skip it.
+      # an edit to only this matrix or ios/ios.mk would skip it.
       - name: Check these lanes cover the merge gate
         run: python3 scripts/tests/ios-test-lanes.test.py
 
