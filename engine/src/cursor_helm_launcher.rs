@@ -1038,6 +1038,10 @@ fn enqueue_terminal_event(
     };
     let runtime_key = format!("cursor:{session_id}");
     let device_id = std::env::var("HOSTNAME").ok();
+    let (terminal_state, terminal_reason) = crate::managed_terminal::helm_terminal_classification(
+        Some(exit_code),
+        requested_session_end,
+    );
     let event = crate::managed_terminal::ManagedTerminalEvent {
         runtime_key: &runtime_key,
         session_id,
@@ -1048,16 +1052,8 @@ fn enqueue_terminal_event(
         device_id: device_id.as_deref(),
         source: "cursor_helm",
         dedupe_prefix: "cursor-helm-terminal",
-        terminal_state: if requested_session_end {
-            "session_ended"
-        } else {
-            crate::managed_terminal::terminal_state_for_exit(exit_code)
-        },
-        terminal_reason: if requested_session_end {
-            "remote_terminate"
-        } else {
-            "provider_exit"
-        },
+        terminal_state,
+        terminal_reason,
         exit_code: Some(exit_code),
     }
     .to_json();
@@ -1680,7 +1676,9 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             }
         }
     });
+    let run_started = std::time::Instant::now();
     let reaped_status = pty_relay::relay(&child, &writer, 0, 1, &stop, &resized);
+    let run_elapsed = run_started.elapsed();
     let launcher_requested_stop = stop.load(Ordering::Relaxed);
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
@@ -1688,7 +1686,7 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     drop(terminal);
     let registration_summary = degraded_registration
         .as_ref()
-        .map(|registration| registration.provider_exit_summary());
+        .and_then(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Only now that the terminal is restored: raw text would otherwise land
     // inside cursor-agent's alternate screen.
@@ -1704,16 +1702,31 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
     // Reap with a deadline whether or not the stop was requested; see
     // pty_relay::reap for why the relay can end with cursor-agent alive.
     let exit_code = pty_relay::reap(&child, reaped_status, launcher_requested_stop);
+    let remote_terminated = requested_session_end.load(Ordering::Relaxed);
     enqueue_terminal_event(
         &config,
         &session_id,
         Some(&run_id),
         exit_code,
-        requested_session_end.load(Ordering::Relaxed),
+        remote_terminated,
     );
     unsafe {
         libc::close(master);
     }
+    let (_, terminal_reason) =
+        crate::managed_terminal::helm_terminal_classification(Some(exit_code), remote_terminated);
+    crate::managed_terminal::HelmExitReceipt {
+        provider_label: "Cursor",
+        provider_cli: "cursor",
+        session_id: &session_id,
+        url: hook_url.as_deref(),
+        cwd: &cwd,
+        elapsed: run_elapsed,
+        terminal_reason,
+        exit_code: Some(exit_code),
+        resumable: true,
+    }
+    .print();
     if config.open {
         if let Some(url) = hook_url.as_deref() {
             println!(

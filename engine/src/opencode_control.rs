@@ -242,12 +242,13 @@ pub async fn permission_reply(
 }
 
 pub async fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
-    stop_server_bridge_at(session_id, None).await
+    stop_server_bridge_with_reason(session_id, None, "bridge_stop").await
 }
 
-pub async fn stop_server_bridge_at(
+pub async fn stop_server_bridge_with_reason(
     session_id: &str,
     state_dir: Option<&Path>,
+    terminal_reason: &str,
 ) -> Result<OpenCodeStopResult> {
     let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
@@ -262,7 +263,7 @@ pub async fn stop_server_bridge_at(
     let stopped = terminate_recorded_opencode_server(&state).await?;
     if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
         let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");
-        if enqueue_terminal_event(&state, &outbox)? {
+        if enqueue_terminal_event(&state, &outbox, terminal_reason)? {
             if let Some(run_id) = state.run_id.as_deref() {
                 crate::status_slot::publisher_for(
                     "opencode",
@@ -286,7 +287,11 @@ pub async fn stop_server_bridge_at(
     Ok(OpenCodeStopResult { pid, stopped })
 }
 
-fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result<bool> {
+fn enqueue_terminal_event(
+    state: &OpenCodeControlState,
+    outbox: &Path,
+    terminal_reason: &str,
+) -> Result<bool> {
     let Some(run_id) = state
         .run_id
         .as_deref()
@@ -307,7 +312,7 @@ fn enqueue_terminal_event(state: &OpenCodeControlState, outbox: &Path) -> Result
         source: "opencode_server_bridge",
         dedupe_prefix: "opencode-terminal",
         terminal_state: "session_ended",
-        terminal_reason: "bridge_stop",
+        terminal_reason,
         exit_code: None,
     }
     .to_json();
@@ -472,7 +477,7 @@ fn pid_matches_strict_opencode_identity(state: &OpenCodeControlState) -> bool {
 
 /// Stop the recorded OpenCode server and report whether it is actually gone.
 ///
-/// The return value means *exited*, not *signalled*. `stop_server_bridge_at`
+/// The return value means *exited*, not *signalled*. `stop_server_bridge_with_reason`
 /// removes the bridge state file on the strength of it, and a state file
 /// removed while the process still runs makes that process unfindable — which
 /// is how an `opencode serve` group becomes a permanent orphan.
@@ -1170,7 +1175,7 @@ mod tests {
         let state = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap();
         let outbox = temp.path().join("outbox");
 
-        assert!(enqueue_terminal_event(&state, &outbox).unwrap());
+        assert!(enqueue_terminal_event(&state, &outbox, "user_closed").unwrap());
         let event_path = fs::read_dir(&outbox)
             .unwrap()
             .next()
@@ -1181,6 +1186,7 @@ mod tests {
         assert_eq!(event["session_id"], SESSION_ID);
         assert_eq!(event["run_id"], "run-1");
         assert_eq!(event["payload"]["provider_session_id"], "ses_test123");
+        assert_eq!(event["payload"]["terminal_reason"], "user_closed");
         assert_eq!(
             event["payload"]["managed_transport"],
             OPENCODE_SERVER_BRIDGE_TRANSPORT

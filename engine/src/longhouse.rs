@@ -1903,6 +1903,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         &cwd,
         args.project.as_deref(),
     );
+    let run_started = std::time::Instant::now();
     let (exit, _registration_summary) = run_antigravity_foreground_with(
         &mut command,
         launch_transaction,
@@ -1921,6 +1922,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
             })
         },
     )?;
+    let run_elapsed = run_started.elapsed();
     // The launcher saw agy exit (a remote terminate kills its process group,
     // which closes the PTY), so it reports the run's end like the other Helm
     // launchers. Without it the served run stayed `running`.
@@ -1937,6 +1939,19 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         &cwd,
         args.project.as_deref(),
     );
+    let (_, terminal_reason) = managed_terminal::helm_terminal_classification(Some(exit), false);
+    managed_terminal::HelmExitReceipt {
+        provider_label: "Antigravity",
+        provider_cli: "antigravity",
+        session_id: &session_id,
+        url: Some(&url),
+        cwd: &cwd,
+        elapsed: run_elapsed,
+        terminal_reason,
+        exit_code: Some(exit),
+        resumable: false,
+    }
+    .print();
     std::process::exit(exit);
 }
 
@@ -1947,6 +1962,8 @@ fn record_antigravity_terminal_event(
     exit_code: i32,
 ) -> anyhow::Result<()> {
     let runtime_key = format!("antigravity:{session_id}");
+    let (terminal_state, terminal_reason) =
+        managed_terminal::helm_terminal_classification(Some(exit_code), false);
     let event = managed_terminal::ManagedTerminalEvent {
         runtime_key: &runtime_key,
         session_id,
@@ -1957,8 +1974,8 @@ fn record_antigravity_terminal_event(
         device_id: Some(machine_name),
         source: "antigravity_helm_launcher",
         dedupe_prefix: "antigravity-terminal",
-        terminal_state: managed_terminal::terminal_state_for_exit(exit_code),
-        terminal_reason: "provider_exit",
+        terminal_state,
+        terminal_reason,
         exit_code: Some(exit_code),
     }
     .to_json();
@@ -2009,7 +2026,7 @@ where
     }
     let registration_summary = degraded_registration
         .as_ref()
-        .map(|registration| registration.provider_exit_summary());
+        .and_then(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     for notice in deferred_notices.drain() {
         eprintln!("{notice}");
@@ -2626,6 +2643,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         .map(|registration| Arc::clone(&registration.provider_alive));
     let confirm_agent_dir = managed_launch_agent_dir();
     let confirm_notices = deferred_notices.clone();
+    let run_started = std::time::Instant::now();
     let run_result = run_foreground_command_after_spawn(&mut command, || {
         let provider_alive = degraded_provider_alive_for_spawn.clone();
         if let Some(alive) = provider_alive.as_ref() {
@@ -2652,6 +2670,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         );
         Ok(())
     });
+    let run_elapsed = run_started.elapsed();
     let exit = match run_result {
         Ok(exit) => exit,
         Err(error) => {
@@ -2677,7 +2696,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     }
     let registration_summary = degraded_registration
         .as_ref()
-        .map(|registration| registration.provider_exit_summary());
+        .and_then(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // The child has exited and the terminal is restored; surface any deferred
     // degradation/recovery notices now, in normal scrollback.
@@ -2696,6 +2715,19 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     ) {
         eprintln!("Longhouse warning: could not queue Claude terminal lifecycle event: {error}");
     }
+    let (_, terminal_reason) = managed_terminal::helm_terminal_classification(Some(exit), false);
+    managed_terminal::HelmExitReceipt {
+        provider_label: "Claude",
+        provider_cli: "claude",
+        session_id: &session_id,
+        url: Some(&url),
+        cwd: &cwd,
+        elapsed: run_elapsed,
+        terminal_reason,
+        exit_code: Some(exit),
+        resumable: true,
+    }
+    .print();
     if exit != 0 {
         // Drain once more before the immediate exit: the cancel flag from
         // `drop` may race a notice still in flight from a blocked HTTP call.
@@ -3020,14 +3052,22 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(model) = &model {
         attach.arg("--model").arg(model);
     }
+    let run_started = std::time::Instant::now();
     let run_result = run_foreground_command(&mut attach);
+    let run_elapsed = run_started.elapsed();
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
     }
-    let stop_result = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+    let (_, terminal_reason) =
+        managed_terminal::helm_terminal_classification(run_result.as_ref().ok().copied(), false);
+    let stop_result = stop_opencode_bridge_with_reason(
+        &session_id,
+        args.claude_dir.clone(),
+        Some(terminal_reason),
+    );
     let registration_summary = degraded_registration
         .as_ref()
-        .map(|registration| registration.provider_exit_summary());
+        .and_then(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Printed only after the provider released the terminal.
     for message in deferred_notices.drain() {
@@ -3045,10 +3085,22 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         &cwd,
         args.project.as_deref(),
     );
+    let _ = &machine_name;
+    managed_terminal::HelmExitReceipt {
+        provider_label: "OpenCode",
+        provider_cli: "opencode",
+        session_id: &session_id,
+        url: Some(&url),
+        cwd: &cwd,
+        elapsed: run_elapsed,
+        terminal_reason,
+        exit_code: Some(exit),
+        resumable: true,
+    }
+    .print();
     if exit != 0 {
         std::process::exit(exit);
     }
-    print_helm_closed(&machine_name);
     Ok(())
 }
 
@@ -3135,11 +3187,28 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     }
     let cwd = std::env::current_dir()?;
     warp_cli_agent::emit_session_event("opencode", "session_start", &args.session_id, &cwd, None);
+    let run_started = std::time::Instant::now();
     let run_result = run_foreground_command(&mut command);
-    let stop_result = stop_opencode_bridge(&args.session_id, None);
+    let run_elapsed = run_started.elapsed();
+    let (_, terminal_reason) =
+        managed_terminal::helm_terminal_classification(run_result.as_ref().ok().copied(), false);
+    let stop_result =
+        stop_opencode_bridge_with_reason(&args.session_id, None, Some(terminal_reason));
     let exit = run_result?;
     stop_result?;
     warp_cli_agent::emit_session_event("opencode", "stop", &args.session_id, &cwd, None);
+    managed_terminal::HelmExitReceipt {
+        provider_label: "OpenCode",
+        provider_cli: "opencode",
+        session_id: &args.session_id,
+        url: None,
+        cwd: &cwd,
+        elapsed: run_elapsed,
+        terminal_reason,
+        exit_code: Some(exit),
+        resumable: true,
+    }
+    .print();
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -3152,11 +3221,22 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
 const OPENCODE_STOP_DEADLINE: Duration = Duration::from_secs(10);
 
 fn stop_opencode_bridge(session_id: &str, claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    stop_opencode_bridge_with_reason(session_id, claude_dir, None)
+}
+
+fn stop_opencode_bridge_with_reason(
+    session_id: &str,
+    claude_dir: Option<PathBuf>,
+    terminal_reason: Option<&str>,
+) -> anyhow::Result<()> {
     validate_session_id(session_id)?;
     let mut command = Command::new(paired_engine_path()?);
     command.args(["opencode-bridge", "stop", "--session-id", session_id]);
     if let Some(dir) = claude_dir {
         command.arg("--claude-dir").arg(dir);
+    }
+    if let Some(reason) = terminal_reason {
+        command.args(["--terminal-reason", reason]);
     }
     let mut child = command
         .stdout(std::process::Stdio::null())
@@ -3192,6 +3272,8 @@ fn record_claude_terminal_event(
     exit_code: i32,
 ) -> anyhow::Result<()> {
     let runtime_key = format!("claude:{provider_session_id}");
+    let (terminal_state, terminal_reason) =
+        managed_terminal::helm_terminal_classification(Some(exit_code), false);
     let event = managed_terminal::ManagedTerminalEvent {
         runtime_key: &runtime_key,
         session_id,
@@ -3202,8 +3284,8 @@ fn record_claude_terminal_event(
         device_id: Some(machine_name),
         source: "claude_channel_wrapper",
         dedupe_prefix: "claude-terminal",
-        terminal_state: managed_terminal::terminal_state_for_exit(exit_code),
-        terminal_reason: "provider_exit",
+        terminal_state,
+        terminal_reason,
         exit_code: Some(exit_code),
     }
     .to_json();
@@ -3859,6 +3941,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         &cwd,
         args.project.as_deref(),
     );
+    let run_started = std::time::Instant::now();
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &bridge.ws_url,
@@ -3870,19 +3953,14 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         args.model_reasoning_effort.as_deref(),
         args.dangerously_bypass_approvals_and_sandbox,
     );
+    let run_elapsed = run_started.elapsed();
     warp_cli_agent::emit_session_event("codex", "stop", &session_id, &cwd, args.project.as_deref());
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
     }
-    let outcome = finish_codex_tui_session(
-        tui_result,
-        &session_id,
-        Some(run_id.as_str()),
-        Some(&machine_name),
-    );
     let registration_summary = degraded_registration
         .as_ref()
-        .map(|registration| registration.provider_exit_summary());
+        .and_then(|registration| registration.provider_exit_summary());
     drop(degraded_registration);
     // Printed only now: the provider owned the alternate screen until here.
     for message in deferred_notices.drain() {
@@ -3891,7 +3969,17 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     if let Some(message) = registration_summary {
         eprintln!("{message}");
     }
-    outcome
+    let _ = &machine_name;
+    finish_codex_tui_session(
+        tui_result,
+        &session_id,
+        Some(run_id.as_str()),
+        Some(CodexExitReceiptContext {
+            url: Some(&url),
+            cwd: &cwd,
+            elapsed: run_elapsed,
+        }),
+    )
 }
 
 fn launch_managed_codex_resume(
@@ -4041,6 +4129,7 @@ fn launch_managed_codex_resume(
         cwd,
         args.project.as_deref(),
     );
+    let run_started = std::time::Instant::now();
     let tui_result = run_codex_tui_with_recovery(
         codex_bin,
         &bridge.ws_url,
@@ -4052,6 +4141,7 @@ fn launch_managed_codex_resume(
         target.model_reasoning_effort.as_deref(),
         target.bypass,
     );
+    let run_elapsed = run_started.elapsed();
     warp_cli_agent::emit_session_event(
         "codex",
         "stop",
@@ -4059,11 +4149,16 @@ fn launch_managed_codex_resume(
         cwd,
         args.project.as_deref(),
     );
+    let _ = machine_name;
     finish_codex_tui_session(
         tui_result,
         &response.session_id,
         Some(response.run_id.as_str()),
-        Some(machine_name),
+        Some(CodexExitReceiptContext {
+            url: Some(url),
+            cwd,
+            elapsed: run_elapsed,
+        }),
     )
 }
 
@@ -4375,16 +4470,23 @@ fn run_codex_tui_with_recovery(
     )
 }
 
+#[derive(Clone, Copy)]
+struct CodexExitReceiptContext<'a> {
+    url: Option<&'a str>,
+    cwd: &'a Path,
+    elapsed: Duration,
+}
+
 fn finish_codex_tui_session(
     tui_result: anyhow::Result<i32>,
     session_id: &str,
     expected_run_id: Option<&str>,
-    banner_machine_name: Option<&str>,
+    exit_receipt: Option<CodexExitReceiptContext<'_>>,
 ) -> anyhow::Result<()> {
     match tui_result {
         Ok(0) => {
             let outcome = stop_codex_bridge(session_id, expected_run_id, "user_closed")?;
-            finish_codex_teardown(outcome, session_id, banner_machine_name, 0)?;
+            finish_codex_teardown(outcome, session_id, exit_receipt, 0)?;
             Ok(())
         }
         Ok(exit) => {
@@ -4396,8 +4498,7 @@ fn finish_codex_tui_session(
                         expected_run_id,
                         Some(format!("terminal detach failed: {detach_error:#}")),
                     );
-                    let exit =
-                        finish_codex_teardown(outcome, session_id, banner_machine_name, exit)?;
+                    let exit = finish_codex_teardown(outcome, session_id, exit_receipt, exit)?;
                     if exit != 0 {
                         std::process::exit(exit);
                     }
@@ -4410,7 +4511,7 @@ fn finish_codex_tui_session(
                     expected_run_id,
                     Some("provider exit observed while detaching the Codex terminal".to_string()),
                 );
-                let exit = finish_codex_teardown(outcome, session_id, banner_machine_name, exit)?;
+                let exit = finish_codex_teardown(outcome, session_id, exit_receipt, exit)?;
                 if exit != 0 {
                     std::process::exit(exit);
                 }
@@ -4433,7 +4534,7 @@ fn finish_codex_tui_session(
                             "provider exit observed while detaching the Codex terminal".to_string(),
                         ),
                     );
-                    finish_codex_teardown(outcome, session_id, banner_machine_name, 1)?;
+                    finish_codex_teardown(outcome, session_id, exit_receipt, 1)?;
                     Err(error)
                 }
                 Err(detach_error) => {
@@ -4442,12 +4543,7 @@ fn finish_codex_tui_session(
                         expected_run_id,
                         Some(format!("terminal detach failed: {detach_error:#}")),
                     );
-                    match finish_codex_teardown(
-                        outcome,
-                        session_id,
-                        banner_machine_name,
-                        1,
-                    ) {
+                    match finish_codex_teardown(outcome, session_id, exit_receipt, 1) {
                         Ok(_) => Err(error),
                         Err(teardown_error) => Err(error.context(format!(
                             "Codex terminal failed, detach failed ({detach_error:#}), and terminal reconciliation failed ({teardown_error:#})"
@@ -4726,15 +4822,6 @@ fn install_tui_signal_flag() -> anyhow::Result<Arc<AtomicUsize>> {
             .context("install managed Codex signal cleanup")?;
     }
     Ok(flag)
-}
-
-fn print_helm_closed(machine_name: &str) {
-    // This is deliberately a receipt, not a liveness claim. Helm owns the
-    // provider process only while its terminal is attached; the thread remains
-    // durable history after the bridge is stopped.
-    println!(
-        "\n╭─ ⬡ Longhouse — Session closed ──────────────────╮\n│                                                  │\n│   ░▒▓  🔥  The hearth is banked  🔥  ▓▒░       │\n│                                                  │\n│   This Helm has ended on {machine_name:<20}│\n│   The thread is safely saved in Longhouse.       │\n│                                                  │\n│   ✦  Until next time                             │\n│                                                  │\n╰──────────────────────────────────────────────────╯"
-    );
 }
 
 #[cfg(unix)]
@@ -5320,13 +5407,13 @@ fn read_codex_bridge_state(state_path: &Path) -> anyhow::Result<BridgeState> {
     serde_json::from_slice(&bytes).with_context(|| format!("parse {}", state_path.display()))
 }
 
-/// Apply a teardown outcome to the user-visible exit: banner, warning, or
+/// Apply a teardown outcome to the user-visible exit: receipt, warning, or
 /// error. Local residue is removed for every outcome except `Unresponsive`,
 /// where the session may still be live and its contract still meaningful.
 fn finish_codex_teardown(
     outcome: TeardownOutcome,
     session_id: &str,
-    banner_machine_name: Option<&str>,
+    exit_receipt: Option<CodexExitReceiptContext<'_>>,
     provider_exit: i32,
 ) -> anyhow::Result<i32> {
     match outcome {
@@ -5334,23 +5421,41 @@ fn finish_codex_teardown(
             terminal_reason,
             resumable_thread,
         } => {
-            let unexpected_provider_exit = matches!(
-                terminal_reason.as_deref(),
-                Some("provider_exit" | "process_gone" | "provider_signal")
-            );
-            if resumable_thread && unexpected_provider_exit {
-                eprintln!(
-                    "Longhouse notice: Codex exited unexpectedly. Resume the same thread with `longhouse codex --resume-session {session_id}`."
-                );
-            } else if resumable_thread {
-                eprintln!(
-                    "Longhouse notice: Resume this thread with `longhouse codex --resume-session {session_id}`."
-                );
-            } else {
+            if !resumable_thread {
                 remove_codex_contract_best_effort(session_id);
             }
-            if let Some(machine_name) = banner_machine_name.filter(|_| provider_exit == 0) {
-                print_helm_closed(machine_name);
+            if let Some(context) = exit_receipt {
+                let reason = terminal_reason.as_deref().unwrap_or(if provider_exit == 0 {
+                    "user_closed"
+                } else {
+                    "provider_exit"
+                });
+                managed_terminal::HelmExitReceipt {
+                    provider_label: "Codex",
+                    provider_cli: "codex",
+                    session_id,
+                    url: context.url,
+                    cwd: context.cwd,
+                    elapsed: context.elapsed,
+                    terminal_reason: reason,
+                    exit_code: Some(provider_exit),
+                    resumable: resumable_thread,
+                }
+                .print();
+            } else if resumable_thread {
+                let unexpected_provider_exit = matches!(
+                    terminal_reason.as_deref(),
+                    Some("provider_exit" | "process_gone" | "provider_signal")
+                );
+                if unexpected_provider_exit {
+                    eprintln!(
+                        "Longhouse notice: Codex exited unexpectedly. Resume the same thread with `longhouse codex --resume-session {session_id}`."
+                    );
+                } else {
+                    eprintln!(
+                        "Longhouse notice: Resume this thread with `longhouse codex --resume-session {session_id}`."
+                    );
+                }
             }
             Ok(provider_exit)
         }
@@ -5513,6 +5618,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         Path::new(&state.cwd),
         None,
     );
+    let attach_started = std::time::Instant::now();
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &ws_url,
@@ -5531,7 +5637,16 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         Path::new(&state.cwd),
         None,
     );
-    finish_codex_tui_session(tui_result, &args.session_id, None, Some("this machine"))
+    finish_codex_tui_session(
+        tui_result,
+        &args.session_id,
+        None,
+        Some(CodexExitReceiptContext {
+            url: None,
+            cwd: Path::new(&state.cwd),
+            elapsed: attach_started.elapsed(),
+        }),
+    )
 }
 
 fn main() -> anyhow::Result<()> {
@@ -5700,7 +5815,7 @@ mod tests {
                         )
                     }
                 } else {
-                    ("200 OK", r#"{"ok":true}"#)
+                    ("200 OK", r#"{"recorded":true}"#)
                 };
                 let resp = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -5724,6 +5839,11 @@ mod tests {
             agent_dir.path().to_path_buf(),
         );
 
+        let receipt_path = agent_dir
+            .path()
+            .join("managed-local")
+            .join("registration-retries")
+            .join("agy-degraded.json");
         let mut command = Command::new("agy");
         let mut saw_register = 0usize;
         let mut saw_confirm = false;
@@ -5737,8 +5857,10 @@ mod tests {
             |_cmd, after_spawn| {
                 after_spawn()?;
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-                while std::time::Instant::now() < deadline && !saw_confirm {
-                    if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                while std::time::Instant::now() < deadline
+                    && (!saw_confirm || receipt_path.exists())
+                {
+                    if let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
                         if line.contains("/managed-local/this-device") {
                             saw_register += 1;
                         } else if line.contains("/launch-outcome") {
@@ -5760,8 +5882,7 @@ mod tests {
             saw_confirm,
             "expected launch-outcome confirmation after retry"
         );
-        let summary = summary.expect("expected exit summary");
-        assert!(summary.contains("Antigravity"), "{summary}");
+        assert_eq!(summary, None);
     }
 
     #[test]
@@ -7337,6 +7458,7 @@ mod tests {
         assert_eq!(event["kind"], "terminal_signal");
         assert_eq!(event["run_id"], "run");
         assert_eq!(event["payload"]["terminal_state"], "session_ended");
+        assert_eq!(event["payload"]["terminal_reason"], "user_closed");
     }
 
     #[test]
@@ -7362,7 +7484,31 @@ mod tests {
         assert_eq!(event["provider"], "antigravity");
         assert_eq!(event["runtime_key"], "antigravity:session");
         assert_eq!(event["payload"]["terminal_state"], "process_gone");
+        assert_eq!(event["payload"]["terminal_reason"], "provider_signal");
         assert_eq!(event["payload"]["exit_code"], 143);
+    }
+
+    #[test]
+    fn antigravity_clean_exit_records_user_closed_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                record_antigravity_terminal_event("session", "run", "device", 0).unwrap();
+            },
+        );
+        let event_path = std::fs::read_dir(temp.path().join("agent/runtime-events-outbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let event: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(event_path).unwrap()).unwrap();
+        assert_eq!(event["payload"]["terminal_state"], "session_ended");
+        assert_eq!(event["payload"]["terminal_reason"], "user_closed");
+        assert_eq!(event["payload"]["exit_code"], 0);
     }
 
     #[test]

@@ -17,7 +17,7 @@ import {
 import { ContinuationsList } from "./ContinuationsList";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
-import { formatResumeReason } from "./ResumeSessionModal";
+import { formatResumeReason, formatRunEndReason } from "./ResumeSessionModal";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -101,6 +101,25 @@ export function SessionContextPane({
     plural(session.tool_calls, "tool call"),
     durationStr,
   ].join(" \u00b7 ");
+  const endedHelmRun =
+    session.session_state.mode === "helm" &&
+    session.session_state.run?.lifecycle === "ended"
+      ? session.session_state.run
+      : null;
+  const endedHelmRunLabel = endedHelmRun
+    ? formatRunEndReason(endedHelmRun.end_reason)
+    : null;
+  const endedHelmRunMeta = (() => {
+    if (!endedHelmRun || !endedHelmRunLabel) return null;
+    if (endedHelmRun.started_at && endedHelmRun.ended_at) {
+      const runDuration = formatDuration(
+        endedHelmRun.started_at,
+        endedHelmRun.ended_at,
+      );
+      return `${endedHelmRunLabel} \u00b7 ${runDuration}`;
+    }
+    return endedHelmRunLabel;
+  })();
   const branchLabel = getBranchLabel(session.git_branch);
   const metadataMeta = branchLabel || session.project || null;
 
@@ -233,6 +252,9 @@ export function SessionContextPane({
               value={formatFullDate(session.started_at)}
             />
             <MetaRow label="Duration" value={durationStr} />
+            {endedHelmRunMeta ? (
+              <MetaRow label="Last run" value={endedHelmRunMeta} />
+            ) : null}
             {branchLabel ? (
               <MetaRow label="Branch" value={branchLabel} />
             ) : null}

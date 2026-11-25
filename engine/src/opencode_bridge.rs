@@ -292,9 +292,19 @@ fn acquire_start_lock(lock_path: &Path) -> Result<fs::File> {
 pub async fn stop(
     session_id: &str,
     claude_dir: Option<PathBuf>,
+    terminal_reason: Option<&str>,
 ) -> Result<crate::opencode_control::OpenCodeStopResult> {
     let state_dir = claude_dir.map(|path| path.join("managed-local/opencode-server"));
-    crate::opencode_control::stop_server_bridge_at(session_id, state_dir.as_deref()).await
+    let reason = terminal_reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("bridge_stop");
+    crate::opencode_control::stop_server_bridge_with_reason(
+        session_id,
+        state_dir.as_deref(),
+        reason,
+    )
+    .await
 }
 
 pub fn attach(

@@ -106,6 +106,7 @@ private extension APISessionStateFacts {
             launchState: launch?.state,
             runLifecycle: run?.lifecycle,
             runId: run?.id,
+            runEndReason: run?.endReason,
             activityState: activity.state,
             activityRawKind: activity.rawKind,
             activityTool: activity.tool,

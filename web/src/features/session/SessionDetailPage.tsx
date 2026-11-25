@@ -1327,7 +1327,8 @@ function SessionDetailWorkspaceRoute({
         <ResumeSessionModal
           intent={resumeIntent}
           unexpectedStop={isUnexpectedResumeStop(
-            displaySession.runtime_display?.terminal_reason ??
+            displaySession.session_state.run?.end_reason ??
+              displaySession.runtime_display?.terminal_reason ??
               displaySession.session_state.disposition.close_reason,
           )}
           onClose={() => setResumeIntent(null)}

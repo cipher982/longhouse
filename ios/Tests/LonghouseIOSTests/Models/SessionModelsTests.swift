@@ -2643,4 +2643,16 @@ struct SessionDelegationFactsTests {
         #expect(toolEvent.toolIntent == "Run unit tests")
         #expect(commentaryEvent.messagePhase == "commentary")
     }
+
+    @Test
+    func unexpectedResumeStopDistinguishesCleanUserExitFromCrashOrSignal() {
+        #expect(!isUnexpectedResumeStop("user_closed"))
+        #expect(!isUnexpectedResumeStop("remote_terminate"))
+        #expect(!isUnexpectedResumeStop("bridge_stop"))
+        #expect(!isUnexpectedResumeStop(nil))
+        #expect(isUnexpectedResumeStop("provider_exit"))
+        #expect(isUnexpectedResumeStop("provider_signal"))
+        #expect(isUnexpectedResumeStop("process_gone"))
+        #expect(isUnexpectedResumeStop("owner_gone"))
+    }
 }

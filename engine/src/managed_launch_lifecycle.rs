@@ -1536,11 +1536,35 @@ mod tests {
             confirmed,
             "a recovered registration must still confirm its launch"
         );
-        assert_eq!(
-            retry.provider_exit_summary(),
-            "Longhouse: Codex managed registration recovered while it was running."
-        );
+        assert_eq!(retry.provider_exit_summary(), None);
         drop(retry);
+    }
+
+    #[test]
+    fn stopped_registration_recovery_still_reports_exit_summary() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let retry = ManagedRegistrationRetry {
+            provider_alive: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            state: Arc::new(Mutex::new(RegistrationRetryState {
+                outcome: RegistrationRetryOutcome::Recovering,
+                attempts: 3,
+                started_at: "2026-11-25T00:00:00Z".to_string(),
+                last_attempt_at: Some("2026-11-25T00:00:10Z".to_string()),
+                last_error: Some("Runtime Host returned HTTP 503".to_string()),
+                recovered_at: None,
+                stopped_at: None,
+            })),
+            agent_dir: agent_dir.path().to_path_buf(),
+            session_id: "session-stopped".to_string(),
+            provider: "Antigravity".to_string(),
+        };
+        let summary = retry
+            .provider_exit_summary()
+            .expect("unrecovered registration must still report on exit");
+        assert!(summary.contains("Antigravity exited before managed registration recovered"));
+        assert!(summary.contains("3 attempts"));
+        assert!(summary.contains("Runtime Host returned HTTP 503"));
     }
 
     #[test]
@@ -1906,9 +1930,11 @@ impl ManagedRegistrationRetry {
         self.stop_recovery_as(RegistrationRetryOutcome::Stopped);
     }
 
-    /// Render the current recovery result after the provider has released the
-    /// terminal. Unlike a deferred string, this describes the state now.
-    pub fn provider_exit_summary(&self) -> String {
+    /// Render an actionable recovery notice after the provider has released the
+    /// terminal. Silent when registration recovered cleanly while the session
+    /// was running: reporting an hours-old healed startup hiccup on exit adds
+    /// noise with nothing for the user to act on.
+    pub fn provider_exit_summary(&self) -> Option<String> {
         self.stop_recovery();
         let state = self
             .state
@@ -1920,31 +1946,32 @@ impl ManagedRegistrationRetry {
                 state
             });
         match state.outcome {
-            RegistrationRetryOutcome::Recovered => format!(
-                "Longhouse: {} managed registration recovered while it was running.",
-                self.provider
+            RegistrationRetryOutcome::Recovered => None,
+            RegistrationRetryOutcome::Exhausted | RegistrationRetryOutcome::Abandoned => Some(
+                format!(
+                    "Longhouse: {} ran without managed registration; recovery stopped after {} attempt{}.{}",
+                    self.provider,
+                    state.attempts,
+                    if state.attempts == 1 { "" } else { "s" },
+                    state
+                        .last_error
+                        .as_deref()
+                        .map(|error| format!(" Last attempt: {error}."))
+                        .unwrap_or_default(),
+                ),
             ),
-            RegistrationRetryOutcome::Exhausted | RegistrationRetryOutcome::Abandoned => format!(
-                "Longhouse: {} ran without managed registration; recovery stopped after {} attempt{}.{}",
-                self.provider,
-                state.attempts,
-                if state.attempts == 1 { "" } else { "s" },
-                state
-                    .last_error
-                    .as_deref()
-                    .map(|error| format!(" Last attempt: {error}."))
-                    .unwrap_or_default(),
-            ),
-            RegistrationRetryOutcome::Recovering | RegistrationRetryOutcome::Stopped => format!(
-                "Longhouse: {} exited before managed registration recovered; retries have stopped after {} attempt{}.{}",
-                self.provider,
-                state.attempts,
-                if state.attempts == 1 { "" } else { "s" },
-                state
-                    .last_error
-                    .as_deref()
-                    .map(|error| format!(" Last attempt: {error}."))
-                    .unwrap_or_default(),
+            RegistrationRetryOutcome::Recovering | RegistrationRetryOutcome::Stopped => Some(
+                format!(
+                    "Longhouse: {} exited before managed registration recovered; retries have stopped after {} attempt{}.{}",
+                    self.provider,
+                    state.attempts,
+                    if state.attempts == 1 { "" } else { "s" },
+                    state
+                        .last_error
+                        .as_deref()
+                        .map(|error| format!(" Last attempt: {error}."))
+                        .unwrap_or_default(),
+                ),
             ),
         }
     }

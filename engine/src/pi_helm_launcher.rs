@@ -1423,6 +1423,7 @@ fn enqueue_terminal_event(
     state: &PiHelmStateFile,
     machine_name: &str,
     exit_code: Option<i32>,
+    terminal_state: &str,
     reason: &str,
 ) -> Result<()> {
     let root = crate::config::get_longhouse_home()?;
@@ -1437,9 +1438,7 @@ fn enqueue_terminal_event(
         device_id: Some(machine_name),
         source: "pi_helm_launcher",
         dedupe_prefix: "pi-helm-terminal",
-        terminal_state: exit_code
-            .map(terminal_state_for_exit)
-            .unwrap_or("process_gone"),
+        terminal_state,
         terminal_reason: reason,
         exit_code,
     }
@@ -1642,6 +1641,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // A launch that missed the registration budget still lists the
     // coordination tools; authority reaches the extension as a frame when the
     // retry recovers, so the tool list never changes after launch.
+    let deferred = DeferredNotices::default();
     let degraded = response.is_none().then(|| {
         let recovered_server = server.clone();
         spawn_managed_registration_retry_with_hook(
@@ -1650,7 +1650,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             "Pi",
             payload.clone(),
             &session_id,
-            DeferredNotices::default(),
+            deferred.clone(),
             crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
             Some(Arc::new(move |response: &ManagedLaunchResponse| {
                 if let Some(value) = response.coordination_token() {
@@ -1710,6 +1710,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .with_run_id(&server.current_state().run_id)
         .apply(&mut command, &owned_env);
     let server_for_spawn = server.clone();
+    let run_started = std::time::Instant::now();
     let exit_code = match run_pi_provider(&mut command, &server, |pid| {
         let mut guard = server_for_spawn
             .shared
@@ -1722,12 +1723,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         drop(guard);
         server_for_spawn.persist_state()?;
         if let Some(transaction) = transaction.as_mut() {
-            transaction.confirm_or_degrade(
-                "Pi",
-                &crate::config::get_agent_dir()?,
-                &DeferredNotices::default(),
-                None,
-            );
+            transaction.confirm_or_degrade("Pi", &crate::config::get_agent_dir()?, &deferred, None);
         }
         if let Some(registration) = degraded.as_ref() {
             registration.provider_alive.store(true, Ordering::Release);
@@ -1749,14 +1745,11 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             return Err(error);
         }
     };
+    let run_elapsed = run_started.elapsed();
     let exit_code = Some(exit_code);
-    let reason = if server.terminate_requested.load(Ordering::Acquire) {
-        "remote_terminate"
-    } else if exit_code.is_some_and(|code| code >= 128) {
-        "terminal_signal"
-    } else {
-        "provider_exit"
-    };
+    let remote_terminated = server.terminate_requested.load(Ordering::Acquire);
+    let (terminal_state, reason) =
+        crate::managed_terminal::helm_terminal_classification(exit_code, remote_terminated);
     server.mark_stopped(exit_code, reason)?;
     let final_state = server.current_state();
     crate::warp_cli_agent::emit_session_event(
@@ -1769,7 +1762,13 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // Retire the slot only once the terminal record is durable: retiring first
     // and failing here would leave neither a current status nor the evidence
     // that the run ended.
-    match enqueue_terminal_event(&final_state, &machine_name, exit_code, reason) {
+    match enqueue_terminal_event(
+        &final_state,
+        &machine_name,
+        exit_code,
+        terminal_state,
+        reason,
+    ) {
         Ok(()) => server
             .status
             .retire_run(&final_state.session_id, &final_state.run_id),
@@ -1779,10 +1778,31 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         ),
     }
     server.shutdown();
-    drop(degraded);
-    if let Some(message) = exit_code.filter(|code| *code != 0) {
-        eprintln!("Pi Helm exited with status {message}");
+    if let Some(registration) = &degraded {
+        registration.provider_alive.store(false, Ordering::Release);
     }
+    let registration_summary = degraded
+        .as_ref()
+        .and_then(|registration| registration.provider_exit_summary());
+    drop(degraded);
+    for notice in deferred.drain() {
+        eprintln!("{notice}");
+    }
+    if let Some(message) = registration_summary {
+        eprintln!("{message}");
+    }
+    crate::managed_terminal::HelmExitReceipt {
+        provider_label: "Pi",
+        provider_cli: "pi",
+        session_id: &final_state.session_id,
+        url: Some(&url),
+        cwd: Path::new(&final_state.cwd),
+        elapsed: run_elapsed,
+        terminal_reason: reason,
+        exit_code,
+        resumable: true,
+    }
+    .print();
     Ok(exit_code.unwrap_or(1))
 }
 

@@ -247,7 +247,8 @@ struct SessionView: View {
             ResumeCommandSheet(
                 intent: intent,
                 unexpectedStop: isUnexpectedResumeStop(
-                    viewModel.detail?.runtimeDisplay.terminalReason
+                    viewModel.detail?.stateFacts.runEndReason
+                        ?? viewModel.detail?.runtimeDisplay.terminalReason
                         ?? viewModel.detail?.stateFacts.dispositionCloseReason
                 )
             )

@@ -1419,3 +1419,152 @@ def test_served_projector_without_control_head_blocks_reattach_when_run_active_o
 
     assert served.control.actions.reattach.state == "unavailable"
     assert served.control.actions.reattach.reason == "already_connected"
+
+
+def test_ended_helm_run_projects_runtime_terminal_reason_without_closing_session():
+    """Exiting a Helm cleanly (`terminal_state=session_ended`, `terminal_reason=user_closed`)
+    exposes `user_closed` on `run.end_reason` while keeping durable session disposition open."""
+    ended_at = NOW - timedelta(minutes=1)
+    catalog_facts = {
+        **CATALOG_FACTS,
+        "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+        "latest_run": {
+            "id": "run-1",
+            "started_at": (NOW - timedelta(minutes=20)).isoformat(),
+            "ended_at": ended_at.isoformat(),
+            "exit_status": "exit_0",
+        },
+        "runtime": {
+            "run_id": "run-1",
+            "terminal_state": "session_ended",
+            "terminal_reason": "user_closed",
+        },
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=92,
+        catalog_facts=catalog_facts,
+        heads=[],
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=ended_at),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.disposition.state == "open"
+    assert served.disposition.close_reason is None
+    assert served.run is not None
+    assert served.run.lifecycle == "ended"
+    assert served.run.end_reason == "user_closed"
+
+
+def test_ended_helm_run_preserves_remote_terminate_and_signal_reasons_and_ignores_stale_runtime_run():
+    ended_at = NOW - timedelta(minutes=1)
+    remote = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=93,
+        catalog_facts={
+            **CATALOG_FACTS,
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(minutes=10)).isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "exit_status": "exit_143",
+            },
+            "runtime": {
+                "run_id": "run-1",
+                "terminal_state": "session_ended",
+                "terminal_reason": "remote_terminate",
+            },
+        },
+        heads=[],
+        now=NOW,
+    )
+    assert remote.run is not None
+    assert remote.run.end_reason == "remote_terminate"
+
+    signalled = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=94,
+        catalog_facts={
+            **CATALOG_FACTS,
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(minutes=10)).isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "exit_status": "exit_137",
+            },
+            "runtime": {
+                "run_id": "run-1",
+                "terminal_state": "process_gone",
+                "terminal_reason": "provider_signal",
+            },
+        },
+        heads=[],
+        now=NOW,
+    )
+    assert signalled.run is not None
+    assert signalled.run.end_reason == "provider_signal"
+
+    mismatched_runtime = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=95,
+        catalog_facts={
+            **CATALOG_FACTS,
+            "latest_run": {
+                "id": "run-2",
+                "started_at": (NOW - timedelta(minutes=10)).isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "exit_status": "exit_1",
+            },
+            "runtime": {
+                "run_id": "run-1",
+                "terminal_state": "session_ended",
+                "terminal_reason": "user_closed",
+            },
+        },
+        heads=[],
+        now=NOW,
+    )
+    assert mismatched_runtime.run is not None
+    assert mismatched_runtime.run.end_reason == "exit_1"
+
+
+def test_completed_console_run_stays_idle_with_runtime_terminal_reason():
+    ended_at = NOW - timedelta(seconds=30)
+    served = project_served_session_state_facts(
+        session_id="session-console",
+        commit_seq=96,
+        catalog_facts={
+            **CATALOG_FACTS,
+            "catalog": {
+                **CATALOG_FACTS["catalog"],
+                "origin_kind": "console",
+                "launch_surface": "web",
+            },
+            "readiness": {"state": "adopted", "execution_lifetime": "one_shot"},
+            "latest_run": {
+                "id": "run-c1",
+                "started_at": (NOW - timedelta(minutes=2)).isoformat(),
+                "ended_at": ended_at.isoformat(),
+                "exit_status": "exit_0",
+            },
+            "runtime": {
+                "run_id": "run-c1",
+                "terminal_state": "run_completed",
+                "terminal_reason": "turn_completed",
+            },
+        },
+        heads=[],
+        supported_operations={"start_turn"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=ended_at),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.run is not None
+    assert served.run.end_reason == "exit_0"
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "idle"

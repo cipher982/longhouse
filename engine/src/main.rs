@@ -912,6 +912,8 @@ enum OpencodeBridgeCommands {
         session_id: String,
         #[arg(long)]
         claude_dir: Option<PathBuf>,
+        #[arg(long)]
+        terminal_reason: Option<String>,
     },
     /// Attach the stock OpenCode TUI without exposing bridge credentials.
     Attach {
@@ -2321,9 +2323,14 @@ fn main() -> anyhow::Result<()> {
             OpencodeBridgeCommands::Stop {
                 session_id,
                 claude_dir,
+                terminal_reason,
             } => {
                 let rt = tokio::runtime::Runtime::new()?;
-                let result = rt.block_on(opencode_bridge::stop(&session_id, claude_dir))?;
+                let result = rt.block_on(opencode_bridge::stop(
+                    &session_id,
+                    claude_dir,
+                    terminal_reason.as_deref(),
+                ))?;
                 println!(
                     "{}",
                     serde_json::to_string(&json!({"pid": result.pid, "stopped": result.stopped}))?

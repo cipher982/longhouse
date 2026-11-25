@@ -3436,6 +3436,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .with_run_id(&current_state.run_id)
         .apply(&mut command, &owned_env);
     let server_for_spawn = server.clone();
+    let run_started = std::time::Instant::now();
     let exit = match run_provider(&mut command, &server, &runtime, |pid| {
         let mut state = server_for_spawn.shared.lock();
         state.state.provider_pid = Some(pid);
@@ -3473,11 +3474,10 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             return Err(error);
         }
     };
-    let reason = if server.terminate_requested.load(Ordering::Acquire) {
-        "remote_terminate"
-    } else {
-        "provider_exit"
-    };
+    let run_elapsed = run_started.elapsed();
+    let remote_terminated = server.terminate_requested.load(Ordering::Acquire);
+    let (terminal_state, reason) =
+        crate::managed_terminal::helm_terminal_classification(Some(exit), remote_terminated);
     let stop_result = server.mark_stopped(Some(exit), reason);
     let current = server.current_state();
     crate::warp_cli_agent::emit_session_event(
@@ -3500,7 +3500,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         device_id: Some(&machine_name),
         source: "omp_helm_launcher",
         dedupe_prefix: "omp-helm-terminal",
-        terminal_state: terminal_state_for_exit(exit),
+        terminal_state,
         terminal_reason: reason,
         exit_code: Some(exit),
     }
@@ -3519,10 +3519,32 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     }
     server.shutdown();
     stop_result?;
-    drop(server.take_launch_registration_retry());
+    let launch_retry = server.take_launch_registration_retry();
+    if let Some(registration) = &launch_retry {
+        registration.provider_alive.store(false, Ordering::Release);
+    }
+    let registration_summary = launch_retry
+        .as_ref()
+        .and_then(|registration| registration.provider_exit_summary());
+    drop(launch_retry);
     for notice in deferred.drain() {
         eprintln!("{notice}");
     }
+    if let Some(message) = registration_summary {
+        eprintln!("{message}");
+    }
+    crate::managed_terminal::HelmExitReceipt {
+        provider_label: "OMP",
+        provider_cli: "omp",
+        session_id: &current.session_id,
+        url: Some(&url),
+        cwd: Path::new(&current.cwd),
+        elapsed: run_elapsed,
+        terminal_reason: reason,
+        exit_code: Some(exit),
+        resumable: true,
+    }
+    .print();
     Ok(exit)
 }
 

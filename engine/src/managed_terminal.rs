@@ -36,6 +36,153 @@ pub fn terminal_state_for_exit(exit_code: i32) -> &'static str {
     }
 }
 
+/// Classify a managed Helm process exit into `(terminal_state, terminal_reason)`.
+///
+/// `terminal_reason = "user_closed"` paired with `terminal_state = "session_ended"`
+/// records that the attached Helm process exited cleanly (exit 0) without a remote
+/// terminate. It describes how this run ended, never durable session disposition
+/// (which only closes on `terminal_state = "user_closed"` or an explicit user close).
+pub fn helm_terminal_classification(
+    exit_code: Option<i32>,
+    remote_terminate: bool,
+) -> (&'static str, &'static str) {
+    if remote_terminate {
+        return ("session_ended", "remote_terminate");
+    }
+    match exit_code {
+        Some(0) => ("session_ended", "user_closed"),
+        Some(code) if code >= 128 => ("process_gone", "provider_signal"),
+        Some(_) => ("process_gone", "provider_exit"),
+        None => ("process_gone", "process_gone"),
+    }
+}
+
+/// Format a run duration compactly for the terminal exit receipt.
+pub fn format_duration_compact(elapsed: Duration) -> String {
+    let total_secs = elapsed.as_secs();
+    if total_secs == 0 {
+        return "<1s".to_string();
+    }
+    if total_secs < 60 {
+        return format!("{total_secs}s");
+    }
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if secs == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {secs:02}s")
+    }
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-' | b'_'
+                )
+        })
+    {
+        return value.to_string();
+    }
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\"'\"'");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// Build the canonical Longhouse Helm resume command matching
+/// `server/zerg/services/session_resume.py::_RESUME_FLAG`.
+pub fn helm_resume_command(provider_cli: &str, cwd: &Path, session_id: &str) -> Option<String> {
+    let flag = match provider_cli {
+        "claude" => "--resume",
+        "codex" | "cursor" | "opencode" | "omp" | "pi" => "--resume-session",
+        _ => return None,
+    };
+    let cwd_str = cwd.to_string_lossy();
+    Some(format!(
+        "longhouse {} --cwd {} {} {}",
+        provider_cli,
+        posix_shell_quote(&cwd_str),
+        flag,
+        posix_shell_quote(session_id)
+    ))
+}
+
+/// Quiet 1-2 line terminal receipt printed after an attached Helm provider exits
+/// and the terminal has been restored. Zero network round-trips.
+pub struct HelmExitReceipt<'a> {
+    pub provider_label: &'a str,
+    pub provider_cli: &'a str,
+    pub session_id: &'a str,
+    pub url: Option<&'a str>,
+    pub cwd: &'a Path,
+    pub elapsed: Duration,
+    pub terminal_reason: &'a str,
+    pub exit_code: Option<i32>,
+    pub resumable: bool,
+}
+
+impl HelmExitReceipt<'_> {
+    pub fn format(&self) -> String {
+        let duration = format_duration_compact(self.elapsed);
+        let code_prefix = match self.exit_code {
+            Some(code) if code != 0 => format!("code {code}, "),
+            _ => String::new(),
+        };
+        let status = match self.terminal_reason {
+            "remote_terminate" => format!("{} stopped remotely ({duration})", self.provider_label),
+            "user_closed" | "bridge_stop" => {
+                format!("{} run ended ({duration})", self.provider_label)
+            }
+            "provider_signal" => format!(
+                "{} stopped by signal ({code_prefix}{duration})",
+                self.provider_label
+            ),
+            _ => format!(
+                "{} exited unexpectedly ({code_prefix}{duration})",
+                self.provider_label
+            ),
+        };
+        let short_id = self
+            .session_id
+            .split('-')
+            .next()
+            .filter(|prefix| !prefix.is_empty())
+            .unwrap_or(self.session_id);
+        let first_line = match self.url.map(str::trim).filter(|base| !base.is_empty()) {
+            Some(base) => format!(
+                "Longhouse: {status} - {}/s/{short_id}",
+                base.trim_end_matches('/')
+            ),
+            None => format!("Longhouse: {status}"),
+        };
+        if self.resumable {
+            if let Some(command) = helm_resume_command(self.provider_cli, self.cwd, self.session_id)
+            {
+                return format!("{first_line}\nResume:    {command}");
+            }
+        }
+        first_line
+    }
+
+    pub fn print(&self) {
+        eprintln!("\n{}", self.format());
+    }
+}
+
 /// Terminal ownership shared by interactive managed launchers. The provider
 /// receives the foreground group and Drop restores the caller's attributes.
 #[cfg(unix)]
@@ -197,5 +344,139 @@ mod tests {
     fn nonzero_provider_exit_is_not_reported_as_a_clean_end() {
         assert_eq!(terminal_state_for_exit(0), "session_ended");
         assert_eq!(terminal_state_for_exit(7), "process_gone");
+    }
+
+    #[test]
+    fn helm_terminal_classification_separates_clean_remote_signal_and_crash() {
+        assert_eq!(
+            helm_terminal_classification(Some(0), false),
+            ("session_ended", "user_closed")
+        );
+        assert_eq!(
+            helm_terminal_classification(Some(143), true),
+            ("session_ended", "remote_terminate")
+        );
+        assert_eq!(
+            helm_terminal_classification(Some(0), true),
+            ("session_ended", "remote_terminate")
+        );
+        assert_eq!(
+            helm_terminal_classification(Some(130), false),
+            ("process_gone", "provider_signal")
+        );
+        assert_eq!(
+            helm_terminal_classification(Some(143), false),
+            ("process_gone", "provider_signal")
+        );
+        assert_eq!(
+            helm_terminal_classification(Some(1), false),
+            ("process_gone", "provider_exit")
+        );
+        assert_eq!(
+            helm_terminal_classification(None, false),
+            ("process_gone", "process_gone")
+        );
+    }
+
+    #[test]
+    fn compact_duration_formatting_covers_seconds_minutes_and_hours() {
+        assert_eq!(format_duration_compact(Duration::from_millis(400)), "<1s");
+        assert_eq!(format_duration_compact(Duration::from_secs(42)), "42s");
+        assert_eq!(format_duration_compact(Duration::from_secs(120)), "2m");
+        assert_eq!(format_duration_compact(Duration::from_secs(862)), "14m 22s");
+        assert_eq!(
+            format_duration_compact(Duration::from_secs(21 * 3600 + 23 * 60 + 6)),
+            "21h 23m"
+        );
+    }
+
+    #[test]
+    fn helm_resume_command_matches_per_provider_flags_and_quotes_cwd() {
+        let sid = "2b78c4f2-2667-4158-8f28-1b41f452d8bc";
+        assert_eq!(
+            helm_resume_command("claude", Path::new("/Users/david/repo"), sid).as_deref(),
+            Some("longhouse claude --cwd /Users/david/repo --resume 2b78c4f2-2667-4158-8f28-1b41f452d8bc")
+        );
+        for provider in ["codex", "cursor", "opencode", "omp", "pi"] {
+            assert_eq!(
+                helm_resume_command(provider, Path::new("/tmp/my repo"), sid).as_deref(),
+                Some(
+                    format!("longhouse {provider} --cwd '/tmp/my repo' --resume-session {sid}")
+                        .as_str()
+                )
+            );
+        }
+        assert_eq!(
+            helm_resume_command("antigravity", Path::new("/tmp/repo"), sid),
+            None
+        );
+    }
+
+    #[test]
+    fn exit_receipt_formats_clean_remote_unexpected_and_non_resumable_runs() {
+        let sid = "2b78c4f2-2667-4158-8f28-1b41f452d8bc";
+        let agy = HelmExitReceipt {
+            provider_label: "Antigravity",
+            provider_cli: "antigravity",
+            session_id: sid,
+            url: Some("https://david010.longhouse.ai/"),
+            cwd: Path::new("/Users/david"),
+            elapsed: Duration::from_secs(21 * 3600 + 23 * 60),
+            terminal_reason: "user_closed",
+            exit_code: Some(0),
+            resumable: false,
+        };
+        assert_eq!(
+            agy.format(),
+            "Longhouse: Antigravity run ended (21h 23m) - https://david010.longhouse.ai/s/2b78c4f2"
+        );
+
+        let claude = HelmExitReceipt {
+            provider_label: "Claude",
+            provider_cli: "claude",
+            session_id: sid,
+            url: Some("https://david010.longhouse.ai"),
+            cwd: Path::new("/Users/david/repo"),
+            elapsed: Duration::from_secs(862),
+            terminal_reason: "user_closed",
+            exit_code: Some(0),
+            resumable: true,
+        };
+        assert_eq!(
+            claude.format(),
+            "Longhouse: Claude run ended (14m 22s) - https://david010.longhouse.ai/s/2b78c4f2\nResume:    longhouse claude --cwd /Users/david/repo --resume 2b78c4f2-2667-4158-8f28-1b41f452d8bc"
+        );
+
+        let remote = HelmExitReceipt {
+            provider_label: "Cursor",
+            provider_cli: "cursor",
+            session_id: sid,
+            url: Some("https://david010.longhouse.ai"),
+            cwd: Path::new("/Users/david/repo"),
+            elapsed: Duration::from_secs(485),
+            terminal_reason: "remote_terminate",
+            exit_code: Some(143),
+            resumable: true,
+        };
+        assert_eq!(
+            remote.format(),
+            "Longhouse: Cursor stopped remotely (8m 05s) - https://david010.longhouse.ai/s/2b78c4f2\nResume:    longhouse cursor --cwd /Users/david/repo --resume-session 2b78c4f2-2667-4158-8f28-1b41f452d8bc"
+        );
+
+        let crash = HelmExitReceipt {
+            provider_label: "Codex",
+            provider_cli: "codex",
+            session_id: sid,
+            url: None,
+            cwd: Path::new("/Users/david/repo"),
+            elapsed: Duration::from_secs(12),
+            terminal_reason: "provider_exit",
+            exit_code: Some(1),
+            resumable: false,
+        };
+        assert_eq!(
+            crash.format(),
+            "Longhouse: Codex exited unexpectedly (code 1, 12s)"
+        );
     }
 }

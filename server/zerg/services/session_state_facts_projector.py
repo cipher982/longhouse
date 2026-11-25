@@ -33,6 +33,9 @@ from pydantic import Field
 
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.services.console_control_projection import ConsoleControlProjection
+from zerg.services.session_runtime import FAILED_RUN_END_REASONS
+from zerg.services.session_runtime import RUN_END_TERMINAL_STATES
+from zerg.services.session_runtime import RUN_TERMINAL_STATES
 from zerg.services.session_state_contract import STATE_CONTRACT_VERSION
 from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
@@ -782,12 +785,34 @@ def _project_run(
         lifecycle = "running"
     else:
         lifecycle = "unknown"
+    end_reason: str | None = None
+    if ended_at is not None:
+        exit_status = _text(run.get("exit_status"))
+        runtime = _mapping(catalog_facts.get("runtime"))
+        runtime_run_id = _text(runtime.get("run_id"))
+        runtime_terminal_state = _text(runtime.get("terminal_state"))
+        runtime_terminal_reason = _text(runtime.get("terminal_reason"))
+        if (runtime_run_id is None or runtime_run_id == run_id) and runtime_terminal_state in (
+            RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES
+        ):
+            if runtime_terminal_state == "run_failed" and runtime_terminal_reason not in FAILED_RUN_END_REASONS:
+                end_reason = "run_failed"
+            elif runtime_terminal_state == "run_completed":
+                end_reason = (
+                    runtime_terminal_reason if runtime_terminal_reason in {"run_completed", "exit_0"} else exit_status or "run_completed"
+                )
+            elif runtime_terminal_reason is not None:
+                end_reason = runtime_terminal_reason
+            else:
+                end_reason = exit_status or runtime_terminal_state
+        else:
+            end_reason = exit_status
     return SessionRunFacts(
         id=run_id,
         lifecycle=lifecycle,
         started_at=started_at,
         ended_at=ended_at,
-        end_reason=_text(run.get("exit_status")) if ended_at is not None else None,
+        end_reason=end_reason,
     )
 
 

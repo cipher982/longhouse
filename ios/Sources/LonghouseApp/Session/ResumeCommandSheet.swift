@@ -65,7 +65,10 @@ struct ResumeCommandSheet: View {
 }
 
 func isUnexpectedResumeStop(_ reason: String?) -> Bool {
-    reason == "provider_exit" || reason == "process_gone"
+    reason == "provider_exit"
+        || reason == "process_gone"
+        || reason == "provider_signal"
+        || reason == "owner_gone"
 }
 
 func resumeReasonLabel(_ reason: String?) -> String {

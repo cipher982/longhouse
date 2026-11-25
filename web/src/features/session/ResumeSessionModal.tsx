@@ -91,7 +91,31 @@ export function ResumeSessionModal({
 }
 
 export function isUnexpectedResumeStop(reason: string | null | undefined): boolean {
-  return reason === "provider_exit" || reason === "process_gone";
+  return (
+    reason === "provider_exit" ||
+    reason === "process_gone" ||
+    reason === "provider_signal" ||
+    reason === "owner_gone"
+  );
+}
+
+export function formatRunEndReason(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "user_closed":
+      return "Exited by user";
+    case "remote_terminate":
+      return "Stopped remotely";
+    case "bridge_stop":
+      return "Stopped cleanly";
+    case "provider_signal":
+      return "Stopped by signal";
+    case "provider_exit":
+    case "process_gone":
+    case "owner_gone":
+      return "Stopped unexpectedly";
+    default:
+      return null;
+  }
 }
 
 export function formatResumeReason(reason: string | null | undefined): string {

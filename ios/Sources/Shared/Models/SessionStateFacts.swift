@@ -359,6 +359,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     /// Provider-owned run identity. It fences optional delegation retention
     /// so a new run cannot inherit tasks from an earlier observation.
     var runId: String? = nil
+    /// Factual reason the latest run ended (e.g. `user_closed`, `remote_terminate`,
+    /// `provider_exit`, `provider_signal`, `process_gone`).
+    var runEndReason: String? = nil
     let activityState: String
     let activityRawKind: String?
     let activityTool: String?
