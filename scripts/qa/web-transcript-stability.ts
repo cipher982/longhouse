@@ -194,6 +194,9 @@ class WebStabilityHarness {
   private nextEventId = 900_000;
   private nextPrependId = 100;
   private sessionId = this.fixture.session.id;
+  // Projection reads, numbered as they arrive; servedRead is the newest one answered.
+  private arrivedRead = 0;
+  private servedRead = 0;
 
   async open(browser: Browser): Promise<void> {
     this.fixture = buildSessionDetailStressFixture();
@@ -218,11 +221,12 @@ class WebStabilityHarness {
       if (pathname === `${sessionBasePath}/thread`) {
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(this.fixture.thread) });
       }
-      if (pathname === `${sessionBasePath}/workspace`) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(this.workspaceState) });
-      }
-      if (pathname === `${sessionBasePath}/projection`) {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(this.workspaceState.projection) });
+      if (pathname === `${sessionBasePath}/workspace` || pathname === `${sessionBasePath}/projection`) {
+        const read = ++this.arrivedRead;
+        const body = pathname.endsWith("/workspace") ? this.workspaceState : this.workspaceState.projection;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+        this.servedRead = Math.max(this.servedRead, read);
+        return;
       }
       if (pathname === `${sessionBasePath}/turns`) {
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(this.fixture.turns) });
@@ -507,7 +511,12 @@ class WebStabilityHarness {
       }
     }
     await this.pushWorkspaceChanged(this.nextEventId++);
-    if (outputText) {
+    // A running call right under prose is a trail and shows no output of its
+    // own (narrationTrail), so there is no text to wait for: the page has read
+    // the update (pushWorkspaceChanged) and had frames to render it. Waiting
+    // for the tail text here timed out after 2 s on every running chunk,
+    // 30 s of each run. A completed call's preview does render.
+    if (outputText && state === "completed") {
       const lines = outputText.split("\n");
       const probe = lines[lines.length - 1].slice(0, 28);
       await this.page.locator('[data-testid="tool-output-preview"]', { hasText: probe }).last().waitFor({ state: "attached", timeout: 2_000 }).catch(() => {});
@@ -515,8 +524,10 @@ class WebStabilityHarness {
     await this.settle(3);
   }
 
+  /** Notify the page and wait until it has read the projection this change announced. */
   private async pushWorkspaceChanged(latestId: number): Promise<void> {
     this.workspaceState.projection.total = this.workspaceState.projection.items.length;
+    const before = this.arrivedRead;
     await this.page.evaluate(
       ({ sessionId, latestId }) => {
         (window as unknown as { __emitWorkspaceChanged: (p: unknown) => void }).__emitWorkspaceChanged({
@@ -528,6 +539,11 @@ class WebStabilityHarness {
       },
       { sessionId: this.sessionId, latestId },
     );
+    const deadline = Date.now() + 10_000;
+    while (this.servedRead <= before) {
+      if (Date.now() > deadline) throw new Error(`the page never read the projection after workspace_changed ${latestId}`);
+      await sleep(5);
+    }
     await this.settle(4);
   }
 
@@ -769,7 +785,7 @@ const scenarios: Scenario[] = [
   },
 ];
 
-const stopFrontend = await ensureFrontend(BASE_URL, { handleSignals: false });
+const stopFrontend = await ensureFrontend(BASE_URL, { handleSignals: false, bundled: true });
 const browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
 const results: Array<{ name: string; about: string; checks: Check[]; error?: string }> = [];
 

@@ -3,6 +3,8 @@
  * capture) and ui-gallery.ts (one Vite for the whole sweep).
  */
 import { spawn } from "child_process";
+import { mkdtempSync, rmSync } from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -19,6 +21,18 @@ export async function isServing(url: string): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Run a command in web/ to completion; reject with its output when it fails. */
+function runInWeb(args: string[], env: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const output: string[] = [];
+    const child = spawn("bunx", args, { cwd: path.join(REPO_ROOT, "web"), stdio: ["ignore", "pipe", "pipe"], env });
+    child.stdout?.on("data", (chunk) => output.push(String(chunk)));
+    child.stderr?.on("data", (chunk) => output.push(String(chunk)));
+    child.on("error", reject);
+    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`bunx ${args.join(" ")} exited ${code}:\n${output.join("")}`))));
+  });
+}
+
 /**
  * Make sure something serves the web app at baseUrl. If nothing does and the
  * host is local, start Vite in web/ on that port and return a function that
@@ -26,10 +40,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *
  * handleSignals: false when the caller owns Ctrl-C once this returns; Ctrl-C
  * during startup still stops the Vite this started.
+ *
+ * bundled: build the app once and serve the bundle (`vite preview`) instead of
+ * the dev server. The dev server sends every page load ~1,400 unbundled
+ * modules, which a check that opens a fresh browser context per scenario pays
+ * every time (about 3 s a page in the isolated test container). The build keeps
+ * mode and NODE_ENV "development", so the page runs the same React development
+ * build and app config the dev server serves; only the module delivery changes.
  */
 export async function ensureFrontend(
   baseUrl: string,
-  { handleSignals = true }: { handleSignals?: boolean } = {},
+  { handleSignals = true, bundled = false }: { handleSignals?: boolean; bundled?: boolean } = {},
 ): Promise<() => Promise<void>> {
   if (await isServing(baseUrl)) {
     console.log(`Frontend already serving at ${baseUrl} (not owned by this capture)`);
@@ -40,19 +61,45 @@ export async function ensureFrontend(
     throw new Error(`Nothing serves ${baseUrl} and it is not local; start it or change FRONTEND_URL.`);
   }
   const port = target.port || "80";
-  console.log(`Nothing listening at ${baseUrl}; starting Vite on :${port} for this capture...`);
+  let bundleDir: string | null = null;
+  let serve = ["vite", "--port", port, "--strictPort", "--clearScreen", "false"];
+  let serveEnv: NodeJS.ProcessEnv = process.env;
+  if (bundled) {
+    bundleDir = mkdtempSync(path.join(os.tmpdir(), "longhouse-web-bundle-"));
+    serveEnv = { ...process.env, NODE_ENV: "development" };
+    const started = Date.now();
+    console.log(`Nothing listening at ${baseUrl}; building the app (development mode) for this capture...`);
+    try {
+      await runInWeb(["vite", "build", "--mode", "development", "--outDir", bundleDir, "--emptyOutDir", "--logLevel", "warn"], serveEnv);
+    } catch (error) {
+      rmSync(bundleDir, { recursive: true, force: true });
+      throw error;
+    }
+    console.log(`Built in ${((Date.now() - started) / 1000).toFixed(1)}s; serving it on :${port}`);
+    serve = ["vite", "preview", "--mode", "development", "--outDir", bundleDir, "--port", port, "--strictPort"];
+  } else {
+    console.log(`Nothing listening at ${baseUrl}; starting Vite on :${port} for this capture...`);
+  }
 
   const output: string[] = [];
-  const child = spawn("bunx", ["vite", "--port", port, "--strictPort", "--clearScreen", "false"], {
+  const child = spawn("bunx", serve, {
     cwd: path.join(REPO_ROOT, "web"),
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
+    env: serveEnv,
   });
+  const removeBundle = () => {
+    if (bundleDir) rmSync(bundleDir, { recursive: true, force: true });
+    bundleDir = null;
+  };
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
   child.stderr?.on("data", (chunk) => output.push(String(chunk)));
 
   const stop = async () => {
-    if (child.exitCode !== null || child.signalCode !== null || child.pid == null) return;
+    if (child.exitCode !== null || child.signalCode !== null || child.pid == null) {
+      removeBundle();
+      return;
+    }
     try {
       process.kill(-child.pid, "SIGTERM");
     } catch {
@@ -69,6 +116,7 @@ export async function ensureFrontend(
         /* already gone */
       }
     }
+    removeBundle();
     console.log("Stopped the Vite server this capture started.");
   };
 
@@ -87,6 +135,7 @@ export async function ensureFrontend(
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       releaseSignals();
+      removeBundle();
       throw new Error(`Vite exited before serving:\n${output.join("")}`);
     }
     if (await isServing(baseUrl)) {
