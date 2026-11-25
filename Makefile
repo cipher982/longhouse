@@ -39,6 +39,13 @@ ENGINE_TEST_PROFILE := $(or $(CARGO_PROFILE),ci-test)
 # QA environment variable. One feature set for every ci-test build, so the
 # builds below share one artifact instead of overwriting each other's.
 ENGINE_TEST_FEATURES := --features qa-fault-injection
+# The synthetic shipper benches build CARGO_PROFILE (release when unset). When
+# that is the engine test profile they take its features too, so in
+# test-shipper-premerge they run the engine test-shipper-e2e just built instead
+# of compiling the crate again without the feature (38 s of the CI Engine tests
+# job). The QA seams fire only under their QA variables, which a bench never sets.
+BENCH_PROFILE := $(or $(CARGO_PROFILE),release)
+BENCH_FEATURES := $(if $(filter $(ENGINE_TEST_PROFILE),$(BENCH_PROFILE)),$(ENGINE_TEST_FEATURES),)
 
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
@@ -659,7 +666,7 @@ engine-compat: ## Ship a transcript with the last released engine against the ca
 
 test-shipper-synthetic-bench: ## @internal Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
+	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(BENCH_PROFILE) $(BENCH_FEATURES) --bin longhouse-engine -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
 
 test-shipper-synthetic-live-bench: ## @internal Synthetic mixed live/archive shipper bench
 	@python3 scripts/build/generate_build_identity.py
@@ -670,7 +677,7 @@ test-shipper-synthetic-live-bench: ## @internal Synthetic mixed live/archive shi
 	for _ in 1 2 3 4 5 6 7 8 9 10; do test -s "$$port_file" && break; sleep 0.2; done; \
 	test -s "$$port_file"; \
 	port="$$(cat "$$port_file")"; \
-	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
+	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(BENCH_PROFILE) $(BENCH_FEATURES) --bin longhouse-engine -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
 
 import-bench: ## Disposable authenticated Claude-history import benchmark (ARGS required)
 	@test -n "$(ARGS)" || (echo "ARGS is required; see scripts/qa/import_bench.py --help" >&2; exit 2)
