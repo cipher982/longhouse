@@ -11,6 +11,11 @@
 # VMs (IOS_TEST_SCHEMES and IOS_TEST_FILTER in the workflow matrix), and
 # scripts/tests/ios-test-lanes.test.py fails if the lanes stop covering it.
 IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
+# The UI scheme's classes run on this many simulator clones at once. The unit
+# scheme stays on one: its tests take 17 s and a clone costs more to boot. The
+# bench Mac has 8 GB; see the iOS job in contract-first-ci.yml for 1 vs 2.
+IOS_PARALLEL_SCHEMES ?= LonghouseSmoke
+IOS_PARALLEL_WORKERS ?= 2
 
 # The generated .xcodeproj is gitignored, so the committed SwiftPM pin file
 # lives next to project.yml and is copied into the project on every generation.
@@ -38,4 +43,4 @@ test-ios: ## iOS unit + smoke tests (simulator), the merge gate (IOS_TEST_SCHEME
 	@$(MAKE) ios-project
 	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
 	if [ -n "$(IOS_TEST_SCHEMES)$(IOS_TEST_FILTER)" ]; then echo "test-ios: PARTIAL run (schemes '$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))', filter '$(IOS_TEST_FILTER)'); the merge gate is '$(IOS_MERGE_TEST_SCHEMES)'"; fi; \
-	IOS_TEST_SCHEMES="$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+	IOS_TEST_SCHEMES="$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))" IOS_PARALLEL_SCHEMES="$(IOS_PARALLEL_SCHEMES)" IOS_PARALLEL_WORKERS="$(IOS_PARALLEL_WORKERS)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"

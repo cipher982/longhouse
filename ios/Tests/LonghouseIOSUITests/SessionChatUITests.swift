@@ -2,8 +2,11 @@ import CoreGraphics
 import ImageIO
 import XCTest
 
+/// What every session chat UI test shares: launching a fixture, waits and layout assertions.
+/// The tests are split over the classes below because parallel testing hands a simulator
+/// clone whole classes, and this was one class of 34 tests, three quarters of the UI scheme.
 @MainActor
-final class SessionChatUITests: XCTestCase {
+class SessionChatUITestCase: XCTestCase {
     /// Every positive wait below is scaled by this. A hosted macOS VM runs the
     /// same UI three times slower on a bad day (compile 3.4 vs 10.7 min), and
     /// WebKit publishing text to XCUITest, or XCUITest answering a snapshot, can
@@ -11,23 +14,23 @@ final class SessionChatUITests: XCTestCase {
     /// "Waiting 12.0s" lasted 25 s and still missed the element (run
     /// 36658111569). A wait returns as soon as its condition holds, so patience
     /// costs nothing on a healthy runner; only negative waits stay short.
-    private static let patience: TimeInterval = 3
-    private static func patient(_ seconds: TimeInterval) -> TimeInterval { seconds * patience }
-    private static let webTranscriptTimeout: TimeInterval = 12 * patience
+    fileprivate static let patience: TimeInterval = 3
+    fileprivate static func patient(_ seconds: TimeInterval) -> TimeInterval { seconds * patience }
+    fileprivate static let webTranscriptTimeout: TimeInterval = 12 * patience
 
-    private enum LaunchEnvironment {
+    fileprivate enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
         static let mobileDetailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
         static let chatTriggerPath = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     }
 
-    private enum LaunchArgument {
+    fileprivate enum LaunchArgument {
         static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
         static let preferredContentSizeCategoryName = "-UIPreferredContentSizeCategoryName"
     }
 
-    private enum Appearance: String {
+    fileprivate enum Appearance: String {
         case light
         case dark
     }
@@ -36,6 +39,421 @@ final class SessionChatUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func disabled_testLargeTranscriptScrollPerformance() {
+        let app = launchChatFixture(name: "stress", eventCount: 500)
+        let transcript = transcriptElement(app)
+
+        XCTAssertTrue(transcript.waitToExist(timeout: Self.patient(10)))
+        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitToExist(timeout: Self.webTranscriptTimeout))
+
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+        measure(options: options) {
+            transcript.swipeDown()
+            transcript.swipeUp()
+            transcript.swipeUp()
+        }
+    }
+
+    fileprivate func launchChatFixture(
+        name: String = "basic",
+        eventCount: Int,
+        appearance: Appearance = .light,
+        tailDelayMs: Int? = nil,
+        detailDelayMs: Int? = nil,
+        dynamicTypeCategory: String? = nil,
+        triggerPath: String? = nil
+    ) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.chatFixture] = name
+        app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
+        if let triggerPath {
+            app.launchEnvironment[LaunchEnvironment.chatTriggerPath] = triggerPath
+        }
+        if let tailDelayMs {
+            app.launchEnvironment["LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"] = String(tailDelayMs)
+        }
+        if let detailDelayMs {
+            app.launchEnvironment[LaunchEnvironment.mobileDetailDelayMs] = String(detailDelayMs)
+        }
+        app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
+        if let dynamicTypeCategory {
+            app.launchArguments += [
+                LaunchArgument.preferredContentSizeCategoryName,
+                dynamicTypeCategory
+            ]
+        }
+        app.launch()
+        addTeardownBlock { [weak self] in
+            guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "\(self.name)-failure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+        return app
+    }
+
+    fileprivate func captureSessionScreenshot(
+        fixtureName: String,
+        eventCount: Int,
+        appearance: Appearance,
+        outputName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
+
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)), file: file, line: line)
+        // WebKit does not reliably publish DOM text into XCUITest's
+        // cross-process accessibility tree. The native render beacon is the
+        // authoritative signal that the deterministic fixture reached the DOM.
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)), file: file, line: line)
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label,
+            file: file,
+            line: line
+        )
+
+        let screenshot = try waitForScreenshotMatchingAppearance(app, appearance: appearance, timeout: 6)
+        let directory = URL(fileURLWithPath: "/tmp/lh-shots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try screenshot.pngRepresentation.write(to: directory.appendingPathComponent(outputName), options: .atomic)
+        // Also attached, so `make ios-ui-shot` exports the frame from a VM.
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = (outputName as NSString).deletingPathExtension
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    fileprivate func waitForScreenshotMatchingAppearance(
+        _ app: XCUIApplication,
+        appearance: Appearance,
+        timeout: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> XCUIScreenshot {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        var lastScreenshot = app.screenshot()
+        var lastMeanLuminance = meanLuminance(of: lastScreenshot)
+
+        while clock.now < deadline {
+            if let meanLuminance = lastMeanLuminance,
+               screenshot(meanLuminance: meanLuminance, matches: appearance) {
+                return lastScreenshot
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            lastScreenshot = app.screenshot()
+            lastMeanLuminance = meanLuminance(of: lastScreenshot)
+        }
+
+        let lastMeanDescription: String
+        if let lastMeanLuminance {
+            lastMeanDescription = String(format: "%.3f", lastMeanLuminance)
+        } else {
+            lastMeanDescription = "unreadable"
+        }
+        XCTFail(
+            "Timed out waiting for \(appearance.rawValue) screenshot luminance; last mean=\(lastMeanDescription)",
+            file: file,
+            line: line
+        )
+        return lastScreenshot
+    }
+
+    fileprivate func screenshot(meanLuminance: Double, matches appearance: Appearance) -> Bool {
+        switch appearance {
+        case .light:
+            return meanLuminance > 0.55
+        case .dark:
+            return meanLuminance < 0.35
+        }
+    }
+
+    fileprivate func transcriptElement(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["session-chat-transcript"]
+    }
+
+    /// The element is gone, or its settled frame lies outside the screen.
+    ///
+    /// This does not ask `isHittable`. While WebKit relayouts under the keyboard
+    /// it publishes text with a frame that is briefly invalid (the same window
+    /// `waitForBottomGap` waits out), and XCTest answers `isHittable` on such an
+    /// element with a hard failure, "Activation point invalid and no suggested
+    /// hit points based on element frame", instead of `false`. It failed
+    /// testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom on
+    /// hosted CI (run 36368089332) and once in thirty runs on a loaded bench.
+    fileprivate func assertNotVisible(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        timeout: TimeInterval = SessionChatUITestCase.patient(5),
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var visible = true
+        var sawValidFrame = false
+        while true {
+            if !element.exists {
+                visible = false
+                break
+            }
+            let frame = element.frame
+            let screen = app.frame
+            if frame.isFiniteAndNonNull, screen.isFiniteAndNonNull {
+                sawValidFrame = true
+                visible = frame.intersects(screen)
+                if !visible { break }
+            }
+            if Date() >= deadline { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let reason = sawValidFrame ? "is still on screen" : "never reported a valid frame"
+        XCTAssertFalse(visible, "\(element) \(reason)", file: file, line: line)
+    }
+
+    fileprivate func assertTranscriptElementsVisibleInOrder(
+        _ elements: [XCUIElement],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screen = app.frame
+        XCTAssertTrue(screen.isFiniteAndNonNull, "The app reported no usable screen frame", file: file, line: line)
+        var previousFrame: CGRect?
+        for element in elements {
+            let frame = element.frame
+            XCTAssertTrue(element.exists, "Transcript row does not exist: \(element)", file: file, line: line)
+            XCTAssertTrue(frame.isFiniteAndNonNull, "Transcript row has no rendered frame: \(element)", file: file, line: line)
+            XCTAssertTrue(frame.intersects(screen), "Transcript row is not visible on screen: \(element)", file: file, line: line)
+            if let previousFrame {
+                XCTAssertGreaterThan(
+                    frame.minY,
+                    previousFrame.maxY,
+                    "Transcript rows are not top-to-bottom in the expected chronology: \(element)",
+                    file: file,
+                    line: line
+                )
+            }
+            previousFrame = frame
+        }
+    }
+
+    /// Give the composer keyboard focus, which every composer test needs first.
+    ///
+    /// Waiting for the field to exist was not enough: on the hosted VM a
+    /// synthesized tap occasionally reached an existing, hittable composer and
+    /// left no focus, no caret and no keyboard (run 38015970561: the update was
+    /// already rendered, the tap synthesized cleanly, nothing changed after it).
+    /// Wait until the field can take the tap; if the first tap brings up no
+    /// keyboard, keep the evidence and tap once more. A composer that never
+    /// takes focus still fails, so a real focus bug cannot hide here. The
+    /// keyboard is the signal: the CI simulator shows the software keyboard,
+    /// and a private focus key would crash the run rather than fail it.
+    fileprivate func focusComposer(_ composer: XCUIElement, in app: XCUIApplication) {
+        XCTAssertTrue(composer.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(waitUntilHittable(composer, timeout: Self.patient(5)), "Composer should accept a tap")
+        composer.tap()
+        if app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)) { return }
+        XCTContext.runActivity(named: "First composer tap took no focus; tapping once more") { activity in
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "composer-tap-without-focus"
+            screenshot.lifetime = .keepAlways
+            activity.add(screenshot)
+        }
+        composer.tap()
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)),
+            "Composer keyboard should appear promptly"
+        )
+    }
+
+    fileprivate func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        poll(timeout: timeout) { element.exists && element.isHittable }
+    }
+
+    fileprivate func waitForLabel(_ element: XCUIElement, containing value: String, timeout: TimeInterval) -> Bool {
+        poll(timeout: timeout) { element.exists && element.label.contains(value) }
+    }
+
+    fileprivate func assertClearsBottomChrome(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        minimumGap: CGFloat = 0,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
+        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
+        let gap = waitForBottomGap(
+            element,
+            bottomChromeCard: bottomChromeCard,
+            minimumGap: minimumGap,
+            maximumGap: .greatestFiniteMagnitude
+        ) ?? .nan
+        XCTAssertGreaterThanOrEqual(
+            gap,
+            minimumGap,
+            "Latest transcript row never settled clear of the floating control card",
+            file: file,
+            line: line
+        )
+    }
+
+    fileprivate func assertAnchoredAboveBottomChrome(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        minimumGap: CGFloat = 8,
+        maximumGap: CGFloat = 96,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
+        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
+
+        let gap = waitForBottomGap(
+            element,
+            bottomChromeCard: bottomChromeCard,
+            minimumGap: minimumGap,
+            maximumGap: maximumGap
+        ) ?? .nan
+        XCTAssertGreaterThanOrEqual(
+            gap,
+            minimumGap,
+            "Latest transcript row overlaps the floating control card",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            gap,
+            maximumGap,
+            "Latest transcript row is visibly detached from the floating control card",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Accessibility geometry can briefly report infinite coordinates while
+    /// WebKit relayout and keyboard presentation cross process boundaries.
+    /// Wait for the layout invariant, not merely for the element to exist.
+    fileprivate func waitForBottomGap(
+        _ element: XCUIElement,
+        bottomChromeCard: XCUIElement,
+        minimumGap: CGFloat,
+        maximumGap: CGFloat,
+        timeout: Duration = .seconds(SessionChatUITestCase.patient(5))
+    ) -> CGFloat? {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var lastFiniteGap: CGFloat?
+        while clock.now < deadline {
+            let elementFrame = element.frame
+            let chromeFrame = bottomChromeCard.frame
+            let gap = chromeFrame.minY - elementFrame.maxY
+            if gap.isFinite {
+                lastFiniteGap = gap
+                if gap >= minimumGap && gap <= maximumGap { return gap }
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return lastFiniteGap
+    }
+
+    fileprivate func assertScreenIsVisiblyRendered(
+        _ app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screenshot = app.screenshot()
+        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("Could not decode screenshot", file: file, line: line)
+            return
+        }
+
+        let width = 32
+        let height = 64
+        let bytesPerPixel = 4
+        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * bytesPerPixel,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            XCTFail("Could not create screenshot sampling context", file: file, line: line)
+            return
+        }
+
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var luminanceTotal = 0.0
+        var visiblyLitPixels = 0
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let red = Double(pixels[offset]) / 255.0
+            let green = Double(pixels[offset + 1]) / 255.0
+            let blue = Double(pixels[offset + 2]) / 255.0
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            luminanceTotal += luminance
+            if luminance > 0.08 {
+                visiblyLitPixels += 1
+            }
+        }
+
+        let sampleCount = width * height
+        let meanLuminance = luminanceTotal / Double(sampleCount)
+        let litPixelFraction = Double(visiblyLitPixels) / Double(sampleCount)
+        XCTAssertGreaterThan(meanLuminance, 0.03, "Screen rendered close to black", file: file, line: line)
+        XCTAssertGreaterThan(litPixelFraction, 0.02, "Screen did not contain enough visible pixels", file: file, line: line)
+    }
+
+    fileprivate func meanLuminance(of screenshot: XCUIScreenshot) -> Double? {
+        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+
+        let width = 32
+        let height = 64
+        let bytesPerPixel = 4
+        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * bytesPerPixel,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var luminanceTotal = 0.0
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let red = Double(pixels[offset]) / 255.0
+            let green = Double(pixels[offset + 1]) / 255.0
+            let blue = Double(pixels[offset + 2]) / 255.0
+            luminanceTotal += 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        }
+        return luminanceTotal / Double(width * height)
+    }
+
+}
+
+/// Transcript rendering and the capture tests the smoke plan names (ios-ui-shot runs them by this name).
+@MainActor
+final class SessionChatUITests: SessionChatUITestCase {
     // The tool-bearing transcript loads and renders (prose + interleaved tool
     // rows) without crashing the WebView pipeline. The demoted-row STYLING and
     // the dropped-result attention treatment are asserted separately and more
@@ -100,27 +518,6 @@ final class SessionChatUITests: XCTestCase {
         add(expanded)
     }
 
-    func testComposeActionsExplainWhyImagesAreUnavailable() {
-        // A Claude Console session launched from the phone advertises no image
-        // attachments. The "+" control must still open a menu that says so;
-        // an empty menu reads as a button that does nothing.
-        let app = launchChatFixture(name: "basic", eventCount: 3)
-
-        let actions = app.buttons["session-chat-compose-actions"]
-        XCTAssertTrue(actions.waitToExist(timeout: Self.patient(8)), "composer action menu did not load")
-        actions.tap()
-
-        let unavailable = app.buttons["session-chat-attach-unavailable"]
-        XCTAssertTrue(unavailable.waitToExist(timeout: Self.patient(5)), "the + menu opened without an attach item")
-        XCTAssertFalse(unavailable.isEnabled, "attach must be disabled when the session cannot accept images")
-        XCTAssertFalse(app.buttons["session-chat-attach"].exists)
-
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "compose-actions-images-unavailable"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-    }
-
     func testLongLoadingTitleStaysClearOfOverflowControl() {
         let app = launchChatFixture(
             name: "loading-long-title",
@@ -141,7 +538,6 @@ final class SessionChatUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }
-
 
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
@@ -209,6 +605,97 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(latestMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+    }
+
+    /// The provider's turn accounting renders as a footer inside the reply row.
+    /// The fixture stamps every assistant reply with a 2m 9s turn, the way
+    /// Claude writes `turn_duration` after each interactive turn.
+    func testTurnFooterRendersUnderTheProviderReply() {
+        let app = launchChatFixture(eventCount: 9)
+        XCTAssertTrue(
+            app.staticTexts["Assistant fixture message 7: streaming-style response with enough body to exercise row layout."]
+                .waitToExist(timeout: Self.webTranscriptTimeout)
+        )
+        let footer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for 2m 9s")).firstMatch
+        XCTAssertTrue(footer.waitToExist(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
+        XCTAssertTrue(footer.label.contains("Turn finished"), "the footer clearly identifies the completed parent turn")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "turn-footer"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testCaptureClaudeFidelitySessionScreenshot() {
+        let app = launchChatFixture(name: "claude-fidelity", eventCount: 0)
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
+        )
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitToExist(timeout: Self.patient(5)))
+        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitToExist(timeout: Self.patient(5)))
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "claude-fidelity-session"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testCaptureNarrationTrailScreenshot() {
+        let app = launchChatFixture(name: "narration", eventCount: 0)
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
+        )
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "narration-trail"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testCaptureClaudeFidelitySheetScreenshot() {
+        let app = launchChatFixture(name: "claude-fidelity-sheet", eventCount: 0)
+        let parentAgent = app.buttons["session-runtime-background-task-sub-1"]
+        let childAgent = app.buttons["session-runtime-background-task-sub-2"]
+        XCTAssertTrue(parentAgent.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(childAgent.waitToExist(timeout: Self.patient(5)))
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "claude-fidelity-sheet"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+}
+
+/// Sending from the composer: optimistic rows, their durable echoes and the send controls.
+@MainActor
+final class SessionChatComposerUITests: SessionChatUITestCase {
+    func testComposeActionsExplainWhyImagesAreUnavailable() {
+        // A Claude Console session launched from the phone advertises no image
+        // attachments. The "+" control must still open a menu that says so;
+        // an empty menu reads as a button that does nothing.
+        let app = launchChatFixture(name: "basic", eventCount: 3)
+
+        let actions = app.buttons["session-chat-compose-actions"]
+        XCTAssertTrue(actions.waitToExist(timeout: Self.patient(8)), "composer action menu did not load")
+        actions.tap()
+
+        let unavailable = app.buttons["session-chat-attach-unavailable"]
+        XCTAssertTrue(unavailable.waitToExist(timeout: Self.patient(5)), "the + menu opened without an attach item")
+        XCTAssertFalse(unavailable.isEnabled, "attach must be disabled when the session cannot accept images")
+        XCTAssertFalse(app.buttons["session-chat-attach"].exists)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "compose-actions-images-unavailable"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testSendShowsOptimisticMessageImmediatelyAndClearsComposer() {
@@ -323,25 +810,117 @@ final class SessionChatUITests: XCTestCase {
         add(durableShot)
     }
 
+    func testEndedCodexHelmResumeHandoffAndContinueToChildSession() {
+        let app = launchChatFixture(name: "ended-codex-helm", eventCount: 4)
 
-    /// The provider's turn accounting renders as a footer inside the reply row.
-    /// The fixture stamps every assistant reply with a 2m 9s turn, the way
-    /// Claude writes `turn_duration` after each interactive turn.
-    func testTurnFooterRendersUnderTheProviderReply() {
-        let app = launchChatFixture(eventCount: 9)
-        XCTAssertTrue(
-            app.staticTexts["Assistant fixture message 7: streaming-style response with enough body to exercise row layout."]
-                .waitToExist(timeout: Self.webTranscriptTimeout)
-        )
-        let footer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for 2m 9s")).firstMatch
-        XCTAssertTrue(footer.waitToExist(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
-        XCTAssertTrue(footer.label.contains("Turn finished"), "the footer clearly identifies the completed parent turn")
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = "turn-footer"
-        shot.lifetime = .keepAlways
-        add(shot)
+        let resume = app.buttons["session-resume-button"]
+        XCTAssertTrue(resume.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        let footerShot = XCTAttachment(screenshot: app.screenshot())
+        footerShot.name = "ended-codex-helm-footer"
+        footerShot.lifetime = .keepAlways
+        add(footerShot)
+
+        resume.tap()
+        let handoff = app.navigationBars["Resume command"]
+        XCTAssertTrue(handoff.waitToExist(timeout: Self.patient(5)))
+        let handoffShot = XCTAttachment(screenshot: app.screenshot())
+        handoffShot.name = "ended-codex-helm-resume-handoff"
+        handoffShot.lifetime = .keepAlways
+        add(handoffShot)
+
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
+        let branchInput = app.textFields["session-branch-input"]
+        XCTAssertTrue(branchInput.waitToExist(timeout: Self.webTranscriptTimeout))
+        branchInput.tap()
+        branchInput.typeText("continue with the migration")
+        app.buttons["session-branch-button"].tap()
+
+        XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.textFields["session-chat-composer"].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
+        let childShot = XCTAttachment(screenshot: app.screenshot())
+        childShot.name = "ended-codex-helm-child"
+        childShot.lifetime = .keepAlways
+        add(childShot)
+    }
+}
+
+/// The transcript stays pinned to its latest row through updates, streaming and the keyboard.
+@MainActor
+final class SessionChatPinningUITests: SessionChatUITestCase {
+    func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
+        let app = launchChatFixture(eventCount: 40)
+        let composer = app.textFields["session-chat-composer"]
+        let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
+
+        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
+        focusComposer(composer, in: app)
+        composer.typeText("typing keeps transcript pinned")
+
+        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
+        assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
+        assertScreenIsVisiblyRendered(app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+        let frame = XCTAttachment(screenshot: app.screenshot())
+        frame.name = "ledger-keyboard-draft"
+        frame.lifetime = .keepAlways
+        add(frame)
     }
 
+    func testAssistantUpdateKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-update", eventCount: 40)
+        let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
+        let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
+
+        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: Self.patient(5)))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+    }
+
+    func testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome() {
+        let app = launchChatFixture(name: "assistant-update-long", eventCount: 40)
+        let liveUpdate = app.staticTexts["Assistant fixture live update with wrapped tail above the floating composer card."]
+
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 20))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
+        assertScreenIsVisiblyRendered(app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+    }
+
+    func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40)
+        let composer = app.textFields["session-chat-composer"]
+        let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
+
+        focusComposer(composer, in: app)
+
+        XCTAssertTrue(liveUpdate.waitToExist(timeout: Self.webTranscriptTimeout))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
+        assertScreenIsVisiblyRendered(app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+    }
+
+    func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
+        let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40)
+        let composer = app.textFields["session-chat-composer"]
+        let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
+
+        focusComposer(composer, in: app)
+
+        XCTAssertTrue(finalChunk.waitToExist(timeout: Self.webTranscriptTimeout))
+        assertAnchoredAboveBottomChrome(finalChunk, app: app)
+        assertScreenIsVisiblyRendered(app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
+    }
+}
+
+/// Background work: the summary line, its sheet and when it must not show.
+@MainActor
+final class SessionChatBackgroundTaskUITests: SessionChatUITestCase {
     func testBackgroundCompletionReceiptsStayBeforeLaterReplies() {
         let app = launchChatFixture(
             name: "background-completion-receipts",
@@ -387,7 +966,6 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-
     func testBackgroundTaskSheetOpensExactChildTranscript() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 3)
         let summary = app.buttons["session-runtime-background-summary"]
@@ -412,41 +990,6 @@ final class SessionChatUITests: XCTestCase {
         add(shot)
     }
 
-    func testEndedCodexHelmResumeHandoffAndContinueToChildSession() {
-        let app = launchChatFixture(name: "ended-codex-helm", eventCount: 4)
-
-        let resume = app.buttons["session-resume-button"]
-        XCTAssertTrue(resume.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
-        let footerShot = XCTAttachment(screenshot: app.screenshot())
-        footerShot.name = "ended-codex-helm-footer"
-        footerShot.lifetime = .keepAlways
-        add(footerShot)
-
-        resume.tap()
-        let handoff = app.navigationBars["Resume command"]
-        XCTAssertTrue(handoff.waitToExist(timeout: Self.patient(5)))
-        let handoffShot = XCTAttachment(screenshot: app.screenshot())
-        handoffShot.name = "ended-codex-helm-resume-handoff"
-        handoffShot.lifetime = .keepAlways
-        add(handoffShot)
-
-        app.buttons["Done"].tap()
-        XCTAssertFalse(app.textFields["session-chat-composer"].exists)
-        let branchInput = app.textFields["session-branch-input"]
-        XCTAssertTrue(branchInput.waitToExist(timeout: Self.webTranscriptTimeout))
-        branchInput.tap()
-        branchInput.typeText("continue with the migration")
-        app.buttons["session-branch-button"].tap()
-
-        XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.textFields["session-chat-composer"].waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
-        let childShot = XCTAttachment(screenshot: app.screenshot())
-        childShot.name = "ended-codex-helm-child"
-        childShot.lifetime = .keepAlways
-        add(childShot)
-    }
     func testBackgroundTaskSummaryLeavesParentHeadlinePrimary() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 0)
         XCTAssertTrue(app.staticTexts["Idle"].waitToExist(timeout: Self.webTranscriptTimeout))
@@ -514,7 +1057,6 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitToExist(timeout: 2))
     }
 
-
     func testBackgroundTaskEmptySnapshotRemovesSummaryLine() {
         let app = launchChatFixture(name: "background-tasks-transition", eventCount: 0)
         let summary = app.buttons["session-runtime-background-summary"]
@@ -523,531 +1065,6 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(clear.waitToExist(timeout: Self.patient(5)))
         clear.tap()
         XCTAssertFalse(summary.waitToExist(timeout: 2))
-    }
-
-    func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
-        let app = launchChatFixture(eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
-        let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
-
-        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
-        focusComposer(composer, in: app)
-        composer.typeText("typing keeps transcript pinned")
-
-        XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
-        assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
-        assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
-        let frame = XCTAttachment(screenshot: app.screenshot())
-        frame.name = "ledger-keyboard-draft"
-        frame.lifetime = .keepAlways
-        add(frame)
-    }
-
-    func testAssistantUpdateKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-update", eventCount: 40)
-        let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
-        let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
-
-        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: Self.patient(5)))
-        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
-    }
-
-    func testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome() {
-        let app = launchChatFixture(name: "assistant-update-long", eventCount: 40)
-        let liveUpdate = app.staticTexts["Assistant fixture live update with wrapped tail above the floating composer card."]
-
-        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 20))
-        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
-        assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
-    }
-
-    func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
-        let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
-
-        focusComposer(composer, in: app)
-
-        XCTAssertTrue(liveUpdate.waitToExist(timeout: Self.webTranscriptTimeout))
-        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
-        assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
-    }
-
-    func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40)
-        let composer = app.textFields["session-chat-composer"]
-        let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
-
-        focusComposer(composer, in: app)
-
-        XCTAssertTrue(finalChunk.waitToExist(timeout: Self.webTranscriptTimeout))
-        assertAnchoredAboveBottomChrome(finalChunk, app: app)
-        assertScreenIsVisiblyRendered(app)
-        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
-    }
-
-    func disabled_testLargeTranscriptScrollPerformance() {
-        let app = launchChatFixture(name: "stress", eventCount: 500)
-        let transcript = transcriptElement(app)
-
-        XCTAssertTrue(transcript.waitToExist(timeout: Self.patient(10)))
-        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitToExist(timeout: Self.webTranscriptTimeout))
-
-        let options = XCTMeasureOptions()
-        options.iterationCount = 3
-        measure(options: options) {
-            transcript.swipeDown()
-            transcript.swipeUp()
-            transcript.swipeUp()
-        }
-    }
-
-    private func launchChatFixture(
-        name: String = "basic",
-        eventCount: Int,
-        appearance: Appearance = .light,
-        tailDelayMs: Int? = nil,
-        detailDelayMs: Int? = nil,
-        dynamicTypeCategory: String? = nil,
-        triggerPath: String? = nil
-    ) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment[LaunchEnvironment.chatFixture] = name
-        app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
-        if let triggerPath {
-            app.launchEnvironment[LaunchEnvironment.chatTriggerPath] = triggerPath
-        }
-        if let tailDelayMs {
-            app.launchEnvironment["LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"] = String(tailDelayMs)
-        }
-        if let detailDelayMs {
-            app.launchEnvironment[LaunchEnvironment.mobileDetailDelayMs] = String(detailDelayMs)
-        }
-        app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
-        if let dynamicTypeCategory {
-            app.launchArguments += [
-                LaunchArgument.preferredContentSizeCategoryName,
-                dynamicTypeCategory
-            ]
-        }
-        app.launch()
-        addTeardownBlock { [weak self] in
-            guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "\(self.name)-failure"
-            attachment.lifetime = .keepAlways
-            self.add(attachment)
-        }
-        return app
-    }
-
-    private func captureSessionScreenshot(
-        fixtureName: String,
-        eventCount: Int,
-        appearance: Appearance,
-        outputName: String,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws {
-        let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
-
-        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)), file: file, line: line)
-        // WebKit does not reliably publish DOM text into XCUITest's
-        // cross-process accessibility tree. The native render beacon is the
-        // authoritative signal that the deterministic fixture reached the DOM.
-        let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)), file: file, line: line)
-        XCTAssertTrue(
-            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
-            renderStatus.label,
-            file: file,
-            line: line
-        )
-
-        let screenshot = try waitForScreenshotMatchingAppearance(app, appearance: appearance, timeout: 6)
-        let directory = URL(fileURLWithPath: "/tmp/lh-shots", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try screenshot.pngRepresentation.write(to: directory.appendingPathComponent(outputName), options: .atomic)
-        // Also attached, so `make ios-ui-shot` exports the frame from a VM.
-        let attachment = XCTAttachment(screenshot: screenshot)
-        attachment.name = (outputName as NSString).deletingPathExtension
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
-
-    private func waitForScreenshotMatchingAppearance(
-        _ app: XCUIApplication,
-        appearance: Appearance,
-        timeout: TimeInterval,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws -> XCUIScreenshot {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(timeout))
-        var lastScreenshot = app.screenshot()
-        var lastMeanLuminance = meanLuminance(of: lastScreenshot)
-
-        while clock.now < deadline {
-            if let meanLuminance = lastMeanLuminance,
-               screenshot(meanLuminance: meanLuminance, matches: appearance) {
-                return lastScreenshot
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-            lastScreenshot = app.screenshot()
-            lastMeanLuminance = meanLuminance(of: lastScreenshot)
-        }
-
-        let lastMeanDescription: String
-        if let lastMeanLuminance {
-            lastMeanDescription = String(format: "%.3f", lastMeanLuminance)
-        } else {
-            lastMeanDescription = "unreadable"
-        }
-        XCTFail(
-            "Timed out waiting for \(appearance.rawValue) screenshot luminance; last mean=\(lastMeanDescription)",
-            file: file,
-            line: line
-        )
-        return lastScreenshot
-    }
-
-    private func screenshot(meanLuminance: Double, matches appearance: Appearance) -> Bool {
-        switch appearance {
-        case .light:
-            return meanLuminance > 0.55
-        case .dark:
-            return meanLuminance < 0.35
-        }
-    }
-
-    private func transcriptElement(_ app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)["session-chat-transcript"]
-    }
-
-    /// The element is gone, or its settled frame lies outside the screen.
-    ///
-    /// This does not ask `isHittable`. While WebKit relayouts under the keyboard
-    /// it publishes text with a frame that is briefly invalid (the same window
-    /// `waitForBottomGap` waits out), and XCTest answers `isHittable` on such an
-    /// element with a hard failure, "Activation point invalid and no suggested
-    /// hit points based on element frame", instead of `false`. It failed
-    /// testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom on
-    /// hosted CI (run 36368089332) and once in thirty runs on a loaded bench.
-    private func assertNotVisible(
-        _ element: XCUIElement,
-        in app: XCUIApplication,
-        timeout: TimeInterval = SessionChatUITests.patient(5),
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let deadline = Date().addingTimeInterval(timeout)
-        var visible = true
-        var sawValidFrame = false
-        while true {
-            if !element.exists {
-                visible = false
-                break
-            }
-            let frame = element.frame
-            let screen = app.frame
-            if frame.isFiniteAndNonNull, screen.isFiniteAndNonNull {
-                sawValidFrame = true
-                visible = frame.intersects(screen)
-                if !visible { break }
-            }
-            if Date() >= deadline { break }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        let reason = sawValidFrame ? "is still on screen" : "never reported a valid frame"
-        XCTAssertFalse(visible, "\(element) \(reason)", file: file, line: line)
-    }
-
-    private func assertTranscriptElementsVisibleInOrder(
-        _ elements: [XCUIElement],
-        in app: XCUIApplication,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let screen = app.frame
-        XCTAssertTrue(screen.isFiniteAndNonNull, "The app reported no usable screen frame", file: file, line: line)
-        var previousFrame: CGRect?
-        for element in elements {
-            let frame = element.frame
-            XCTAssertTrue(element.exists, "Transcript row does not exist: \(element)", file: file, line: line)
-            XCTAssertTrue(frame.isFiniteAndNonNull, "Transcript row has no rendered frame: \(element)", file: file, line: line)
-            XCTAssertTrue(frame.intersects(screen), "Transcript row is not visible on screen: \(element)", file: file, line: line)
-            if let previousFrame {
-                XCTAssertGreaterThan(
-                    frame.minY,
-                    previousFrame.maxY,
-                    "Transcript rows are not top-to-bottom in the expected chronology: \(element)",
-                    file: file,
-                    line: line
-                )
-            }
-            previousFrame = frame
-        }
-    }
-
-    /// Give the composer keyboard focus, which every composer test needs first.
-    ///
-    /// Waiting for the field to exist was not enough: on the hosted VM a
-    /// synthesized tap occasionally reached an existing, hittable composer and
-    /// left no focus, no caret and no keyboard (run 38015970561: the update was
-    /// already rendered, the tap synthesized cleanly, nothing changed after it).
-    /// Wait until the field can take the tap; if the first tap brings up no
-    /// keyboard, keep the evidence and tap once more. A composer that never
-    /// takes focus still fails, so a real focus bug cannot hide here. The
-    /// keyboard is the signal: the CI simulator shows the software keyboard,
-    /// and a private focus key would crash the run rather than fail it.
-    private func focusComposer(_ composer: XCUIElement, in app: XCUIApplication) {
-        XCTAssertTrue(composer.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(waitUntilHittable(composer, timeout: Self.patient(5)), "Composer should accept a tap")
-        composer.tap()
-        if app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)) { return }
-        XCTContext.runActivity(named: "First composer tap took no focus; tapping once more") { activity in
-            let screenshot = XCTAttachment(screenshot: app.screenshot())
-            screenshot.name = "composer-tap-without-focus"
-            screenshot.lifetime = .keepAlways
-            activity.add(screenshot)
-        }
-        composer.tap()
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)),
-            "Composer keyboard should appear promptly"
-        )
-    }
-
-    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
-        poll(timeout: timeout) { element.exists && element.isHittable }
-    }
-
-    private func waitForLabel(_ element: XCUIElement, containing value: String, timeout: TimeInterval) -> Bool {
-        poll(timeout: timeout) { element.exists && element.label.contains(value) }
-    }
-
-    private func assertClearsBottomChrome(
-        _ element: XCUIElement,
-        app: XCUIApplication,
-        minimumGap: CGFloat = 0,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
-        let gap = waitForBottomGap(
-            element,
-            bottomChromeCard: bottomChromeCard,
-            minimumGap: minimumGap,
-            maximumGap: .greatestFiniteMagnitude
-        ) ?? .nan
-        XCTAssertGreaterThanOrEqual(
-            gap,
-            minimumGap,
-            "Latest transcript row never settled clear of the floating control card",
-            file: file,
-            line: line
-        )
-    }
-
-    private func assertAnchoredAboveBottomChrome(
-        _ element: XCUIElement,
-        app: XCUIApplication,
-        minimumGap: CGFloat = 8,
-        maximumGap: CGFloat = 96,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
-
-        let gap = waitForBottomGap(
-            element,
-            bottomChromeCard: bottomChromeCard,
-            minimumGap: minimumGap,
-            maximumGap: maximumGap
-        ) ?? .nan
-        XCTAssertGreaterThanOrEqual(
-            gap,
-            minimumGap,
-            "Latest transcript row overlaps the floating control card",
-            file: file,
-            line: line
-        )
-        XCTAssertLessThanOrEqual(
-            gap,
-            maximumGap,
-            "Latest transcript row is visibly detached from the floating control card",
-            file: file,
-            line: line
-        )
-    }
-
-    /// Accessibility geometry can briefly report infinite coordinates while
-    /// WebKit relayout and keyboard presentation cross process boundaries.
-    /// Wait for the layout invariant, not merely for the element to exist.
-    private func waitForBottomGap(
-        _ element: XCUIElement,
-        bottomChromeCard: XCUIElement,
-        minimumGap: CGFloat,
-        maximumGap: CGFloat,
-        timeout: Duration = .seconds(SessionChatUITests.patient(5))
-    ) -> CGFloat? {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        var lastFiniteGap: CGFloat?
-        while clock.now < deadline {
-            let elementFrame = element.frame
-            let chromeFrame = bottomChromeCard.frame
-            let gap = chromeFrame.minY - elementFrame.maxY
-            if gap.isFinite {
-                lastFiniteGap = gap
-                if gap >= minimumGap && gap <= maximumGap { return gap }
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        return lastFiniteGap
-    }
-
-    private func assertScreenIsVisiblyRendered(
-        _ app: XCUIApplication,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let screenshot = app.screenshot()
-        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            XCTFail("Could not decode screenshot", file: file, line: line)
-            return
-        }
-
-        let width = 32
-        let height = 64
-        let bytesPerPixel = 4
-        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
-        guard let context = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * bytesPerPixel,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            XCTFail("Could not create screenshot sampling context", file: file, line: line)
-            return
-        }
-
-        context.interpolationQuality = .low
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        var luminanceTotal = 0.0
-        var visiblyLitPixels = 0
-        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
-            let red = Double(pixels[offset]) / 255.0
-            let green = Double(pixels[offset + 1]) / 255.0
-            let blue = Double(pixels[offset + 2]) / 255.0
-            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-            luminanceTotal += luminance
-            if luminance > 0.08 {
-                visiblyLitPixels += 1
-            }
-        }
-
-        let sampleCount = width * height
-        let meanLuminance = luminanceTotal / Double(sampleCount)
-        let litPixelFraction = Double(visiblyLitPixels) / Double(sampleCount)
-        XCTAssertGreaterThan(meanLuminance, 0.03, "Screen rendered close to black", file: file, line: line)
-        XCTAssertGreaterThan(litPixelFraction, 0.02, "Screen did not contain enough visible pixels", file: file, line: line)
-    }
-
-    private func meanLuminance(of screenshot: XCUIScreenshot) -> Double? {
-        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            return nil
-        }
-
-        let width = 32
-        let height = 64
-        let bytesPerPixel = 4
-        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
-        guard let context = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * bytesPerPixel,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
-        }
-
-        context.interpolationQuality = .low
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        var luminanceTotal = 0.0
-        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
-            let red = Double(pixels[offset]) / 255.0
-            let green = Double(pixels[offset + 1]) / 255.0
-            let blue = Double(pixels[offset + 2]) / 255.0
-            luminanceTotal += 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        }
-        return luminanceTotal / Double(width * height)
-    }
-
-    func testCaptureClaudeFidelitySessionScreenshot() {
-        let app = launchChatFixture(name: "claude-fidelity", eventCount: 0)
-        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
-        let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
-        XCTAssertTrue(
-            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
-            renderStatus.label
-        )
-        let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitToExist(timeout: Self.patient(5)))
-        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitToExist(timeout: Self.patient(5)))
-
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = "claude-fidelity-session"
-        shot.lifetime = .keepAlways
-        add(shot)
-    }
-
-    func testCaptureNarrationTrailScreenshot() {
-        let app = launchChatFixture(name: "narration", eventCount: 0)
-        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
-        let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
-        XCTAssertTrue(
-            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
-            renderStatus.label
-        )
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = "narration-trail"
-        shot.lifetime = .keepAlways
-        add(shot)
-    }
-
-    func testCaptureClaudeFidelitySheetScreenshot() {
-        let app = launchChatFixture(name: "claude-fidelity-sheet", eventCount: 0)
-        let parentAgent = app.buttons["session-runtime-background-task-sub-1"]
-        let childAgent = app.buttons["session-runtime-background-task-sub-2"]
-        XCTAssertTrue(parentAgent.waitToExist(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(childAgent.waitToExist(timeout: Self.patient(5)))
-
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = "claude-fidelity-sheet"
-        shot.lifetime = .keepAlways
-        add(shot)
     }
 }
 

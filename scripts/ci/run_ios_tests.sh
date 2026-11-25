@@ -52,6 +52,19 @@ done
 # simulator boot, the UI tests) and the job log shows none of them by name.
 stage() { echo "[run_ios_tests] $* (t+${SECONDS}s)"; }
 
+# IOS_PARALLEL_WORKERS simulator clones run the classes of each scheme named in
+# IOS_PARALLEL_SCHEMES side by side (xcodebuild hands each clone whole classes).
+# Unset, or 1, runs every scheme on the one simulator.
+parallel_arguments() {
+  case " ${IOS_PARALLEL_SCHEMES:-} " in
+    *" $1 "*)
+      if [[ "${IOS_PARALLEL_WORKERS:-1}" -gt 1 ]]; then
+        printf '%s\n' -parallel-testing-enabled YES -parallel-testing-worker-count "${IOS_PARALLEL_WORKERS}"
+      fi
+      ;;
+  esac
+}
+
 # One -only-testing / -skip-testing argument per line for the entries of $1.
 filter_arguments() {
   local scheme="$1" entry rest
@@ -95,6 +108,11 @@ run_scheme() {
       filters+=("${argument}")
     fi
   done < <(filter_arguments "${scheme}")
+  while IFS= read -r argument; do
+    if [[ -n "${argument}" ]]; then
+      filters+=("${argument}")
+    fi
+  done < <(parallel_arguments "${scheme}")
 
   stage "${scheme}: build-for-testing"
   if ! build_for_testing "${scheme}"; then
