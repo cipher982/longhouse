@@ -16,6 +16,11 @@ if [[ -z "${DESTINATION}" ]]; then
 fi
 
 DERIVED_DATA_PATH="${IOS_DERIVED_DATA_PATH:-${HOME}/Library/Developer/Xcode/DerivedData/LonghouseIOS-CI}"
+# Every xcodebuild below passes -enableCodeCoverage NO. The smoke scheme's test plan
+# turned coverage on and the unit scheme did not, so the two schemes built the app
+# and widget with different compiler arguments, and each build threw away the
+# other's incremental state: every Swift file compiled twice per job (run
+# 45691666834). Nothing reads the coverage.
 RESULTS_DIR="${IOS_RESULTS_DIR:-}"
 IOS_TEST_SCHEMES="${IOS_TEST_SCHEMES:-Longhouse}"
 # IOS_TEST_FILTER splits one scheme's tests over VMs: space-separated entries
@@ -93,6 +98,7 @@ build_for_testing() {
     -scheme "$1" \
     -destination "${DESTINATION}" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    -enableCodeCoverage NO \
     -disableAutomaticPackageResolution \
     ${settings[@]+"${settings[@]}"} \
     build-for-testing
@@ -144,6 +150,7 @@ run_scheme() {
       -scheme "${scheme}" \
       -destination "${DESTINATION}" \
       -derivedDataPath "${DERIVED_DATA_PATH}" \
+      -enableCodeCoverage NO \
       -resultBundlePath "${result_bundle}" \
       ${filters[@]+"${filters[@]}"} \
       test-without-building
@@ -153,6 +160,7 @@ run_scheme() {
       -scheme "${scheme}" \
       -destination "${DESTINATION}" \
       -derivedDataPath "${DERIVED_DATA_PATH}" \
+      -enableCodeCoverage NO \
       ${filters[@]+"${filters[@]}"} \
       test-without-building
   fi

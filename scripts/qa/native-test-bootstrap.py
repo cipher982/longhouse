@@ -118,7 +118,7 @@ def _simctl(*args: str, timeout: int = 600) -> str:
 
 
 def cloned_simulator() -> str:
-    """Clone the kept template (making it first when needed), start the clone booting, and return its id."""
+    """Clone the kept template (making it first when needed) and return the clone as a destination."""
 
     sys.path.insert(0, str(ROOT / "scripts" / "ci"))
     import select_ios_simulator as select  # the runtime and device type `make test-ios` would pick
@@ -143,9 +143,9 @@ def cloned_simulator() -> str:
         _simctl("bootstatus", template, "-b", timeout=900)
         _simctl("shutdown", template)
     clone = _simctl("clone", template, f"Longhouse CI {device_type['name']}")
-    # Boot while Xcode builds; xcodebuild waits for it to finish.
-    subprocess.Popen(["xcrun", "simctl", "boot", clone], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"native-test-bootstrap: simulator cloned from the template, booting: {clone}", flush=True)
+    # xcodebuild boots it when the tests start. Booting it during the build made the build
+    # take 108 s instead of 33 (run 45691666834).
+    print(f"native-test-bootstrap: simulator cloned from the template: {clone}", flush=True)
     return f"platform=iOS Simulator,id={clone}"
 
 
