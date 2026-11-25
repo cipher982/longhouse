@@ -98,7 +98,7 @@ export class HostLinkStore {
     this.healthFetcher = fetchHealth;
     this.monitorCount += 1;
     if (this.monitorCount === 1) {
-      this.tickTimer = setInterval(() => this.refreshSnapshot(), 1_000);
+      this.syncTickTimer();
       void this.refreshHealth();
       this.syncHealthPoll();
     }
@@ -283,6 +283,7 @@ export class HostLinkStore {
       this.snapshot = snapshot;
       for (const listener of this.listeners) listener();
     }
+    this.syncTickTimer();
     this.syncHealthPoll();
     for (const waiter of waiters) waiter();
   }
@@ -361,6 +362,18 @@ export class HostLinkStore {
       a.reloadAvailable === b.reloadAvailable &&
       a.elapsedSeconds === b.elapsedSeconds
     );
+  }
+
+  private syncTickTimer(): void {
+    const needsTick =
+      this.monitorCount > 0 && (this.claim !== null || this.claimStartedAtMs !== null);
+    if (!needsTick) {
+      clearInterval(this.tickTimer ?? undefined);
+      this.tickTimer = null;
+      return;
+    }
+    if (this.tickTimer !== null) return;
+    this.tickTimer = setInterval(() => this.refreshSnapshot(), 1_000);
   }
 
   private syncHealthPoll(): void {

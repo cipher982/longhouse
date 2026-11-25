@@ -35,6 +35,8 @@ const GLOW_MAX = 0.085;
 /** Reduced motion: steps to settle a still frame, and at most this many per frame. */
 const RM_SETTLE_STEPS = 90;
 const RM_STEPS_PER_FRAME = 15;
+/** Minimum interval between GPU height-probe readbacks (PI controller tau = 350 ms). */
+const MEASURE_INTERVAL_MS = 250;
 /** A fire that comes on screen is simulated this far ahead before it is
  * first drawn, so a glance at the timeline finds it already burning. */
 const WARM_STEPS = 180;
@@ -165,6 +167,7 @@ export class HearthRenderer {
   private heats = new Map<string, { heat: SessionHeat; orphanSince: number }>();
   private simRuns: [number, number][] = [];
   private io: IntersectionObserver | null = null;
+  private ro: ResizeObserver | null = null;
   private raf = 0;
   private last = 0;
   private acc = 0;
@@ -174,10 +177,13 @@ export class HearthRenderer {
   private settleT = 0;
   private fence: WebGLSync | null = null;
   private measT = 0;
+  private lastMeasureStart = 0;
   private q: WebGLQuery | null = null;
   private ring = 0;
   private dpr = 1;
   private box = { left: 0, top: 0, width: 0, height: 0 };
+  private layoutDirty = true;
+  private visibleTiles = 0;
   private dead = false;
   /** Reduced motion: sim steps left before the still frame is settled.
    * A signal change resets it (never adds), and each frame spends at most
@@ -274,6 +280,10 @@ export class HearthRenderer {
     if (typeof IntersectionObserver !== "undefined") {
       this.io = new IntersectionObserver(this.handleIntersect, { rootMargin: "48px 0px" });
     }
+    if (typeof ResizeObserver !== "undefined" && this.canvas.parentElement) {
+      this.ro = new ResizeObserver(this.touchSoon);
+      this.ro.observe(this.canvas.parentElement);
+    }
   }
 
   // ---------------- public API ----------------
@@ -286,6 +296,7 @@ export class HearthRenderer {
     const entry = this.heats.get(key);
     if (entry) entry.orphanSince = 0;
     else this.heats.set(key, { heat: new SessionHeat(), orphanSince: 0 });
+    this.layoutDirty = true;
     this.io?.observe(el);
     this.requestFrame();
   }
@@ -310,11 +321,13 @@ export class HearthRenderer {
       const entry = this.heats.get(cell.key);
       if (entry) entry.orphanSince = performance.now();
     }
+    this.layoutDirty = true;
     this.requestFrame();
   }
 
   /** Rows moved (drag, reflow): redraw for a moment even if nothing burns. */
   touch(): void {
+    this.layoutDirty = true;
     this.stillUntil = Math.max(this.stillUntil, performance.now() + 350);
     this.requestFrame();
   }
@@ -329,6 +342,7 @@ export class HearthRenderer {
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.io?.disconnect();
+    this.ro?.disconnect();
     this.canvas.removeEventListener("webglcontextlost", this.handleLost, false);
     document.removeEventListener("visibilitychange", this.handleVisibility);
     window.removeEventListener("scroll", this.touchSoon, { capture: true } as EventListenerOptions);
@@ -347,6 +361,7 @@ export class HearthRenderer {
   private handleVisibility = () => {
     if (!document.hidden) {
       this.last = 0;
+      this.layoutDirty = true;
       this.requestFrame();
     }
   };
@@ -365,6 +380,7 @@ export class HearthRenderer {
         }
       }
     }
+    this.layoutDirty = true;
     this.requestFrame();
   };
 
@@ -401,6 +417,7 @@ export class HearthRenderer {
       v.frozen = false;
       this.settleT = now;
       this.rmSettle = RM_SETTLE_STEPS;
+      this.layoutDirty = true;
     }
     // A visible row the atlas has no room for draws its static glyph.
     for (const cell of this.cells.values()) {
@@ -421,6 +438,7 @@ export class HearthRenderer {
     this.tileCell[t] = null;
     this.vis[t] = freshVis(t);
     this.clearTile(t);
+    this.layoutDirty = true;
   }
 
   // ---------------- frame ----------------
@@ -493,7 +511,12 @@ export class HearthRenderer {
     this.packUniforms(wall);
     const warming = this.warmUp();
 
-    const visibleTiles = this.layout();
+    const needsLayout = this.layoutDirty || nowMs < this.stillUntil;
+    const visibleTiles = needsLayout ? this.layout() : this.visibleTiles;
+    if (needsLayout) {
+      this.visibleTiles = visibleTiles;
+      this.layoutDirty = false;
+    }
     if (!visibleTiles) {
       // Nothing on screen: no GPU work at all. A scroll or visibility change wakes us.
       this.stats.running = false;
@@ -516,35 +539,41 @@ export class HearthRenderer {
       return;
     }
 
-    let useQ = false;
-    if (this.timerExt && !this.q) {
-      this.q = gl.createQuery();
-      if (this.q) {
-        gl.beginQuery(this.timerExt.TIME_ELAPSED_EXT, this.q);
-        useQ = true;
-      }
-    }
+    const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.acc += realDt;
     let n = 0;
     while (this.acc >= H && n < 3) {
-      this.simStep();
-      this.acc -= H;
       n++;
+      this.acc -= H;
     }
     if (n === 3) this.acc = 0;
-    this.render(true);
-    if (this.simRuns.length) this.measureAsync(nowMs);
-    if (useQ && this.timerExt) gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
-    else if (this.q && this.timerExt && gl.getQueryParameter(this.q, gl.QUERY_RESULT_AVAILABLE)) {
-      if (!gl.getParameter(this.timerExt.GPU_DISJOINT_EXT)) {
-        const ms = gl.getQueryParameter(this.q, gl.QUERY_RESULT) / 1e6;
-        this.stats.gpuMs = this.stats.gpuMs == null ? ms : this.stats.gpuMs + (ms - this.stats.gpuMs) * 0.1;
+
+    // On >60 Hz displays (e.g. 120 Hz ProMotion), skip redrawing frames where the
+    // fixed-timestep solver did not advance and neither layout nor cooling moved.
+    const needsDraw = n > 0 || needsLayout || cooling || warming || this.stats.frames === 0;
+    if (needsDraw) {
+      let useQ = false;
+      if (this.timerExt && !this.q) {
+        this.q = gl.createQuery();
+        if (this.q) {
+          gl.beginQuery(this.timerExt.TIME_ELAPSED_EXT, this.q);
+          useQ = true;
+        }
       }
-      gl.deleteQuery(this.q);
-      this.q = null;
+      for (let k = 0; k < n; k++) this.simStep();
+      this.render(true);
+      if (this.simRuns.length) this.measureAsync(nowMs);
+      if (useQ && this.timerExt) gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
+      else if (this.q && this.timerExt && gl.getQueryParameter(this.q, gl.QUERY_RESULT_AVAILABLE)) {
+        if (!gl.getParameter(this.timerExt.GPU_DISJOINT_EXT)) {
+          const ms = gl.getQueryParameter(this.q, gl.QUERY_RESULT) / 1e6;
+          this.stats.gpuMs = this.stats.gpuMs == null ? ms : this.stats.gpuMs + (ms - this.stats.gpuMs) * 0.1;
+        }
+        gl.deleteQuery(this.q);
+        this.q = null;
+      }
+      this.stats.frames++;
     }
-    this.stats.frames++;
-    const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.stats.running = keepGoing;
     if (keepGoing) this.raf = requestAnimationFrame(this.frame);
     else if (this.q) {
@@ -864,7 +893,11 @@ export class HearthRenderer {
       budget -= n;
       this.simRuns = [run];
       for (let k = 0; k < n; k++) this.simStep(false);
-      for (let i = run[0]; i < run[0] + run[1]; i++) this.vis[i].warm = Math.max(0, this.vis[i].warm - n);
+      for (let i = run[0]; i < run[0] + run[1]; i++) {
+        const nextWarm = Math.max(0, this.vis[i].warm - n);
+        if (this.vis[i].warm > 0 && nextWarm === 0) this.layoutDirty = true;
+        this.vis[i].warm = nextWarm;
+      }
     }
     this.simRuns = spans;
     this.simTime = time;
@@ -922,6 +955,8 @@ export class HearthRenderer {
       }
       return;
     }
+    if (now - this.lastMeasureStart < MEASURE_INTERVAL_MS) return;
+    this.lastMeasureStart = now;
     this.run(this.P.meas, this.F.meas, { u_s: this.F.s.r.tex, u_lut: this.lutTex });
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.F.meas.fb);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);

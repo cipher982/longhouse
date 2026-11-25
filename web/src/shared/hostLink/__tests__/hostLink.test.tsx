@@ -207,6 +207,52 @@ describe("host-link store", () => {
     stop();
     vi.useRealTimers();
   });
+
+  it("does not run a background 1s tick interval while serving with no active claim", async () => {
+    vi.useFakeTimers();
+    const now = vi.fn(() => Date.parse("2026-10-06T12:00:00.000Z"));
+    const fetchHealth = vi.fn(async () => ({
+      runtime: { epoch: "runtime-1", admission: "open" as const },
+      build: { commit: pageCommit },
+    }));
+    const store = new HostLinkStore({ pageCommit, now });
+    const stop = store.startMonitoring(fetchHealth);
+    try {
+      await act(async () => {
+        await store.refreshHealth();
+      });
+      expect(store.getSnapshot().state).toBe("serving");
+      const callsWhileServing = now.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(now.mock.calls.length).toBe(callsWhileServing);
+
+      // An active claim arms the 1s tick timer and advances elapsedSeconds.
+      store.observeLifecycle(claim());
+      const callsAfterClaim = now.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(now.mock.calls.length).toBeGreaterThan(callsAfterClaim);
+
+      // Returning to serving disarms the 1s tick timer again (flush the
+      // lifecycle-triggered health refresh before counting idle ticks).
+      store.observeLifecycle(claim({ state: "serving" }));
+      await act(async () => {
+        await store.refreshHealth();
+      });
+      const callsAfterRecover = now.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(now.mock.calls.length).toBe(callsAfterRecover);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("host-link banner", () => {
