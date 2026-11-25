@@ -116,7 +116,24 @@ final class HearthHeat {
     private var stoppedWall: Date?
     private var wasActive = false
 
-    func update(snapshot next: HearthSnapshot, time: TimeInterval, wall: Date) {
+    /// Immediately snap the bed and work to the resting state for `mode` with
+    /// no 4.5 s cool-down ramp (used on foreground/cache resume catch-up).
+    func snapToRest(mode: HearthMode? = nil) {
+        let resolvedMode = mode ?? snapshot?.mode ?? .idle
+        let bed = Self.restBed(for: resolvedMode)
+        surface = bed.surface
+        core = bed.core
+        surfaceBaseline = bed.surface
+        coreBaseline = bed.core
+        work = 0
+        pending.removeAll()
+        deposits.removeAll()
+        lastEventTime = -.infinity
+        stoppedWall = nil
+        wasActive = false
+    }
+
+    func update(snapshot next: HearthSnapshot, time: TimeInterval, wall: Date, snap: Bool = false) {
         let previous = snapshot
         var retained = next
         if retained.tool == nil { retained.tool = previous?.tool }
@@ -136,8 +153,25 @@ final class HearthHeat {
             return
         }
 
-        let spread = max(0.3, min(2.5, time - lastUpdateTime))
+        let since = time - lastUpdateTime
+        let spread = max(0.3, min(2.5, since))
         lastUpdateTime = time
+        let staleStop = next.mode != .working && snap
+        if staleStop {
+            snapToRest(mode: next.mode)
+            return
+        }
+        if snap && next.mode == .working && previous.mode != .working {
+            let bed = Self.restBed(for: .working)
+            surface = max(surface, bed.surface)
+            core = max(core, bed.core)
+            work = max(work, 18 + densityWork(next))
+            pending.removeAll()
+            deposits.removeAll()
+            stoppedWall = nil
+            wasActive = true
+            return
+        }
         guard next.mode != .ended, next.acceptsEvents else {
             pending.removeAll()
             deposits.removeAll()

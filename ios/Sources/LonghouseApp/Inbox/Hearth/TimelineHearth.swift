@@ -9,11 +9,12 @@ struct TimelineHearthLamp: View {
 
     let session: SessionSummary
     let suppressed: Bool
+    var revalidating: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @State private var failed = !HearthEngine.shared.isAvailable
 
     var body: some View {
-        let snapshot = HearthSnapshot(session: session, suppressed: suppressed, now: Date())
+        let snapshot = HearthSnapshot(session: session, suppressed: suppressed, revalidating: revalidating, now: Date())
         let bounds = HearthGeometry(cell: Self.cell).bounds
         Color.clear
             .frame(width: Self.cell.width, height: Self.cell.height)
@@ -74,11 +75,11 @@ private struct HearthGlyph: View {
 extension HearthSnapshot {
     /// The fire's inputs from a timeline card (web: hearthSnapshotFromSession).
     /// A suppressed or unknown card still shows its bed but never fires events.
-    init(session: SessionSummary, suppressed: Bool, now: Date) {
+    init(session: SessionSummary, suppressed: Bool, revalidating: Bool = false, now: Date) {
         let signal = TimelineSignal.resolve(for: session, suppressed: suppressed, asOf: now)
         let mode: HearthMode
         switch signal {
-        case .working: mode = .working
+        case .working: mode = revalidating ? .idle : .working
         case .attention: mode = .waiting
         case .closed: mode = .ended
         case .quiet:
@@ -120,6 +121,6 @@ extension HearthSnapshot {
             lastActivity: session.lastActivityAt.flatMap(LonghouseDateParser.parse),
             started: session.startedAt.flatMap(LonghouseDateParser.parse)
         )
-        acceptsEvents = !suppressed && signal != .unknown && mode != .ended
+        acceptsEvents = !suppressed && !revalidating && signal != .unknown && mode != .ended
     }
 }

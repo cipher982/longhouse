@@ -56,7 +56,15 @@ final class TimelineViewModel: ObservableObject {
     @Published private(set) var searchLane: TimelineSearchLane?
     @Published private(set) var connectivity = TimelineConnectivityState()
     @Published private(set) var connectivityNow = Date()
+    /// True while a foreground or stale-cache refresh is in flight so Hearth
+    /// suppresses pre-background working flames until fresh server truth lands.
+    @Published private(set) var isRevalidatingAfterBackground = false
 
+    private var backgroundedAt: Date?
+    private var revalidationGeneration: UInt64 = 0
+    private var revalidationTimeoutTask: Task<Void, Never>?
+    private static let resumeRevalidationGapSeconds: TimeInterval = 5
+    private static let resumeRevalidationTimeoutNanoseconds: UInt64 = 4_000_000_000
     private var streamTask: Task<Void, Never>?
     private var stream: TimelineSessionsStreamSource?
     private var reconcileTask: Task<Void, Never>?
@@ -139,11 +147,21 @@ final class TimelineViewModel: ObservableObject {
         }
         if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
             let cachedSessions = scopedSessions(cached.sessions)
+            let cacheAge = Date().timeIntervalSince(cached.savedAt)
+            let revalidationID = cacheAge >= Self.resumeRevalidationGapSeconds
+                ? beginResumeRevalidationWindow()
+                : nil
             applySessions(cachedSessions, source: "cache")
             applyConnectivity(.cacheLoaded(hasLoadedData: !cachedSessions.isEmpty, savedAt: cached.savedAt))
             logger.info("timeline cache hit sessions=\(cachedSessions.count, privacy: .public)")
             Task { [weak self] in
-                await self?.refresh(using: appState, reloadWidget: true)
+                guard let self else { return }
+                defer {
+                    if let revalidationID {
+                        self.endResumeRevalidationWindow(revalidationID)
+                    }
+                }
+                await self.refresh(using: appState, reloadWidget: true, force: revalidationID != nil)
             }
             return
         }
@@ -285,6 +303,59 @@ final class TimelineViewModel: ObservableObject {
             }
             logger.error("timeline refresh failed elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func beginResumeRevalidationWindow() -> UInt64 {
+        revalidationGeneration &+= 1
+        let id = revalidationGeneration
+        revalidationTimeoutTask?.cancel()
+        isRevalidatingAfterBackground = true
+        HearthEngine.shared.beginResumeRevalidation()
+        revalidationTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.resumeRevalidationTimeoutNanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.endResumeRevalidationWindow(id)
+        }
+        return id
+    }
+
+    private func endResumeRevalidationWindow(_ id: UInt64) {
+        guard id == revalidationGeneration else { return }
+        revalidationTimeoutTask?.cancel()
+        revalidationTimeoutTask = nil
+        guard isRevalidatingAfterBackground else { return }
+        isRevalidatingAfterBackground = false
+        HearthEngine.shared.endResumeRevalidation()
+    }
+
+    func didLeaveForeground() {
+        if backgroundedAt == nil {
+            backgroundedAt = Date()
+        }
+        revalidationGeneration &+= 1
+        revalidationTimeoutTask?.cancel()
+        revalidationTimeoutTask = nil
+        if isRevalidatingAfterBackground {
+            isRevalidatingAfterBackground = false
+        }
+        stopStream()
+    }
+
+    func resumeFromForeground(using appState: AppState) async {
+        let gap = backgroundedAt.map { Date().timeIntervalSince($0) } ?? 0
+        backgroundedAt = nil
+        let revalidationID = hasLoadedSessions && gap >= Self.resumeRevalidationGapSeconds
+            ? beginResumeRevalidationWindow()
+            : nil
+        defer {
+            if let revalidationID {
+                endResumeRevalidationWindow(revalidationID)
+            }
+        }
+        // Force a fresh post-resume snapshot even if an earlier refresh was still
+        // marked in flight, so the window cannot close with stale pre-background data.
+        await refresh(using: appState, reloadWidget: true, force: revalidationID != nil)
+        startStream(using: appState)
     }
 
     func resumeStream(using appState: AppState) {

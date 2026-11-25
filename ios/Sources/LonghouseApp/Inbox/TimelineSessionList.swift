@@ -5,6 +5,7 @@ import WidgetKit
 struct TimelineSessionList: View {
     let sessions: [SessionSummary]
     let connectivityBanner: TimelineConnectivityBanner
+    var revalidating: Bool = false
     /// Present only while the user is filtering. Its presence is what makes
     /// this a search view; the list itself, its order, and its sections do not
     /// change, because the resident rows are the filter's corpus.
@@ -210,7 +211,8 @@ struct TimelineSessionList: View {
                     TimelineSessionCardRow(
                         session: session,
                         role: role,
-                        connectivityBanner: connectivityBanner
+                        connectivityBanner: connectivityBanner,
+                        revalidating: revalidating
                     )
                 }
                 .buttonStyle(.plain)

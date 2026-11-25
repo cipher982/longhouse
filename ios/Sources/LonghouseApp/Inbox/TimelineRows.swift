@@ -6,6 +6,7 @@ struct TimelineSessionCardRow: View {
     let session: SessionSummary
     let role: TimelineRowRole
     var connectivityBanner: TimelineConnectivityBanner = .none
+    var revalidating: Bool = false
 
     var body: some View {
         let signal = TimelineSignal.resolve(for: session, suppressed: connectivityBanner != .none)
@@ -97,7 +98,11 @@ struct TimelineSessionCardRow: View {
                         .lineLimit(1)
                 }
             }
-            TimelineHearthLamp(session: session, suppressed: connectivityBanner != .none)
+            TimelineHearthLamp(
+                session: session,
+                suppressed: connectivityBanner != .none,
+                revalidating: revalidating
+            )
                 .frame(maxHeight: .infinity, alignment: .center)
         }
         .padding(.vertical, 11)

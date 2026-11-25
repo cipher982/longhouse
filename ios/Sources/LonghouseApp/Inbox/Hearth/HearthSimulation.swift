@@ -271,6 +271,35 @@ final class HearthSimulation {
         clearing.insert(index)
     }
 
+    /// Clear a tile's fluid and flame height immediately (used when quenching
+    /// stale pre-background flames or snapping to a newly settled state).
+    func quenchTile(_ index: Int, freeze: Bool) {
+        var tile = tiles[index]
+        tile.height = 0
+        tile.gust = 0
+        tile.coldTime = 0
+        tile.warmSteps = 0
+        for root in tile.puff.indices { tile.puff[root] = 0 }
+        if freeze { tile.frozen = true }
+        tiles[index] = tile
+        clearing.insert(index)
+    }
+
+    /// Re-warm an attached tile that stayed working after resume revalidation.
+    func rewarmTile(_ index: Int, time: Double, reducedMotion: Bool) {
+        guard let heat = tiles[index].heat else { return }
+        var tile = tiles[index]
+        let target = heat.target(time: time)
+        tile.height = reducedMotion ? 0 : target
+        tile.frozen = false
+        tile.litAt = time
+        if !reducedMotion && (target > 0 || heat.snapshot?.mode == .waiting) {
+            tile.warmSteps = Self.warmupSteps
+        }
+        tiles[index] = tile
+        clearing.insert(index)
+    }
+
     /// Park a tile whose row left the screen: its fluid state is kept as is
     /// and it stops counting as burning, so coming back shows the fire as it
     /// was instead of relighting it from bare coals.

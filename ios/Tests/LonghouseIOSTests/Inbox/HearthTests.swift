@@ -182,4 +182,30 @@ struct HearthSimulationTests {
         #expect(try state(0) != burning)
         #expect(parked.contains { $0 != 0 })
     }
+
+    @Test
+    func resumeSnapClearsCoolingImmediatelyForFinishedSessions() {
+        let wall = Date(timeIntervalSince1970: 1_790_000_000)
+        let heat = HearthHeat()
+        heat.update(
+            snapshot: HearthSnapshot(mode: .working, toolCalls: 20, lastActivity: wall.addingTimeInterval(-120)),
+            time: 0,
+            wall: wall.addingTimeInterval(-120)
+        )
+        heat.step(time: 5, delta: 5, wall: wall.addingTimeInterval(-115)) { _ in }
+        #expect(heat.target(time: 5) > 0)
+
+        // Returning from background with an already-finished session snaps directly to rest.
+        heat.update(
+            snapshot: HearthSnapshot(mode: .idle, toolCalls: 25, lastActivity: wall.addingTimeInterval(-60)),
+            time: 125,
+            wall: wall,
+            snap: true
+        )
+        #expect(heat.target(time: 125) == 0)
+        #expect(!heat.isCooling(wall: wall))
+        #expect(heat.surface == HearthHeat.ambientTemperature)
+        #expect(heat.core == HearthHeat.ambientTemperature)
+        #expect(!heat.hasPending)
+    }
 }

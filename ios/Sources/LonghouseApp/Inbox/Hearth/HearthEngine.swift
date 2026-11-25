@@ -48,6 +48,8 @@ final class HearthEngine {
     private var settle = 0
     private var inFlight = 0
     private var active = UIApplication.shared.applicationState != .background
+    private var revalidating = false
+    private var snapUntil: Double = 0
     private var observers: [NSObjectProtocol] = []
     private(set) var frames = 0
 
@@ -112,10 +114,52 @@ final class HearthEngine {
         requestFrame()
     }
 
+    /// Quench stale pre-background working flames while a foreground refresh is
+    /// in flight so returning to the app never flashes old fires before truth lands.
+    func beginResumeRevalidation() {
+        revalidating = true
+        for entry in entries.values where entry.heat.snapshot?.mode == .working {
+            entry.heat.snapToRest(mode: .idle)
+        }
+        if case .ready(let simulation) = phase {
+            for index in tileKeys.indices {
+                guard let key = tileKeys[index],
+                      entries[key]?.heat.snapshot?.mode == .working else { continue }
+                simulation.quenchTile(index, freeze: true)
+            }
+        }
+        settle = HearthSimulation.settleSteps
+        requestFrame()
+    }
+
+    /// End resume revalidation and snap post-resume transitions to their real
+    /// state (avoiding a 4.5 s fake cool-down on sessions that finished away).
+    /// Lamps re-render on `isRevalidatingAfterBackground = false` and drive
+    /// `update(_:)`, which re-warms genuinely working rows and keeps finished
+    /// rows quenched.
+    func endResumeRevalidation() {
+        revalidating = false
+        let now = CACurrentMediaTime()
+        snapUntil = max(snapUntil, now + 1.5)
+        settle = HearthSimulation.settleSteps
+        requestFrame()
+    }
+
     func update(_ view: HearthLayerView) {
         guard let snapshot = view.snapshot, let entry = entries[view.key] else { return }
+        let now = CACurrentMediaTime()
+        let shouldSnap = !revalidating && now < snapUntil
+        let previousMode = entry.heat.snapshot?.mode
         if entry.heat.snapshot.map({ !Self.sameCard($0, snapshot) }) ?? true {
-            entry.heat.update(snapshot: snapshot, time: CACurrentMediaTime(), wall: Date())
+            entry.heat.update(snapshot: snapshot, time: now, wall: Date(), snap: shouldSnap)
+            if shouldSnap, case .ready(let simulation) = phase,
+               let index = tileKeys.firstIndex(of: view.key) {
+                if snapshot.mode != .working {
+                    simulation.quenchTile(index, freeze: snapshot.mode != .waiting)
+                } else if previousMode != .working {
+                    simulation.rewarmTile(index, time: now, reducedMotion: still)
+                }
+            }
             settle = HearthSimulation.settleSteps
         }
         requestFrame()

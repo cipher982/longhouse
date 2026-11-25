@@ -196,6 +196,7 @@ struct TimelineView: View {
         TimelineSessionList(
             sessions: filteredSessions,
             connectivityBanner: effectiveConnectionBanner,
+            revalidating: viewModel.isRevalidatingAfterBackground,
             search: searchPresentation
         )
     }
@@ -410,15 +411,14 @@ struct TimelineView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     Task {
-                        await viewModel.refresh(using: appState, reloadWidget: true)
-                        viewModel.startStream(using: appState)
+                        await viewModel.resumeFromForeground(using: appState)
                         if !normalizedSearch.isEmpty, viewModel.searchLane != nil {
                             viewModel.retrySearch(using: appState)
                         }
                         consumePendingPushIfNeeded()
                     }
                 } else {
-                    viewModel.stopStream()
+                    viewModel.didLeaveForeground()
                 }
             }
             // Push payloads are posted from nonisolated APNs delegate code;
@@ -456,7 +456,11 @@ struct TimelineView: View {
 
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
-        TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)
+        TimelineSessionList(
+            sessions: sessions,
+            connectivityBanner: effectiveConnectionBanner,
+            revalidating: viewModel.isRevalidatingAfterBackground
+        )
     }
 
     private var emptyView: some View {
