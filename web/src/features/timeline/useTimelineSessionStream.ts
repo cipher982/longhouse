@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { isOnShelf } from "./timelineInboxModel";
+import { isOnShelf, isUnread } from "./timelineInboxModel";
 import {
   connectTimelineSessionsStream,
   type AgentSessionFilters,
@@ -28,15 +28,15 @@ function upsertTimelineSession(
     event.session,
     ...current.sessions.filter((session) => session.thread_id !== event.session.thread_id),
   ]);
-  // The cap is history's, never the shelf's. The server admits every open
-  // session by predicate, so dropping whichever row has the oldest anchor
-  // drops exactly the quiet-but-open session that admission exists to protect:
-  // a Helm session with a terminal attached and no transcript write for a day.
-  const shelf = sessions.filter((session) => isOnShelf(session));
-  const rest = sessions.filter((session) => !isOnShelf(session));
+  // The cap is history's, never the shelf's or unread band's. The server
+  // admits every open and unread session by predicate, so dropping whichever
+  // row has the oldest anchor drops exactly the quiet-but-open or older-unread
+  // session that admission exists to protect.
+  const pinned = sessions.filter((session) => isOnShelf(session) || isUnread(session));
+  const rest = sessions.filter((session) => !isOnShelf(session) && !isUnread(session));
 
   return {
-    sessions: [...shelf, ...(typeof limit === "number" ? rest.slice(0, Math.max(0, limit - shelf.length)) : rest)],
+    sessions: [...pinned, ...(typeof limit === "number" ? rest.slice(0, Math.max(0, limit - pinned.length)) : rest)],
     total: event.total ?? current.total,
     has_real_sessions: event.has_real_sessions ?? current.has_real_sessions,
   };

@@ -1,7 +1,7 @@
 /**
  * TimelineInbox — inbox-style timeline render.
  *
- * Three tiers: Shelf (open now, flat), Needs attention (unread Console
+ * Three tiers: Shelf (open now, flat), Unread (unread Console
  * results), then History (all other sessions grouped by project). The history
  * tier keeps open and closed sessions together, ordered by lifecycle activity.
  * See lib/timelineInbox.ts for the pure layout function.
@@ -183,7 +183,7 @@ export function TimelineInbox({
             aria-labelledby={attentionHeadingId}
           >
             <div className="inbox-unread-divider">
-              <h2 id={attentionHeadingId} className="inbox-unread-divider-label">Needs attention</h2>
+              <h2 id={attentionHeadingId} className="inbox-unread-divider-label">Unread</h2>
               <span className="inbox-unread-divider-count">{layout.unread.length}</span>
             </div>
             <div className="inbox-repo-rows">

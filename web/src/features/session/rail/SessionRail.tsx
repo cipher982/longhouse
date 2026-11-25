@@ -130,7 +130,7 @@ type RailGroup = RailRow["group"];
 
 const GROUP_LABEL: Record<RailGroup, string> = {
   live: "Live now",
-  attention: "Needs attention",
+  attention: "Unread",
   recent: "Recent",
 };
 
@@ -205,7 +205,7 @@ function rowFromCard(
 /**
  * The Timeline's own tiers, read with its own layout function so the rail and
  * the Timeline never disagree about what is live: Live now, results waiting
- * (Needs attention), then Recent. Automation runs (canaries, Hatch workers,
+ * (Unread), then Recent. Automation runs (canaries, Hatch workers,
  * test launches), by the Timeline's own classifier, stay on the Timeline: the
  * rail is for sessions a person is steering.
  */
