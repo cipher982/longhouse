@@ -19,6 +19,7 @@ final class SessionChatUITests: XCTestCase {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
         static let mobileDetailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
+        static let chatTriggerPath = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     }
 
     private enum LaunchArgument {
@@ -47,9 +48,9 @@ final class SessionChatUITests: XCTestCase {
         app.launchArguments += [LaunchArgument.appearanceOverride, Appearance.light.rawValue]
         app.launch()
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
         // Consume the WebKit render beacon rather than a DOM accessibility
         // child: the simulator intermittently publishes the WebView without
         // any of its text descendants even after rendering has completed.
@@ -64,9 +65,9 @@ final class SessionChatUITests: XCTestCase {
     func testProviderNotificationRendersAsCompactRow() {
         let app = launchChatFixture(name: "provider-notification", eventCount: 0)
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label
@@ -75,13 +76,13 @@ final class SessionChatUITests: XCTestCase {
         // WebKit exposes a <summary> as a button and a <pre> as static text.
         let title = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Background job bg_96 has completed")).firstMatch
         let output = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "artifact://335")).firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(title.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertFalse(output.exists, "the job's output stays behind the row until it is tapped")
         let closeNotice = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "left any that remain alone"))
             .firstMatch
         XCTAssertTrue(
-            closeNotice.waitForExistence(timeout: Self.webTranscriptTimeout),
+            closeNotice.waitToExist(timeout: Self.webTranscriptTimeout),
             "the close notice keeps its cleanup line"
         )
 
@@ -91,7 +92,7 @@ final class SessionChatUITests: XCTestCase {
         add(collapsed)
 
         title.tap()
-        XCTAssertTrue(output.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(output.waitToExist(timeout: Self.webTranscriptTimeout))
 
         let expanded = XCTAttachment(screenshot: app.screenshot())
         expanded.name = "provider-notification-expanded"
@@ -106,11 +107,11 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "basic", eventCount: 3)
 
         let actions = app.buttons["session-chat-compose-actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: Self.patient(8)), "composer action menu did not load")
+        XCTAssertTrue(actions.waitToExist(timeout: Self.patient(8)), "composer action menu did not load")
         actions.tap()
 
         let unavailable = app.buttons["session-chat-attach-unavailable"]
-        XCTAssertTrue(unavailable.waitForExistence(timeout: Self.patient(5)), "the + menu opened without an attach item")
+        XCTAssertTrue(unavailable.waitToExist(timeout: Self.patient(5)), "the + menu opened without an attach item")
         XCTAssertFalse(unavailable.isEnabled, "attach must be disabled when the session cannot accept images")
         XCTAssertFalse(app.buttons["session-chat-attach"].exists)
 
@@ -131,8 +132,8 @@ final class SessionChatUITests: XCTestCase {
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
         let actions = app.buttons["Session actions"]
-        XCTAssertTrue(title.waitForExistence(timeout: Self.patient(8)))
-        XCTAssertTrue(actions.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(title.waitToExist(timeout: Self.patient(8)))
+        XCTAssertTrue(actions.waitToExist(timeout: Self.patient(8)))
         XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -164,11 +165,11 @@ final class SessionChatUITests: XCTestCase {
     /// the row loads the whole body and keeps the row open.
     func testLiteToolRowLoadsItsFullBodyWhenExpanded() {
         let app = launchChatFixture(name: "lite-bodies", eventCount: 0)
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(5)))
         // WebKit may expose the summary as text, a button or a group; match the element itself.
         let command = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "pytest -q tests/")).firstMatch
-        XCTAssertTrue(command.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(command.waitToExist(timeout: Self.webTranscriptTimeout))
 
         let collapsed = XCTAttachment(screenshot: app.screenshot())
         collapsed.name = "lite-row-collapsed"
@@ -180,7 +181,7 @@ final class SessionChatUITests: XCTestCase {
         // test asserts the end state: the whole body, and no note left behind.
         let tail = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Full body loaded: 40 passed")).firstMatch
-        XCTAssertTrue(tail.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(tail.waitToExist(timeout: Self.webTranscriptTimeout))
         let loadingNote = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "Loading the full output")).firstMatch
         XCTAssertFalse(loadingNote.exists)
@@ -194,8 +195,8 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(eventCount: 120)
         let latestMessage = app.staticTexts["Assistant fixture message 119: streaming-style response with enough body to exercise row layout."]
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
-        XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(5)))
+        XCTAssertTrue(latestMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
@@ -204,8 +205,8 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(eventCount: 119)
         let latestMessage = app.staticTexts["User fixture message 118: request text for chat scroll anchoring."]
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(5)))
-        XCTAssertTrue(latestMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(5)))
+        XCTAssertTrue(latestMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         assertClearsBottomChrome(latestMessage, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
@@ -220,8 +221,8 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(app.staticTexts[message].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts["Longhouse"].waitToExist(timeout: Self.patient(5)))
         XCTAssertEqual(composer.value as? String, "Steer this turn")
     }
 
@@ -235,7 +236,7 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertFalse(app.staticTexts["Working..."].exists)
 
@@ -255,8 +256,8 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.staticTexts["Sent"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts[message].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts["Sent"].waitToExist(timeout: Self.webTranscriptTimeout))
         Thread.sleep(forTimeInterval: 2.1)
         XCTAssertTrue(app.staticTexts[message].exists)
         XCTAssertTrue(app.staticTexts["Sent"].exists)
@@ -271,8 +272,8 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
         let composer = app.textFields["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(composer.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(sendButton.waitToExist(timeout: Self.patient(5)))
         XCTAssertEqual(sendButton.label, "Send to this turn")
         focusComposer(composer, in: app)
         composer.typeText("Also check the other hose.")
@@ -283,20 +284,25 @@ final class SessionChatUITests: XCTestCase {
     }
 
     func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
-        let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0)
+        // The fixture holds the durable echo until this file exists, so the optimistic state is
+        // checked before the echo can replace it.
+        let trigger = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-helm-echo-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: trigger) }
+        let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0, triggerPath: trigger.path)
         let composer = app.textFields["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
         let message = "Keep the current diagnostics and inspect the changed hose."
 
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(sendButton.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(composer.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(sendButton.waitToExist(timeout: Self.patient(5)))
         XCTAssertEqual(sendButton.label, "Send to this turn")
         focusComposer(composer, in: app)
         composer.typeText(message)
         sendButton.tap()
 
         let optimisticMessage = app.staticTexts[message]
-        XCTAssertTrue(optimisticMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(optimisticMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertFalse(app.staticTexts["Longhouse"].exists)
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertTrue(app.staticTexts["Sending…"].exists)
@@ -304,9 +310,10 @@ final class SessionChatUITests: XCTestCase {
         optimisticShot.name = "helm-send-optimistic"
         optimisticShot.lifetime = .keepAlways
         add(optimisticShot)
+        try? "1".write(to: trigger, atomically: true, encoding: .utf8)
 
         let longhouseOrigin = app.staticTexts["Longhouse"]
-        XCTAssertTrue(longhouseOrigin.waitForExistence(timeout: 30))
+        XCTAssertTrue(longhouseOrigin.waitToExist(timeout: 30))
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertFalse(app.staticTexts["Sending…"].exists)
 
@@ -324,10 +331,10 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(eventCount: 9)
         XCTAssertTrue(
             app.staticTexts["Assistant fixture message 7: streaming-style response with enough body to exercise row layout."]
-                .waitForExistence(timeout: Self.webTranscriptTimeout)
+                .waitToExist(timeout: Self.webTranscriptTimeout)
         )
         let footer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for 2m 9s")).firstMatch
-        XCTAssertTrue(footer.waitForExistence(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
+        XCTAssertTrue(footer.waitToExist(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
         XCTAssertTrue(footer.label.contains("Turn finished"), "the footer clearly identifies the completed parent turn")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "turn-footer"
@@ -354,7 +361,7 @@ final class SessionChatUITests: XCTestCase {
 
         for element in initialOrder {
             XCTAssertTrue(
-                element.waitForExistence(timeout: Self.webTranscriptTimeout),
+                element.waitToExist(timeout: Self.webTranscriptTimeout),
                 "Expected transcript row to render: \(element)"
             )
         }
@@ -371,7 +378,7 @@ final class SessionChatUITests: XCTestCase {
 
         // Drive the update only after observing the initial rendered order.
         app.buttons["background-completion-append"].tap()
-        XCTAssertTrue(newestReply.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(newestReply.waitToExist(timeout: Self.webTranscriptTimeout))
         assertTranscriptElementsVisibleInOrder(initialOrder + [newestReply], in: app)
         XCTAssertGreaterThan(
             newestReply.frame.minY,
@@ -384,12 +391,12 @@ final class SessionChatUITests: XCTestCase {
     func testBackgroundTaskSheetOpensExactChildTranscript() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 3)
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(summary.label.contains("1 agent"))
         XCTAssertTrue(summary.label.contains("1 command"))
         summary.tap()
         let childTask = app.buttons["session-runtime-background-task-agent-1"]
-        XCTAssertTrue(childTask.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(childTask.waitToExist(timeout: Self.patient(5)))
         let sheetShot = XCTAttachment(screenshot: app.screenshot())
         sheetShot.name = "background-task-sheet"
         sheetShot.lifetime = .keepAlways
@@ -397,7 +404,7 @@ final class SessionChatUITests: XCTestCase {
         childTask.tap()
 
         let childID = "019fc50b-1111-4111-8111-111111111111"
-        XCTAssertTrue(app.staticTexts["Child transcript"].waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(app.staticTexts["Child transcript"].waitToExist(timeout: Self.patient(5)))
         XCTAssertTrue(app.staticTexts[childID].exists)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "background-task-child-route"
@@ -409,7 +416,7 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "ended-codex-helm", eventCount: 4)
 
         let resume = app.buttons["session-resume-button"]
-        XCTAssertTrue(resume.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(resume.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertFalse(app.textFields["session-chat-composer"].exists)
         let footerShot = XCTAttachment(screenshot: app.screenshot())
         footerShot.name = "ended-codex-helm-footer"
@@ -418,7 +425,7 @@ final class SessionChatUITests: XCTestCase {
 
         resume.tap()
         let handoff = app.navigationBars["Resume command"]
-        XCTAssertTrue(handoff.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(handoff.waitToExist(timeout: Self.patient(5)))
         let handoffShot = XCTAttachment(screenshot: app.screenshot())
         handoffShot.name = "ended-codex-helm-resume-handoff"
         handoffShot.lifetime = .keepAlways
@@ -427,14 +434,14 @@ final class SessionChatUITests: XCTestCase {
         app.buttons["Done"].tap()
         XCTAssertFalse(app.textFields["session-chat-composer"].exists)
         let branchInput = app.textFields["session-branch-input"]
-        XCTAssertTrue(branchInput.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(branchInput.waitToExist(timeout: Self.webTranscriptTimeout))
         branchInput.tap()
         branchInput.typeText("continue with the migration")
         app.buttons["session-branch-button"].tap()
 
-        XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.textFields["session-chat-composer"].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(app.navigationBars["Codex Helm branch"].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.textFields["session-chat-composer"].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
         let childShot = XCTAttachment(screenshot: app.screenshot())
         childShot.name = "ended-codex-helm-child"
         childShot.lifetime = .keepAlways
@@ -442,18 +449,18 @@ final class SessionChatUITests: XCTestCase {
     }
     func testBackgroundTaskSummaryLeavesParentHeadlinePrimary() {
         let app = launchChatFixture(name: "background-tasks", eventCount: 0)
-        XCTAssertTrue(app.staticTexts["Idle"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.staticTexts["Idle"].waitToExist(timeout: Self.webTranscriptTimeout))
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
     }
 
     func testBackgroundTaskExpiredPositiveEvidenceRemainsUnknown() {
         let app = launchChatFixture(name: "background-tasks-expired-positive", eventCount: 0)
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(summary.label.contains("unknown"))
         summary.tap()
-        XCTAssertTrue(app.staticTexts["Background work status unknown"].waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(app.staticTexts["Background work status unknown"].waitToExist(timeout: Self.patient(5)))
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "background-task-unknown"
         shot.lifetime = .keepAlways
@@ -467,11 +474,11 @@ final class SessionChatUITests: XCTestCase {
             dynamicTypeCategory: "UICTContentSizeCategoryAccessibilityXXXL"
         )
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
         summary.tap()
 
         let agent = app.buttons["session-runtime-background-task-agent-1"]
-        XCTAssertTrue(agent.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(agent.waitToExist(timeout: Self.patient(5)))
         XCTAssertGreaterThan(agent.frame.height, 44)
         XCTAssertGreaterThanOrEqual(agent.frame.minX, 0)
         XCTAssertLessThanOrEqual(agent.frame.maxX, app.windows.firstMatch.frame.width)
@@ -484,8 +491,8 @@ final class SessionChatUITests: XCTestCase {
 
     func testBackgroundTaskExplicitEmptyRendersNoSummary() {
         let app = launchChatFixture(name: "background-tasks-empty", eventCount: 0)
-        XCTAssertTrue(app.staticTexts["Idle"].waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Idle"].waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitToExist(timeout: 2))
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "background-task-none"
         shot.lifetime = .keepAlways
@@ -494,28 +501,28 @@ final class SessionChatUITests: XCTestCase {
 
     func testBackgroundTaskLocalExpiryOfExplicitEmptyHidesSummary() {
         let app = launchChatFixture(name: "background-tasks-local-expired-empty", eventCount: 0)
-        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitToExist(timeout: 2))
     }
 
     func testBackgroundTaskServerExpiredEmptyHidesSummary() {
         let app = launchChatFixture(name: "background-tasks-expired-empty", eventCount: 0)
-        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitToExist(timeout: 2))
     }
 
     func testUnobservedUnknownBackgroundWorkIsAbsent() {
         let app = launchChatFixture(name: "background-tasks-unobserved-unknown", eventCount: 0)
-        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitToExist(timeout: 2))
     }
 
 
     func testBackgroundTaskEmptySnapshotRemovesSummaryLine() {
         let app = launchChatFixture(name: "background-tasks-transition", eventCount: 0)
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
         let clear = app.buttons["background-tasks-clear"]
-        XCTAssertTrue(clear.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(clear.waitToExist(timeout: Self.patient(5)))
         clear.tap()
-        XCTAssertFalse(summary.waitForExistence(timeout: 2))
+        XCTAssertFalse(summary.waitToExist(timeout: 2))
     }
 
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
@@ -523,7 +530,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
 
-        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: Self.patient(5)))
         focusComposer(composer, in: app)
         composer.typeText("typing keeps transcript pinned")
@@ -543,7 +550,7 @@ final class SessionChatUITests: XCTestCase {
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
         let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
 
-        XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: Self.patient(5)))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -566,7 +573,7 @@ final class SessionChatUITests: XCTestCase {
 
         focusComposer(composer, in: app)
 
-        XCTAssertTrue(liveUpdate.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(liveUpdate.waitToExist(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -579,7 +586,7 @@ final class SessionChatUITests: XCTestCase {
 
         focusComposer(composer, in: app)
 
-        XCTAssertTrue(finalChunk.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(finalChunk.waitToExist(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
@@ -589,8 +596,8 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "stress", eventCount: 500)
         let transcript = transcriptElement(app)
 
-        XCTAssertTrue(transcript.waitForExistence(timeout: Self.patient(10)))
-        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(transcript.waitToExist(timeout: Self.patient(10)))
+        XCTAssertTrue(app.staticTexts["Assistant fixture message 499: streaming-style response with enough body to exercise row layout."].waitToExist(timeout: Self.webTranscriptTimeout))
 
         let options = XCTMeasureOptions()
         options.iterationCount = 3
@@ -607,11 +614,15 @@ final class SessionChatUITests: XCTestCase {
         appearance: Appearance = .light,
         tailDelayMs: Int? = nil,
         detailDelayMs: Int? = nil,
-        dynamicTypeCategory: String? = nil
+        dynamicTypeCategory: String? = nil,
+        triggerPath: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
+        if let triggerPath {
+            app.launchEnvironment[LaunchEnvironment.chatTriggerPath] = triggerPath
+        }
         if let tailDelayMs {
             app.launchEnvironment["LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"] = String(tailDelayMs)
         }
@@ -646,12 +657,12 @@ final class SessionChatUITests: XCTestCase {
     ) throws {
         let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
 
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)), file: file, line: line)
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)), file: file, line: line)
         // WebKit does not reliably publish DOM text into XCUITest's
         // cross-process accessibility tree. The native render beacon is the
         // authoritative signal that the deterministic fixture reached the DOM.
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)), file: file, line: line)
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)), file: file, line: line)
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label,
@@ -796,10 +807,10 @@ final class SessionChatUITests: XCTestCase {
     /// keyboard is the signal: the CI simulator shows the software keyboard,
     /// and a private focus key would crash the run rather than fail it.
     private func focusComposer(_ composer: XCUIElement, in app: XCUIApplication) {
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(composer.waitToExist(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(composer, timeout: Self.patient(5)), "Composer should accept a tap")
         composer.tap()
-        if app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)) { return }
+        if app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)) { return }
         XCTContext.runActivity(named: "First composer tap took no focus; tapping once more") { activity in
             let screenshot = XCTAttachment(screenshot: app.screenshot())
             screenshot.name = "composer-tap-without-focus"
@@ -808,21 +819,17 @@ final class SessionChatUITests: XCTestCase {
         }
         composer.tap()
         XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: Self.patient(3)),
+            app.keyboards.firstMatch.waitToExist(timeout: Self.patient(3)),
             "Composer keyboard should appear promptly"
         )
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "hittable == true")
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+        poll(timeout: timeout) { element.exists && element.isHittable }
     }
 
     private func waitForLabel(_ element: XCUIElement, containing value: String, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS %@", value)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+        poll(timeout: timeout) { element.exists && element.label.contains(value) }
     }
 
     private func assertClearsBottomChrome(
@@ -833,7 +840,7 @@ final class SessionChatUITests: XCTestCase {
         line: UInt = #line
     ) {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: Self.patient(5)), file: file, line: line)
+        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
         let gap = waitForBottomGap(
             element,
             bottomChromeCard: bottomChromeCard,
@@ -858,7 +865,7 @@ final class SessionChatUITests: XCTestCase {
         line: UInt = #line
     ) {
         let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: Self.patient(5)), file: file, line: line)
+        XCTAssertTrue(bottomChromeCard.waitToExist(timeout: Self.patient(5)), file: file, line: line)
 
         let gap = waitForBottomGap(
             element,
@@ -997,17 +1004,17 @@ final class SessionChatUITests: XCTestCase {
 
     func testCaptureClaudeFidelitySessionScreenshot() {
         let app = launchChatFixture(name: "claude-fidelity", eventCount: 0)
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label
         )
         let summary = app.buttons["session-runtime-background-summary"]
-        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitForExistence(timeout: Self.patient(5)))
-        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(summary.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(app.descendants(matching: .any)["session-hud-permission-mode"].waitToExist(timeout: Self.patient(5)))
+        XCTAssertTrue(app.descendants(matching: .any)["session-context-ring"].waitToExist(timeout: Self.patient(5)))
 
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "claude-fidelity-session"
@@ -1017,9 +1024,9 @@ final class SessionChatUITests: XCTestCase {
 
     func testCaptureNarrationTrailScreenshot() {
         let app = launchChatFixture(name: "narration", eventCount: 0)
-        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(transcriptElement(app).waitToExist(timeout: Self.patient(8)))
         let renderStatus = app.staticTexts["transcript-benchmark-status"]
-        XCTAssertTrue(renderStatus.waitForExistence(timeout: Self.patient(8)))
+        XCTAssertTrue(renderStatus.waitToExist(timeout: Self.patient(8)))
         XCTAssertTrue(
             waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
             renderStatus.label
@@ -1034,8 +1041,8 @@ final class SessionChatUITests: XCTestCase {
         let app = launchChatFixture(name: "claude-fidelity-sheet", eventCount: 0)
         let parentAgent = app.buttons["session-runtime-background-task-sub-1"]
         let childAgent = app.buttons["session-runtime-background-task-sub-2"]
-        XCTAssertTrue(parentAgent.waitForExistence(timeout: Self.webTranscriptTimeout))
-        XCTAssertTrue(childAgent.waitForExistence(timeout: Self.patient(5)))
+        XCTAssertTrue(parentAgent.waitToExist(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(childAgent.waitToExist(timeout: Self.patient(5)))
 
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "claude-fidelity-sheet"

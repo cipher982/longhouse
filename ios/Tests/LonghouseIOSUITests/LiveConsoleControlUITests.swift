@@ -78,8 +78,8 @@ final class LiveConsoleControlUITests: XCTestCase {
         // served idle reply below.
         let composer = app.textFields["session-chat-composer"]
         let send = app.buttons["session-chat-send"]
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.uiTimeout), "real composer did not load")
-        XCTAssertTrue(send.waitForExistence(timeout: Self.uiTimeout), "real send control did not load")
+        XCTAssertTrue(composer.waitToExist(timeout: Self.uiTimeout), "real composer did not load")
+        XCTAssertTrue(send.waitToExist(timeout: Self.uiTimeout), "real send control did not load")
 
         try await sendFromIOS(
             app: app,
@@ -178,14 +178,14 @@ final class LiveConsoleControlUITests: XCTestCase {
 
         try waitForSendLabel(send, equals: "Send", timeout: Self.uiTimeout)
         let actions = app.buttons["session-chat-compose-actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 10), "composer action menu did not return after the turn")
+        XCTAssertTrue(actions.waitToExist(timeout: 10), "composer action menu did not return after the turn")
         actions.tap()
         let attach = app.buttons["session-chat-attach"]
-        XCTAssertTrue(attach.waitForExistence(timeout: 10), "OMP Console did not advertise image attachments while idle")
+        XCTAssertTrue(attach.waitToExist(timeout: 10), "OMP Console did not advertise image attachments while idle")
         attach.tap()
         try chooseRealPhoto(in: app)
         XCTAssertTrue(
-            app.descendants(matching: .any)["session-chat-attachment-tray"].waitForExistence(timeout: 15),
+            app.descendants(matching: .any)["session-chat-attachment-tray"].waitToExist(timeout: 15),
             "PhotosPicker selection did not reach the production attachment tray"
         )
         attachScreenshot(app, name: "live-omp-photo-selected")
@@ -359,7 +359,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         send.tap()
         try await Task.sleep(nanoseconds: 250_000_000)
         let optimisticRow = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
-        guard optimisticRow.waitForExistence(timeout: 5) else {
+        guard optimisticRow.waitToExist(timeout: 5) else {
             throw ProofFailure(description: "iOS optimistic input row did not render")
         }
     }
@@ -379,7 +379,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         description: String
     ) throws {
         let webView = app.webViews.firstMatch
-        guard webView.waitForExistence(timeout: min(timeout, Self.uiTimeout)) else {
+        guard webView.waitToExist(timeout: min(timeout, Self.uiTimeout)) else {
             throw ProofFailure(description: "\(description): production WKWebView transcript did not appear")
         }
         let predicate = NSPredicate(format: "label BEGINSWITH %@", marker)
@@ -419,7 +419,7 @@ final class LiveConsoleControlUITests: XCTestCase {
         ]
         for (name, picker) in pickerApplications {
             let photo = picker.images.matching(identifier: "PXGGridLayout-Info").firstMatch
-            guard photo.waitForExistence(timeout: 8) else { continue }
+            guard photo.waitToExist(timeout: 8) else { continue }
             guard photo.isEnabled, photo.frame.width > 0, photo.frame.height > 0 else {
                 throw ProofFailure(description: "\(name) PhotosPicker photo was not enabled or had no surfaced geometry")
             }

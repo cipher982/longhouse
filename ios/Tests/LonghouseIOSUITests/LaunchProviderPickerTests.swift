@@ -26,7 +26,7 @@ final class LaunchProviderPickerTests: XCTestCase {
         openProviderPicker(in: app)
 
         let claude = app.buttons["launch-provider-row-claude"]
-        XCTAssertTrue(claude.waitForExistence(timeout: 5), "Provider picker did not list Claude.")
+        XCTAssertTrue(claude.waitToExist(timeout: 5), "Provider picker did not list Claude.")
         claude.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
 
         XCTAssertTrue(
@@ -41,7 +41,7 @@ final class LaunchProviderPickerTests: XCTestCase {
         openProviderPicker(in: app)
 
         let claude = app.buttons["launch-provider-row-claude"]
-        XCTAssertTrue(claude.waitForExistence(timeout: 5), "Provider picker did not list Claude.")
+        XCTAssertTrue(claude.waitToExist(timeout: 5), "Provider picker did not list Claude.")
         attach(app.screenshot(), name: "provider-picker")
 
         let row = claude.frame
@@ -61,7 +61,7 @@ final class LaunchProviderPickerTests: XCTestCase {
         openMachineChooser(in: app)
 
         let cinder = app.buttons["launch-machine-row-cinder"]
-        XCTAssertTrue(cinder.waitForExistence(timeout: 5), "Machine chooser did not list cinder.")
+        XCTAssertTrue(cinder.waitToExist(timeout: 5), "Machine chooser did not list cinder.")
         attach(app.screenshot(), name: "machine-chooser")
 
         let row = cinder.frame
@@ -78,9 +78,9 @@ final class LaunchProviderPickerTests: XCTestCase {
         openModelChooser(in: app)
 
         let recent = app.buttons["launch-model-row-gpt-5.6-luna"]
-        XCTAssertTrue(recent.waitForExistence(timeout: 5), "Model chooser did not list the recent model.")
+        XCTAssertTrue(recent.waitToExist(timeout: 5), "Model chooser did not list the recent model.")
         XCTAssertTrue(
-            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Last used '")).firstMatch.waitForExistence(timeout: 3),
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Last used '")).firstMatch.waitToExist(timeout: 3),
             "Recent model did not render a relative last-used label."
         )
         attach(app.screenshot(), name: "model-chooser")
@@ -98,7 +98,7 @@ final class LaunchProviderPickerTests: XCTestCase {
         let app = launchLaunchSheet()
 
         let row = app.descendants(matching: .any)["launch-model-picker"]
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "Launch sheet did not render the model row.")
+        XCTAssertTrue(row.waitToExist(timeout: 20), "Launch sheet did not render the model row.")
         attach(app.screenshot(), name: "launch-model-row")
 
         XCTAssertTrue(
@@ -117,7 +117,7 @@ final class LaunchProviderPickerTests: XCTestCase {
         app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["New Session"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["New Session"].waitToExist(timeout: 20), app.debugDescription)
         return app
     }
 
@@ -131,13 +131,13 @@ final class LaunchProviderPickerTests: XCTestCase {
 
     private func open(picker identifier: String, pushed title: String, in app: XCUIApplication) {
         let row = app.descendants(matching: .any)[identifier]
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "Launch sheet did not render \(identifier).")
+        XCTAssertTrue(row.waitToExist(timeout: 20), "Launch sheet did not render \(identifier).")
         row.tap()
-        if app.navigationBars[title].waitForExistence(timeout: 3) { return }
+        if app.navigationBars[title].waitToExist(timeout: 3) { return }
         // The sheet is still settling right after launch; one tap can be dropped.
         row.tap()
         XCTAssertTrue(
-            app.navigationBars[title].waitForExistence(timeout: 5),
+            app.navigationBars[title].waitToExist(timeout: 5),
             "\(identifier) did not push \(title). \(app.debugDescription)"
         )
     }

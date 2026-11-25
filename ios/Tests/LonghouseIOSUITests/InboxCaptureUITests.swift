@@ -28,7 +28,7 @@ final class InboxCaptureUITests: XCTestCase {
         app.launchArguments += ["-LONGHOUSE_UI_TEST_APPEARANCE", "dark"]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Timeline"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["Timeline"].waitToExist(timeout: 10))
         RunLoop.current.run(until: Date().addingTimeInterval(3))
         let list = app.scrollViews.firstMatch
         for _ in 0..<2 {
@@ -49,7 +49,7 @@ final class InboxCaptureUITests: XCTestCase {
         app.launchArguments += ["-LONGHOUSE_UI_TEST_APPEARANCE", appearance]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Timeline"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["Timeline"].waitToExist(timeout: 10))
         // Let the list settle past its first layout pass.
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         let shot = XCTAttachment(screenshot: app.screenshot())

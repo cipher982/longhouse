@@ -190,8 +190,17 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
-        let delay = fixtureName == "helm-channel-reconcile" ? 20_000_000_000 : 650_000_000
-        try await Task.sleep(nanoseconds: UInt64(delay))
+        if fixtureName == "helm-channel-reconcile" {
+            // The durable echo waits until the test has checked the optimistic row and writes the
+            // trigger file, or 20 s without one: a fixed 20 s was most of that test's run.
+            let deadline = Date().addingTimeInterval(20)
+            while Date() < deadline {
+                if let trigger = UITestHooks.chatFixtureTriggerPath, FileManager.default.fileExists(atPath: trigger) { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+        } else {
+            try await Task.sleep(nanoseconds: 650_000_000)
+        }
         let inputID = nextEventID
         if fixtureName != "console-sent-unlinked" {
             events.append(Self.makeEvent(

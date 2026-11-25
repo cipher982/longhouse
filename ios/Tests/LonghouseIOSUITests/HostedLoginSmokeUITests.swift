@@ -14,7 +14,7 @@ final class HostedLoginSmokeUITests: XCTestCase {
     func disabled_testHostedBootstrapShowsContinueButtonWithoutConfiguredServer() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["login.continueWithLonghouse"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["login.continueWithLonghouse"].waitToExist(timeout: 5))
         XCTAssertTrue(app.buttons["login.serverConfig"].exists)
     }
 
@@ -22,11 +22,11 @@ final class HostedLoginSmokeUITests: XCTestCase {
         let app = launchApp()
         let continueButton = app.buttons["login.continueWithLonghouse"]
 
-        XCTAssertTrue(continueButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(continueButton.waitToExist(timeout: 5))
         continueButton.tap()
 
         let attemptedURLLabel = app.staticTexts["login.hostedAuthAttemptURL"]
-        XCTAssertTrue(attemptedURLLabel.waitForExistence(timeout: 5))
+        XCTAssertTrue(attemptedURLLabel.waitToExist(timeout: 5))
         let attemptedURL = URL(string: attemptedURLLabel.label)
         let components = URLComponents(url: try XCTUnwrap(attemptedURL), resolvingAgainstBaseURL: false)
         XCTAssertEqual(components?.scheme, "https")
@@ -43,11 +43,11 @@ final class HostedLoginSmokeUITests: XCTestCase {
         let app = launchApp()
         let explore = app.buttons["login.exploreDemo"]
 
-        XCTAssertTrue(explore.waitForExistence(timeout: 5))
+        XCTAssertTrue(explore.waitToExist(timeout: 5))
         attachFrame(app, named: "login-with-demo-entry")
         explore.tap()
 
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-session-row"].firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-session-row"].firstMatch.waitToExist(timeout: 30))
         attachFrame(app, named: "demo-timeline")
     }
 

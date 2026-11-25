@@ -201,8 +201,8 @@ final class LiveSessionFidelityUITests: XCTestCase {
         }
         app.launch()
         let transcript = app.descendants(matching: .any)["session-chat-transcript"]
-        guard transcript.waitForExistence(timeout: Self.renderTimeout),
-              app.webViews.firstMatch.waitForExistence(timeout: max(0, Self.renderTimeout - elapsedMS(since: started) / 1_000)) else {
+        guard transcript.waitToExist(timeout: Self.renderTimeout),
+              app.webViews.firstMatch.waitToExist(timeout: max(0, Self.renderTimeout - elapsedMS(since: started) / 1_000)) else {
             throw ProofFailure(description: "\(phase): real WKWebView transcript must be available")
         }
         evidence.webViewAvailableMS = elapsedMS(since: started)

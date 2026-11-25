@@ -90,12 +90,12 @@ final class HTTPOutboxUITests: XCTestCase {
 
         app.launch()
         let transcript = app.descendants(matching: .any)["session-chat-transcript"]
-        XCTAssertTrue(transcript.waitForExistence(timeout: Self.timeout), "headless app did not open the real session transcript")
+        XCTAssertTrue(transcript.waitToExist(timeout: Self.timeout), "headless app did not open the real session transcript")
 
         let composer = app.textFields["session-chat-composer"]
         let actions = app.buttons["session-chat-compose-actions"]
-        XCTAssertTrue(composer.waitForExistence(timeout: Self.timeout), "real composer did not load")
-        XCTAssertTrue(actions.waitForExistence(timeout: Self.timeout), "real composer action menu did not load")
+        XCTAssertTrue(composer.waitToExist(timeout: Self.timeout), "real composer did not load")
+        XCTAssertTrue(actions.waitToExist(timeout: Self.timeout), "real composer action menu did not load")
 
         // The model lives in the + menu now, not a chip above the input.
         actions.tap()
@@ -103,17 +103,17 @@ final class HTTPOutboxUITests: XCTestCase {
             NSPredicate(format: "identifier == %@ AND label == %@", "session-chat-model-picker", "Model gpt-5.6-luna")
         ).firstMatch
         XCTAssertTrue(
-            selectedModel.waitForExistence(timeout: Self.timeout),
+            selectedModel.waitToExist(timeout: Self.timeout),
             "the session's selected model did not hydrate in the composer before sending"
         )
 
         let attach = app.buttons["session-chat-attach"]
-        XCTAssertTrue(attach.waitForExistence(timeout: 5), "real attachment action is not available")
+        XCTAssertTrue(attach.waitToExist(timeout: 5), "real attachment action is not available")
         attach.tap()
         try chooseSeededPhoto(in: app)
 
         let tray = app.descendants(matching: .any)["session-chat-attachment-tray"]
-        guard tray.waitForExistence(timeout: Self.timeout) else {
+        guard tray.waitToExist(timeout: Self.timeout) else {
             throw ProofFailure(description: "PhotosPicker selection did not reach the production attachment tray")
         }
 
@@ -121,7 +121,7 @@ final class HTTPOutboxUITests: XCTestCase {
         composer.tap()
         composer.typeText(message)
         let send = app.buttons["session-chat-send"]
-        XCTAssertTrue(send.waitForExistence(timeout: 5), "real send control did not load")
+        XCTAssertTrue(send.waitToExist(timeout: 5), "real send control did not load")
         send.tap()
 
         // The fixture records the complete multipart body before dropping its
@@ -154,7 +154,7 @@ final class HTTPOutboxUITests: XCTestCase {
 
         let retrySend = liveWebView.buttons["Retry send"]
         XCTAssertTrue(
-            retrySend.waitForExistence(timeout: Self.timeout),
+            retrySend.waitToExist(timeout: Self.timeout),
             "an unconfirmed Console send needs an explicit same-operation retry"
         )
         retrySend.tap()
@@ -191,9 +191,9 @@ final class HTTPOutboxUITests: XCTestCase {
 
         app.launch()
         let reopenedTranscript = app.descendants(matching: .any)["session-chat-transcript"]
-        XCTAssertTrue(reopenedTranscript.waitForExistence(timeout: Self.timeout), "reopened app did not reach the real transcript")
+        XCTAssertTrue(reopenedTranscript.waitToExist(timeout: Self.timeout), "reopened app did not reach the real transcript")
         let reopenedWebView = app.webViews.firstMatch
-        XCTAssertTrue(reopenedWebView.waitForExistence(timeout: Self.timeout), "reopened normal app did not expose its WebView transcript")
+        XCTAssertTrue(reopenedWebView.waitToExist(timeout: Self.timeout), "reopened normal app did not expose its WebView transcript")
         XCTAssertTrue(
             waitForWebViewText(reopenedWebView, containing: "HTTP fixture ready.", timeout: Self.timeout),
             "reopened normal app did not render the fixture transcript"
@@ -334,7 +334,7 @@ final class HTTPOutboxUITests: XCTestCase {
 
         for (name, picker) in pickerApplications {
             let photo = picker.images.matching(identifier: "PXGGridLayout-Info").firstMatch
-            guard photo.waitForExistence(timeout: 5) else { continue }
+            guard photo.waitToExist(timeout: 5) else { continue }
             guard waitUntilEnabled(photo, timeout: 5) else {
                 throw ProofFailure(description: "\(name) PhotosPicker seeded photo was not accessibility-enabled")
             }
@@ -350,7 +350,7 @@ final class HTTPOutboxUITests: XCTestCase {
             photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
             let done = picker.buttons["Done"]
-            guard done.waitForExistence(timeout: 5),
+            guard done.waitToExist(timeout: 5),
                   waitUntilEnabled(done, timeout: 5),
                   waitUntilHittable(done, timeout: 5),
                   done.isEnabled else {
