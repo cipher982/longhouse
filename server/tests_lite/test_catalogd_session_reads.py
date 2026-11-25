@@ -1555,7 +1555,13 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         # cannot make a deployment wait (david010 probe 3.3 s, 2026-10-07).
         daemon._read_depth = daemon._read_max_depth
         with pytest.raises(CatalogRemoteError) as busy:
-            await client.call("session.active.list.v2", {"limit": 1, "days_back": 7, "observed_at": now.isoformat()})
+            # The lane stays full, so the client retries until its deadline: the test container widens the
+            # default to 10 s, which this call spent waiting. Its own budget ends the retries sooner.
+            await client.call(
+                "session.active.list.v2",
+                {"limit": 1, "days_back": 7, "observed_at": now.isoformat()},
+                timeout_seconds=2.0,
+            )
         assert busy.value.code == "resource_exhausted"
         consistency = await client.call("deployment.read_consistency.v2", {"observed_at": now.isoformat()})
         daemon._read_depth = 0

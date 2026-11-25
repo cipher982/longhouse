@@ -141,6 +141,8 @@ async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths
         ping = await client.call("ping.v2")
         assert ping["writer_admission"]["accepting"] is False
         with pytest.raises(CatalogRemoteError) as closed_exc:
+            # Admission stays closed, so the client retries until its deadline: the test container widens the
+            # default to 10 s, which this call spent waiting. Its own budget ends the retries sooner.
             await client.call(
                 "auth.device.create.v2",
                 {
@@ -149,6 +151,7 @@ async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths
                     "device_id": "closed-admission-test",
                     "token_hash": "a" * 64,
                 },
+                timeout_seconds=2.0,
             )
         assert closed_exc.value.code == "admission_closed"
         assert closed_exc.value.retryable is True
