@@ -53,7 +53,7 @@ pub struct ClaudeChannelObservation {
     pub claude_foreground_tui: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ClaudeChannelStateFile {
     session_id: Option<String>,
     run_id: Option<String>,
@@ -90,29 +90,52 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<ClaudeChannelObservation> {
-    let paths = crate::managed_scan::state_file_paths(state_dir);
-    collect_observations_from_paths(&paths, process_facts)
+    fn parse_state(
+        path: &Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(PathBuf, ClaudeChannelStateFile)> {
+        let state = serde_json::from_slice::<ClaudeChannelStateFile>(&bytes.ok()?).ok()?;
+        Some((path.to_path_buf(), state))
+    }
+    let Ok(cached) = crate::dir_cache::parsed_json_dir(state_dir, parse_state, |left, right| {
+        left.0.cmp(&right.0)
+    }) else {
+        return Vec::new();
+    };
+    collect_observations_from_entries(
+        cached
+            .iter()
+            .map(|entry| (entry.0.as_path(), entry.1.clone())),
+        process_facts,
+    )
 }
 
 pub(crate) fn collect_observations_from_paths(
     paths: &[PathBuf],
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<ClaudeChannelObservation> {
+    let parsed: Vec<(PathBuf, ClaudeChannelStateFile)> = paths
+        .iter()
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|path| {
+            let bytes = fs::read(path).ok()?;
+            let state = serde_json::from_slice::<ClaudeChannelStateFile>(&bytes).ok()?;
+            Some((path.clone(), state))
+        })
+        .collect();
+    collect_observations_from_entries(parsed, process_facts)
+}
+
+fn collect_observations_from_entries<P: AsRef<Path>>(
+    entries: impl IntoIterator<Item = (P, ClaudeChannelStateFile)>,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<ClaudeChannelObservation> {
     // Parse first, then resolve every working directory that the state files do
     // not carry in one probe. Probing per session spawned one `lsof` per live
     // session for the same answer.
     let mut parsed = Vec::new();
-    for path in paths {
-        let path = path.as_path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<ClaudeChannelStateFile>(&bytes) else {
-            continue;
-        };
+    for (path, state) in entries {
+        let path = path.as_ref();
         let now = Utc::now();
         if tombstone_expired(&state, now) {
             // Re-checked under the bridge's lock: a relaunch may have replaced

@@ -262,7 +262,10 @@ pub(super) fn start_startup_reconciliation(
 }
 
 /// How often the bound working set is reconciled.
-pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
+/// Live updates arrive via FSEvents/outbox; this fallback catches missed wakes
+/// well below `STARVED_LIVE_TRANSCRIPT_STALE_SECONDS` (120 s) without statting
+/// 1,500+ historical bindings every second.
+pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// One source the reconciler wants scheduled.
 #[derive(Debug, Clone, PartialEq, Eq)]

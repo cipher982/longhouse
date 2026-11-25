@@ -88,15 +88,29 @@ pub fn default_antigravity_state_dir() -> Option<PathBuf> {
 }
 
 pub fn collect_observations_from(state_dir: &Path) -> Vec<AntigravityHookObservation> {
-    collect_observations_from_paths(&crate::managed_scan::state_file_paths(state_dir))
+    let mut raw = collect_observations_from_processes(state_dir, &HashMap::new());
+    hydrate_provider_liveness(&mut raw);
+    raw
 }
 
 pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<AntigravityHookObservation> {
-    collect_observations_from_paths_with_processes(
-        &crate::managed_scan::state_file_paths(state_dir),
+    fn parse_state(
+        path: &Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(PathBuf, AntigravityStateFile)> {
+        let state = serde_json::from_slice::<AntigravityStateFile>(&bytes.ok()?).ok()?;
+        Some((path.to_path_buf(), state))
+    }
+    let Ok(cached) = crate::dir_cache::parsed_json_dir(state_dir, parse_state, |left, right| {
+        left.0.cmp(&right.0)
+    }) else {
+        return Vec::new();
+    };
+    collect_observations_from_entries(
+        cached.iter().map(|entry| (entry.0.as_path(), &entry.1)),
         process_facts,
     )
 }
@@ -105,24 +119,28 @@ pub(crate) fn collect_observations_from_paths(
     paths: &[PathBuf],
 ) -> Vec<AntigravityHookObservation> {
     let mut raw = collect_observations_from_paths_with_processes(paths, &HashMap::new());
+    hydrate_provider_liveness(&mut raw);
+    raw
+}
+
+fn hydrate_provider_liveness(raw: &mut [AntigravityHookObservation]) {
     let pids: Vec<u32> = raw
         .iter()
         .filter_map(|obs| obs.provider_pid.filter(|pid| *pid > 1))
         .collect();
     if pids.is_empty() {
-        return raw;
+        return;
     }
     let Some(facts) = crate::process_identity::try_collect_process_facts_for_pids(&pids) else {
-        return raw;
+        return;
     };
-    for obs in &mut raw {
+    for obs in raw {
         obs.provider_alive = provider_pid_is_alive(
             obs.provider_pid,
             obs.provider_process_start_time.as_deref(),
             &facts,
         );
     }
-    raw
 }
 
 fn provider_pid_is_alive(
@@ -145,55 +163,73 @@ pub(crate) fn collect_observations_from_paths_with_processes(
     paths: &[PathBuf],
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<AntigravityHookObservation> {
+    let parsed: Vec<(PathBuf, AntigravityStateFile)> = paths
+        .iter()
+        .filter(|path| private_regular_file(path))
+        .filter_map(|path| {
+            let bytes = fs::read(path).ok()?;
+            let state = serde_json::from_slice::<AntigravityStateFile>(&bytes).ok()?;
+            Some((path.clone(), state))
+        })
+        .collect();
+    collect_observations_from_entries(
+        parsed.iter().map(|(path, state)| (path.as_path(), state)),
+        process_facts,
+    )
+}
+
+fn collect_observations_from_entries<'a>(
+    entries: impl IntoIterator<Item = (&'a Path, &'a AntigravityStateFile)>,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<AntigravityHookObservation> {
     let mut observations = Vec::new();
-    for path in paths {
+    for (path, state) in entries {
         if !private_regular_file(path) {
             continue;
         }
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<AntigravityStateFile>(&bytes) else {
-            continue;
-        };
-        let session_id = state.session_id.unwrap_or_default().trim().to_string();
+        let session_id = state
+            .session_id
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if session_id.is_empty() {
             continue;
         }
-        let provider_process_start_time = normalize(state.provider_process_start_time);
+        let provider_process_start_time = normalize(state.provider_process_start_time.clone());
         let provider_alive = provider_pid_is_alive(
             state.provider_pid,
             provider_process_start_time.as_deref(),
             process_facts,
         );
         observations.push(AntigravityHookObservation {
-            state_file: path.clone(),
+            state_file: path.to_path_buf(),
             schema_version: state.schema_version,
             session_id,
-            connection_id: normalize(state.connection_id),
-            lease_generation: normalize(state.lease_generation),
-            run_id: normalize(state.run_id),
+            connection_id: normalize(state.connection_id.clone()),
+            lease_generation: normalize(state.lease_generation.clone()),
+            run_id: normalize(state.run_id.clone()),
             provider_pid: state.provider_pid,
             provider_process_group_id: state.provider_process_group_id,
             provider_process_start_time,
             provider_alive,
-            provider_session_id: normalize(state.provider_session_id),
-            cwd: normalize(state.cwd),
-            transcript_path: normalize(state.transcript_path),
-            state: normalize(state.state),
-            updated_at: state.updated_at.unwrap_or_default(),
-            last_hook_event: normalize(state.last_hook_event),
-            last_hook_observed_at: normalize(state.last_hook_observed_at),
-            last_claimed_message_id: normalize(state.last_claimed_message_id),
-            last_claimed_at: normalize(state.last_claimed_at),
-            last_claim_event: normalize(state.last_claim_event),
-            last_response_event: normalize(state.last_response_event),
-            last_response_at: normalize(state.last_response_at),
-            last_response_status: normalize(state.last_response_status),
+            provider_session_id: normalize(state.provider_session_id.clone()),
+            cwd: normalize(state.cwd.clone()),
+            transcript_path: normalize(state.transcript_path.clone()),
+            state: normalize(state.state.clone()),
+            updated_at: state.updated_at.clone().unwrap_or_default(),
+            last_hook_event: normalize(state.last_hook_event.clone()),
+            last_hook_observed_at: normalize(state.last_hook_observed_at.clone()),
+            last_claimed_message_id: normalize(state.last_claimed_message_id.clone()),
+            last_claimed_at: normalize(state.last_claimed_at.clone()),
+            last_claim_event: normalize(state.last_claim_event.clone()),
+            last_response_event: normalize(state.last_response_event.clone()),
+            last_response_at: normalize(state.last_response_at.clone()),
+            last_response_status: normalize(state.last_response_status.clone()),
             last_response_claimed_message_ids: state
                 .last_response_claimed_message_ids
-                .into_iter()
-                .filter_map(|value| normalize(Some(value)))
+                .iter()
+                .filter_map(|value| normalize(Some(value.clone())))
                 .collect(),
             last_continuation_requested: state.last_continuation_requested,
         });

@@ -838,6 +838,7 @@ struct DaemonState {
     prune_timer: tokio::time::Interval,
     health_timer: tokio::time::Interval,
     failed_ship_retry_timer: tokio::time::Interval,
+    failed_ship_retry_needed: bool,
     scope_timer: tokio::time::Interval,
     provider_roots_timer: tokio::time::Interval,
     fallback_timer: tokio::time::Interval,
@@ -1420,6 +1421,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         prune_timer,
         health_timer,
         failed_ship_retry_timer,
+        failed_ship_retry_needed: true,
         scope_timer,
         provider_roots_timer,
         fallback_timer,
@@ -1456,25 +1458,43 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         conn,
         projection_db_path,
     };
-    loop {
-        match queue_failed_shipment_retries_if_idle(
-            &mut state.scheduler,
-            &state.conn,
-            state.offline.is_offline,
-            config.archive_repair_mode,
-            &mut state.deferred_retries,
-        ) {
-            Ok(queued) if queued > 0 => {
-                tracing::info!(
-                    queued,
-                    "Queued failed-shipment retry paths after local scheduler drained"
-                );
+    // Clean up any orphaned `.<session>.lock` files accumulated in `status/` once
+    // at startup so the 100ms status-slot scan does not iterate hundreds of dead entries.
+    if let Ok(agent_dir) = crate::config::get_agent_dir() {
+        let status_dir = crate::status_slot::status_slot_dir(&agent_dir);
+        tokio::task::spawn_blocking(move || {
+            let removed =
+                crate::status_slot::prune_stale_lock_files(&status_dir, Duration::from_secs(3600));
+            if removed > 0 {
+                tracing::info!(removed, "Pruned stale status-slot lock files on startup");
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(
-                "Failed-shipment retry error while refilling idle scheduler: {}",
-                e
-            ),
+        });
+    }
+    loop {
+        if state.failed_ship_retry_needed
+            && !state.offline.is_offline
+            && !state.scheduler.has_pending_work()
+        {
+            state.failed_ship_retry_needed = false;
+            match queue_failed_shipment_retries_if_idle(
+                &mut state.scheduler,
+                &state.conn,
+                state.offline.is_offline,
+                config.archive_repair_mode,
+                &mut state.deferred_retries,
+            ) {
+                Ok(queued) if queued > 0 => {
+                    tracing::info!(
+                        queued,
+                        "Queued failed-shipment retry paths after local scheduler drained"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    "Failed-shipment retry error while refilling idle scheduler: {}",
+                    e
+                ),
+            }
         }
         pump_ready_local_work(
             &mut state.scheduler,
@@ -1573,6 +1593,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             task_result = state.in_flight.join_next(), if state.scheduler.has_in_flight() => {
                 state.on_path_task_done(task_result)?;
+                state.failed_ship_retry_needed = true;
             }
 
             discovery_result = state.discovery_tasks.join_next(), if !state.discovery_tasks.is_empty() => {
@@ -1690,6 +1711,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // transcript lane.
             _ = state.failed_ship_retry_timer.tick(), if !state.offline.is_offline => {
                 state.on_failed_ship_retry_tick(&config);
+                state.failed_ship_retry_needed = true;
             }
 
             // Outbox drain: presence events written by hooks. These are runtime
@@ -1700,7 +1722,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Wake the loop when delayed local retry work may now be ready.
-            _ = state.local_retry_timer.tick(), if !state.deferred_retries.is_empty() => {}
+            _ = state.local_retry_timer.tick(), if !state.deferred_retries.is_empty() => {
+                state.failed_ship_retry_needed = true;
+            }
 
             _ = state.flight_sample_timer.tick(), if state.flight_recorder.is_some() => {
                 state.on_flight_sample_tick(&config);

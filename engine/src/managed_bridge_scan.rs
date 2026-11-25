@@ -121,12 +121,45 @@ pub fn collect_observations_from(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
-    let paths = crate::managed_scan::state_file_paths(state_dir);
-    collect_observations_from_paths(&paths, process_facts)
+    fn parse_state(
+        path: &Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(PathBuf, BridgeStateFile)> {
+        let state = serde_json::from_slice::<BridgeStateFile>(&bytes.ok()?).ok()?;
+        Some((path.to_path_buf(), state))
+    }
+    let Ok(cached) = crate::dir_cache::parsed_json_dir(state_dir, parse_state, |left, right| {
+        left.0.cmp(&right.0)
+    }) else {
+        return Vec::new();
+    };
+    collect_observations_from_entries(
+        cached.iter().map(|entry| (entry.0.as_path(), &entry.1)),
+        process_facts,
+    )
 }
 
 pub(crate) fn collect_observations_from_paths(
     paths: &[PathBuf],
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<CodexBridgeObservation> {
+    let parsed: Vec<(PathBuf, BridgeStateFile)> = paths
+        .iter()
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|path| {
+            let bytes = fs::read(path).ok()?;
+            let state = serde_json::from_slice::<BridgeStateFile>(&bytes).ok()?;
+            Some((path.clone(), state))
+        })
+        .collect();
+    collect_observations_from_entries(
+        parsed.iter().map(|(path, state)| (path.as_path(), state)),
+        process_facts,
+    )
+}
+
+fn collect_observations_from_entries<'a>(
+    entries: impl IntoIterator<Item = (&'a Path, &'a BridgeStateFile)>,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
     let mut out = Vec::new();
@@ -139,17 +172,7 @@ pub(crate) fn collect_observations_from_paths(
         .map(|fact| fact.command.as_str())
         .filter(|command| command.contains("--remote"))
         .collect();
-    for path in paths {
-        let path = path.as_path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<BridgeStateFile>(&bytes) else {
-            continue;
-        };
+    for (path, state) in entries {
         let session_id = state.session_id.trim().to_string();
         if session_id.is_empty() {
             continue;
@@ -182,30 +205,30 @@ pub(crate) fn collect_observations_from_paths(
 
         out.push(CodexBridgeObservation {
             session_id,
-            run_id: state.run_id,
-            connection_id: state.connection_id,
-            lease_generation: state.lease_generation,
+            run_id: state.run_id.clone(),
+            connection_id: state.connection_id.clone(),
+            lease_generation: state.lease_generation.clone(),
             state_file: path.to_path_buf(),
             schema_version: state.schema_version,
-            cwd: Some(state.cwd),
-            launch_mode: state.launch_mode,
-            ws_url: state.ws_url,
-            status: state.status,
-            thread_id: state.thread_id,
-            thread_path: state.thread_path,
-            active_turn_id: state.active_turn_id,
-            last_turn_status: state.last_turn_status,
-            last_error: state.last_error,
-            thread_subscription_status: state.thread_subscription_status,
-            stopped_at: state.stopped_at,
-            terminal_state: state.terminal_state,
-            terminal_reason: state.terminal_reason,
+            cwd: Some(state.cwd.clone()),
+            launch_mode: state.launch_mode.clone(),
+            ws_url: state.ws_url.clone(),
+            status: state.status.clone(),
+            thread_id: state.thread_id.clone(),
+            thread_path: state.thread_path.clone(),
+            active_turn_id: state.active_turn_id.clone(),
+            last_turn_status: state.last_turn_status.clone(),
+            last_error: state.last_error.clone(),
+            thread_subscription_status: state.thread_subscription_status.clone(),
+            stopped_at: state.stopped_at.clone(),
+            terminal_state: state.terminal_state.clone(),
+            terminal_reason: state.terminal_reason.clone(),
             bridge_pid: state.pid,
-            bridge_process_start_time: state.bridge_process_start_time,
+            bridge_process_start_time: state.bridge_process_start_time.clone(),
             app_server_pid: state.app_server_pid,
-            app_server_process_start_time: state.app_server_process_start_time,
+            app_server_process_start_time: state.app_server_process_start_time.clone(),
             app_server_pgid: state.app_server_pgid,
-            updated_at: state.updated_at,
+            updated_at: state.updated_at.clone(),
             bridge_alive,
             has_tui_attachment,
             app_server_alive,

@@ -525,24 +525,40 @@ fn read_slot(path: &Path) -> Option<StatusSlot> {
 
 /// Hold an exclusive lock for one session's slot. The lock file is separate
 /// from the slot so the atomic rename that publishes it stays untouched.
+///
+/// Re-verifies `(dev, ino)` after acquiring `flock` so concurrent lock-file
+/// pruning cannot let two writers lock different inodes for the same session.
 fn lock_session(dir: &Path, session_id: &str) -> std::io::Result<std::fs::File> {
     let lock_path = dir.join(format!(".{session_id}.lock"));
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(&lock_path)?;
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(std::io::Error::last_os_error());
+    loop {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        let file = options.open(&lock_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::MetadataExt;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let fd_meta = file.metadata()?;
+            match std::fs::metadata(&lock_path) {
+                Ok(path_meta)
+                    if path_meta.dev() == fd_meta.dev() && path_meta.ino() == fd_meta.ino() =>
+                {
+                    return Ok(file);
+                }
+                _ => continue,
+            }
+        }
+        #[cfg(not(unix))]
+        return Ok(file);
     }
-    Ok(file)
 }
 
 /// Read every current slot. Bounded by the number of live sessions.
@@ -571,6 +587,64 @@ pub fn read_all(dir: &Path) -> Vec<StatusSlot> {
         }
     }
     slots
+}
+
+/// Remove orphaned `.<session_id>.lock` files that have no matching
+/// `<session_id>.json` slot and have not been touched for at least `max_age`.
+///
+/// Acquires a non-blocking `LOCK_EX | LOCK_NB` before unlinking so an active
+/// slot writer can never be raced. Prevents stale lock files from accumulating
+/// in `~/.longhouse/agent/status/` and slowing every `read_all` directory scan.
+pub fn prune_stale_lock_files(dir: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let Some(session_id) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".lock")) else {
+            continue;
+        };
+        if session_id.is_empty() || slot_path(dir, session_id).exists() {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= max_age);
+        if !stale {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let Ok(file) = OpenOptions::new().write(true).open(&path) else {
+                continue;
+            };
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                continue;
+            }
+            if slot_path(dir, session_id).exists() {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
 }
 
 /// Drop a slot only when it still belongs to the run that ended.
@@ -1519,5 +1593,37 @@ mod tests {
             }
         }
         writer.join().expect("writer thread");
+    }
+
+    #[test]
+    fn prune_stale_lock_files_removes_only_unlocked_orphans_past_max_age() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = status_slot_dir(tmp.path());
+
+        // Active session keeps its lock file even when max_age is zero.
+        publish(&dir, &slot("active", "running", 1)).expect("publish active");
+
+        // Retired session leaves an orphaned lock file.
+        publish(&dir, &slot("retired", "idle", 1)).expect("publish retired");
+        assert!(retire_if_run(&dir, "retired", "run-1").expect("retire"));
+
+        // Orphaned lock file currently held by a writer must not be pruned.
+        publish(&dir, &slot("held", "idle", 1)).expect("publish held");
+        assert!(retire_if_run(&dir, "held", "run-1").expect("retire held"));
+        let _held_guard = lock_session(&dir, "held").expect("lock held");
+
+        // Fresh orphan is spared when max_age is in the future.
+        assert_eq!(prune_stale_lock_files(&dir, Duration::from_secs(3600)), 0);
+        assert!(dir.join(".retired.lock").exists());
+
+        // With max_age == 0, only the unlocked orphan is removed.
+        assert_eq!(prune_stale_lock_files(&dir, Duration::ZERO), 1);
+        assert!(!dir.join(".retired.lock").exists());
+        assert!(dir.join(".active.lock").exists());
+        assert!(dir.join(".held.lock").exists());
+
+        // Publishing to the pruned session id recreates the lock cleanly.
+        publish(&dir, &slot("retired", "thinking", 2)).expect("republish retired");
+        assert_eq!(read_all(&dir).len(), 2);
     }
 }

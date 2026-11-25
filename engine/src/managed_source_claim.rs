@@ -546,6 +546,37 @@ pub struct ProjectionReport {
 /// the same rows — so a pass that fails or is missed costs nothing but the next
 /// pass, and a session never becomes degraded because a projection was late.
 pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
+    // Skip re-opening SQLite on unchanged active claims for up to 60s, while
+    // still forcing a periodic reconciliation pass so externally modified or
+    // rebuilt binding tables self-heal.
+    const CLAIM_REPROJECTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+    static LAST_PROJECTED: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (std::time::Instant, ClaimsBySession)>>,
+    > = std::sync::LazyLock::new(Default::default);
+
+    let snapshot = claims_by_session()?;
+    let current_now = now();
+    let needs_work = snapshot.iter().any(|entry| match &entry.1 {
+        Err(_) => true,
+        Ok(claim) => {
+            claim.state == ClaimState::Released
+                || chrono::DateTime::parse_from_rfc3339(&claim.expires_at)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .is_none_or(|expires| expires <= current_now)
+        }
+    });
+    if !needs_work {
+        if let Ok(cache) = LAST_PROJECTED.lock() {
+            if cache.get(db_path).is_some_and(|(at, prev)| {
+                at.elapsed() < CLAIM_REPROJECTION_INTERVAL
+                    && std::sync::Arc::ptr_eq(prev, &snapshot)
+            }) {
+                return Ok(ProjectionReport::default());
+            }
+        }
+    }
+
     let conn = crate::state::db::open_connection(db_path).with_context(|| {
         format!(
             "opening {} to project managed source claims",
@@ -557,6 +588,16 @@ pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
     retire_released(&conn)?;
     let claims = active_claims()?;
     if claims.is_empty() {
+        if let Ok(mut cache) = LAST_PROJECTED.lock() {
+            if let Ok(fresh) = claims_by_session() {
+                if fresh.is_empty() {
+                    if cache.len() >= 32 {
+                        cache.clear();
+                    }
+                    cache.insert(db_path.to_path_buf(), (std::time::Instant::now(), fresh));
+                }
+            }
+        }
         return Ok(ProjectionReport::default());
     }
     let mut report = ProjectionReport::default();
@@ -573,6 +614,14 @@ pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
                     "projecting a managed source claim failed; the next pass retries it"
                 );
             }
+        }
+    }
+    if report.failed == 0 && !needs_work {
+        if let Ok(mut cache) = LAST_PROJECTED.lock() {
+            if cache.len() >= 32 {
+                cache.clear();
+            }
+            cache.insert(db_path.to_path_buf(), (std::time::Instant::now(), snapshot));
         }
     }
     Ok(report)

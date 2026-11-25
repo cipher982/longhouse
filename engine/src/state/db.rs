@@ -67,7 +67,8 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(
         "PRAGMA foreign_keys=ON;
          PRAGMA synchronous=NORMAL;
-         PRAGMA busy_timeout=5000;",
+         PRAGMA busy_timeout=5000;
+         PRAGMA cache_size=-16384;",
     )?;
     Ok(conn)
 }
@@ -614,6 +615,16 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          CREATE UNIQUE INDEX IF NOT EXISTS idx_source_epoch_current
          ON source_epoch_registry(provider, opaque_source_id)
          WHERE ended_at IS NULL;
+
+         -- Covering partial indexes for `query_epoch_progress()` so the periodic
+         -- status projection aggregates active epochs without cold full-table reads.
+         CREATE INDEX IF NOT EXISTS idx_source_epoch_active_progress
+         ON source_epoch_registry(provider, source_epoch, max_observed_len)
+         WHERE ended_at IS NULL;
+
+         CREATE INDEX IF NOT EXISTS idx_source_epoch_lane_durable
+         ON source_epoch_lane_state(source_epoch, last_position)
+         WHERE lane = 'durable';
 
          CREATE INDEX IF NOT EXISTS idx_source_epoch_incarnation
          ON source_epoch_registry(provider, opaque_source_id, file_incarnation, created_at DESC);

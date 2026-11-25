@@ -2779,6 +2779,10 @@ struct BinaryFileStamp {
     dev: u64,
     #[cfg(unix)]
     ino: u64,
+    #[cfg(unix)]
+    ctime: i64,
+    #[cfg(unix)]
+    ctime_nsec: i64,
 }
 
 fn binary_file_stamp(metadata: &fs::Metadata) -> Option<BinaryFileStamp> {
@@ -2791,9 +2795,14 @@ fn binary_file_stamp(metadata: &fs::Metadata) -> Option<BinaryFileStamp> {
         }
     };
     #[cfg(unix)]
-    let (dev, ino) = {
+    let (dev, ino, ctime, ctime_nsec) = {
         use std::os::unix::fs::MetadataExt;
-        (metadata.dev(), metadata.ino())
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
     };
     Some(BinaryFileStamp {
         len: metadata.len(),
@@ -2803,6 +2812,10 @@ fn binary_file_stamp(metadata: &fs::Metadata) -> Option<BinaryFileStamp> {
         dev,
         #[cfg(unix)]
         ino,
+        #[cfg(unix)]
+        ctime,
+        #[cfg(unix)]
+        ctime_nsec,
     })
 }
 

@@ -1215,7 +1215,7 @@ pub(super) fn prepare_next_cursor_envelope_outcome_with_limit(
         .as_ref()
         .and_then(|evidence| evidence.unsettled_reason())
     {
-        tracing::warn!(
+        tracing::debug!(
             session_id = claimed_session_id.as_deref().unwrap_or_default(),
             conversation_id = snapshot.conversation_uuid,
             reason = wait.as_str(),

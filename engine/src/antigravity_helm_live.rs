@@ -77,8 +77,11 @@ const STEP_TYPE_TOOL: i64 = 132;
 const STATUS_DONE: i64 = 3;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// The thread wakes this often to see what is due and whether it should stop.
+/// The thread wakes this often when actively following a streaming turn.
 const LOOP_SLICE: Duration = Duration::from_millis(25);
+/// Upper sleep cap when idle with no streaming sessions so shutdown stays fast
+/// while avoiding 40 wakeups/sec on an idle laptop.
+const IDLE_SLEEP_SLICE: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 /// Consecutive failures after which the reader stands down for good.
 const MAX_CONSECUTIVE_ERRORS: u32 = 8;
@@ -604,7 +607,7 @@ fn newest_tool_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec
 // --- the loop -------------------------------------------------------------
 
 /// How often the hook state directory is rescanned for sessions.
-const SCAN_EVERY: Duration = Duration::from_secs(1);
+const SCAN_EVERY: Duration = Duration::from_secs(3);
 /// A state file untouched for this long belongs to no live session.
 const STATE_FILE_RECENT: Duration = Duration::from_secs(30 * 60);
 /// A "thinking" or "running" state older than this is a crashed turn, not a
@@ -861,12 +864,43 @@ fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
             rescan(&config, &mut sessions);
             next_scan = now + SCAN_EVERY;
         }
+        let mut any_live = false;
+        let mut any_streaming = false;
+        let mut next_wake = next_scan;
         for session in sessions.values_mut() {
-            if !session.stood_down && session.due(&config, now) {
+            if session.stood_down {
+                continue;
+            }
+            any_live = true;
+            if session.active {
+                any_streaming = true;
+            }
+            if session.due(&config, now) {
                 session.poll(&config);
             }
+            if !session.stood_down {
+                let after = Instant::now();
+                let candidate = if session.active && session.earliest_poll > after {
+                    session.earliest_poll.min(session.next_poll)
+                } else {
+                    session.next_poll
+                };
+                if candidate < next_wake {
+                    next_wake = candidate;
+                }
+            }
         }
-        std::thread::sleep(LOOP_SLICE);
+        let sleep_cap = if any_streaming {
+            LOOP_SLICE
+        } else if any_live {
+            POLL_INTERVAL
+        } else {
+            IDLE_SLEEP_SLICE
+        };
+        let sleep_for = next_wake
+            .saturating_duration_since(Instant::now())
+            .min(sleep_cap);
+        std::thread::sleep(sleep_for.max(LOOP_SLICE));
     }
 }
 

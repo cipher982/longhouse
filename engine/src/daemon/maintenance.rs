@@ -93,8 +93,24 @@ impl DaemonState {
         }
         if self.daily_maintenance_tasks.is_empty() {
             let db_path = self.projection_db_path.clone();
+            let status_dir = self
+                .runtime_events_outbox_dir
+                .parent()
+                .map(crate::status_slot::status_slot_dir);
             self.daily_maintenance_tasks.spawn_blocking(move || {
                 crate::state::recover::run_daily_storage_maintenance(&db_path);
+                if let Some(status_dir) = status_dir {
+                    let removed = crate::status_slot::prune_stale_lock_files(
+                        &status_dir,
+                        Duration::from_secs(3600),
+                    );
+                    if removed > 0 {
+                        tracing::info!(
+                            removed,
+                            "Daily prune: removed stale status-slot lock files"
+                        );
+                    }
+                }
             });
         }
     }

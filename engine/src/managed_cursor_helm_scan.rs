@@ -78,31 +78,64 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CursorHelmObservation> {
-    let paths = crate::managed_scan::state_file_paths(state_dir);
-    collect_observations_from_paths(&paths, process_facts)
+    fn parse_state(
+        path: &Path,
+        bytes: std::io::Result<Vec<u8>>,
+    ) -> Option<(PathBuf, CursorHelmStateFile)> {
+        let state = serde_json::from_slice::<CursorHelmStateFile>(&bytes.ok()?).ok()?;
+        Some((path.to_path_buf(), state))
+    }
+    let Ok(cached) = crate::dir_cache::parsed_json_dir(state_dir, parse_state, |left, right| {
+        left.0.cmp(&right.0)
+    }) else {
+        return Vec::new();
+    };
+    collect_observations_from_entries(
+        cached.iter().map(|entry| (entry.0.as_path(), &entry.1)),
+        process_facts,
+    )
 }
 
 pub(crate) fn collect_observations_from_paths(
     paths: &[PathBuf],
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CursorHelmObservation> {
+    let parsed: Vec<(PathBuf, CursorHelmStateFile)> = paths
+        .iter()
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|path| {
+            let bytes = fs::read(path).ok()?;
+            let state = serde_json::from_slice::<CursorHelmStateFile>(&bytes).ok()?;
+            Some((path.clone(), state))
+        })
+        .collect();
+    collect_observations_from_entries(
+        parsed.iter().map(|(path, state)| (path.as_path(), state)),
+        process_facts,
+    )
+}
+
+fn collect_observations_from_entries<'a>(
+    entries: impl IntoIterator<Item = (&'a Path, &'a CursorHelmStateFile)>,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<CursorHelmObservation> {
     let mut out = Vec::new();
-    for path in paths {
-        let path = path.as_path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        let Ok(state) = serde_json::from_slice::<CursorHelmStateFile>(&bytes) else {
-            continue;
-        };
-        let session_id = state.session_id.unwrap_or_default().trim().to_string();
+    for (path, state) in entries {
+        let session_id = state
+            .session_id
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if session_id.is_empty() {
             continue;
         }
-        let socket_str = state.socket_path.unwrap_or_default().trim().to_string();
+        let socket_str = state
+            .socket_path
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         let socket_path = if socket_str.is_empty() {
             None
         } else {
@@ -137,19 +170,20 @@ pub(crate) fn collect_observations_from_paths(
             session_id,
             provider_session_id: state
                 .provider_session_id
+                .clone()
                 .filter(|value| !value.trim().is_empty()),
-            run_id: state.run_id,
-            connection_id: state.connection_id,
-            lease_generation: state.lease_generation,
+            run_id: state.run_id.clone(),
+            connection_id: state.connection_id.clone(),
+            lease_generation: state.lease_generation.clone(),
             state_file: path.to_path_buf(),
             socket_path,
-            cwd: state.cwd.filter(|value| !value.trim().is_empty()),
+            cwd: state.cwd.clone().filter(|value| !value.trim().is_empty()),
             launcher_pid: state.launcher_pid,
-            launcher_process_start_time: state.launcher_process_start_time,
+            launcher_process_start_time: state.launcher_process_start_time.clone(),
             cursor_pid,
-            cursor_process_start_time: state.cursor_process_start_time,
-            started_at: state.started_at.unwrap_or_default(),
-            updated_at: state.updated_at.unwrap_or_default(),
+            cursor_process_start_time: state.cursor_process_start_time.clone(),
+            started_at: state.started_at.clone().unwrap_or_default(),
+            updated_at: state.updated_at.clone().unwrap_or_default(),
             launcher_alive,
             live,
         });
