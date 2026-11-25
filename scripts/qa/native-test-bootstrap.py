@@ -104,6 +104,69 @@ def kept_derived_data(runner_temp: Path) -> Path:
     return path
 
 
+# A simulator that has been through its first boot, kept on the bench runner between jobs. A job
+# clones it, so each job still starts from the same clean device, and the clone boots in seconds:
+# a new device spent about 88 s on its first boot before the first unit test (run 45687712205).
+# The simulators live in the runner user's own device set (CoreSimulator ignores the scratch HOME).
+SIMULATOR_TEMPLATE = "Longhouse CI template"
+
+
+def _simctl(*args: str, timeout: int = 600) -> str:
+    return subprocess.run(
+        ["xcrun", "simctl", *args], capture_output=True, text=True, check=True, timeout=timeout
+    ).stdout.strip()
+
+
+def cloned_simulator() -> str:
+    """Clone the kept template (making it first when needed), start the clone booting, and return its id."""
+
+    sys.path.insert(0, str(ROOT / "scripts" / "ci"))
+    import select_ios_simulator as select  # the runtime and device type `make test-ios` would pick
+
+    runtime = select._choose_runtime(select._load_available_runtimes())
+    device_type = select._choose_device_type(runtime) if runtime else None
+    if runtime is None or device_type is None:
+        raise RuntimeError("no iOS simulator runtime or device type to create the template from")
+    devices = json.loads(_simctl("list", "devices", "-j"))["devices"]
+    template = None
+    for runtime_id, entries in devices.items():
+        for device in entries:
+            if device.get("name") != SIMULATOR_TEMPLATE:
+                continue
+            if runtime_id == runtime["identifier"] and device.get("isAvailable") and template is None:
+                template = device["udid"]
+            else:  # an older runtime's, or a second copy
+                _simctl("delete", device["udid"])
+    if template is None:
+        print("native-test-bootstrap: making the simulator template (first boot)", flush=True)
+        template = _simctl("create", SIMULATOR_TEMPLATE, device_type["identifier"], runtime["identifier"])
+        _simctl("bootstatus", template, "-b", timeout=900)
+        _simctl("shutdown", template)
+    clone = _simctl("clone", template, f"Longhouse CI {device_type['name']}")
+    # Boot while Xcode builds; xcodebuild waits for it to finish.
+    subprocess.Popen(["xcrun", "simctl", "boot", clone], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"native-test-bootstrap: simulator cloned from the template, booting: {clone}", flush=True)
+    return f"platform=iOS Simulator,id={clone}"
+
+
+def remove_simulators(environment: dict[str, str]) -> None:
+    """Shut down every simulator and delete all but the kept template."""
+
+    subprocess.run(["xcrun", "simctl", "shutdown", "all"], env=environment, check=False, timeout=120, capture_output=True)
+    try:
+        devices = json.loads(_simctl("list", "devices", "-j", timeout=120))["devices"]
+    except (subprocess.SubprocessError, ValueError):
+        subprocess.run(["xcrun", "simctl", "delete", "all"], env=environment, check=False, timeout=120, capture_output=True)
+        return
+    for entries in devices.values():
+        for device in entries:
+            if device.get("name") != SIMULATOR_TEMPLATE:
+                subprocess.run(
+                    ["xcrun", "simctl", "delete", device["udid"]],
+                    env=environment, check=False, timeout=120, capture_output=True,
+                )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, choices=sorted(TARGETS))
@@ -200,6 +263,12 @@ def main() -> int:
     if not hosted and uses_xcode(args.target):
         environment["IOS_DERIVED_DATA_PATH"] = str(kept_derived_data(runner_temp))
         environment["IOS_DERIVED_DATA_KEPT"] = "1"
+        if args.target == "test-ios":
+            try:
+                environment["IOS_DESTINATION"] = cloned_simulator()
+            except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+                # make test-ios then creates a new simulator, as before the template.
+                print(f"::warning::simulator template unavailable, using a new simulator: {exc}", flush=True)
     for key in ("HOME", "TMPDIR", "LONGHOUSE_HOME", "CARGO_HOME"):
         Path(environment[key]).mkdir(parents=True, exist_ok=True)
     boundary_path = None
@@ -320,16 +389,9 @@ def main() -> int:
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()
         # A hosted VM is discarded after the job, which ends every descendant and simulator even
-        # on SIGKILL. Wisp is not, so shut down and delete the simulators this run created in its
-        # scratch HOME (its own device set) before the scratch is removed.
-        for simctl in ("shutdown", "delete"):
-            subprocess.run(
-                ["xcrun", "simctl", simctl, "all"],
-                env=environment,
-                check=False,
-                timeout=120,
-                capture_output=True,
-            )
+        # on SIGKILL. Wisp is not, so shut down and delete the simulators this run made, which live
+        # in the runner user's device set, keeping only the template the next job clones.
+        remove_simulators(environment)
         try:
             for name, source in (
                 ("native", scratch / "artifacts"),
