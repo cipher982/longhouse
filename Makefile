@@ -438,7 +438,14 @@ test-frontend: ## Frontend unit tests + type-check (ARGS="src/path.test.ts" sele
 	@# One vitest worker per CPU the guest actually has (Node's
 	@# availableParallelism honours the container's cgroup quota). --runInBand
 	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
-	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100% $(ARGS)
+	@# tsc is one thread for ~23s; it runs beside vitest instead of before it,
+	@# and its output is printed after the tests. Either failing fails the target.
+	@cd web && types_log=$$(mktemp) && \
+		{ bun run validate:types >"$$types_log" 2>&1 & types_pid=$$!; } && \
+		bun run test -- --run --maxWorkers=100% $(ARGS); tests_rc=$$?; \
+		wait $$types_pid; types_rc=$$?; cat "$$types_log"; rm -f "$$types_log"; \
+		test $$types_rc -eq 0 || echo "type-check failed (exit $$types_rc)" >&2; \
+		test $$tests_rc -eq 0 && test $$types_rc -eq 0
 
 ifeq ($(strip $(TEST)),)
 test-engine: test-engine-omp-helm ## Rust engine tests (~20s; TEST=filter runs one)
