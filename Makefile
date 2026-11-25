@@ -1,5 +1,8 @@
 # Longhouse
 
+# This checkout, wherever make runs from (`make -f <checkout>/Makefile` from another directory).
+REPO_DIR := $(dir $(abspath $(firstword $(MAKEFILE_LIST))))
+
 # Dispatch before reading dotenv: tests never inherit the operator's login.
 # Only a live invocation-scoped child record can bypass host dispatch.
 ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-% ci-%,$(MAKECMDGOALS))
@@ -25,6 +28,8 @@ ifeq ($(CI),)
 export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 endif
 
+# Every file that defines documented targets (help and validate-makefile read them).
+TARGET_FILES := Makefile ios/ios.mk
 CARGO_ENGINE := python3 scripts/build/cargo.py exec --
 CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
 # Engine test lanes build with `ci-test` (engine/Cargo.toml): an unoptimized
@@ -89,7 +94,7 @@ help: ## Show this help message
 	@echo "\nLonghouse"
 	@echo "========="
 	@echo ""
-	@grep -E '^[a-zA-Z0-9_-]+:.*## ' Makefile | grep -v '## @internal' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-28s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
+	@cat $(TARGET_FILES) | grep -E '^[a-zA-Z0-9_-]+:.*## ' | grep -v '## @internal' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-28s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -181,42 +186,9 @@ test-session-state: ## @internal Focused canonical session-state and Phase 7 fau
 		cd server && uv run --extra dev pytest -q $$NODEIDS
 	@python3 scripts/tests/session-state-deep-health.test.py
 
-# Single source of truth for which iOS schemes run where. CI calls these targets
-# rather than setting IOS_TEST_SCHEMES itself, so `make test-ios` and the merge
-# gate cannot drift apart — they did, and every local run was green against a
-# scheme set CI never ran. The one thing CI may set is how to split that set over
-# VMs (IOS_TEST_SCHEMES and IOS_TEST_FILTER in the workflow matrix), and
-# scripts/tests/ios-test-lanes.test.py fails if the lanes stop covering it.
-IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
+include $(REPO_DIR)ios/ios.mk
+
 IOS_PERF_TEST_SCHEMES ?= LonghouseChatStress
-
-# The generated .xcodeproj is gitignored, so the committed SwiftPM pin file
-# lives next to project.yml and is copied into the project on every generation.
-IOS_PACKAGE_RESOLVED := ios/XcodeHarness/LonghouseIOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-
-ios-project: ## Regenerate the local Xcode project and freshness stamp
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
-	@mkdir -p $(dir $(IOS_PACKAGE_RESOLVED))
-	@cp ios/XcodeHarness/Package.resolved $(IOS_PACKAGE_RESOLVED)
-	@python3 scripts/build/ios_project_stamp.py > ios/XcodeHarness/.project-source-sha256
-
-ios-package-update: ## Re-resolve iOS Swift packages after changing a pin in project.yml, then commit Package.resolved
-	@$(MAKE) ios-project
-	@rm -f $(IOS_PACKAGE_RESOLVED)
-	@xcodebuild -resolvePackageDependencies -project ios/XcodeHarness/LonghouseIOS.xcodeproj -scheme Longhouse
-	@cp $(IOS_PACKAGE_RESOLVED) ios/XcodeHarness/Package.resolved
-
-ios-project-check: ## Regenerate and verify Xcode source membership
-	@$(MAKE) ios-project
-	@scripts/build/check_ios_project_fresh.sh
-
-test-ios: ## iOS unit + smoke tests (simulator) — the merge gate (IOS_TEST_SCHEMES / IOS_TEST_FILTER run part of it)
-	@$(MAKE) ios-project
-	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
-	if [ -n "$(IOS_TEST_SCHEMES)$(IOS_TEST_FILTER)" ]; then echo "test-ios: PARTIAL run (schemes '$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))', filter '$(IOS_TEST_FILTER)'); the merge gate is '$(IOS_MERGE_TEST_SCHEMES)'"; fi; \
-	IOS_TEST_SCHEMES="$(or $(IOS_TEST_SCHEMES),$(IOS_MERGE_TEST_SCHEMES))" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)
 	@test -n "$(TEST)" || (echo "TEST is required, e.g. TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderReply" >&2; exit 2)
@@ -1227,9 +1199,9 @@ validate-makefile: ## @internal Verify .PHONY vs documented targets
 	@phony="$$( $(MAKE) --no-print-directory -pRrq help | sed -n 's/^\.PHONY: //p')"; failed=0; \
 	for t in $$phony; do \
 		case $$t in help|validate-makefile) continue ;; esac; \
-		if ! grep -Eq "^$$t:.*##" Makefile; then echo "Missing ## for .PHONY: $$t"; failed=1; fi; \
+		if ! cat $(TARGET_FILES) | grep -Eq "^$$t:.*##"; then echo "Missing ## for .PHONY: $$t"; failed=1; fi; \
 	done; \
-	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile | sed -E 's/:.*##.*$$//'); do \
+	for t in $$(cat $(TARGET_FILES) | grep -E '^[a-zA-Z0-9_-]+:.*##' | sed -E 's/:.*##.*$$//'); do \
 		case " $$phony " in *" $$t "*) ;; *) echo "Not in .PHONY: $$t"; failed=1 ;; esac; \
 	done; \
 	exit $$failed

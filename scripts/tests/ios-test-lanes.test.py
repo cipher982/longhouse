@@ -14,9 +14,9 @@ SCRIPT = ROOT / "scripts/ci/run_ios_tests.sh"
 
 
 def merge_schemes() -> set[str]:
-    makefile = (ROOT / "Makefile").read_text()
-    match = re.search(r"^IOS_MERGE_TEST_SCHEMES \?= (.+)$", makefile, re.MULTILINE)
-    assert match, "Makefile no longer defines IOS_MERGE_TEST_SCHEMES"
+    gate = (ROOT / "ios/ios.mk").read_text()
+    match = re.search(r"^IOS_MERGE_TEST_SCHEMES \?= (.+)$", gate, re.MULTILINE)
+    assert match, "ios/ios.mk no longer defines IOS_MERGE_TEST_SCHEMES"
     return set(match.group(1).split())
 
 

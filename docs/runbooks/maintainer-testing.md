@@ -67,11 +67,10 @@ signing identity lives on wisp.
 - The workflow definition comes from `main` while the VM checks out your
   `source_sha`, so the run's own `head_sha` is `main`. Read the `source=<sha>`
   line the dispatcher prints.
-- CI runs the iOS merge gate as two lanes split by test class: the unit scheme
-  plus small UI classes, and `SessionChatUITests` alone (`IOS_TEST_SCHEMES` and
-  `IOS_TEST_FILTER`, entries `Scheme:only:Id` or `Scheme:skip:Id`).
-  `scripts/tests/ios-test-lanes.test.py` fails when the lanes stop covering the
-  Makefile's merge-gate schemes. `make test-ios IOS_TEST_FILTER=...` runs part
+- CI runs the iOS merge gate as one lane on the wisp bench runner; the matrix can
+  still split it by test class (`IOS_TEST_SCHEMES` and `IOS_TEST_FILTER`, entries
+  `Scheme:only:Id` or `Scheme:skip:Id`). `scripts/tests/ios-test-lanes.test.py`
+  fails when the lanes stop covering the merge-gate schemes in `ios/ios.mk`. `make test-ios IOS_TEST_FILTER=...` runs part
   of the gate and says so.
 - `make ios-unit` runs the hermetic unit target on a local simulator. It is a
   development loop, not the gate; the dispatched lane also runs the smoke

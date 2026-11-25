@@ -72,6 +72,14 @@ def test_release_version_bump_does_not_select_the_ios_lane() -> None:
     assert "ios" in resolve("ios/XcodeHarness/project.yml")["categories"]
 
 
+def test_a_makefile_edit_selects_ios_only_through_the_ios_gate_file() -> None:
+    # ios/ios.mk owns the iOS merge gate's schemes and targets; the Makefile only
+    # includes it, so an edit elsewhere in the Makefile runs no iOS tests.
+    assert "ios" not in resolve("Makefile")["categories"]
+    assert "ios" in resolve("ios/ios.mk")["categories"]
+    assert "ios" in resolve("scripts/qa/native-test-bootstrap.py")["categories"]
+
+
 def test_exclusion_only_filters_are_rejected() -> None:
     with tempfile.TemporaryDirectory(prefix="affected-filters-") as raw:
         path = Path(raw) / "filters.yml"

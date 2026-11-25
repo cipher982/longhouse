@@ -10,7 +10,7 @@ frontend:
 engine:
   - 'engine/**'
   # The Makefile decides which engine tests run, so a change to it must trigger
-  # them. The ios: filter below already does this for the same reason.
+  # them.
   - 'Makefile'
   # The engine include_str!s engine/src/managed_provider_contracts.generated.json
   # (covered above), not the server manifest, whose source digests churn.
@@ -49,10 +49,12 @@ ios:
   - 'scripts/ci/select_ios_simulator.py'
   # Where the bench runner's iOS jobs keep Xcode's build output and how they are isolated.
   - 'scripts/qa/native-test-bootstrap.py'
-  # The Makefile now owns which schemes the merge gate runs, and this file plus
-  # the workflow decide whether that gate runs at all. Without them a change to
-  # what iOS testing means skips iOS testing and reports success.
-  - 'Makefile'
+  # ios/ios.mk (under ios/** above) owns which schemes the merge gate runs and
+  # the make targets the job calls, and this file plus the workflow decide whether
+  # that gate runs at all. Without them a change to what iOS testing means skips
+  # iOS testing and reports success. The Makefile itself is not here: it only
+  # includes ios/ios.mk, and 5 of 14 iOS runs (2026-11) were Makefile edits that
+  # changed nothing about iOS.
   - '.github/path-filters.yml'
   - '.github/workflows/contract-first-ci.yml'
 
