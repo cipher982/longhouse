@@ -11,11 +11,12 @@
 # VMs (IOS_TEST_SCHEMES and IOS_TEST_FILTER in the workflow matrix), and
 # scripts/tests/ios-test-lanes.test.py fails if the lanes stop covering it.
 IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
-# The UI scheme's classes run on this many simulator clones at once. The unit
-# scheme stays on one: its tests take 17 s and a clone costs more to boot. The
-# bench Mac has 8 GB; see the iOS job in contract-first-ci.yml for 1 vs 2.
+# The UI scheme's classes can run on IOS_PARALLEL_WORKERS simulator clones at
+# once. On the 8 GB bench Mac two were slower than one: the UI tests took 537 s
+# against 452 s, free memory fell to 26% and it swapped (run 45683709216 against
+# 45681254244). Raise it on a Mac with more memory.
 IOS_PARALLEL_SCHEMES ?= LonghouseSmoke
-IOS_PARALLEL_WORKERS ?= 2
+IOS_PARALLEL_WORKERS ?= 1
 
 # The generated .xcodeproj is gitignored, so the committed SwiftPM pin file
 # lives next to project.yml and is copied into the project on every generation.

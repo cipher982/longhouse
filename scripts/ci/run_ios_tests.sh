@@ -82,12 +82,19 @@ filter_arguments() {
 }
 
 build_for_testing() {
+  local settings=()
+  # With kept derived data, have the Swift driver say why each file is compiled
+  # again, so a build that stops being incremental shows its cause in the log.
+  if [[ "${IOS_DERIVED_DATA_KEPT:-}" == "1" ]]; then
+    settings+=('OTHER_SWIFT_FLAGS=$(inherited) -driver-show-incremental')
+  fi
   xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "$1" \
     -destination "${DESTINATION}" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
     -disableAutomaticPackageResolution \
+    ${settings[@]+"${settings[@]}"} \
     build-for-testing
 }
 
