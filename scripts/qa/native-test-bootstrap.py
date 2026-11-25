@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -60,6 +61,47 @@ def hold_bench_lock() -> None:
     global _bench_lock_handle
     _bench_lock_handle = open(BENCH_LOCK, "a")
     fcntl.flock(_bench_lock_handle, fcntl.LOCK_EX)
+
+
+# Xcode's build output for the bench runner's iOS targets, kept between jobs: a fresh one recompiled the app and both
+# test bundles on every run. One directory per Xcode build (a new Xcode starts again, and the old one is removed), shared
+# by every branch: the checkout path is the same for all of them, and Xcode rebuilds what a commit changed. It is started
+# again above this size, and run_ios_tests.sh builds once more from nothing when a build in it fails.
+DERIVED_DATA_KEEP_BYTES = 30 * 1024**3
+XCODE_TARGETS = {"ios-ui-shot", "ios-previews", "benchmark-ios-transcript", "simlab-run"}
+
+
+def uses_xcode(target: str) -> bool:
+    return target.startswith(("test-ios", "test-mobile-chat")) or target in XCODE_TARGETS
+
+
+def _disk_bytes(path: Path) -> int:
+    done = subprocess.run(["du", "-sk", str(path)], capture_output=True, text=True, check=False)
+    return int(done.stdout.split()[0]) * 1024 if done.returncode == 0 and done.stdout else 0
+
+
+def kept_derived_data(runner_temp: Path) -> Path:
+    """The bench runner's derived data for this Xcode build, beside the runner's own work directories."""
+
+    version = subprocess.run(["xcodebuild", "-version"], capture_output=True, text=True, check=True).stdout
+    match = re.search(r"Build version (\S+)", version)
+    if not match:
+        raise RuntimeError(f"cannot read the Xcode build from: {version!r}")
+    root = runner_temp.parent / "_longhouse-cache" / "ios-derived-data"
+    path = root / f"xcode-{match.group(1)}"
+    if root.is_dir():
+        for other in root.iterdir():
+            if other != path:
+                print(f"native-test-bootstrap: removing derived data of another Xcode: {other.name}", flush=True)
+                shutil.rmtree(other, ignore_errors=True)
+    size = _disk_bytes(path) if path.is_dir() else 0
+    if size > DERIVED_DATA_KEEP_BYTES:
+        print(f"native-test-bootstrap: derived data is {size >> 20} MiB, over the bound; starting again", flush=True)
+        shutil.rmtree(path, ignore_errors=True)
+        size = 0
+    print(f"native-test-bootstrap: derived data {path.name}, {size >> 20} MiB kept", flush=True)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def main() -> int:
@@ -155,6 +197,9 @@ def main() -> int:
         environment["LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR"] = str(
             scratch / "artifacts/native-installer"
         )
+    if not hosted and uses_xcode(args.target):
+        environment["IOS_DERIVED_DATA_PATH"] = str(kept_derived_data(runner_temp))
+        environment["IOS_DERIVED_DATA_KEPT"] = "1"
     for key in ("HOME", "TMPDIR", "LONGHOUSE_HOME", "CARGO_HOME"):
         Path(environment[key]).mkdir(parents=True, exist_ok=True)
     boundary_path = None
@@ -218,12 +263,7 @@ def main() -> int:
                 env=environment,
                 check=True,
             )
-        if (
-            args.target.startswith("test-ios")
-            or args.target.startswith("test-mobile-chat")
-            or args.target
-            in {"ios-ui-shot", "ios-previews", "benchmark-ios-transcript", "simlab-run"}
-        ):
+        if uses_xcode(args.target):
             subprocess.run(
                 ["make", "ios-project"],
                 cwd=ROOT,

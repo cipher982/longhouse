@@ -68,6 +68,16 @@ filter_arguments() {
   done
 }
 
+build_for_testing() {
+  xcodebuild \
+    -project "${PROJECT_PATH}" \
+    -scheme "$1" \
+    -destination "${DESTINATION}" \
+    -derivedDataPath "${DERIVED_DATA_PATH}" \
+    -disableAutomaticPackageResolution \
+    build-for-testing
+}
+
 run_scheme() {
   local scheme="$1"
   local result_bundle=""
@@ -87,13 +97,20 @@ run_scheme() {
   done < <(filter_arguments "${scheme}")
 
   stage "${scheme}: build-for-testing"
-  xcodebuild \
-    -project "${PROJECT_PATH}" \
-    -scheme "${scheme}" \
-    -destination "${DESTINATION}" \
-    -derivedDataPath "${DERIVED_DATA_PATH}" \
-    -disableAutomaticPackageResolution \
-    build-for-testing
+  if ! build_for_testing "${scheme}"; then
+    # Derived data kept from earlier jobs (IOS_DERIVED_DATA_KEPT, the bench runner) can hold
+    # state that breaks a build no clean checkout would. Build once more from nothing; a real
+    # compile error fails again, and the clean output is what the next job starts from.
+    if [[ "${IOS_DERIVED_DATA_KEPT:-}" != "1" ]]; then
+      return 1
+    fi
+    echo "::warning::${scheme}: build failed in kept derived data; building again from nothing"
+    stage "${scheme}: build-for-testing, clean"
+    # SourcePackages stays: the packages were resolved before this script, and it builds with
+    # automatic resolution off.
+    find "${DERIVED_DATA_PATH:?}" -mindepth 1 -maxdepth 1 ! -name SourcePackages -exec rm -rf {} +
+    build_for_testing "${scheme}"
+  fi
 
   stage "${scheme}: test-without-building ${filters[*]-}"
   if [[ -n "${result_bundle}" ]]; then
