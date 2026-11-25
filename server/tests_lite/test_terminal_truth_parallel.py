@@ -620,9 +620,11 @@ def test_the_engine_and_the_qa_engine_are_built_once_per_set_of_inputs_and_copie
     from zerg.qa import terminal_truth_engine as engine
 
     builds: list[str] = []
+    targets: list[Path | None] = []
 
-    def fake_build(flags: str = engine.FLAGS) -> dict[str, Path]:
+    def fake_build(flags: str = engine.FLAGS, target: Path | None = None) -> dict[str, Path]:
         builds.append(flags)
+        targets.append(target)
         made = tmp_path / "target"
         made.mkdir(exist_ok=True)
         for name in mutations.BINARIES:
@@ -635,18 +637,82 @@ def test_the_engine_and_the_qa_engine_are_built_once_per_set_of_inputs_and_copie
     monkeypatch.setattr(mutations, "engine_inputs_digest", lambda **_k: digest[0])
     cache = tmp_path / "cache"
 
-    assert engine.provide(tmp_path / "one", cache) == "miss"
+    assert engine.provide(tmp_path / "one", cache) == ("miss", "built")
     assert builds == [engine.FLAGS, engine.FAULT_FLAGS]  # the engine, then the same engine with the fault seams
     assert "qa-fault-injection" in engine.FAULT_FLAGS and "qa-fault-injection" not in engine.FLAGS
+    assert targets == [engine.cache_target(cache)] * 2  # the dependencies stay compiled between runs
     assert (tmp_path / "one" / "longhouse-engine").read_text() == "longhouse-engine build 1"
     assert (tmp_path / "one" / "fault" / "longhouse-engine").read_text() == "longhouse-engine build 2"
-    assert engine.provide(tmp_path / "two", cache) == "hit" and len(builds) == 2
+    assert engine.provide(tmp_path / "two", cache) == ("hit", "cached") and len(builds) == 2
     assert (tmp_path / "two" / "fault" / "longhouse").read_text() == "longhouse build 2"
-    assert engine.provide(tmp_path / "three", None) == "off" and len(builds) == 4
+    assert engine.provide(tmp_path / "three", None) == ("off", "built") and len(builds) == 4
+    assert targets[2:] == [None, None]  # no cache, the checkout's own target
 
     digest[0] = "b" * 64  # the engine sources changed
-    assert engine.provide(tmp_path / "four", cache) == "miss" and len(builds) == 6
-    assert [entry.name for entry in cache.iterdir()] == ["b" * 24]  # one build is kept
+    assert engine.provide(tmp_path / "four", cache) == ("miss", "built") and len(builds) == 6
+    assert [entry.name for entry in cache.iterdir() if not entry.name.startswith("cargo-target-")] == ["b" * 24]  # one build is kept
+
+
+def test_a_run_without_mutation_checks_builds_no_qa_engine_and_leaves_the_engine_for_the_next_run(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_engine as engine
+
+    builds: list[str] = []
+
+    def fake_build(flags: str = engine.FLAGS, target: Path | None = None) -> dict[str, Path]:
+        builds.append(flags)
+        made = tmp_path / f"target{len(builds)}"
+        made.mkdir()
+        for name in mutations.BINARIES:
+            (made / name).write_text(f"{name} {'qa' if 'qa-fault-injection' in flags else 'measured'} build {len(builds)}")
+            (made / name).chmod(0o755)
+        return {name: made / name for name in mutations.BINARIES}
+
+    monkeypatch.setattr(engine, "build", fake_build)
+    monkeypatch.setattr(mutations, "engine_inputs_digest", lambda **_k: "c" * 64)
+    cache = tmp_path / "cache"
+
+    assert engine.provide(tmp_path / "cells", cache, fault=False) == ("miss", "skipped")
+    assert builds == [engine.FLAGS] and not (tmp_path / "cells" / "fault").exists()
+    assert engine.provide(tmp_path / "cells-again", cache, fault=False) == ("hit", "skipped") and len(builds) == 1
+    # A run with mutation checks on the same inputs builds only the QA engine, and keeps it beside the measured one.
+    assert engine.provide(tmp_path / "mutations", cache) == ("miss", "built") and builds == [engine.FLAGS, engine.FAULT_FLAGS]
+    assert (tmp_path / "mutations" / "longhouse-engine").read_text() == "longhouse-engine measured build 1"
+    assert (tmp_path / "mutations" / "fault" / "longhouse-engine").read_text() == "longhouse-engine qa build 2"
+    assert engine.provide(tmp_path / "mutations-again", cache) == ("hit", "cached") and len(builds) == 2
+
+
+def test_the_engine_lines_name_the_measured_engine_as_the_qa_engine_when_none_is_built(monkeypatch, tmp_path, capsys) -> None:
+    from zerg.qa import terminal_truth_engine as engine
+
+    def fake_provide(out: Path, cache: Path | None, *, fault: bool = True) -> tuple[str, str]:
+        for directory in [out, *([out / engine.FAULT_DIR] if fault else [])]:
+            directory.mkdir(parents=True, exist_ok=True)
+            for name in mutations.BINARIES:
+                (directory / name).write_text(name)
+                (directory / name).chmod(0o755)
+        return "off", "built" if fault else "skipped"
+
+    monkeypatch.setattr(engine, "provide", fake_provide)
+    monkeypatch.setenv("TT_MUTATIONS", "0")  # the CI action's decision: this run has no mutation checks
+    assert engine.main(["--out", str(tmp_path / "a")]) == 0
+    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["fault_engine"] == lines["engine"] and lines["fault_cli"] == lines["cli"] and lines["fault"] == "skipped"
+    monkeypatch.setenv("TT_MUTATIONS", "1")
+    assert engine.main(["--out", str(tmp_path / "b")]) == 0
+    lines = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert lines["fault_engine"] == str(tmp_path / "b" / "fault" / "longhouse-engine") and lines["fault"] == "built"
+
+
+def test_a_cached_cargo_target_over_its_bound_is_started_again(monkeypatch, tmp_path) -> None:
+    from zerg.qa import terminal_truth_engine as engine
+
+    target = tmp_path / "cargo-target-x"
+    (target / "ci").mkdir(parents=True)
+    (target / "ci" / "big").write_bytes(b"x" * 2048)
+    monkeypatch.setattr(engine, "TARGET_KEEP_BYTES", 4096)
+    assert engine._bounded(target) == target and target.exists()
+    (target / "ci" / "bigger").write_bytes(b"x" * 4096)
+    assert engine._bounded(target) == target and not target.exists()
 
 
 def test_the_engine_and_the_qa_engine_are_keyed_by_different_flags_over_the_same_inputs(monkeypatch) -> None:

@@ -569,7 +569,7 @@ web-paint: ## Real browser watches live thinking, tool and subagent rows on a sc
 terminal-truth-all: ## Every terminal-truth check in one run, side by side: all cells of all five scenarios, then the mutation tests (ARGS="--engine <engine> --longhouse-cli <longhouse> --out-dir DIR [--jobs N] [--no-mutations]")
 	@uv run --project server python -m zerg.qa.terminal_truth_parallel $(ARGS)
 
-terminal-truth-engine: ## The engine and CLI a terminal-truth run measures, built with the ci profile or copied from a cache of that exact build (ARGS="--out DIR [--cache DIR]")
+terminal-truth-engine: ## The engine and CLI a terminal-truth run measures, built with the ci profile or copied from a cache of that exact build (ARGS="--out DIR [--cache DIR] [--no-fault-engine]"; no QA engine when TT_MUTATIONS=0)
 	@uv run --project server python -m zerg.qa.terminal_truth_engine $(ARGS)
 
 terminal-truth-mutations: ## Reintroduce each 2026-11-11 live-text defect and require the gate to fail it (rebuilds the engine in a scratch worktree; ARGS="--engine <engine> --longhouse-cli <longhouse> [--only NAME] [--skip-engine]")
