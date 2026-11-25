@@ -39,9 +39,17 @@ function webgl2Available(): boolean {
   return typeof window !== "undefined" && typeof WebGL2RenderingContext !== "undefined";
 }
 
-export function HearthProvider({ children }: { children: ReactNode }) {
+export function HearthProvider({
+  children,
+  revalidating = false,
+}: {
+  children: ReactNode;
+  revalidating?: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<HearthRenderer | null>(null);
+  const revalidatingRef = useRef(revalidating);
+  revalidatingRef.current = revalidating;
   const cellsRef = useRef(
     new Map<string, { key: string; el: HTMLElement; snap: HearthSnapshot | null; onStarved: (starved: boolean) => void }>(),
   );
@@ -71,6 +79,9 @@ export function HearthProvider({ children }: { children: ReactNode }) {
           renderer.register(id, cell.key, cell.el, cell.onStarved);
           if (cell.snap) renderer.update(id, cell.snap);
         }
+        if (revalidatingRef.current) {
+          renderer.setRevalidating(true);
+        }
         window.__longhouseHearth = () => rendererRef.current?.getStats() ?? null;
         setStatus("gl");
       })
@@ -84,6 +95,10 @@ export function HearthProvider({ children }: { children: ReactNode }) {
       delete window.__longhouseHearth;
     };
   }, []);
+
+  useEffect(() => {
+    rendererRef.current?.setRevalidating(revalidating);
+  }, [revalidating]);
 
   const register = useCallback((id: string, key: string, el: HTMLElement, onStarved: (starved: boolean) => void) => {
     cellsRef.current.set(id, { key, el, snap: null, onStarved });

@@ -20,6 +20,7 @@ import {
   useAgentFilters,
 } from "@/shared/api/useAgentSessions";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { useResumeRevalidation } from "@/shared/hooks/useResumeRevalidation";
 import { useAmbientSessionAttentionCue } from "./useAmbientSessionAttentionCue";
 import { useTimelineSessionStream } from "./useTimelineSessionStream";
 import { plural } from "@/shared/lib/plural";
@@ -285,6 +286,9 @@ export default function SessionsPage() {
   const isLoading = timelineResult.isLoading;
   const error = timelineResult.error;
   const refetch = timelineResult.refetch;
+  const resumeRevalidating = useResumeRevalidation(documentVisible, refetch, {
+    enabled: !isLoading && !!data,
+  });
   const timelineStreamEnabled = timelineStreamEligible && documentVisible && !isLoading && !!data;
   const skipInitialTimelineReplay =
     timelineStreamEnabled &&
@@ -750,6 +754,7 @@ export default function SessionsPage() {
             allowHoverPrefetch={allowHoverPrefetch}
             relativeNowMs={relativeNowMs}
             highlightQuery={debouncedQuery}
+            revalidating={resumeRevalidating}
           />
         )}
 

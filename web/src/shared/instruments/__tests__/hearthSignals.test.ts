@@ -188,6 +188,21 @@ describe("mode coal beds", () => {
     expect(heat.isCooling(NOW + 10_000)).toBe(false);
     expect(cool(T_LIT, TAU_CORE, TAU_CORE)).toBeCloseTo(T_AMB + (T_LIT - T_AMB) / Math.E);
   });
+
+  it("snaps straight to rest without a fake cooldown when returning after a gap or stale activity", () => {
+    const heat = new SessionHeat();
+    heat.update(snap({ mode: "working", lastActivityMs: NOW - 120_000 }), 0, NOW - 120_000);
+    drain(heat, 0, 5);
+    expect(heat.target(5)).toBeGreaterThan(0);
+
+    // Returning after a gap with an already-finished session snaps immediately.
+    heat.update(snap({ mode: "idle", toolCalls: 25, lastActivityMs: NOW - 60_000 }), 125, NOW, { snap: true });
+    expect(heat.target(125)).toBe(0);
+    expect(heat.isCooling(NOW)).toBe(false);
+    expect(heat.surface).toBe(T_AMB);
+    expect(heat.core).toBe(T_AMB);
+    expect(heat.hasPending()).toBe(false);
+  });
 });
 
 describe("mapping from the timeline row", () => {

@@ -37,6 +37,10 @@ const RM_SETTLE_STEPS = 90;
 const RM_STEPS_PER_FRAME = 15;
 /** Minimum interval between GPU height-probe readbacks (PI controller tau = 350 ms). */
 const MEASURE_INTERVAL_MS = 250;
+/** Presentation cadence (30 fps over 60 Hz solver, matching iOS HearthEngine). */
+const PRESENT_INTERVAL_MS = 1000 / 30;
+/** Hidden gap after which returning snaps stale flames instead of cooling over 4.5s. */
+const RESUME_SNAP_GAP_MS = 5_000;
 /** A fire that comes on screen is simulated this far ahead before it is
  * first drawn, so a glance at the timeline finds it already burning. */
 const WARM_STEPS = 180;
@@ -178,6 +182,10 @@ export class HearthRenderer {
   private fence: WebGLSync | null = null;
   private measT = 0;
   private lastMeasureStart = 0;
+  private lastPresentMs = 0;
+  private hiddenAtMs: number | null = null;
+  private revalidating = false;
+  private snapUntilMs = 0;
   private q: WebGLQuery | null = null;
   private ring = 0;
   private dpr = 1;
@@ -306,9 +314,90 @@ export class HearthRenderer {
     if (!cell || this.dead) return;
     const entry = this.heats.get(cell.key);
     if (!entry) return;
-    entry.heat.update(snap, performance.now() / 1000, Date.now());
+    const nowMs = performance.now();
+    const shouldSnap = !this.revalidating && nowMs < this.snapUntilMs;
+    const prevMode = entry.heat.snap?.mode;
+    entry.heat.update(snap, nowMs / 1000, Date.now(), { snap: shouldSnap });
+    if (shouldSnap && cell.tile >= 0) {
+      const v = this.vis[cell.tile];
+      if (snap.mode !== "working") {
+        v.hcmd = 0;
+        v.puff.fill(0);
+        v.gust = 0;
+        v.coldT = 0;
+        v.warm = 0;
+        if (snap.mode !== "waiting") v.frozen = true;
+        this.clearTile(cell.tile);
+      } else if (prevMode !== "working" || v.hcmd < 0.05) {
+        v.hcmd = this.reducedMotion ? 0 : entry.heat.target(nowMs / 1000);
+        if (!this.reducedMotion && v.hcmd > 0) v.warm = WARM_STEPS;
+        v.frozen = false;
+        this.layoutDirty = true;
+      }
+    }
     this.rmSettle = RM_SETTLE_STEPS;
     this.requestFrame();
+  }
+
+  /** Hold/quench stale working flames while a post-resume refresh is in flight,
+   * then snap to truth once fresh snapshots land. */
+  setRevalidating(revalidating: boolean): void {
+    if (this.dead || this.revalidating === revalidating) return;
+    this.revalidating = revalidating;
+    const nowMs = performance.now();
+    if (revalidating) {
+      this.quenchStaleWorkingTiles(nowMs);
+      this.stillUntil = Math.max(this.stillUntil, nowMs + 80);
+      this.requestFrame();
+      return;
+    }
+    // Fresh snapshot has landed (or timed out): snap transitions over the next
+    // brief window and re-warm any tiles that remain genuinely working.
+    this.snapUntilMs = Math.max(this.snapUntilMs, nowMs + 1_500);
+    for (let i = 0; i < this.nt; i++) {
+      const cell = this.tileCell[i];
+      if (!cell) continue;
+      const heat = this.heats.get(cell.key)?.heat;
+      if (!heat?.snap) continue;
+      const v = this.vis[i];
+      if (heat.snap.mode === "working") {
+        heat.update(heat.snap, nowMs / 1000, Date.now(), { snap: true });
+        const target = this.reducedMotion ? 0 : heat.target(nowMs / 1000);
+        v.hcmd = target;
+        if (!this.reducedMotion && target > 0) v.warm = WARM_STEPS;
+        v.frozen = false;
+        this.layoutDirty = true;
+      } else if (heat.snap.mode !== "waiting") {
+        v.hcmd = 0;
+        v.frozen = true;
+        this.clearTile(i);
+      }
+    }
+    this.rmSettle = RM_SETTLE_STEPS;
+    this.stillUntil = Math.max(this.stillUntil, nowMs + 80);
+    this.requestFrame();
+  }
+
+  private quenchStaleWorkingTiles(_nowMs: number): void {
+    for (const { heat } of this.heats.values()) {
+      if (heat.snap?.mode === "working") {
+        heat.snapToRest("idle");
+      }
+    }
+    for (let i = 0; i < this.nt; i++) {
+      const cell = this.tileCell[i];
+      if (!cell) continue;
+      const snap = this.heats.get(cell.key)?.heat.snap;
+      if (snap?.mode !== "working") continue;
+      const v = this.vis[i];
+      v.hcmd = 0;
+      v.puff.fill(0);
+      v.gust = 0;
+      v.coldT = 0;
+      v.warm = 0;
+      v.frozen = true;
+      this.clearTile(i);
+    }
   }
 
   unregister(id: string): void {
@@ -359,11 +448,27 @@ export class HearthRenderer {
   };
 
   private handleVisibility = () => {
-    if (!document.hidden) {
-      this.last = 0;
-      this.layoutDirty = true;
-      this.requestFrame();
+    if (document.hidden) {
+      this.hiddenAtMs = performance.now();
+      if (this.raf) {
+        cancelAnimationFrame(this.raf);
+        this.raf = 0;
+      }
+      return;
     }
+    const nowMs = performance.now();
+    const gap = this.hiddenAtMs != null ? nowMs - this.hiddenAtMs : 0;
+    this.hiddenAtMs = null;
+    if (gap >= RESUME_SNAP_GAP_MS) {
+      // Quench stale working flames immediately on the visibility event rather
+      // than waiting a frame for React's revalidation effect.
+      this.quenchStaleWorkingTiles(nowMs);
+      this.snapUntilMs = Math.max(this.snapUntilMs, nowMs + 2_000);
+      this.stillUntil = Math.max(this.stillUntil, nowMs + 80);
+    }
+    this.last = 0;
+    this.layoutDirty = true;
+    this.requestFrame();
   };
 
   private touchSoon = () => this.touch();
@@ -476,6 +581,13 @@ export class HearthRenderer {
       const heat = this.heats.get(cell.key)?.heat;
       const snap = heat?.snap;
       if (!heat || !snap) continue;
+      if (this.revalidating && snap.mode === "working") {
+        v.hcmd = 0;
+        v.puff.fill(0);
+        v.gust = 0;
+        v.frozen = true;
+        continue;
+      }
       if (heat.hasPending()) pendingEvents = true;
       if (!heat.isActive(t) && heat.isCooling(wall)) cooling = true;
       let ht = heat.target(t);
@@ -541,17 +653,21 @@ export class HearthRenderer {
 
     const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.acc += realDt;
-    let n = 0;
-    while (this.acc >= H && n < 3) {
-      n++;
-      this.acc -= H;
-    }
-    if (n === 3) this.acc = 0;
-
-    // On >60 Hz displays (e.g. 120 Hz ProMotion), skip redrawing frames where the
-    // fixed-timestep solver did not advance and neither layout nor cooling moved.
-    const needsDraw = n > 0 || needsLayout || cooling || warming || this.stats.frames === 0;
+    const presentDue = nowMs - this.lastPresentMs >= PRESENT_INTERVAL_MS - 1;
+    // Cap presentation to 30 fps over the 60 Hz fixed-timestep solver (matching
+    // iOS HearthEngine). Layout moves, warming, and first frames draw right away.
+    const needsDraw =
+      needsLayout ||
+      warming ||
+      this.stats.frames === 0 ||
+      (presentDue && (this.acc >= H || cooling || nowMs < this.stillUntil));
     if (needsDraw) {
+      let n = 0;
+      while (this.acc >= H && n < 3) {
+        n++;
+        this.acc -= H;
+      }
+      if (n === 3) this.acc = 0;
       let useQ = false;
       if (this.timerExt && !this.q) {
         this.q = gl.createQuery();
@@ -562,6 +678,7 @@ export class HearthRenderer {
       }
       for (let k = 0; k < n; k++) this.simStep();
       this.render(true);
+      this.lastPresentMs = nowMs;
       if (this.simRuns.length) this.measureAsync(nowMs);
       if (useQ && this.timerExt) gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
       else if (this.q && this.timerExt && gl.getQueryParameter(this.q, gl.QUERY_RESULT_AVAILABLE)) {

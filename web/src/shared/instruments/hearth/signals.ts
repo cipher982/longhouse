@@ -216,8 +216,25 @@ export class SessionHeat {
   private stoppedWallMs: number | null = null;
   private wasActive = false;
 
+  /** Immediately snap the bed and work to the resting state for `mode` with
+   * no cool-down ramp (used on tab/app resume catch-up). */
+  snapToRest(mode?: HearthMode): void {
+    const resolvedMode = mode ?? this.snap?.mode ?? "idle";
+    const bed = restBed(resolvedMode);
+    this.surface = bed.surface;
+    this.core = bed.core;
+    this.surface0 = bed.surface;
+    this.core0 = bed.core;
+    this.work = 0;
+    this.deposits = [];
+    this.pending = [];
+    this.lastEventT = -Infinity;
+    this.stoppedWallMs = null;
+    this.wasActive = false;
+  }
+
   /** Apply a new card snapshot. Returns the delta it found (for tests/debug). */
-  update(next: HearthSnapshot, t: number, wallMs: number): CardDelta {
+  update(next: HearthSnapshot, t: number, wallMs: number, options?: { snap?: boolean }): CardDelta {
     const prev = this.snap;
     const delta = diffSnapshots(prev, next);
     this.snap = next.tool == null && prev?.tool ? { ...next, tool: prev.tool } : next;
@@ -235,6 +252,24 @@ export class SessionHeat {
     }
     const since = Number.isFinite(this.lastUpdateT) ? t - this.lastUpdateT : SPREAD_MAX;
     this.lastUpdateT = t;
+    // Explicit resume catch-up: snap directly to rest instead of playing a
+    // fake 4.5s "just finished" cool-down animation for work that ended away.
+    const staleStop = next.mode !== "working" && options?.snap === true;
+    if (staleStop) {
+      this.snapToRest(next.mode);
+      return delta;
+    }
+    if (options?.snap === true && next.mode === "working" && prev.mode !== "working") {
+      const bed = restBed("working");
+      this.surface = Math.max(this.surface, bed.surface);
+      this.core = Math.max(this.core, bed.core);
+      this.work = Math.max(this.work, BASE_WORK.working + densityWork(next));
+      this.pending = [];
+      this.deposits = [];
+      this.wasActive = true;
+      this.stoppedWallMs = null;
+      return delta;
+    }
     const spread = Math.max(0.3, Math.min(SPREAD_MAX, since));
     // Cap before building anything: a reconnect can report thousands.
     // Prompts lead the batch (the stoke comes before the work it caused).

@@ -26,7 +26,9 @@ import { Link, useLocation, useNavigate } from "react-router";
 import type { TimelineSessionCard } from "@/shared/api/agents";
 import { useAgentSessions } from "@/shared/api/useAgentSessions";
 import { useMobileNavSlot } from "@/app/headerSlot";
+import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
+import { useResumeRevalidation } from "@/shared/hooks/useResumeRevalidation";
 import { useStoredState } from "@/shared/hooks/useStoredState";
 import { useWallClock } from "@/shared/hooks/useWallClock";
 import type { StatusLampState } from "@/shared/instruments/StatusLamp";
@@ -277,7 +279,13 @@ function SessionRail({
   const nowMs = useWallClock(true);
   const mac = useMemo(isMacPlatform, []);
   const newSessionKey = newSessionHotkeyLabel(mac);
-  const { data } = useAgentSessions(RAIL_SESSION_FILTERS, { refetchInterval: 30_000 });
+  const documentVisible = useDocumentVisible();
+  const { data, refetch } = useAgentSessions(RAIL_SESSION_FILTERS, {
+    refetchInterval: documentVisible ? 30_000 : false,
+  });
+  const resumeRevalidating = useResumeRevalidation(documentVisible, refetch, {
+    enabled: Boolean(data),
+  });
   const [switcherOpen, setSwitcherOpenState] = useState(false);
   const switcherLabel = mac ? "⌘K" : "Ctrl+K";
   // Focus goes back where it was before the switcher opened (the composer,
@@ -522,7 +530,7 @@ function SessionRail({
             document.body,
           )
         : null}
-      <HearthProvider>
+      <HearthProvider revalidating={resumeRevalidating}>
       {groups.map((group) => {
         const groupRows = rows
           .map((row, index) => ({ row, index }))

@@ -53,6 +53,7 @@ export interface TimelineInboxProps {
   allowHoverPrefetch?: () => boolean;
   relativeNowMs: number;
   highlightQuery?: string;
+  revalidating?: boolean;
 }
 
 export function TimelineInbox({
@@ -62,6 +63,7 @@ export function TimelineInbox({
   allowHoverPrefetch,
   relativeNowMs,
   highlightQuery,
+  revalidating = false,
 }: TimelineInboxProps) {
   const inboxId = useId();
   const liveHeadingId = `${inboxId}-live-heading`;
@@ -154,7 +156,7 @@ export function TimelineInbox({
   }
 
   return (
-    <HearthProvider>
+    <HearthProvider revalidating={revalidating}>
       <div className="inbox" data-testid="timeline-inbox">
         {layout.shelf.length > 0 ? (
           <section className="inbox-tier inbox-tier--shelf" aria-labelledby={liveHeadingId}>
