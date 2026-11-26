@@ -10,7 +10,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from zerg.services.tool_presentation import call_text_for
 from zerg.models.agents import SessionLivePreview
 from zerg.models.live_store import LiveSessionLivePreview
 from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -18,6 +17,7 @@ from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
+from zerg.services.tool_presentation import call_text_for
 from zerg.utils.time import normalize_utc
 
 LIVE_PREVIEW_SOURCES = {

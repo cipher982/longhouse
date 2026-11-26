@@ -325,6 +325,8 @@ def test_cursor_task_with_a_subagent_type_uses_the_canonical_agent_label():
 def test_swarm_summaries_unwrap_json_quoted_args_and_skip_mcp_collisions():
     from zerg.services.tool_presentation import call_text_for
 
-    assert call_text_for("swarm", {"action": '"add"', "name": '"worker-a"', "workspace": '"share"'})["tool_intent"] == "add worker-a (share)"
+    assert (
+        call_text_for("swarm", {"action": '"add"', "name": '"worker-a"', "workspace": '"share"'})["tool_intent"] == "add worker-a (share)"
+    )
     assert call_text_for("read_board", {"since": 40})["tool_intent"] == "since #40"
     assert call_text_for("mcp__board__post_message", {"text": "hi"})["tool_intent"] is None

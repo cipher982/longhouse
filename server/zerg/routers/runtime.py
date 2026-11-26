@@ -19,7 +19,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
-from zerg.services.tool_presentation import call_text_for
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogRequestInvalid
 from zerg.catalogd.client import CatalogRequestTooLarge
@@ -51,6 +50,7 @@ from zerg.services.session_live_previews import reasoning_step
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
+from zerg.services.tool_presentation import call_text_for
 
 _LIFECYCLE_EVENT_KINDS = frozenset(
     {"binding_signal", "terminal_signal", "pause_request", "pause_resolution", "wake_signal", "invocation_closed"}

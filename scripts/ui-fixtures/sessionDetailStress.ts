@@ -1,4 +1,5 @@
 import { withServedSignal } from "./timelineCardStress";
+import { servedCallText } from "./servedCallText";
 export const SESSION_DETAIL_STRESS_SESSION_ID = "session-detail-stress";
 export const SESSION_DETAIL_STRESS_NOW = "2026-04-15T16:12:00Z";
 
@@ -329,6 +330,10 @@ export function makeEvent(
   timestamp: string,
   overrides: Partial<AgentEvent> = {},
 ): AgentEvent {
+  // A real server serves every call's text; carry it like the API does.
+  const served = role === "assistant" && overrides.tool_name && overrides.tool_intent === undefined
+    ? servedCallText(overrides.tool_name, overrides.tool_input_json)
+    : {};
   return {
     id,
     role,
@@ -341,6 +346,7 @@ export function makeEvent(
     in_active_context: true,
     branch_id: null,
     is_head_branch: true,
+    ...served,
     ...overrides,
   };
 }
