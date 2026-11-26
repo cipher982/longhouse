@@ -255,3 +255,76 @@ def test_status_phrase_is_none_without_a_tool():
 )
 def test_delegation_label_wording(kinds, count, label):
     assert _delegation_label(SessionDelegationFacts(state="pending", count=count, kinds=kinds)) == label
+
+
+# --- Served call text reads the effective tool (call_text_for / resolve_call_text) ---
+
+
+def test_codex_exec_single_child_is_described_by_its_command():
+    from zerg.services.tool_presentation import call_text_for
+
+    source = 'const r = await tools.exec_command({cmd:"rg -n needle server"}); text(r.output);'
+    text = call_text_for("exec", source, provider="codex")
+    assert text == {"tool_intent": "rg -n needle server", "tool_intent_source": "derived", "tool_target": "rg -n needle server"}
+
+
+def test_codex_exec_with_several_children_lists_each_one():
+    from zerg.services.tool_presentation import call_text_for
+
+    source = 'const a = await tools.exec_command({cmd:"ls"}); const b = await tools.exec_command({cmd:"pwd"}); text(a.output+b.output);'
+    text = call_text_for("exec", source, provider="codex")
+    assert text["tool_intent"] == "ls · pwd"
+    assert text["tool_target"] == "ls\npwd"
+
+
+def test_raw_apply_patch_names_its_files():
+    from zerg.services.tool_presentation import call_text_for
+
+    patch = "*** Begin Patch\n*** Update File: web/src/a.ts\n*** Add File: b/c.py\n*** End Patch"
+    text = call_text_for("apply_patch", patch, provider="codex")
+    assert text == {"tool_intent": "src/a.ts + 1 file", "tool_intent_source": "derived", "tool_target": "web/src/a.ts, b/c.py"}
+
+
+def test_authored_purpose_keeps_the_literal_target():
+    from zerg.services.tool_presentation import call_text_for
+
+    text = call_text_for("Bash", {"command": "make test", "description": "Run the tests"})
+    assert text == {"tool_intent": "Run the tests", "tool_intent_source": "authored", "tool_target": "make test"}
+
+
+def test_provider_spellings_of_paths_all_derive():
+    from zerg.services.tool_presentation import call_text_for
+
+    for name, key in (("read", "filePath"), ("read_file", "AbsolutePath"), ("Read", "file_path"), ("view_file", "Path")):
+        text = call_text_for(name, {key: "/a/b/c.ts"})
+        assert text["tool_intent"] == "b/c.ts", name
+        assert text["tool_target"] == "/a/b/c.ts", name
+
+
+def test_swarm_tools_summarize_the_action():
+    from zerg.services.tool_presentation import call_text_for
+
+    assert call_text_for("swarm", {"action": "add", "name": "w", "n": 3})["tool_intent"] == "add w x 3"
+    assert call_text_for("post_message", {"text": "\nhello board\nmore"})["tool_intent"] == "hello board"
+
+
+def test_plan_and_wait_tools_have_no_derived_text():
+    from zerg.services.tool_presentation import call_text_for
+
+    assert call_text_for("TodoWrite", {"todos": [{"content": "x"}]})["tool_intent"] is None
+    assert call_text_for("wait", {"timeout_ms": 1000})["tool_intent"] is None
+
+
+def test_cursor_task_with_a_subagent_type_uses_the_canonical_agent_label():
+    from zerg.services.tool_presentation import project_tool_presentation
+
+    presentation = project_tool_presentation("Task", {"subagent_type": "explore", "prompt": "x"}, provider="cursor")
+    assert presentation is not None and presentation["label"] == "Agent"
+
+
+def test_swarm_summaries_unwrap_json_quoted_args_and_skip_mcp_collisions():
+    from zerg.services.tool_presentation import call_text_for
+
+    assert call_text_for("swarm", {"action": '"add"', "name": '"worker-a"', "workspace": '"share"'})["tool_intent"] == "add worker-a (share)"
+    assert call_text_for("read_board", {"since": 40})["tool_intent"] == "since #40"
+    assert call_text_for("mcp__board__post_message", {"text": "hi"})["tool_intent"] is None

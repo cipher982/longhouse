@@ -40,8 +40,8 @@ describe("live phone projection", () => {
       "Shell",
     ]);
     expect(toolRows.map((row) => getToolSummary(row.interaction))).toEqual([
-      "/demo-repo/inventory.py",
-      "/demo-repo/inventory.py",
+      "demo-repo/inventory.py",
+      "demo-repo/inventory.py",
       "python3 test_inventory.py",
     ]);
     expect(toolRows.map((row) => toolResultLine(row.interaction))).toEqual([

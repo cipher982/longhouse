@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveToolInfo } from "../toolTiers.generated";
-import { buildTimelineModel, getToolSummary } from "../timelineModel";
+import { buildTimelineModel } from "../timelineModel";
 import { presentTranscript } from "../presentTranscript";
 import type { AgentSessionProjectionItem } from "@/shared/api/agents";
 import type { SubagentChild } from "../types";
@@ -35,63 +35,8 @@ describe("exact tool aliases", () => {
   });
 });
 
-describe("swarm tool summaries and subagent binding", () => {
-  it("summarizes JSON-quoted compact args and ignores MCP-namespaced collisions", () => {
-    const items: AgentSessionProjectionItem[] = [
-      {
-        kind: "event",
-        session_id: "coord-quoted",
-        timestamp: "2026-05-21T22:27:42Z",
-        event: {
-          id: 101,
-          role: "assistant",
-          tool_name: "swarm",
-          tool_call_id: "antigravity-1-0",
-          tool_input_json: { action: '"add"', name: '"worker-a"', workspace: '"share"' },
-          tool_output_text: null,
-          content_text: null,
-          timestamp: "2026-05-21T22:27:42Z",
-        },
-      },
-      {
-        kind: "event",
-        session_id: "coord-quoted",
-        timestamp: "2026-05-21T22:27:43Z",
-        event: {
-          id: 102,
-          role: "assistant",
-          tool_name: "post_message",
-          tool_call_id: "antigravity-2-0",
-          tool_input_json: { text: '"@worker-a First line\\nSecond line"' },
-          tool_output_text: null,
-          content_text: null,
-          timestamp: "2026-05-21T22:27:43Z",
-        },
-      },
-      {
-        kind: "event",
-        session_id: "coord-quoted",
-        timestamp: "2026-05-21T22:27:44Z",
-        event: {
-          id: 103,
-          role: "assistant",
-          tool_name: "mcp__slack__post_message",
-          tool_call_id: "mcp-1",
-          tool_input_json: { text: "Hello channel", channel: "#general" },
-          tool_output_text: null,
-          content_text: null,
-          timestamp: "2026-05-21T22:27:44Z",
-        },
-      },
-    ];
-    const model = buildTimelineModel(items);
-    const [quotedAdd, quotedPost, mcpPost] = model.toolItems;
-    expect(getToolSummary(quotedAdd)).toBe("add worker-a (share)");
-    expect(getToolSummary(quotedPost)).toBe("@worker-a First line");
-    expect(getToolSummary(mcpPost)).toBe("");
-  });
-
-  it("summarizes swarm, post_message, read_board, and swarm_note without raw JSON", () => {
+describe("swarm subagent binding", () => {
+  it("binds swarm workers to their child sessions", () => {
     const items: AgentSessionProjectionItem[] = [
       {
         kind: "event",
@@ -221,11 +166,8 @@ describe("swarm tool summaries and subagent binding", () => {
 
     const model = buildTimelineModel(items, subagents);
     expect(model.toolItems).toHaveLength(3);
-    const [swarmAdd, postMsg, readBoard] = model.toolItems;
-    expect(getToolSummary(swarmAdd)).toBe("add data-worker (share)");
+    const [swarmAdd] = model.toolItems;
     expect(swarmAdd.children?.map((c) => c.session_id)).toEqual(["child-session-1"]);
-    expect(getToolSummary(postMsg)).toBe("@data-worker Status check?");
-    expect(getToolSummary(readBoard)).toBe("since #40");
 
     const presented = presentTranscript({ items, subagents });
     const withSubagents = presented.find((row) => (row.subagents?.length ?? 0) > 0);

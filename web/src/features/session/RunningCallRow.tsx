@@ -6,6 +6,7 @@ import { parseUTC } from "@/shared/lib/dateUtils";
 import {
   getInteractionDisplayInfo,
   getToolInputRecord,
+  getToolTargetText,
   getToolIntentLabel,
   isToolIntentAuthored,
   isAgentLaunchInteraction,
@@ -194,8 +195,7 @@ export function RunningCallRow({
   const intent = getToolIntentLabel(interaction);
   const purpose = intent !== null && isToolIntentAuthored(interaction);
   const summary = getToolSummary(interaction);
-  const input = getToolInputRecord(interaction.callEvent?.tool_input_json);
-  const command = typeof input?.command === "string" ? input.command : typeof input?.cmd === "string" ? input.cmd : null;
+  const command = getToolTargetText(interaction);
   const label = intent || summary || "running…";
   const fraction =
     run.timeoutSeconds != null && run.elapsedSeconds != null ? run.elapsedSeconds / run.timeoutSeconds : null;

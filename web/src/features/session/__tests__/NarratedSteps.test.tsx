@@ -5,6 +5,7 @@ import { declaredTimeoutSeconds, type TimelineLiveness } from "../RunningCallRow
 import { getToolIntentLabel, type TimelineItem, type ToolInteraction } from "@/shared/session/model";
 import type { AgentEvent } from "@/shared/api/agents";
 import { makeSessionStateFacts } from "@/shared/test/sessionState";
+import { servedShellText } from "@/shared/test/servedCallText";
 
 function event(id: number, overrides: Partial<AgentEvent>): AgentEvent {
   return {
@@ -37,6 +38,7 @@ function bash(
   const callEvent = event(id, {
     tool_name: "Bash",
     tool_input_json: input,
+    ...servedShellText(input),
     tool_call_id: `tc-${id}`,
     timestamp,
     tool_call_state: output == null ? "running" : "completed",
@@ -218,10 +220,10 @@ describe("declared timeouts", () => {
 });
 
 describe("tool intent", () => {
-  it("reads Claude's shell description as intent, but not another tool's description", () => {
+  it("renders the served intent and never reads a description out of the arguments", () => {
     const shell = (bash(1, { command: "make test", description: "Run the tests" }, "ok") as Extract<TimelineItem, { kind: "tool" }>).interaction;
     expect(getToolIntentLabel(shell)).toBe("Run the tests");
-    const other: ToolInteraction = { ...shell, toolName: "WebFetch", callEvent: { ...shell.callEvent!, tool_name: "WebFetch" } };
-    expect(getToolIntentLabel(other)).toBeNull();
+    const unserved: ToolInteraction = { ...shell, callEvent: { ...shell.callEvent!, tool_intent: null, tool_intent_source: null } };
+    expect(getToolIntentLabel(unserved)).toBeNull();
   });
 });

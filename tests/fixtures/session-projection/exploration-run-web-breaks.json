@@ -5,7 +5,9 @@
     "root_session_id": "fixture-web-breaks",
     "focus_session_id": "fixture-web-breaks",
     "head_session_id": "fixture-web-breaks",
-    "path_session_ids": ["fixture-web-breaks"],
+    "path_session_ids": [
+      "fixture-web-breaks"
+    ],
     "total": 9,
     "page_offset": 0,
     "branch_mode": "head",
@@ -37,12 +39,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Grep",
-          "tool_input_json": {"pattern": "a"},
+          "tool_input_json": {
+            "pattern": "a"
+          },
           "tool_output_text": null,
           "tool_call_id": "g1",
           "timestamp": "2026-05-15T21:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "a",
+          "tool_intent_source": "derived",
+          "tool_target": "a"
         }
       },
       {
@@ -71,12 +78,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Grep",
-          "tool_input_json": {"pattern": "b"},
+          "tool_input_json": {
+            "pattern": "b"
+          },
           "tool_output_text": null,
           "tool_call_id": "g2",
           "timestamp": "2026-05-15T21:00:03Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "b",
+          "tool_intent_source": "derived",
+          "tool_target": "b"
         }
       },
       {
@@ -105,12 +117,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "WebFetch",
-          "tool_input_json": {"url": "https://example.com"},
+          "tool_input_json": {
+            "url": "https://example.com"
+          },
           "tool_output_text": null,
           "tool_call_id": "w1",
           "timestamp": "2026-05-15T21:00:05Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "https://example.com",
+          "tool_intent_source": "derived",
+          "tool_target": "https://example.com"
         }
       },
       {
@@ -139,12 +156,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Grep",
-          "tool_input_json": {"pattern": "c"},
+          "tool_input_json": {
+            "pattern": "c"
+          },
           "tool_output_text": null,
           "tool_call_id": "g3",
           "timestamp": "2026-05-15T21:00:07Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "c",
+          "tool_intent_source": "derived",
+          "tool_target": "c"
         }
       },
       {
@@ -168,13 +190,37 @@
   },
   "expectations": {
     "rows": [
-      {"kind": "message", "role": "user", "event_id": 1},
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
       {
         "kind": "activity_group",
-        "tool_names": ["Grep", "Grep", "WebFetch", "Grep"],
-        "call_event_ids": [2, 4, 6, 8],
-        "result_event_ids": [3, 5, 7, 9],
-        "pairings": ["id", "id", "id", "id"]
+        "tool_names": [
+          "Grep",
+          "Grep",
+          "WebFetch",
+          "Grep"
+        ],
+        "call_event_ids": [
+          2,
+          4,
+          6,
+          8
+        ],
+        "result_event_ids": [
+          3,
+          5,
+          7,
+          9
+        ],
+        "pairings": [
+          "id",
+          "id",
+          "id",
+          "id"
+        ]
       }
     ],
     "tool_count": 4,

@@ -18,6 +18,7 @@ import { TestRouter } from "@/shared/test/test-utils";
 import type { SessionStateFacts } from "@/shared/api/agents";
 import { BackgroundTaskRoster } from "../BackgroundTaskRoster";
 import SessionDetailPage from "../SessionDetailPage";
+import { servedShellText } from "@/shared/test/servedCallText";
 
 const workspaceMocks = vi.hoisted(() => ({
   useSessionWorkspace: vi.fn(),
@@ -805,6 +806,7 @@ describe("SessionDetailPage", () => {
             content_text: null,
             tool_name: "Bash",
             tool_input_json: { command: "git status --short" },
+            ...servedShellText({ command: "git status --short" }),
             tool_output_text: null,
             tool_call_id: "tc-pending",
             tool_call_state: "running",

@@ -55,6 +55,7 @@ from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.tool_presentation import call_text_for
 from zerg.services.tool_presentation import tool_display_label
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
@@ -662,6 +663,9 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     tool_output_text: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_call_state: Optional[Literal["running", "completed", "dropped"]] = None
+    tool_intent: Optional[str] = Field(None, description="Same as the event field: the call's one-line text")
+    tool_intent_source: Optional[Literal["authored", "derived"]] = Field(None, description="Same as the event field")
+    tool_target: Optional[str] = Field(None, description="Same as the event field: the call's literal target")
     kind: Optional[Literal["reply", "thinking", "tool", "subagent"]] = Field(
         None,
         description=(
@@ -1481,6 +1485,13 @@ class EventResponse(UTCBaseModel):
             "Null when tool_intent is null."
         ),
     )
+    tool_target: Optional[str] = Field(
+        None,
+        description=(
+            "The literal target of this call: the full command, file path(s), pattern or URL. "
+            "Clients show it on hover or as a mono line under an authored purpose; never a summary."
+        ),
+    )
     message_phase: Optional[Literal["commentary", "final_answer"]] = Field(
         None,
         description="Assistant text phase relative to tool execution vs turn completion",
@@ -2220,6 +2231,7 @@ def build_session_transcript_preview_response(
         tool_output_text=preview.tool_output_text,
         tool_call_id=preview.tool_call_id,
         tool_call_state=preview.tool_call_state,
+        **(call_text_for(preview.tool_name, preview.tool_input_json) if preview.tool_name else {}),
         kind=preview.kind,
         event_origin=preview.event_origin,
         timestamp=preview.timestamp,

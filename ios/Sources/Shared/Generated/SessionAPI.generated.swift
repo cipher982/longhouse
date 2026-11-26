@@ -457,6 +457,9 @@ struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: String?
+    let toolIntent: String?
+    let toolIntentSource: String?
+    let toolTarget: String?
     let kind: String?
     let eventOrigin: String
     let timestamp: String?
@@ -744,6 +747,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolPresentation: APIToolPresentationResponse?
     let toolIntent: String?
     let toolIntentSource: String?
+    let toolTarget: String?
     let messagePhase: String?
     let reasoningWithheld: Bool?
     let taskNotification: [String: JSONValue]?

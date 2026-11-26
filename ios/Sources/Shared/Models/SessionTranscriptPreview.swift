@@ -12,6 +12,10 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let toolOutputText: String?
     let toolCallId: String?
     let toolCallState: ToolCallState?
+    /// Served call text, the same fields a durable event carries.
+    var toolIntent: String? = nil
+    var toolIntentSource: String? = nil
+    var toolTarget: String? = nil
     let eventOrigin: String
     let timestamp: String?
     let isProvisional: Bool
@@ -42,7 +46,10 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
             inActiveContext: true,
             isHeadBranch: true,
             inputOrigin: nil,
-            eventOrigin: eventOrigin
+            eventOrigin: eventOrigin,
+            toolIntent: toolIntent ?? (kind == "subagent" ? text : nil),
+            toolIntentSource: toolIntent != nil ? toolIntentSource : (kind == "subagent" ? "authored" : nil),
+            toolTarget: toolTarget
         )
         guard toolName != nil,
               let toolOutputText,

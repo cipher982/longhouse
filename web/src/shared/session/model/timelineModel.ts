@@ -10,7 +10,7 @@ import type {
   ToolInteraction,
   SubagentChild,
 } from "./types";
-import { formatTime, truncatePath } from "./formatters";
+import { formatTime } from "./formatters";
 import { formatEditStat, getEditStat } from "./editSummary";
 import {
   colorTokenToCss,
@@ -291,23 +291,7 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
  * purpose is prose, a target is literal machine text.
  */
 export function isToolIntentAuthored(interaction: ToolInteraction): boolean {
-  const callIntent = interaction.callEvent?.tool_intent;
-  if (typeof callIntent === "string" && callIntent.trim()) {
-    return interaction.callEvent?.tool_intent_source === "authored";
-  }
-  // No served intent: mirror the server's rule. OMP's `i` and a shell call's
-  // description are purposes; an `intent` key in some other tool's arguments
-  // (an MCP or artifact payload) is data, never a purpose.
-  const toolName = interaction.presentation?.tool_name ?? interaction.toolName;
-  if (toolName.startsWith("mcp__")) return false;
-  const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
-  const fields = isShellTool(toolName) ? (["i", "description"] as const) : (["i"] as const);
-  return fields.some((field) =>
-    inputs.some((input) => {
-      const value = getToolInputRecord(input)?.[field];
-      return typeof value === "string" && value.trim().length > 0;
-    }),
-  );
+  return Boolean(getToolIntentLabel(interaction)) && interaction.callEvent?.tool_intent_source === "authored";
 }
 
 /** True for a call that starts a subagent (Agent, Task, spawn_agent). */
@@ -323,29 +307,13 @@ export function isAgentLaunchInteraction(interaction: ToolInteraction): boolean 
  * row's hover title. Null when the arguments carry neither.
  */
 export function getToolTargetText(interaction: ToolInteraction): string | null {
-  const input = getToolInputRecord(interaction.callEvent?.tool_input_json);
-  if (!input) return null;
-  for (const key of ["command", "cmd", "CommandLine", "file_path", "path", "filePath", "Path", "pattern", "url", "query"]) {
-    const value = input[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
+  const target = interaction.callEvent?.tool_target;
+  return typeof target === "string" && target.trim() ? target.trim() : null;
 }
 
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
   const callIntent = interaction.callEvent?.tool_intent;
-  if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();
-  const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
-  const shell = isShellTool(interaction.presentation?.tool_name ?? interaction.toolName);
-  const fields = shell ? (["i", "intent", "description"] as const) : (["i", "intent"] as const);
-  for (const field of fields) {
-    for (const input of inputs) {
-      const record = getToolInputRecord(input);
-      const value = record?.[field];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return null;
+  return typeof callIntent === "string" && callIntent.trim() ? callIntent.trim() : null;
 }
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
@@ -774,6 +742,15 @@ function replyProjectionItems(
         tool_output_text: liveOutput,
         tool_call_id: preview.tool_call_id || null,
         tool_call_state: preview.tool_call_state || null,
+        // Served like a durable event's; a subagent preview with no served
+        // text is described by its own preview line.
+        tool_intent: preview.tool_intent ?? (kind === "subagent" && previewText ? previewText : null),
+        tool_intent_source: preview.tool_intent
+          ? (preview.tool_intent_source ?? null)
+          : kind === "subagent" && previewText
+            ? "authored"
+            : null,
+        tool_target: preview.tool_target ?? null,
         timestamp: previewTimestamp,
         in_active_context: true,
         is_head_branch: true,
@@ -931,73 +908,14 @@ export function getActivityGroupTiming(group: ActivityGroup): { duration: string
   };
 }
 
-function unwrapArgString(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (typeof parsed === "string") return parsed.trim();
-    } catch {
-      // keep raw string when not valid JSON
-    }
-  }
-  return trimmed;
-}
-
-function summarizeSwarmTool(toolName: string, input: Record<string, unknown>): string | null {
-  if (toolName === "swarm") {
-    const action = unwrapArgString(input.action).toLowerCase();
-    const name = unwrapArgString(input.name);
-    const title = unwrapArgString(input.title);
-    const model = unwrapArgString(input.model);
-    const workspace = unwrapArgString(input.workspace);
-    const taskCount = Array.isArray(input.tasks)
-      ? input.tasks.length
-      : typeof input.n === "number" && input.n > 1
-        ? input.n
-        : 0;
-    if (action === "add") {
-      const target = name || "worker";
-      const countSuffix = taskCount > 1 ? ` × ${taskCount}` : "";
-      const wsSuffix = workspace && workspace !== "inherit" ? ` (${workspace})` : "";
-      return `add ${target}${countSuffix}${wsSuffix}`.slice(0, 120);
-    }
-    if (action === "kill" && name) return `kill ${name}`.slice(0, 120);
-    if (action === "title" && title) return `title: ${title}`.slice(0, 120);
-    if (action === "model") {
-      if (name && model) return `model ${name} → ${model}`.slice(0, 120);
-      if (model) return `model ${model}`.slice(0, 120);
-    }
-    if (action) return action.slice(0, 120);
-    return null;
-  }
-  if (toolName === "post_message") {
-    const text = unwrapArgString(input.text);
-    const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-    return firstLine ? firstLine.slice(0, 120) : null;
-  }
-  if (toolName === "read_board") {
-    if (typeof input.since === "number") return `since #${input.since}`.slice(0, 120);
-    const sinceStr = unwrapArgString(input.since);
-    return sinceStr ? `since #${sinceStr}`.slice(0, 120) : "read board";
-  }
-  if (toolName === "swarm_note") {
-    for (const field of ["title", "goal", "text", "note"]) {
-      const text = unwrapArgString(input[field]);
-      const firstLine = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-      if (firstLine) return firstLine.slice(0, 120);
-    }
-  }
-  return null;
-}
-
 /**
- * Short one-line label for a tool call. Prefers the most semantic input field
- * (file path, command, query) over raw JSON.
+ * Short one-line label for a tool call: the served tool_intent, else the
+ * start of its output.
  */
 export function getToolSummary(interaction: ToolInteraction): string {
-  const { callEvent, resultEvent } = interaction;
+  // The server serves every call's one-line text (tool_intent): the agent's
+  // purpose when it wrote one, else what the arguments say, for every
+  // provider's spelling. Clients render it and never re-derive it.
   const intent = getToolIntentLabel(interaction);
   if (intent) return intent;
 
@@ -1005,45 +923,10 @@ export function getToolSummary(interaction: ToolInteraction): string {
     return "";
   }
 
-  const children = interaction.presentation?.children ?? [];
-  if (children.length > 0 && !interaction.presentation?.wrapper_recedes) {
-    return `contains ${children.map((child) => child.label).join(" · ")}`;
-  }
-
-  const projectedInput = interactionInput(interaction);
-  if (projectedInput) {
-    const input = getToolInputRecord(projectedInput);
-    if (!input) return (formatToolInput(projectedInput) ?? "").slice(0, 120).replace(/\n/g, " ");
-    const hasMcpNamespace = Boolean(interaction.presentation?.mcp_namespace) || interaction.toolName.startsWith("mcp__");
-    if (!hasMcpNamespace) {
-      const lowerTool = (interaction.presentation?.tool_name ?? interaction.toolName).toLowerCase();
-      const swarmSummary = summarizeSwarmTool(lowerTool, input);
-      if (swarmSummary) return swarmSummary;
-    }
-    if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
-    if ("patch" in input && typeof input.patch === "string") {
-      const paths = [...input.patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((match) => match[1].trim());
-      if (paths.length > 0) {
-        const first = paths[0].split(/[\\/]/).pop() || paths[0];
-        const extra = paths.length - 1;
-        return extra === 0 ? first : `${first} + ${extra} ${extra === 1 ? "file" : "files"}`;
-      }
-      return "Applied patch";
-    }
-    if ("file_path" in input) return truncatePath(String(input.file_path));
-    if ("command" in input) return String(input.command).slice(0, 120);
-    if ("cmd" in input) return String(input.cmd).slice(0, 120);
-    if ("pattern" in input) return String(input.pattern);
-    if ("query" in input) return String(input.query).slice(0, 120);
-    if ("path" in input) return truncatePath(String(input.path));
-    if ("url" in input) return String(input.url).slice(0, 120);
-    if ("prompt" in input) return String(input.prompt).slice(0, 120);
-    if ("key" in input) return String(input.key).slice(0, 120);
-  }
-
-  if (resultEvent?.tool_output_text) {
-    const parsed = parseLonghouseOutput(resultEvent.tool_output_text);
-    const raw = parsed ? parsed.output : resultEvent.tool_output_text;
+  const output = interaction.resultEvent?.tool_output_text;
+  if (output) {
+    const parsed = parseLonghouseOutput(output);
+    const raw = parsed ? parsed.output : output;
     return raw.slice(0, 120).replace(/\n/g, " ");
   }
 

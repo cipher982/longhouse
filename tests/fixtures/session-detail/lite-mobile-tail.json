@@ -42,7 +42,10 @@
           "tool_input_truncated": true,
           "tool_name": "Bash",
           "tool_presentation_input": "same",
-          "tool_presentation_ref": "87d8cfef4bcf"
+          "tool_presentation_ref": "87d8cfef4bcf",
+          "tool_intent": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && ec",
+          "tool_intent_source": "derived",
+          "tool_target": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && echo step-9 && echo step-10 && echo step-11 && echo step-12 && echo step-13 && echo step-14 && echo step-15 && echo step-16 && echo step-17 &&"
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:02Z"
@@ -55,7 +58,7 @@
           "tool_call_id": "call-bash",
           "tool_name": "Bash",
           "tool_output_original_chars": 380,
-          "tool_output_text": "Chunk ID: 1\nWall time: 2.5 seconds\nProcess exited with code 0\nOutput:\nline 1\nline 2\n\u2026 30 more lines \u2026\nline 33\nline 34\nline 35\nline 36\nline 37\nline 38\nline 39\nline 40",
+          "tool_output_text": "Chunk ID: 1\nWall time: 2.5 seconds\nProcess exited with code 0\nOutput:\nline 1\nline 2\n… 30 more lines …\nline 33\nline 34\nline 35\nline 36\nline 37\nline 38\nline 39\nline 40",
           "tool_output_truncated": true
         },
         "kind": "event",
@@ -75,7 +78,10 @@
           },
           "tool_name": "Edit",
           "tool_presentation_input": "same",
-          "tool_presentation_ref": "2d02ef15e09c"
+          "tool_presentation_ref": "2d02ef15e09c",
+          "tool_intent": "src/app.py",
+          "tool_intent_source": "derived",
+          "tool_target": "/repo/src/app.py"
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:06Z"
@@ -104,7 +110,10 @@
           },
           "tool_name": "mcp_call",
           "tool_presentation_input": "same",
-          "tool_presentation_ref": "376472d7f4d9"
+          "tool_presentation_ref": "376472d7f4d9",
+          "tool_intent": "q",
+          "tool_intent_source": "derived",
+          "tool_target": "q"
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:08Z"
@@ -139,7 +148,10 @@
           },
           "tool_name": "StructuredOutput",
           "tool_presentation_input": "same",
-          "tool_presentation_ref": "df0b934d6321"
+          "tool_presentation_ref": "df0b934d6321",
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:10Z"

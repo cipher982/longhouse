@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from zerg.services.tool_presentation import call_text_for
 from zerg.models.agents import SessionLivePreview
 from zerg.models.live_store import LiveSessionLivePreview
 from zerg.provider_contract.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -1026,6 +1027,7 @@ def preview_payload_from_runtime_event(event: Any, *, observation_id: str) -> di
         "tool_output_text": candidate.tool_output_text,
         "tool_call_id": candidate.tool_call_id,
         "tool_call_state": candidate.tool_call_state,
+        **(call_text_for(candidate.tool_name, candidate.tool_input_json) if candidate.tool_name else {}),
         "kind": candidate.effective_kind,
         "event_origin": EVENT_ORIGIN_LIVE_PROVISIONAL,
         "timestamp": candidate.preview_observed_at.isoformat().replace("+00:00", "Z"),

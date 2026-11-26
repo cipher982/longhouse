@@ -5,7 +5,9 @@
     "root_session_id": "phase1-live",
     "focus_session_id": "phase1-live",
     "head_session_id": "phase1-live",
-    "path_session_ids": ["phase1-live"],
+    "path_session_ids": [
+      "phase1-live"
+    ],
     "total": 8,
     "page_offset": 0,
     "branch_mode": "head",
@@ -38,13 +40,18 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Read",
-          "tool_input_json": {"file_path": "/demo-repo/inventory.py"},
+          "tool_input_json": {
+            "file_path": "/demo-repo/inventory.py"
+          },
           "tool_output_text": null,
           "tool_call_id": "t1",
           "tool_call_state": "completed",
           "timestamp": "2026-08-12T20:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "demo-repo/inventory.py",
+          "tool_intent_source": "derived",
+          "tool_target": "/demo-repo/inventory.py"
         }
       },
       {
@@ -74,13 +81,20 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Edit",
-          "tool_input_json": {"file_path": "/demo-repo/inventory.py", "old_string": "shelves[1:]", "new_string": "shelves"},
+          "tool_input_json": {
+            "file_path": "/demo-repo/inventory.py",
+            "old_string": "shelves[1:]",
+            "new_string": "shelves"
+          },
           "tool_output_text": null,
           "tool_call_id": "t2",
           "tool_call_state": "completed",
           "timestamp": "2026-08-12T20:00:03Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "demo-repo/inventory.py",
+          "tool_intent_source": "derived",
+          "tool_target": "/demo-repo/inventory.py"
         }
       },
       {
@@ -110,13 +124,18 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Bash",
-          "tool_input_json": {"command": "python3 test_inventory.py"},
+          "tool_input_json": {
+            "command": "python3 test_inventory.py"
+          },
           "tool_output_text": null,
           "tool_call_id": "t3",
           "tool_call_state": "completed",
           "timestamp": "2026-08-12T20:00:05Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "python3 test_inventory.py",
+          "tool_intent_source": "derived",
+          "tool_target": "python3 test_inventory.py"
         }
       },
       {
@@ -159,15 +178,39 @@
   },
   "expectations": {
     "rows": [
-      {"kind": "message", "role": "user", "event_id": 1},
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
       {
         "kind": "activity_group",
-        "tool_names": ["Read", "Edit", "Bash"],
-        "call_event_ids": [2, 4, 6],
-        "result_event_ids": [3, 5, 7],
-        "pairings": ["id", "id", "id"]
+        "tool_names": [
+          "Read",
+          "Edit",
+          "Bash"
+        ],
+        "call_event_ids": [
+          2,
+          4,
+          6
+        ],
+        "result_event_ids": [
+          3,
+          5,
+          7
+        ],
+        "pairings": [
+          "id",
+          "id",
+          "id"
+        ]
       },
-      {"kind": "message", "role": "assistant", "event_id": 8}
+      {
+        "kind": "message",
+        "role": "assistant",
+        "event_id": 8
+      }
     ],
     "tool_count": 3,
     "activity_group_count": 1,

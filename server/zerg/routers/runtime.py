@@ -19,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
+from zerg.services.tool_presentation import call_text_for
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogRequestInvalid
 from zerg.catalogd.client import CatalogRequestTooLarge
@@ -563,6 +564,7 @@ def _live_transcript_preview_payload(event, *, now: datetime, thinking_text: str
     turn_id = str(payload.get("turn_id") or "unknown-turn").strip() or "unknown-turn"
     cursor_seq = str(seq) if seq is not None else "unknown-seq"
     tool_name = (str(payload.get("tool_name") or "").strip() or "exec") if is_tool else None
+    tool_input_json = {"command": command} if is_tool else None
     return {
         "event_id": seq or 0,
         "text": text,
@@ -570,7 +572,8 @@ def _live_transcript_preview_payload(event, *, now: datetime, thinking_text: str
         "tool_name": tool_name,
         # A subagent-spawning tool (Codex's collaboration call) is a subagent, like every other provider's.
         "kind": preview_kind(tool_name) if is_tool else "reply",
-        "tool_input_json": {"command": command} if is_tool else None,
+        "tool_input_json": tool_input_json,
+        **(call_text_for(tool_name, tool_input_json) if tool_name else {}),
         "tool_output_text": bounded_tail(output) if is_tool and output else None,
         "tool_call_id": str(payload.get("item_id") or "") or None,
         "tool_call_state": (

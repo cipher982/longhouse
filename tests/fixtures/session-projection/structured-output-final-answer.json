@@ -5,7 +5,9 @@
     "root_session_id": "fixture-final-answer",
     "focus_session_id": "fixture-final-answer",
     "head_session_id": "fixture-final-answer",
-    "path_session_ids": ["fixture-final-answer"],
+    "path_session_ids": [
+      "fixture-final-answer"
+    ],
     "total": 4,
     "page_offset": 0,
     "branch_mode": "head",
@@ -55,14 +57,23 @@
           "content_text": null,
           "tool_name": "StructuredOutput",
           "tool_input_json": {
-            "changed": ["Dockerfile", "docker-compose.yml"],
-            "done": ["cap_drop: ALL and no-new-privileges landed.", "Residual risk written up in README.md."]
+            "changed": [
+              "Dockerfile",
+              "docker-compose.yml"
+            ],
+            "done": [
+              "cap_drop: ALL and no-new-privileges landed.",
+              "Residual risk written up in README.md."
+            ]
           },
           "tool_output_text": null,
           "tool_call_id": "toolu_final_1",
           "timestamp": "2026-08-25T03:35:09Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         }
       },
       {
@@ -86,9 +97,21 @@
   },
   "expectations": {
     "rows": [
-      { "kind": "message", "role": "user", "event_id": 1 },
-      { "kind": "message", "role": "assistant", "event_id": 2 },
-      { "kind": "message", "role": "assistant", "event_id": 3 }
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "event_id": 2
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "event_id": 3
+      }
     ],
     "tool_count": 0,
     "activity_group_count": 0,

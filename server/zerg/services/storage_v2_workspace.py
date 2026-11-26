@@ -38,7 +38,7 @@ from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.tool_presentation import DESCRIPTION_IS_INTENT
 from zerg.services.tool_presentation import project_tool_presentation
-from zerg.services.tool_presentation import resolve_tool_intent
+from zerg.services.tool_presentation import resolve_call_text
 from zerg.services.transcript_lite import DETAIL_FULL
 from zerg.services.transcript_lite import DETAIL_LITE
 from zerg.services.transcript_lite import DETAIL_MODES
@@ -254,9 +254,13 @@ def _event_projection(
 
     item_facts = event.get("item") if isinstance(event.get("item"), Mapping) else {}
 
-    tool_intent: str | None = None
-    tool_intent_source: str | None = None
-    if event.get("tool_name"):
+    presentation = project_tool_presentation(
+        event.get("tool_name"),
+        event.get("tool_input_json"),
+        provider=provider,
+    )
+    call_text: dict[str, str | None] = {"tool_intent": None, "tool_intent_source": None, "tool_target": None}
+    if presentation is not None:
         tool_name = str(event.get("tool_name"))
         # Provider-authored purpose wins over anything derived from arguments.
         # The engine's item intent is already authored (OMP block intent or
@@ -265,9 +269,8 @@ def _event_projection(
         # only where description is the purpose.
         raw_item_intent = item_facts.get("intent")
         fact_intent = _fact_tool_intent(pos_facts, tool_call_id) if tool_name.lower() in DESCRIPTION_IS_INTENT else None
-        tool_intent, tool_intent_source = resolve_tool_intent(
-            tool_name,
-            event.get("tool_input_json"),
+        call_text = resolve_call_text(
+            presentation,
             provider_intents=(raw_item_intent if isinstance(raw_item_intent, str) else None, fact_intent),
         )
 
@@ -334,13 +337,8 @@ def _event_projection(
             "tool_output_truncated": False,
             "tool_output_original_chars": None,
             "tool_call_id": tool_call_id,
-            "tool_presentation": project_tool_presentation(
-                event.get("tool_name"),
-                event.get("tool_input_json"),
-                provider=provider,
-            ),
-            "tool_intent": tool_intent,
-            "tool_intent_source": tool_intent_source,
+            "tool_presentation": presentation,
+            **call_text,
             "message_phase": message_phase,
             "reasoning_withheld": reasoning_withheld,
             "task_notification": task_notification,

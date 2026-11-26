@@ -4893,6 +4893,11 @@ button.timeline-pane__status-chip:hover {
   font-family: var(--font-family-mono);
   font-size: 12.5px;
 }
+.tl-context--purpose .tl-context__summary,
+.tl-trail.tl-context--purpose .tl-context__summary {
+  font-family: var(--font-family-base);
+  font-size: 13px;
+}
 @media (max-width: 900px) {
   .tl-action--purpose .tl-action__summary,
   .tl-trail.tl-action--purpose .tl-action__summary,

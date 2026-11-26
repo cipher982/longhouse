@@ -494,7 +494,7 @@ def project_tool_presentation(
         if isinstance(agent_type, str) and agent_type.strip():
             base.update(
                 {
-                    "label": "Delegate",
+                    "label": "Agent",
                     "icon": "A",
                     "color": "tertiary",
                     "rule_id": "cursor:task:delegation",
@@ -639,6 +639,102 @@ def _path_tail(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:_INTENT_CHARS])
 
 
+_PATH_KEYS = ("file_path", "path", "filePath", "Path", "AbsolutePath", "target_file", "notebook_path")
+_PATTERN_KEYS = ("pattern", "query", "Query", "glob", "glob_pattern", "Pattern")
+_WEB_KEYS = ("query", "url", "Url", "Query")
+_PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.MULTILINE)
+_TARGET_CHARS = 2000
+
+
+def _first_text(parsed: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _first_line(text: str) -> str | None:
+    for line in text.strip().splitlines():
+        compact = " ".join(line.split())
+        if compact:
+            return compact
+    return None
+
+
+def _patch_source(tool_input_json: Any, parsed: Mapping[str, Any] | None) -> str | None:
+    """Patch text from Codex apply_patch, stored raw or under ``patch``/``input``."""
+    if isinstance(tool_input_json, str) and "*** Begin Patch" in tool_input_json:
+        return tool_input_json
+    if parsed is not None:
+        for key in ("patch", "input"):
+            value = parsed.get(key)
+            if isinstance(value, str) and "*** Begin Patch" in value:
+                return value
+    return None
+
+
+def _patch_summary(patch: str) -> str:
+    paths = [m.strip() for m in _PATCH_FILE.findall(patch)]
+    if not paths:
+        return "Applied patch"
+    first = _path_tail(paths[0])
+    extra = len(dict.fromkeys(paths)) - 1
+    return first if extra <= 0 else f"{first} + {extra} {'file' if extra == 1 else 'files'}"
+
+
+def _swarm_summary(name: str, parsed: Mapping[str, Any]) -> str | None:
+    """OMP swarm/board tools: the action and its subject, not the JSON."""
+
+    def text(key: str) -> str:
+        value = parsed.get(key)
+        if not isinstance(value, str):
+            return ""
+        value = value.strip()
+        # Compact OMP args arrive JSON-quoted ('"add"').
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                return value
+            return decoded.strip() if isinstance(decoded, str) else value
+        return value
+
+    if name == "swarm":
+        action = text("action").lower()
+        worker = text("name")
+        tasks = parsed.get("tasks")
+        count = len(tasks) if isinstance(tasks, list) else (parsed.get("n") if isinstance(parsed.get("n"), int) else 0)
+        if action == "add":
+            workspace = text("workspace")
+            suffix = f" x {count}" if count and count > 1 else ""
+            where = f" ({workspace})" if workspace and workspace != "inherit" else ""
+            return f"add {worker or 'worker'}{suffix}{where}"
+        if action == "kill" and worker:
+            return f"kill {worker}"
+        if action == "title" and text("title"):
+            return f"title: {text('title')}"
+        if action == "model" and text("model"):
+            return f"model {worker} -> {text('model')}" if worker else f"model {text('model')}"
+        return action or None
+    if name == "post_message":
+        return _first_line(text("text"))
+    if name == "read_board":
+        since = parsed.get("since")
+        return f"since #{since}" if isinstance(since, (int, str)) and str(since).strip() else "read board"
+    if name == "swarm_note":
+        for key in ("title", "goal", "text", "note"):
+            line = _first_line(text(key))
+            if line:
+                return line
+    return None
+
+
+def _label_for(name: str, rules_path: Path) -> str | None:
+    meta = _lookup_tool(_load_rules(str(rules_path.resolve())), name)
+    return str(meta.get("label")) if meta is not None else None
+
+
 def extract_derived_tool_intent(
     tool_name: str | None,
     tool_input_json: Any,
@@ -649,48 +745,89 @@ def extract_derived_tool_intent(
 
     Chosen by the tool's canonical label in config/tool-tiers.json, so every
     provider's spelling of a read, search or shell call gets the same rule: a
-    path tail, a pattern, a query or URL, the first line of a command, or the
-    first line of a subagent prompt. This is what the call does, not why.
+    path tail, a pattern, a query or URL, the first line of a command, the
+    files a patch touches, or the first line of a subagent prompt. A tool with
+    no rule falls back to the first familiar argument. This is what the call
+    does, not why. Clients render it as given and never re-derive it.
     """
     name = str(tool_name or "").strip()
     if not name:
         return None
     parsed = _input_mapping(tool_input_json)
+    patch = _patch_source(tool_input_json, parsed)
+    if patch is not None:
+        return _patch_summary(patch)
     if parsed is None:
         return None
-    meta = _lookup_tool(_load_rules(str(rules_path.resolve())), name)
-    label = str(meta.get("label")) if meta is not None else None
+    label = _label_for(name, rules_path)
+    lowered = name.lower()
 
     if label in {"Read", "Edit", "Write", "Notebook"}:
-        for key in ("file_path", "path", "filePath", "Path", "AbsolutePath", "target_file", "notebook_path"):
-            path = parsed.get(key)
-            if isinstance(path, str) and path.strip():
-                return _path_tail(path)
-        return None
+        path = _first_text(parsed, _PATH_KEYS)
+        return _path_tail(path) if path else None
     if label in {"Search", "List"}:
-        for key in ("pattern", "query", "Query", "glob", "glob_pattern", "Pattern"):
-            compact = _compact(parsed.get(key))
-            if compact:
-                return compact
-        return None
+        return _compact(_first_text(parsed, _PATTERN_KEYS) or _first_text(parsed, _PATH_KEYS))
     if label in {"Fetch", "Web search"}:
-        for key in ("query", "url", "Url", "Query"):
-            compact = _compact(parsed.get(key))
-            if compact:
-                return compact
-        return None
+        return _compact(_first_text(parsed, _WEB_KEYS))
     if label == "Shell":
         cmd = _shell_command(parsed)
-        if isinstance(cmd, str) and cmd.strip():
-            first_line = cmd.strip().splitlines()[0].strip()
-            return first_line[:_INTENT_CHARS] if first_line else None
+        line = _first_line(cmd) if isinstance(cmd, str) else None
+        return line[:_INTENT_CHARS] if line else None
+    swarm = _swarm_summary(lowered, parsed)
+    if swarm:
+        return _compact(swarm)
+    if label == "Agent" or lowered == "subagent":
+        prompt = _first_text(parsed, ("prompt", "Prompt", "message", "task"))
+        line = _first_line(prompt) if prompt else None
+        return line[:_INTENT_CHARS] if line else None
+    if label in {"Plan", "Wait", "Ask"}:
         return None
-    if label == "Agent" or name.lower() == "subagent":
-        prompt = parsed.get("prompt") or parsed.get("Prompt")
-        if isinstance(prompt, str) and prompt.strip():
-            first_line = " ".join(prompt.strip().splitlines()[0].split())
-            return first_line[:_INTENT_CHARS] if first_line else None
+    # No canonical rule: the first argument a reader would recognize.
+    path = _first_text(parsed, _PATH_KEYS)
+    if path:
+        return _path_tail(path)
+    for key in ("command", "cmd", "pattern", "query", "url", "prompt", "key"):
+        value = parsed.get(key)
+        if isinstance(value, str):
+            line = _first_line(value)
+            if line:
+                return line[:_INTENT_CHARS]
     return None
+
+
+def extract_tool_target(
+    tool_name: str | None,
+    tool_input_json: Any,
+    *,
+    rules_path: Path = DEFAULT_RULES_PATH,
+) -> str | None:
+    """The literal machine target of a call: the full command, path, pattern or URL.
+
+    Shown on hover or in a mono line under an authored purpose, so a reader
+    can always see exactly what ran. Never a summary.
+    """
+    name = str(tool_name or "").strip()
+    if not name:
+        return None
+    parsed = _input_mapping(tool_input_json)
+    if _patch_source(tool_input_json, parsed) is not None:
+        paths = list(dict.fromkeys(m.strip() for m in _PATCH_FILE.findall(_patch_source(tool_input_json, parsed) or "")))
+        return ", ".join(paths)[:_TARGET_CHARS] or None
+    if parsed is None:
+        return None
+    label = _label_for(name, rules_path)
+    if label == "Shell":
+        cmd = _shell_command(parsed)
+        return cmd.strip()[:_TARGET_CHARS] if isinstance(cmd, str) and cmd.strip() else None
+    order: tuple[str, ...]
+    if label in {"Search", "List"}:
+        order = (*_PATTERN_KEYS, *_PATH_KEYS)
+    elif label in {"Fetch", "Web search"}:
+        order = ("url", "Url", "query", "Query")
+    else:
+        order = (*_PATH_KEYS, "command", "cmd", "CommandLine", "pattern", "url", "query")
+    value = _first_text(parsed, order)
+    return value[:_TARGET_CHARS] if value else None
 
 
 def resolve_tool_intent(
@@ -721,6 +858,55 @@ def resolve_tool_intent(
     if derived:
         return derived, "derived"
     return None, None
+
+
+def resolve_call_text(
+    presentation: Mapping[str, Any] | None,
+    *,
+    provider_intents: tuple[str | None, ...] = (),
+    rules_path: Path = DEFAULT_RULES_PATH,
+) -> dict[str, str | None]:
+    """The served text of one call: ``tool_intent``, ``tool_intent_source``, ``tool_target``.
+
+    Reads the presentation's effective tool, so a Codex ``exec`` wrapper that
+    forwards one child is described by that child (the raw wrapper is
+    JavaScript and has no arguments to read). A wrapper with several children
+    is described by their labels.
+    """
+    empty: dict[str, str | None] = {"tool_intent": None, "tool_intent_source": None, "tool_target": None}
+    if not presentation:
+        return empty
+    name = str(presentation.get("tool_name") or "")
+    tool_input = presentation.get("tool_input_json")
+    children = presentation.get("children") or []
+    if children and not presentation.get("wrapper_recedes"):
+        parts: list[str] = []
+        targets: list[str] = []
+        for child in children:
+            child_name = str(child.get("tool_name") or "")
+            child_input = child.get("tool_input_json")
+            text, _ = resolve_tool_intent(child_name, child_input, rules_path=rules_path)
+            parts.append(text or str(child.get("label") or child_name or "tool"))
+            target = extract_tool_target(child_name, child_input, rules_path=rules_path)
+            if target:
+                targets.append(target)
+        intent, source = resolve_tool_intent(name, None, provider_intents=provider_intents, rules_path=rules_path)
+        return {
+            "tool_intent": intent or _compact(" · ".join(parts)),
+            "tool_intent_source": source or "derived",
+            "tool_target": "\n".join(targets)[:_TARGET_CHARS] or None,
+        }
+    intent, source = resolve_tool_intent(name, tool_input, provider_intents=provider_intents, rules_path=rules_path)
+    return {
+        "tool_intent": intent,
+        "tool_intent_source": source,
+        "tool_target": extract_tool_target(name, tool_input, rules_path=rules_path),
+    }
+
+
+def call_text_for(tool_name: str | None, tool_input_json: Any, *, provider: str | None = None) -> dict[str, str | None]:
+    """Served call text for a call that has no engine facts (a live preview)."""
+    return resolve_call_text(project_tool_presentation(tool_name, tool_input_json, provider=provider))
 
 
 _STATUS_NAME_CHARS = 32

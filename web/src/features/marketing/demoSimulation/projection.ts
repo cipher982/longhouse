@@ -14,7 +14,8 @@ function timestamp(t: number): string {
 
 function agentEvent(
   event: DemoSessionEvent,
-  fields: Pick<AgentEvent, "role" | "content_text" | "tool_name" | "tool_input_json" | "tool_output_text" | "tool_call_id">,
+  fields: Pick<AgentEvent, "role" | "content_text" | "tool_name" | "tool_input_json" | "tool_output_text" | "tool_call_id">
+    & Partial<Pick<AgentEvent, "tool_intent" | "tool_intent_source" | "tool_target">>,
 ): AgentSessionProjectionItem {
   const at = timestamp(event.t);
   return {
@@ -66,6 +67,11 @@ export function demoStoryToProjection(story: DemoStory): AgentSessionProjectionR
         tool_input_json: event.input,
         tool_output_text: null,
         tool_call_id: event.callId,
+        // The server serves each call's one-line text; the simulated story
+        // carries the same line as `display`.
+        tool_intent: event.display,
+        tool_intent_source: "derived",
+        tool_target: event.display,
       })];
     }
     if (event.type === "tool_result") {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AgentSessionProjectionItem } from "@/shared/api/agents";
 import { renderTranscript, resetTranscriptStateForTesting } from "../render";
 import type { OverlayRow, TranscriptPayload } from "../types";
+import { servedShellText } from "@/shared/test/servedCallText";
 
 function ev(partial: Partial<AgentEvent> & { id: number; role: string }): AgentSessionProjectionItem {
   const event = {
@@ -36,7 +37,7 @@ const narrated = [
   ev({ id: 1, role: "user", content_text: "check the build" }),
   ev({ id: 2, role: "assistant", content_text: "Looking at the CI log first.", message_phase: "commentary" }),
   ev({ id: 3, role: "assistant", tool_name: "Bash", tool_call_id: "a", tool_call_state: "completed",
-    tool_input_json: { command: "gh run list", description: "List recent CI runs" } }),
+    tool_input_json: { command: "gh run list", description: "List recent CI runs" }, ...servedShellText({ command: "gh run list", description: "List recent CI runs" }) }),
   ev({ id: 4, role: "tool", tool_call_id: "a", tool_output_text: "ok", tool_call_state: "completed" }),
   ev({ id: 5, role: "assistant", content_text: "The build is green.", message_phase: "final_answer" }),
 ];

@@ -239,6 +239,9 @@ function nonEmptyText(value: unknown): string | null {
 }
 
 function isAskUserQuestion(interaction: ToolInteraction): boolean {
+  // Claude's question card parses AskUserQuestion's structured questions;
+  // another provider's ask tool renders as an ordinary call until its
+  // payload is mapped.
   return interaction.toolName === "AskUserQuestion";
 }
 
@@ -1097,6 +1100,10 @@ function ContextLine({
 }) {
   const info = getInteractionDisplayInfo(interaction);
   const summary = getToolSummary(interaction);
+  // An authored purpose reads as prose on a context row too (OMP writes one
+  // on its reads and searches); the literal target stays on hover.
+  const purpose = isToolIntentAuthored(interaction);
+  const target = getToolTargetText(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
   const dropped = isToolInteractionDropped(interaction);
   const pending = isToolInteractionRunning(interaction);
@@ -1116,7 +1123,7 @@ function ContextLine({
       data-row-kind="tool"
       data-tool-tier="context"
       data-status={statusTone}
-      className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
+      className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-context--purpose" : ""}`}
     >
       <button
         type="button"
@@ -1136,7 +1143,9 @@ function ContextLine({
         >
           {info.displayName}
         </span>
-        <span className="tl-context__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        <span className="tl-context__summary" title={target && target !== summary ? target : undefined}>
+          {summary || (dropped ? "dropped" : pending ? "running…" : "")}
+        </span>
         <span className="tl-context__meta">
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
           {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
@@ -1373,7 +1382,7 @@ function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteracti
           ))}
         </div>
       ) : (
-        <div className="tl-question__text">Claude is waiting for your answer.</div>
+        <div className="tl-question__text">Waiting for your answer.</div>
       )}
     </article>
   );

@@ -65,6 +65,7 @@ function hydrateEvent(
     tool_call_state: null,
     tool_intent: null,
     tool_intent_source: null,
+    tool_target: null,
     message_phase: null,
     reasoning_withheld: false,
     task_notification: null,

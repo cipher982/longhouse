@@ -5,7 +5,9 @@
     "root_session_id": "fixture-tool-pairing",
     "focus_session_id": "fixture-tool-pairing",
     "head_session_id": "fixture-tool-pairing",
-    "path_session_ids": ["fixture-tool-pairing"],
+    "path_session_ids": [
+      "fixture-tool-pairing"
+    ],
     "total": 10,
     "page_offset": 0,
     "branch_mode": "head",
@@ -37,12 +39,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Bash",
-          "tool_input_json": {"command": "pwd"},
+          "tool_input_json": {
+            "command": "pwd"
+          },
           "tool_output_text": null,
           "tool_call_id": "call-explicit",
           "timestamp": "2026-05-15T18:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "pwd",
+          "tool_intent_source": "derived",
+          "tool_target": "pwd"
         }
       },
       {
@@ -88,12 +95,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Read",
-          "tool_input_json": {"file_path": "/repo/README.md"},
+          "tool_input_json": {
+            "file_path": "/repo/README.md"
+          },
           "tool_output_text": null,
           "tool_call_id": null,
           "timestamp": "2026-05-15T18:00:04Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "repo/README.md",
+          "tool_intent_source": "derived",
+          "tool_target": "/repo/README.md"
         }
       },
       {
@@ -122,12 +134,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Bash",
-          "tool_input_json": {"command": "sleep 120"},
+          "tool_input_json": {
+            "command": "sleep 120"
+          },
           "tool_output_text": null,
           "tool_call_id": "call-pending",
           "timestamp": "2026-05-15T18:00:06Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "sleep 120",
+          "tool_intent_source": "derived",
+          "tool_target": "sleep 120"
         }
       },
       {
@@ -156,12 +173,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Bash",
-          "tool_input_json": {"command": "whoami"},
+          "tool_input_json": {
+            "command": "whoami"
+          },
           "tool_output_text": null,
           "tool_call_id": null,
           "timestamp": "2026-05-15T18:00:08Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "whoami",
+          "tool_intent_source": "derived",
+          "tool_target": "whoami"
         }
       },
       {
@@ -185,17 +207,60 @@
   },
   "expectations": {
     "rows": [
-      {"kind": "message", "role": "user", "event_id": 1},
-      {"kind": "tool", "tool_name": "Bash", "call_event_id": 2, "result_event_id": 3, "pairing": "id"},
-      {"kind": "message", "role": "assistant", "event_id": 4},
-      {"kind": "tool", "tool_name": "Read", "call_event_id": 5, "result_event_id": 6, "pairing": "fifo"},
-      {"kind": "tool", "tool_name": "Bash", "call_event_id": 7, "result_event_id": null, "pairing": "id"},
-      {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 8},
-      {"kind": "tool", "tool_name": "Bash", "call_event_id": 9, "result_event_id": null, "pairing": "pending"},
-      {"kind": "orphan_tool", "tool_name": "Bash", "result_event_id": 10}
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
+      {
+        "kind": "tool",
+        "tool_name": "Bash",
+        "call_event_id": 2,
+        "result_event_id": 3,
+        "pairing": "id"
+      },
+      {
+        "kind": "message",
+        "role": "assistant",
+        "event_id": 4
+      },
+      {
+        "kind": "tool",
+        "tool_name": "Read",
+        "call_event_id": 5,
+        "result_event_id": 6,
+        "pairing": "fifo"
+      },
+      {
+        "kind": "tool",
+        "tool_name": "Bash",
+        "call_event_id": 7,
+        "result_event_id": null,
+        "pairing": "id"
+      },
+      {
+        "kind": "orphan_tool",
+        "tool_name": "Bash",
+        "result_event_id": 8
+      },
+      {
+        "kind": "tool",
+        "tool_name": "Bash",
+        "call_event_id": 9,
+        "result_event_id": null,
+        "pairing": "pending"
+      },
+      {
+        "kind": "orphan_tool",
+        "tool_name": "Bash",
+        "result_event_id": 10
+      }
     ],
     "tool_count": 6,
     "activity_group_count": 0,
-    "orphan_tool_ids": [8, 10]
+    "orphan_tool_ids": [
+      8,
+      10
+    ]
   }
 }

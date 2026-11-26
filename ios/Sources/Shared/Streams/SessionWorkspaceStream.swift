@@ -62,6 +62,9 @@ actor SessionWorkspaceStream {
             let tool_output_text: String?
             let tool_call_id: String?
             let tool_call_state: String?
+            var tool_intent: String? = nil
+            var tool_intent_source: String? = nil
+            var tool_target: String? = nil
             let event_origin: String
             let timestamp: String
             let is_provisional: Bool
@@ -81,6 +84,9 @@ actor SessionWorkspaceStream {
                     toolOutputText: tool_output_text,
                     toolCallId: tool_call_id,
                     toolCallState: tool_call_state.flatMap(ToolCallState.init(rawValue:)),
+                    toolIntent: tool_intent,
+                    toolIntentSource: tool_intent_source,
+                    toolTarget: tool_target,
                     eventOrigin: event_origin,
                     timestamp: timestamp,
                     isProvisional: is_provisional,

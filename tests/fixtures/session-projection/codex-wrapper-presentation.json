@@ -77,7 +77,10 @@
                 },
                 "rule_id": "tool:write_stdin",
                 "child_id": "36d4119054a1a6b0:14:57",
-                "source_span": [14, 57],
+                "source_span": [
+                  14,
+                  57
+                ],
                 "input_complete": true,
                 "result_forwarded": true
               }
@@ -85,7 +88,10 @@
           },
           "timestamp": "2026-07-23T12:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         }
       },
       {
@@ -152,7 +158,10 @@
                 },
                 "rule_id": "tool:write_stdin",
                 "child_id": "36d4119054a1a6b0:14:57",
-                "source_span": [14, 57],
+                "source_span": [
+                  14,
+                  57
+                ],
                 "input_complete": true,
                 "result_forwarded": true
               }
@@ -160,7 +169,10 @@
           },
           "timestamp": "2026-07-23T12:00:03Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         }
       },
       {
@@ -227,7 +239,10 @@
                 },
                 "rule_id": "tool:write_stdin",
                 "child_id": "36d4119054a1a6b0:14:57",
-                "source_span": [14, 57],
+                "source_span": [
+                  14,
+                  57
+                ],
                 "input_complete": true,
                 "result_forwarded": true
               }
@@ -235,7 +250,10 @@
           },
           "timestamp": "2026-07-23T12:00:05Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         }
       },
       {
@@ -302,7 +320,10 @@
                 },
                 "rule_id": "tool:write_stdin",
                 "child_id": "36d4119054a1a6b0:14:57",
-                "source_span": [14, 57],
+                "source_span": [
+                  14,
+                  57
+                ],
                 "input_complete": true,
                 "result_forwarded": true
               }
@@ -310,7 +331,10 @@
           },
           "timestamp": "2026-07-23T12:00:07Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         }
       },
       {

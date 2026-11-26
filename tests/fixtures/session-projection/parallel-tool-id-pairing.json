@@ -5,7 +5,9 @@
     "root_session_id": "fixture-parallel-tools",
     "focus_session_id": "fixture-parallel-tools",
     "head_session_id": "fixture-parallel-tools",
-    "path_session_ids": ["fixture-parallel-tools"],
+    "path_session_ids": [
+      "fixture-parallel-tools"
+    ],
     "total": 6,
     "page_offset": 0,
     "branch_mode": "head",
@@ -37,12 +39,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Grep",
-          "tool_input_json": {"pattern": "alpha"},
+          "tool_input_json": {
+            "pattern": "alpha"
+          },
           "tool_output_text": null,
           "tool_call_id": "grep-a",
           "timestamp": "2026-05-15T20:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "alpha",
+          "tool_intent_source": "derived",
+          "tool_target": "alpha"
         }
       },
       {
@@ -54,12 +61,17 @@
           "role": "assistant",
           "content_text": null,
           "tool_name": "Grep",
-          "tool_input_json": {"pattern": "beta"},
+          "tool_input_json": {
+            "pattern": "beta"
+          },
           "tool_output_text": null,
           "tool_call_id": "grep-b",
           "timestamp": "2026-05-15T20:00:01Z",
           "in_active_context": true,
-          "is_head_branch": true
+          "is_head_branch": true,
+          "tool_intent": "beta",
+          "tool_intent_source": "derived",
+          "tool_target": "beta"
         }
       },
       {
@@ -117,15 +129,35 @@
   },
   "expectations": {
     "rows": [
-      {"kind": "message", "role": "user", "event_id": 1},
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 1
+      },
       {
         "kind": "activity_group",
-        "tool_names": ["Grep", "Grep"],
-        "call_event_ids": [2, 3],
-        "result_event_ids": [5, 4],
-        "pairings": ["id", "id"]
+        "tool_names": [
+          "Grep",
+          "Grep"
+        ],
+        "call_event_ids": [
+          2,
+          3
+        ],
+        "result_event_ids": [
+          5,
+          4
+        ],
+        "pairings": [
+          "id",
+          "id"
+        ]
       },
-      {"kind": "message", "role": "assistant", "event_id": 6}
+      {
+        "kind": "message",
+        "role": "assistant",
+        "event_id": 6
+      }
     ],
     "tool_count": 2,
     "activity_group_count": 1,

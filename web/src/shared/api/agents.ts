@@ -146,6 +146,10 @@ export interface SessionTranscriptPreview {
   tool_output_text?: string | null;
   tool_call_id?: string | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
+  /** Served call text, the same fields a durable event carries. */
+  tool_intent?: string | null;
+  tool_intent_source?: "authored" | "derived" | null;
+  tool_target?: string | null;
   event_origin: string;
   timestamp?: string | null;
   is_provisional: boolean;
@@ -609,6 +613,8 @@ export interface AgentEvent {
   tool_intent?: string | null;
   /** authored: the agent wrote tool_intent as the purpose; derived: Longhouse built it from the arguments. */
   tool_intent_source?: "authored" | "derived" | null;
+  /** The call's literal target (full command, path, pattern or URL); shown on hover. */
+  tool_target?: string | null;
   message_phase?: "commentary" | "final_answer" | null;
   reasoning_withheld?: boolean;
   task_notification?: TaskNotificationPayload | null;

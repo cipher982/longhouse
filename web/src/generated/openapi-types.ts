@@ -4581,6 +4581,11 @@ export interface components {
              */
             tool_intent_source?: ("authored" | "derived") | null;
             /**
+             * Tool Target
+             * @description The literal target of this call: the full command, file path(s), pattern or URL. Clients show it on hover or as a mono line under an authored purpose; never a summary.
+             */
+            tool_target?: string | null;
+            /**
              * Message Phase
              * @description Assistant text phase relative to tool execution vs turn completion
              */
@@ -9489,6 +9494,21 @@ export interface components {
             tool_call_id?: string | null;
             /** Tool Call State */
             tool_call_state?: ("running" | "completed" | "dropped") | null;
+            /**
+             * Tool Intent
+             * @description Same as the event field: the call's one-line text
+             */
+            tool_intent?: string | null;
+            /**
+             * Tool Intent Source
+             * @description Same as the event field
+             */
+            tool_intent_source?: ("authored" | "derived") | null;
+            /**
+             * Tool Target
+             * @description Same as the event field: the call's literal target
+             */
+            tool_target?: string | null;
             /**
              * Kind
              * @description What the preview is. Absent: a reply when there is no tool_name, else a tool. thinking is sent only on the live stream, to a connection that asked for it with preview_kinds=thinking.

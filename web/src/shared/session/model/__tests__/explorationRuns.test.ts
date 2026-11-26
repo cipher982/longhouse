@@ -110,76 +110,36 @@ describe("exploration run helpers", () => {
     expect(formatActivitySummary(calls.map(fixtureInteraction))).toBe(expected);
   });
 
-  it("summarizes projected patches by files instead of wrapper syntax", () => {
-    expect(getToolSummary(interaction({
-      toolName: "apply_patch",
-      key: "patch",
-      anchorId: 1,
-      presentation: {
-        version: 1,
-        disposition: "parsed",
-        tool_name: "apply_patch",
-        source_tool_name: "exec",
-        execution_method: "exec",
-        label: "Edited",
-        icon: "E",
-        color: "brand",
-        tier: "action",
-        aggregate: null,
-        mcp_namespace: null,
-        tool_input_json: { patch: "*** Begin Patch\n*** Update File: server/zerg/services/app.py\n*** Add File: server/tests/test_app.py\n*** End Patch" },
-        rule_id: "codex:exec:single-child:v1",
-        wrapper_recedes: true,
-        children: [],
-      },
-    }))).toBe("app.py + 1 file");
-  });
-
-  it("prefers trimmed provider intent labels before legacy summaries", () => {
-    const withIntent = interaction({
+  it("renders the served call text and never re-derives it from arguments", () => {
+    const served = interaction({
       toolName: "Bash",
-      key: "intent",
+      key: "served",
       anchorId: 2,
       callEvent: event({
         id: 2,
         role: "assistant",
         timestamp: "2026-01-01T00:00:00Z",
         tool_name: "Bash",
-        tool_input_json: {
-          command: "docker ps -a",
-          i: "  Listing running containers  ",
-          intent: "ignored fallback",
-        },
+        tool_input_json: { command: "docker ps -a", i: "ignored by the client" },
+        tool_intent: "  Listing running containers  ",
+        tool_intent_source: "authored",
+        tool_target: "docker ps -a",
       }),
     });
-    expect(getToolSummary(withIntent)).toBe("Listing running containers");
+    expect(getToolSummary(served)).toBe("Listing running containers");
 
-    const withFallbackIntent = interaction({
+    expect(getToolSummary(interaction({
       toolName: "Bash",
-      key: "intent-fallback",
+      key: "unserved",
       anchorId: 3,
       callEvent: event({
         id: 3,
         role: "assistant",
         timestamp: "2026-01-01T00:00:00Z",
         tool_name: "Bash",
-        tool_input_json: { command: "docker ps -a", i: "  ", intent: "  Inspecting containers  " },
+        tool_input_json: { command: "docker ps -a", i: "a purpose the server did not serve" },
       }),
-    });
-    expect(getToolSummary(withFallbackIntent)).toBe("Inspecting containers");
-
-    expect(getToolSummary(interaction({
-      toolName: "Bash",
-      key: "no-intent",
-      anchorId: 4,
-      callEvent: event({
-        id: 4,
-        role: "assistant",
-        timestamp: "2026-01-01T00:00:00Z",
-        tool_name: "Bash",
-        tool_input_json: { command: "docker ps -a" },
-      }),
-    }))).toBe("docker ps -a");
+    }))).toBe("");
   });
 
   it("formats semantic verb counts in fixed order", () => {

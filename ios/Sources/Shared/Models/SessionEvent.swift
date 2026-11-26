@@ -56,6 +56,10 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     /// The full output (not sent) reads as a structured failure.
     let toolOutputFailed: Bool
     let toolIntent: String?
+    /// "authored" when the agent wrote toolIntent as the purpose, "derived" when the server built it.
+    let toolIntentSource: String?
+    /// The call's literal target (full command, path, pattern or URL), served.
+    let toolTarget: String?
     let messagePhase: String?
     let reasoningWithheld: Bool
     let taskNotification: [String: JSONValue]?
@@ -93,6 +97,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputOriginalChars: Int? = nil,
         toolOutputFailed: Bool = false,
         toolIntent: String? = nil,
+        toolIntentSource: String? = nil,
+        toolTarget: String? = nil,
         messagePhase: String? = nil,
         reasoningWithheld: Bool = false,
         taskNotification: [String: JSONValue]? = nil,
@@ -108,6 +114,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.toolOutputOriginalChars = toolOutputOriginalChars
         self.toolOutputFailed = toolOutputFailed
         self.toolIntent = toolIntent
+        self.toolIntentSource = toolIntentSource
+        self.toolTarget = toolTarget
         self.messagePhase = messagePhase
         self.reasoningWithheld = reasoningWithheld
         self.taskNotification = taskNotification
@@ -161,6 +169,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         threadId: String? = nil,
         branchKind: String? = nil,
         toolIntent: String? = nil,
+        toolIntentSource: String? = nil,
+        toolTarget: String? = nil,
         messagePhase: String? = nil,
         reasoningWithheld: Bool = false,
         taskNotification: [String: JSONValue]? = nil,
@@ -192,6 +202,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             threadId: threadId,
             branchKind: branchKind,
             toolIntent: toolIntent,
+            toolIntentSource: toolIntentSource,
+            toolTarget: toolTarget,
             messagePhase: messagePhase,
             reasoningWithheld: reasoningWithheld,
             taskNotification: taskNotification,
@@ -243,6 +255,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolOutputOriginalChars = try container.decodeIfPresent(Int.self, forKey: .toolOutputOriginalChars)
         toolOutputFailed = try container.decodeIfPresent(Bool.self, forKey: .toolOutputFailed) ?? false
         toolIntent = try container.decodeIfPresent(String.self, forKey: .toolIntent)
+        toolIntentSource = try container.decodeIfPresent(String.self, forKey: .toolIntentSource)
+        toolTarget = try container.decodeIfPresent(String.self, forKey: .toolTarget)
         messagePhase = try container.decodeIfPresent(String.self, forKey: .messagePhase)
         reasoningWithheld = try container.decodeIfPresent(Bool.self, forKey: .reasoningWithheld) ?? false
         taskNotification = try container.decodeIfPresent([String: JSONValue].self, forKey: .taskNotification)
@@ -279,6 +293,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(toolOutputOriginalChars, forKey: .toolOutputOriginalChars)
         if toolOutputFailed { try container.encode(true, forKey: .toolOutputFailed) }
         try container.encodeIfPresent(toolIntent, forKey: .toolIntent)
+        try container.encodeIfPresent(toolIntentSource, forKey: .toolIntentSource)
+        try container.encodeIfPresent(toolTarget, forKey: .toolTarget)
         try container.encodeIfPresent(messagePhase, forKey: .messagePhase)
         if reasoningWithheld { try container.encode(true, forKey: .reasoningWithheld) }
         try container.encodeIfPresent(taskNotification, forKey: .taskNotification)
@@ -315,6 +331,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case toolOutputOriginalChars
         case toolOutputFailed
         case toolIntent
+        case toolIntentSource
+        case toolTarget
         case messagePhase
         case reasoningWithheld
         case taskNotification

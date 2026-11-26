@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
 import { buildTimelineModel, type TimelineItem } from "@/shared/session/model";
+import { servedShellText } from "@/shared/test/servedCallText";
 
 const seamItem: TimelineItem = {
   kind: "seam",
@@ -120,6 +121,7 @@ function makePendingToolItem(state: "running" | "dropped"): TimelineItem {
         content_text: null,
         tool_name: "Bash",
         tool_input_json: { command: "sleep 10; make dogfood-check" },
+        ...servedShellText({ command: "sleep 10; make dogfood-check" }),
         tool_output_text: null,
         tool_call_id: "tool-pending",
         tool_call_state: state,
@@ -146,6 +148,7 @@ function makeToolWithMediaItem(): TimelineItem {
         content_text: null,
         tool_name: "Bash",
         tool_input_json: { command: "capture" },
+        ...servedShellText({ command: "capture" }),
         tool_output_text: null,
         tool_call_id: "tool-media",
         tool_call_state: "completed",
@@ -1082,6 +1085,12 @@ describe("TimelinePane", () => {
     const item = makePendingToolItem("running");
     if (item.kind !== "tool") throw new Error("expected tool fixture");
     item.interaction.callEvent!.tool_input_json = "*** Begin Patch\n*** Update File: example.ts";
+    // The server names a patch by the files it touches.
+    Object.assign(item.interaction.callEvent!, {
+      tool_intent: "example.ts",
+      tool_intent_source: "derived",
+      tool_target: "example.ts",
+    });
 
     render(
       <TimelinePane
@@ -1102,9 +1111,7 @@ describe("TimelinePane", () => {
     );
 
     const row = screen.getByTestId("session-timeline-row");
-    expect(row).toHaveTextContent(
-      "*** Begin Patch *** Update File: example.ts",
-    );
+    expect(row).toHaveTextContent("example.ts");
     fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
     expect(row).toHaveTextContent("*** Begin Patch");
     expect(row).toHaveTextContent("*** Update File: example.ts");
@@ -1210,6 +1217,11 @@ describe("TimelinePane", () => {
       command: "docker ps -a",
       i: "Listing running containers",
     };
+    Object.assign(item.interaction.callEvent, {
+      tool_intent: "Listing running containers",
+      tool_intent_source: "authored",
+      tool_target: "docker ps -a",
+    });
 
     renderPane([item]);
 

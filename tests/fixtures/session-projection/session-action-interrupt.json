@@ -5,7 +5,9 @@
     "root_session_id": "fixture-session-action",
     "focus_session_id": "fixture-session-action",
     "head_session_id": "fixture-session-action",
-    "path_session_ids": ["fixture-session-action"],
+    "path_session_ids": [
+      "fixture-session-action"
+    ],
     "total": 2,
     "page_offset": 0,
     "branch_mode": "head",
@@ -51,7 +53,11 @@
         "provider": "codex",
         "event_id": 10
       },
-      { "kind": "message", "role": "user", "event_id": 11 }
+      {
+        "kind": "message",
+        "role": "user",
+        "event_id": 11
+      }
     ],
     "tool_count": 0,
     "activity_group_count": 0,
