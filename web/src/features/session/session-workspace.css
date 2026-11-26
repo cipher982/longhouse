@@ -1147,7 +1147,7 @@ button.timeline-pane__status-chip:hover {
   align-items: center;
   gap: 8px;
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-2) 0 var(--trace-indent, var(--space-2));
   cursor: pointer;
   min-width: 0;
   width: 100%;
@@ -1361,7 +1361,12 @@ button.timeline-pane__status-chip:hover {
   /* Local instrument tokens for the trace (not in tokens.css — scoped here
      per the Phase 2 restyle so they can be deleted in one commit later). */
   --trace-gutter: var(--space-4);
+  /* Conductor sits --trace-inset left of the column edge; every row's text
+     starts --trace-indent right of it. Their sum is the clearance the
+     largest node (the assistant's 18px glyph plus its 3px page halo, radius
+     12) needs so it never covers a row's first letter. */
   --trace-inset: 8px;
+  --trace-indent: var(--space-2);
 }
 
 @media (min-width: 1180px) {
@@ -1671,7 +1676,10 @@ button.timeline-pane__status-chip:hover {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: var(--tl-msg-pad, var(--space-3)) 0;
+  padding-block: var(--tl-msg-pad, var(--space-3));
+  /* Same text edge as tool, thought and Thinking rows, so the turn node on
+     the trace has room beside the first line instead of over it. */
+  padding-inline: var(--trace-indent, var(--space-2)) 0;
   max-width: var(--tl-prose-max);
   width: 100%;
 }
@@ -1691,8 +1699,6 @@ button.timeline-pane__status-chip:hover {
 .tl-msg__head {
   position: relative;
   display: flex;
-  /* Clearance for the trace node (.tl-msg__node) straddling the conductor. */
-  padding-left: 4px;
   align-items: center;
   gap: var(--space-2);
   font-size: 12px;
@@ -1706,7 +1712,9 @@ button.timeline-pane__status-chip:hover {
    border. Hidden with the trace below 640px. */
 .tl-msg__node {
   position: absolute;
-  left: calc(-1 * var(--trace-inset, 8px) + 0.5px);
+  /* Measured from the row's text edge, back across the indent to the
+     conductor. */
+  left: calc(-1 * (var(--trace-inset, 8px) + var(--trace-indent, var(--space-2))) + 0.5px);
   top: 50%;
   transform: translate(-50%, -50%);
   display: flex;
@@ -2352,7 +2360,7 @@ button.timeline-pane__status-chip:hover {
   align-items: center;
   gap: var(--space-2);
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-2) 0 var(--trace-indent, var(--space-2));
   min-width: 0;
   width: 100%;
   border: 0;
@@ -2605,7 +2613,7 @@ button.timeline-pane__status-chip:hover {
   align-items: center;
   gap: 8px;
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-2) 0 var(--trace-indent, var(--space-2));
   cursor: pointer;
   min-width: 0;
   width: 100%;
@@ -2663,7 +2671,7 @@ button.timeline-pane__status-chip:hover {
   align-items: center;
   gap: 8px;
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-2) 0 var(--trace-indent, var(--space-2));
   cursor: pointer;
   /* Prose, like a tool row's own summary text (.tl-action__summary) — a
      group label is a sentence ("Ran 9 commands"), not machine output, so it
@@ -3216,7 +3224,7 @@ button.timeline-pane__status-chip:hover {
 
   .tl-msg {
     gap: 3px;
-    padding: var(--tl-msg-pad, 8px) 0;
+    padding-block: var(--tl-msg-pad, 8px);
     max-width: 100%;
   }
 
@@ -4018,7 +4026,7 @@ button.timeline-pane__status-chip:hover {
   max-width: var(--tl-tool-max);
   margin-inline: auto;
   width: 100%;
-  padding: 10px 76px 2px var(--space-2);
+  padding: 10px 76px 2px var(--trace-indent, var(--space-2));
   border-radius: 2px;
 }
 .tl-thought::before {
