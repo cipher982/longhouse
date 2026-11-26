@@ -4406,13 +4406,13 @@ summary:has(> .run-dot) {
 		const callIntent = interaction.callEvent?.tool_intent;
 		return typeof callIntent === "string" && callIntent.trim() ? callIntent.trim() : null;
 	}
-	/** Completed, attributable calls may join a prose-bounded activity run. */
 	/** A thought the provider withheld and left empty: a marker, not content. */
 	function isBareWithheldReasoning(event) {
 		const raw = event.content_text || "";
 		const cleaned = (raw.startsWith("Thinking:\n") ? raw.slice(10) : raw).trim();
 		return (Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld") && (!cleaned || cleaned === "[Reasoning withheld]");
 	}
+	/** Completed, attributable calls may join a prose-bounded activity run. */
 	function isActivityEligible(interaction) {
 		if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
 		if ((interaction.children?.length ?? 0) > 0) return false;
@@ -4844,8 +4844,16 @@ summary:has(> .run-dot) {
 		const activityGroups = [];
 		const groupByInteractionKey = /* @__PURE__ */ new Map();
 		let buffer = [];
+		let deferredMarker = null;
+		let keptWithheldInTurn = false;
 		const flush = () => {
 			if (buffer.length === 0) return;
+			const marker = deferredMarker;
+			deferredMarker = null;
+			pushRun();
+			if (marker) groupedItems.push(marker);
+		};
+		const pushRun = () => {
 			if (buffer.length === 1) groupedItems.push({
 				kind: "tool",
 				interaction: buffer[0]
@@ -4871,7 +4879,16 @@ summary:has(> .run-dot) {
 				buffer.push(item.interaction);
 				continue;
 			}
-			if (buffer.length > 0 && item.kind === "reasoning" && isBareWithheldReasoning(item.event)) continue;
+			if (item.kind === "message" && item.event.role === "user" || item.kind === "seam") keptWithheldInTurn = false;
+			if (item.kind === "reasoning" && isBareWithheldReasoning(item.event)) {
+				const firstInTurn = !keptWithheldInTurn;
+				keptWithheldInTurn = true;
+				if (buffer.length > 0) {
+					if (firstInTurn) deferredMarker = item;
+					else eventIdToSelectionKey.set(item.event.id, `tool:${buffer[buffer.length - 1].key}`);
+					continue;
+				}
+			}
 			flush();
 			groupedItems.push(item);
 		}

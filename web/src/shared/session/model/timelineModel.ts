@@ -316,7 +316,6 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
   return typeof callIntent === "string" && callIntent.trim() ? callIntent.trim() : null;
 }
 
-/** Completed, attributable calls may join a prose-bounded activity run. */
 /** A thought the provider withheld and left empty: a marker, not content. */
 export function isBareWithheldReasoning(event: AgentEvent): boolean {
   const raw = event.content_text || "";
@@ -325,6 +324,7 @@ export function isBareWithheldReasoning(event: AgentEvent): boolean {
   return isWithheld && (!cleaned || cleaned === "[Reasoning withheld]");
 }
 
+/** Completed, attributable calls may join a prose-bounded activity run. */
 export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
   if ((interaction.children?.length ?? 0) > 0) return false;
@@ -1192,9 +1192,20 @@ export function buildTimelineModel(
   const groupByInteractionKey = new Map<string, ActivityGroup>();
 
   let buffer: ToolInteraction[] = [];
+  // The turn's one visible "Reasoning withheld" marker, when it first shows
+  // up inside a run, waits here and lands right after that run.
+  let deferredMarker: TimelineItem | null = null;
+  let keptWithheldInTurn = false;
 
   const flush = () => {
     if (buffer.length === 0) return;
+    const marker = deferredMarker;
+    deferredMarker = null;
+    pushRun();
+    if (marker) groupedItems.push(marker);
+  };
+
+  const pushRun = () => {
     if (buffer.length === 1) {
       groupedItems.push({ kind: "tool", interaction: buffer[0] });
     } else {
@@ -1218,11 +1229,27 @@ export function buildTimelineModel(
       buffer.push(item.interaction);
       continue;
     }
+    if ((item.kind === "message" && item.event.role === "user") || item.kind === "seam") {
+      keptWithheldInTurn = false;
+    }
     // Some providers (Claude Opus) write an empty, withheld thought before
     // nearly every call. The pane shows one "Reasoning withheld" per turn and
     // hides the rest, so letting the hidden ones split a run left every call
-    // as its own row with nothing visible between them.
-    if (buffer.length > 0 && item.kind === "reasoning" && isBareWithheldReasoning(item.event)) continue;
+    // as its own row with nothing visible between them. Inside a run, the
+    // turn's first marker moves to the run's end; later ones fold into the
+    // run, and a link to one opens the run.
+    if (item.kind === "reasoning" && isBareWithheldReasoning(item.event)) {
+      const firstInTurn = !keptWithheldInTurn;
+      keptWithheldInTurn = true;
+      if (buffer.length > 0) {
+        if (firstInTurn) {
+          deferredMarker = item;
+        } else {
+          eventIdToSelectionKey.set(item.event.id, `tool:${buffer[buffer.length - 1].key}`);
+        }
+        continue;
+      }
+    }
     flush();
     groupedItems.push(item);
   }

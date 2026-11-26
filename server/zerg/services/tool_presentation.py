@@ -770,25 +770,33 @@ def _label_for(name: str, rules_path: Path) -> str | None:
 
 _SHELL_WORD = r"""(?:"[^"]*"|'[^']*'|[^\s;&|'"])+"""
 # Leading setup that says where or with what, not what: `cd <dir> &&`,
-# `cd <dir>;`, `VAR=value;`, `export VAR=value &&`. A bare `VAR=value cmd`
-# (an environment prefix) stays, since it belongs to the command.
+# `cd <dir>;`, `VAR=value;`, `export VAR=value &&`, or either on its own line.
+# A bare `VAR=value cmd` (an environment prefix) stays: it belongs to the
+# command.
 _SHELL_SETUP = re.compile(
-    rf"""^\s*(?:cd\s+{_SHELL_WORD}|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:{_SHELL_WORD})?)\s*(?:&&|;)\s*"""
+    rf"""^[ \t]*(?:cd[ \t]+{_SHELL_WORD}|(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=(?:{_SHELL_WORD})?)"""
+    r"""[ \t]*(?:&&|;|\n)(?:[ \t]|\\\n|\n)*"""
 )
 
 
-def _shell_headline(line: str) -> str:
+def _shell_headline(command: str) -> str | None:
     """A command's first line without its leading cd and variable setup.
 
     `cd /tmp/x/scratchpad && python3 - <<'EOF'` reads as `python3 - <<'EOF'`.
-    The full command stays the call's target, shown beside or on hover.
+    When what is left is not a command (a comment, a stray continuation),
+    the plain first line stands. The full command stays the call's target.
     """
-    current = line
+    first = _first_line(command)
+    current = command
     while True:
         match = _SHELL_SETUP.match(current)
-        if not match or not current[match.end():].strip():
-            return current.strip()
+        if not match:
+            break
         current = current[match.end():]
+    line = _first_line(current)
+    if not line or line.startswith("#") or line.rstrip("\\ \t") == "":
+        return first
+    return line.rstrip(" \t\\").strip() or first
 
 
 def extract_derived_tool_intent(
@@ -834,8 +842,7 @@ def extract_derived_tool_intent(
         return _compact(_first_text(parsed, _WEB_KEYS))
     if label == "Shell":
         cmd = _shell_command(parsed)
-        line = _first_line(cmd) if isinstance(cmd, str) else None
-        line = _shell_headline(line) if line else None
+        line = _shell_headline(cmd) if isinstance(cmd, str) else None
         return line[:_INTENT_CHARS] if line else None
     swarm = _swarm_summary(lowered, parsed)
     if swarm:

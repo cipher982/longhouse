@@ -257,6 +257,8 @@
    not push to the line's end: that space belongs to the evidence icon. */
 .session-chat-composer__turn-clock {
   flex-shrink: 0;
+  /* The head's 10px gap is too wide for "label · 4:42"; pull in to 6px. */
+  margin-left: -4px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
@@ -1094,11 +1096,4 @@
   font-family: var(--font-family-mono);
   font-size: 11px;
   color: var(--color-text-secondary);
-}
-
-/* Phones: the clock's word goes first so the step's label keeps its room. */
-@media (max-width: 640px) {
-  .session-chat-composer__turn-label {
-    display: none;
-  }
 }

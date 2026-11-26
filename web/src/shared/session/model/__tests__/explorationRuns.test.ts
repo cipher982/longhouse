@@ -493,6 +493,32 @@ describe("withheld thoughts between calls", () => {
     expect(model.activityGroups[0].interactions).toHaveLength(4);
   });
 
+  it("keeps the turn's one marker when it first appears mid-run, and links folded ones to the run", () => {
+    const withheld = (id: number) =>
+      event({ id, role: "assistant", content_text: "", reasoning_withheld: true, item: { kind: "reasoning", visibility: "withheld" }, timestamp: `2026-01-01T00:00:${String(id).padStart(2, "0")}Z` } as Partial<AgentEvent> & Pick<AgentEvent, "id" | "role" | "timestamp">);
+    const call = (id: number, callId: string) => [
+      event({ id, role: "assistant", tool_name: "Bash", tool_call_id: callId, tool_input_json: { command: "ls" }, timestamp: `2026-01-01T00:00:${String(id).padStart(2, "0")}Z` }),
+      event({ id: id + 1, role: "tool", tool_call_id: callId, tool_output_text: "ok", timestamp: `2026-01-01T00:00:${String(id + 1).padStart(2, "0")}Z` }),
+    ];
+    const events: AgentEvent[] = [
+      event({ id: 1, role: "user", content_text: "go", timestamp: "2026-01-01T00:00:01Z" }),
+      ...call(2, "a"),
+      withheld(4),
+      ...call(5, "b"),
+      withheld(7),
+      ...call(8, "c"),
+    ];
+
+    const model = buildTimelineModel(projection(events));
+
+    expect(model.items.map((item) => item.kind)).toEqual(["message", "activity_group", "reasoning"]);
+    expect(model.activityGroups[0].interactions).toHaveLength(3);
+    const marker = model.items[2];
+    expect(marker.kind === "reasoning" && marker.event.id).toBe(4);
+    // The folded second marker opens the run it sits in.
+    expect(model.eventIdToRowId.get(7)).toBe(model.eventIdToRowId.get(5));
+  });
+
   it("keeps a thought with text as a break between calls", () => {
     const events: AgentEvent[] = [
       event({ id: 1, role: "assistant", tool_name: "Bash", tool_call_id: "a", tool_input_json: { command: "ls" }, timestamp: "2026-01-01T00:00:01Z" }),

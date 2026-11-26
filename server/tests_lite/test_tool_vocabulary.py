@@ -356,5 +356,11 @@ def test_shell_intent_drops_leading_cd_and_variable_setup():
     # An environment prefix belongs to the command, and a bare cd is the command.
     assert intent("FOO=1 make test") == "FOO=1 make test"
     assert intent("cd /repo") == "cd /repo"
+    # Setup on its own line, or continued with a backslash.
+    assert intent("cd /tmp/x/scratchpad\npython3 - <<'EOF'\nprint(1)\nEOF") == "python3 - <<'EOF'"
+    assert intent("cd /tmp/x && \\\n  python3 script.py") == "python3 script.py"
+    # What follows is not a command: the plain first line stands.
+    assert intent("cd /tmp/x && # run tests\nmake") == "cd /tmp/x && # run tests"
+    assert intent("cd /repo\n") == "cd /repo"
     # The target keeps the literal command.
     assert call_text_for("Bash", {"command": "cd /r && ls"})["tool_target"] == "cd /r && ls"
