@@ -495,13 +495,19 @@ struct SessionView: View {
     /// The turn clock's anchor: the newest user message in the loaded thread,
     /// the same fact the web composer and rail count from, so the phone and
     /// the browser show one number for "this turn".
+    /// A message sent from this phone counts before its echo lands, and a
+    /// Longhouse send the server recorded counts even when its row has not
+    /// loaded, so the clock never runs from an older turn.
     private var latestUserMessageAt: Date? {
-        viewModel.items.reversed().lazy.compactMap { item -> Date? in
+        let transcript = viewModel.items.reversed().lazy.compactMap { item -> Date? in
             guard let event = item.event, event.role == "user",
                   !["compaction_boundary", "provider_notification", "provider_reasoning"].contains(event.interactionKind)
             else { return nil }
             return LonghouseDateParser.parse(event.timestamp)
         }.first
+        let sent = viewModel.submittedInputs.map(\.createdAt).max()
+        let recorded = viewModel.detail?.stateFacts.lastUserInputAt.flatMap(LonghouseDateParser.parse)
+        return [transcript, sent, recorded].compactMap { $0 }.max()
     }
 
     // Lock-Screen / Live Activity management failure — explicitly NOT session

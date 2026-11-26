@@ -418,7 +418,11 @@ struct SessionRuntimeDock: View {
 
     private var elapsedStart: Date? {
         guard isOpen && detail.isSessionExecuting else { return nil }
-        if let turnStartedAt, turnStartedAt <= Date() { return turnStartedAt }
+        // A turn older than a day is not this turn (a resumed or quiet
+        // session); fall back to the state's own start rather than a blank.
+        if let turnStartedAt, turnStartedAt <= Date(), Date().timeIntervalSince(turnStartedAt) < 86_400 {
+            return turnStartedAt
+        }
         if let anchor = elapsedAnchor, anchor.key == elapsedAnchorKey {
             return anchor.start
         }
@@ -691,7 +695,7 @@ struct SessionRuntimeDock: View {
             return "Activity uncertain"
         case .attention:
             if let pause = detail.activePauseRequest {
-                return pause.questions.isEmpty ? "Needs approval" : "Needs your answer"
+                return pause.kind == "structured_question" ? "Needs your answer" : "Needs approval"
             }
             return detail.runtimeHeadline
         default:

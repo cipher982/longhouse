@@ -62,6 +62,8 @@ struct TimelineSessionCardRow: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(Ember.textMuted)
                             .monospacedDigit()
+                            // The status badge's label already speaks the age.
+                            .accessibilityHidden(true)
                     }
                 }
 
@@ -439,7 +441,7 @@ func stateDurationLabel(for session: SessionSummary) -> String? {
     // Use the receded state (disposition closed or run ended), matching the
     // dot/accent and signal so closed or exited rows never show a live counter.
     if session.isReceded { return nil }
-    guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
+    guard let date = parseLonghouseDate(session.timelineAnchor), date <= Date() else { return nil }
     return "\(compactDuration(since: date)) ago"
 }
 
