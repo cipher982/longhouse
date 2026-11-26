@@ -140,7 +140,7 @@ const LIVE_TAIL_LINES = 2;
 
 /** The last non-blank lines of a running call's output so far, when the live preview supplied it. */
 export function liveOutputTail(interaction: ToolInteraction): string | null {
-  const text = interaction.callEvent?.tool_output_text;
+  const text = interaction.callEvent?.tool_output_text || interaction.resultEvent?.tool_output_text;
   if (typeof text !== "string" || !text.trim()) return null;
   const lines = text
     .replace(/\r\n?/g, "\n")
@@ -168,6 +168,7 @@ export function RunningCallRow({
   onSelect,
   onToggleExpand,
   detail,
+  preview = null,
   trail = false,
 }: {
   interaction: ToolInteraction;
@@ -177,6 +178,8 @@ export function RunningCallRow({
   onSelect: () => void;
   onToggleExpand: () => void;
   detail: ReactNode;
+  /** The output well a settled call shows outside a narrated step. */
+  preview?: ReactNode;
   trail?: boolean;
 }) {
   const run = useRunningCallState(interaction);
@@ -190,7 +193,7 @@ export function RunningCallRow({
     run.timeoutSeconds != null && run.elapsedSeconds != null ? run.elapsedSeconds / run.timeoutSeconds : null;
   const showBudget = run.timeoutSeconds != null && fraction != null && fraction >= BUDGET_VISIBLE_FRACTION;
   const detailId = `${rowId}-detail`;
-  const tail = expanded ? null : liveOutputTail(interaction);
+  const tail = expanded || preview ? null : liveOutputTail(interaction);
   const note = run.note;
 
   return (
@@ -240,6 +243,7 @@ export function RunningCallRow({
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
       </button>
+      {!expanded && preview ? preview : null}
       {tail ? (
         <pre className="tl-run__tail" data-testid="running-call-tail">
           {tail}

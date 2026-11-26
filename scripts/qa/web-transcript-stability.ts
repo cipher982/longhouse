@@ -786,7 +786,8 @@ const scenarios: Scenario[] = [
 ];
 
 const stopFrontend = await ensureFrontend(BASE_URL, { handleSignals: false, bundled: true });
-const browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
+const browser = await chromium.launch({ ...(executablePath ? { executablePath } : {}), args: ["--enable-unsafe-swiftshader"] });
 const results: Array<{ name: string; about: string; checks: Check[]; error?: string }> = [];
 
 try {

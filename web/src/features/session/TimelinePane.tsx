@@ -41,6 +41,7 @@ import {
   getToolExitCode,
   getToolIntentLabel,
   getToolOutputPreview,
+  getLiveToolOutputPreview,
   countTimelineItems,
   formatTranscriptSummary,
   getToolInputRecord,
@@ -1382,10 +1383,14 @@ function ToolRow(props: {
 }) {
   const { liveness } = useTimelineLiveness();
   if (liveness && isToolInteractionRunning(props.interaction) && !isAskUserQuestion(props.interaction)) {
+    // Outside a narrated step a settled call shows its output in a fixed well;
+    // the running call fills the same well, so the result lands in place.
+    const live = props.trail ? null : getLiveToolOutputPreview(props.interaction);
     return (
       <RunningCallRow
         {...props}
         detail={<ToolDetail interaction={props.interaction} renderMedia={props.renderMedia} />}
+        preview={live ? <ToolOutputPreview text={live} pending /> : null}
       />
     );
   }

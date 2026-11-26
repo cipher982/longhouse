@@ -254,6 +254,17 @@ function isAgentLaunchBoilerplate(interaction: ToolInteraction, text: string): b
   return /^(?:async\s+agent\s+launched|background\s+agent\s+launched|launched(?:\s+successfully)?(?:\.|!|\s|$))/i.test(text);
 }
 
+/**
+ * A running call's output so far, bounded like the preview it becomes when it
+ * returns, so the well keeps its size across the result landing.
+ */
+export function getLiveToolOutputPreview(interaction: ToolInteraction): string | null {
+  // The live preview carries output on the call; a partial result row may
+  // also arrive while the call is still marked running.
+  const text = (interaction.callEvent?.tool_output_text || interaction.resultEvent?.tool_output_text || "").trim();
+  return text ? boundToolOutputPreview(text) : null;
+}
+
 /** Successful tool output shown inline while the row remains collapsed. */
 export function getToolOutputPreview(interaction: ToolInteraction): string | null {
   if (isToolInteractionFailed(interaction)) return null;

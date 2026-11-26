@@ -44,6 +44,7 @@ export {
   getToolInputRecord,
   getToolIntentLabel,
   getToolOutputPreview,
+  getLiveToolOutputPreview,
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,
