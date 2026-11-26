@@ -70,7 +70,7 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
   const primary = options.closed
     ? { key: "closed", label: "Closed", tone: "closed", observed_at: options.observedAt }
     : options.pendingInteraction
-      ? { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: options.observedAt }
+      ? { key: "needs_answer", label: "Needs your answer", tone: "blocked", observed_at: options.observedAt }
     : activity === "thinking"
       ? { key: "thinking", label: "Thinking", tone: "thinking", observed_at: options.observedAt }
       : activity === "executing"

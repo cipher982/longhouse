@@ -226,7 +226,7 @@ test.describe("Session hot plane", () => {
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const strip = page.getByTestId("session-control-strip");
-    await expect(strip).toContainText("Needs answer", { timeout: 10_000 });
+    await expect(strip).toContainText("Needs your answer", { timeout: 10_000 });
 
     await ingestSessionEvents(request, {
       sessionId,

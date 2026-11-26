@@ -260,7 +260,7 @@ describe("SessionRailFrame", () => {
     for (const row of rows) expect(row.querySelector(".hearth-lamp")).not.toBeNull();
     expect(byId("a").querySelector("[data-testid='session-rail-detail']")).toBeNull();
     expect(byId("b").querySelector("[data-testid='session-rail-detail']")?.textContent).toMatch(/^Using Shell/);
-    expect(byId("c").querySelector("[data-testid='session-rail-detail']")).toHaveTextContent("Needs answer");
+    expect(byId("c").querySelector("[data-testid='session-rail-detail']")).toHaveTextContent("Needs your answer");
     expect(byId("c").querySelector(".session-rail__flag")).toHaveTextContent("Needs you");
   });
 

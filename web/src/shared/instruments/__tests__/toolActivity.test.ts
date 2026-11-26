@@ -185,3 +185,10 @@ describe("servedRunningCall", () => {
     expect(servedRunningCallCount({ turn: { active_call_count: 2 } } as never)).toBe(2);
   });
 });
+
+describe("getRunningTurnStartMs with a recorded send", () => {
+  it("counts a recorded Longhouse send newer than the transcript's turn start", () => {
+    const state = { turn: { started_at: "2026-04-15T15:30:00Z" }, last_user_input_at: "2026-04-15T15:40:00Z" } as never;
+    expect(getRunningTurnStartMs(state, [])).toBe(Date.parse("2026-04-15T15:40:00Z"));
+  });
+});

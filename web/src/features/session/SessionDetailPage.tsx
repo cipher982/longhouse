@@ -1202,7 +1202,7 @@ function SessionDetailWorkspaceRoute({
               contextWindow={displaySession.usage_latest?.context_window ?? null}
               toolCallsThisTurn={toolCallsThisTurn}
               toolCallsLive={turnLive}
-              waitingOn={waitingOn}
+              waitingOn={turnLive ? waitingOn : null}
             />
             ) : null
           }

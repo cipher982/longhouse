@@ -42,16 +42,19 @@ export function bucketToolActivityByMinute(
  * read it, so they never disagree with each other or with the phone.
  * `session_state.run.started_at` is deliberately NOT this: `run` is the
  * provider process, started once and unchanged across every turn inside it.
- * Only when the server does not know the turn (history from before it
- * tracked one) does this fall back to the newest user message in the loaded
+ * A Longhouse send the server recorded (`last_user_input_at`) counts before
+ * the transcript carries it, as on the phone. Only when the server knows
+ * neither does this fall back to the newest user message in the loaded
  * thread.
  */
 export function getRunningTurnStartMs(
   state: SessionStateFacts | null | undefined,
   items: TimelineItem[],
 ): number | null {
-  const served = state?.turn?.started_at ? Date.parse(state.turn.started_at) : Number.NaN;
-  if (Number.isFinite(served)) return served;
+  const served = [state?.turn?.started_at, state?.last_user_input_at]
+    .map((value) => (value ? Date.parse(value) : Number.NaN))
+    .filter((ms) => Number.isFinite(ms));
+  if (served.length > 0) return Math.max(...served);
   let lastUserMs: number | null = null;
   for (const item of items) {
     if (item.kind === "message" && item.event.role === "user") {

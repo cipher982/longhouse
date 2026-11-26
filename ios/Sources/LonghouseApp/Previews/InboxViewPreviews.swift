@@ -41,7 +41,7 @@ private func previewStateFacts(
     let primaryKey = answerableInteraction
         ? (isApproval ? "needs_approval" : "needs_answer")
         : (ended ? "ended" : statusTone)
-    let primaryLabel = answerableInteraction ? (isApproval ? "Needs approval" : "Needs answer") : statusLabel
+    let primaryLabel = answerableInteraction ? (isApproval ? "Needs approval" : "Needs your answer") : statusLabel
     let workingSet = overrideWorkingSet
         ?? ((!(closed || ended) && (pendingInteractionKind != nil || activity == "thinking" || activity == "executing"))
             ? "open"

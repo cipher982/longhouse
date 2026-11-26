@@ -2,7 +2,7 @@
  * The one client reading of the server's status vocabulary.
  *
  * The server authors every status word (`session_state_contract._primary`:
- * "Thinking", "Using Bash", "Needs answer", "Waiting on 1 background agent",
+ * "Thinking", "Using Bash", "Needs your answer", "Waiting on 1 background agent",
  * ...). A client shows `presentation.primary.label` verbatim and adds only a
  * duration. The one thing the client decides for itself is freshness: a work
  * claim whose `valid_until` has passed on the reader's clock is no longer
@@ -82,7 +82,7 @@ export function delegatedWorkLabel(facts: StatusFacts, nowMs: number): string | 
 
 /**
  * The words for a pending interaction: always the server's own copy. It tells
- * a question ("Needs answer") from an approval ("Needs approval"); a client
+ * a question ("Needs your answer") from an approval ("Needs approval"); a client
  * that invents "Waiting for approval" makes a question read as something else.
  */
 export function pendingInteractionLabel(facts: Pick<SessionStateFacts, "presentation">): string {

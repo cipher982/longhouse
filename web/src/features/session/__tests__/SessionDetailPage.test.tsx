@@ -899,7 +899,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     const strip = screen.getByTestId("session-control-strip");
-    expect(strip).toHaveTextContent("Needs answer");
+    expect(strip).toHaveTextContent("Needs your answer");
     expect(strip).not.toHaveTextContent("Running AskUserQuestion");
   });
 
@@ -1125,7 +1125,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Needs answer",
+      "Needs your answer",
     );
     expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
       "Choose storage",
