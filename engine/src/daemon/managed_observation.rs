@@ -641,6 +641,16 @@ pub(super) fn maybe_start_managed_observation_scan(
             } else {
                 None
             };
+        // Computed before the contract sweep below, which shadows the
+        // `retained_codex` and `retained_claude` names with contract sets.
+        let providers_fully_enumerated = unresolved_state_dirs == 0
+            && retained_codex.is_empty()
+            && retained_antigravity.is_empty()
+            && retained_claude.is_empty()
+            && retained_opencode.is_empty()
+            && retained_cursor.is_empty()
+            && retained_pi.is_empty()
+            && retained_omp.is_empty();
         if full_reconciliation && process_inventory_valid {
             if let Ok(home) = crate::config::get_longhouse_home() {
                 // Codex launch provenance remains useful after a run ends: a
@@ -730,6 +740,28 @@ pub(super) fn maybe_start_managed_observation_scan(
                     chrono::Utc::now(),
                     crate::managed_process_janitor::ORPHAN_GRACE,
                 );
+
+                // Retire launch-recovery receipts for sessions no provider
+                // observes any more. Only a complete enumeration may decide
+                // absence: an unresolved provider directory or a row carried
+                // forward from the previous pass would make a live session
+                // look gone and hide its real degradation.
+                if providers_fully_enumerated {
+                    if let Ok(agent_dir) = crate::config::get_agent_dir() {
+                        let retired =
+                            crate::managed_launch_lifecycle::retire_unobserved_retry_receipts(
+                                &agent_dir,
+                                &observed_sessions,
+                                now,
+                            );
+                        if retired > 0 {
+                            tracing::info!(
+                                retired,
+                                "retired launch-recovery receipts for ended sessions"
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -767,15 +799,7 @@ pub(super) fn maybe_start_managed_observation_scan(
             // checks are meaningless without it), every provider directory
             // resolved, and no entry was carried forward unaccounted for -- a
             // state file that vanished mid-pass or failed to parse.
-            enumeration_complete: process_inventory_valid
-                && unresolved_state_dirs == 0
-                && retained_codex.is_empty()
-                && retained_antigravity.is_empty()
-                && retained_claude.is_empty()
-                && retained_opencode.is_empty()
-                && retained_cursor.is_empty()
-                && retained_pi.is_empty()
-                && retained_omp.is_empty(),
+            enumeration_complete: process_inventory_valid && providers_fully_enumerated,
             captured_at,
             elapsed_ms: started.elapsed().as_millis() as u64,
             status_owners: StatusOwnerEvidence::default(),

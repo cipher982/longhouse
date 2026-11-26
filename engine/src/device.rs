@@ -1658,9 +1658,13 @@ fn collect_native_local_health(status_path: &Path) -> NativeLocalHealth {
 /// deploy window kept the menu bar in "needs attention" hours later with
 /// nothing wrong and nothing to do.
 ///
-/// Deliberately not solved by deleting the receipts: the session remains
-/// resumable and its contract is legitimately retained, so the file is not
-/// garbage. The signal was wrong, not the storage.
+/// This filter is the second line. It cannot trust an empty list (see below),
+/// so on a machine with no live managed session every stale receipt counted
+/// again. The daemon's observation pass now retires receipts for sessions a
+/// complete enumeration no longer sees
+/// (`managed_launch_lifecycle::retire_unobserved_retry_receipts`), which is
+/// what keeps this alarm about the present. The resumable contract lives in a
+/// separate file and is untouched by that.
 fn collect_managed_launch_recovery(
     status_path: &Path,
     known_session_ids: &std::collections::HashSet<String>,

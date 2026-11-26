@@ -533,6 +533,85 @@ fn prune_stale_retry_receipts(directory: &std::path::Path) {
     }
 }
 
+/// How long a receipt for an unobserved session must sit untouched before the
+/// daemon retires it. A launch writes its receipt before the provider's state
+/// file exists, and a recovering launch rewrites it on every attempt, so a
+/// recent write means the launch may still be in flight.
+#[allow(dead_code)] // Engine-only; the facade compiles this module too.
+pub const RETRY_RECEIPT_RETIRE_GRACE: Duration = Duration::from_secs(10 * 60);
+
+/// Retire launch-recovery receipts whose session this machine no longer
+/// observes, and apply the age retention to both receipt directories.
+///
+/// A receipt says "this launch is degraded". Once its session is gone the
+/// claim is about the past, and leaving the file in place made it a standing
+/// alarm: local health only suppresses such receipts while it can see at least
+/// one other managed session, so a machine with no live managed sessions
+/// flipped to "Managed session recovery needs attention" for launches that had
+/// ended days earlier. Health cannot tell an empty session list from a failed
+/// scan; the observation pass can, so the decision lives here.
+///
+/// The caller must pass `observed` only from a complete enumeration (valid
+/// process inventory, every provider directory resolved, nothing carried
+/// forward). A partial scan makes live sessions look absent. The resumable
+/// contract is a separate file under `managed-local/contracts` and is not
+/// touched here. Returns how many receipts were removed.
+#[allow(dead_code)] // Engine-only; the facade compiles this module too.
+pub fn retire_unobserved_retry_receipts(
+    agent_dir: &std::path::Path,
+    observed: &std::collections::HashSet<String>,
+    now: std::time::SystemTime,
+) -> usize {
+    let mut retired = 0usize;
+    for kind in ["registration-retries", "outcome-retries"] {
+        let directory = agent_dir.join("managed-local").join(kind);
+        prune_stale_retry_receipts(&directory);
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(session_id) = retry_receipt_session_id(&path) else {
+                // Unparseable receipts stay visible as `unreadable` in health.
+                continue;
+            };
+            if observed.contains(&session_id) {
+                continue;
+            }
+            let settled = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age >= RETRY_RECEIPT_RETIRE_GRACE);
+            if settled && std::fs::remove_file(&path).is_ok() {
+                retired = retired.saturating_add(1);
+            }
+        }
+    }
+    retired
+}
+
+#[allow(dead_code)] // Engine-only; the facade compiles this module too.
+fn retry_receipt_session_id(path: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let payload: Value = serde_json::from_str(&raw).ok()?;
+    let payload = payload.as_object()?;
+    payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_string)
+        })
+        .filter(|id| !id.is_empty())
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // Fields are split across the facade and engine binary consumers.
 pub struct ManagedLaunchResponse {
@@ -990,6 +1069,77 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The menu bar showed "Managed session recovery needs attention" for
+    /// launches that ended days earlier whenever the machine had no live
+    /// managed session. A complete enumeration that no longer sees the session
+    /// must retire its receipt so nothing downstream can count it.
+    #[test]
+    fn retire_removes_settled_receipts_for_unobserved_sessions_only() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let ended = "ended-session";
+        let live = "live-session";
+        let fresh = "fresh-launch";
+        record_registration_retry(agent_dir.path(), ended, "Claude", true).unwrap();
+        record_outcome_retry(agent_dir.path(), ended, "Claude", true).unwrap();
+        record_outcome_retry(agent_dir.path(), live, "Claude", true).unwrap();
+        record_registration_retry(agent_dir.path(), fresh, "Codex", false).unwrap();
+        let receipt = |kind: &str, id: &str| {
+            agent_dir
+                .path()
+                .join("managed-local")
+                .join(kind)
+                .join(format!("{id}.json"))
+        };
+        let age = |path: std::path::PathBuf| {
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(std::time::SystemTime::now() - RETRY_RECEIPT_RETIRE_GRACE * 2)
+                .unwrap();
+        };
+        age(receipt("registration-retries", ended));
+        age(receipt("outcome-retries", ended));
+        age(receipt("outcome-retries", live));
+
+        let observed = std::collections::HashSet::from([live.to_string()]);
+        let retired = retire_unobserved_retry_receipts(
+            agent_dir.path(),
+            &observed,
+            std::time::SystemTime::now(),
+        );
+
+        assert_eq!(retired, 2);
+        assert!(!receipt("registration-retries", ended).exists());
+        assert!(!receipt("outcome-retries", ended).exists());
+        // Still observed: its degradation is current and must stay visible.
+        assert!(receipt("outcome-retries", live).exists());
+        // Unobserved but written inside the grace: the provider may not have
+        // published its state file yet, so this is not proof the launch ended.
+        assert!(receipt("registration-retries", fresh).exists());
+    }
+
+    /// An unreadable receipt is health's `unreadable` evidence; retiring it
+    /// would erase the only sign that something wrote garbage.
+    #[test]
+    fn retire_leaves_unparseable_receipts_for_health_to_report() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let directory = agent_dir
+            .path()
+            .join("managed-local")
+            .join("outcome-retries");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("garbage.json");
+        std::fs::write(&path, b"not json").unwrap();
+        let later = std::time::SystemTime::now() + RETRY_RECEIPT_RETIRE_GRACE * 2;
+
+        let retired = retire_unobserved_retry_receipts(
+            agent_dir.path(),
+            &std::collections::HashSet::new(),
+            later,
+        );
+
+        assert_eq!(retired, 0);
+        assert!(path.exists());
+    }
 
     fn response(session_id: &str, run_id: &str) -> ManagedLaunchResponse {
         ManagedLaunchResponse {
