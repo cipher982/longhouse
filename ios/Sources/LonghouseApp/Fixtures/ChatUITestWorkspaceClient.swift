@@ -87,7 +87,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 ))
             }
         }
-        events = seedEvents
+        events = seedEvents.map { $0.withFixtureCallText() }
         nextEventID = (seedEvents.compactMap(\.legacyNumericId).max() ?? 0) + 1
     }
 
@@ -1625,3 +1625,49 @@ private struct ChatUITestReplayEvent: Decodable {
     let timestamp: String
 }
 #endif
+
+extension SessionEvent {
+    /// Fixture stand-in for the server's served call text (`resolve_call_text`
+    /// in server/zerg/services/tool_presentation.py). A real API serves
+    /// `tool_intent`, `tool_intent_source` and `tool_target` on every call and
+    /// the transcript never derives them, so a hand-built fixture call carries
+    /// them too. Covers the shapes these fixtures use; the server is the authority.
+    func withFixtureCallText() -> SessionEvent {
+        guard role == "assistant", let toolName, toolIntent == nil else { return self }
+        let input = toolInputJSON ?? [:]
+        func text(_ key: String) -> String? {
+            guard case .string(let value)? = input[key] else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        func tail(_ path: String) -> String {
+            let parts = path.split(separator: "/").map(String.init)
+            return parts.count >= 2 ? parts.suffix(2).joined(separator: "/") : (parts.first ?? path)
+        }
+        let name = toolName.lowercased()
+        let command = text("command") ?? text("cmd") ?? text("CommandLine")
+        let path = ["file_path", "path", "filePath", "Path", "AbsolutePath", "DirectoryPath"].lazy.compactMap(text).first
+        let pattern = text("pattern") ?? text("query")
+        let url = text("url")
+        let target = command ?? path ?? pattern ?? url
+        let describes: Set<String> = ["bash", "shell", "exec_command", "task", "agent", "monitor"]
+        var intent: String?
+        var source: String?
+        if let authored = text("i") ?? text("toolSummary") ?? (describes.contains(name) ? text("description") : nil) {
+            intent = authored
+            source = "authored"
+        } else if let derived = command.flatMap({ $0.split(separator: "\n").first.map(String.init) })
+            ?? path.map(tail) ?? pattern ?? url {
+            intent = derived
+            source = "derived"
+        }
+        guard intent != nil || target != nil,
+              let data = try? JSONEncoder().encode(self),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return self }
+        object["toolIntent"] = intent
+        object["toolIntentSource"] = source
+        object["toolTarget"] = target
+        guard let patched = try? JSONSerialization.data(withJSONObject: object) else { return self }
+        return (try? JSONDecoder().decode(SessionEvent.self, from: patched)) ?? self
+    }
+}
