@@ -27,14 +27,42 @@ pub struct ConnectionPool {
     inner: Arc<Inner>,
 }
 
+#[cfg(unix)]
+type DbFileId = (u64, u64);
+
+#[cfg(not(unix))]
+type DbFileId = ();
+
+fn current_db_file_id(path: &Path) -> Option<DbFileId> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        Some(())
+    }
+}
+
+struct IdleConnection {
+    conn: Connection,
+    file_id: Option<DbFileId>,
+}
+
 struct Inner {
     db_path: PathBuf,
     capacity: usize,
-    idle: Mutex<Vec<Connection>>,
+    idle: Mutex<Vec<IdleConnection>>,
 }
 
 pub struct PooledConnection {
     conn: Option<Connection>,
+    file_id: Option<DbFileId>,
     pool: Arc<Inner>,
 }
 
@@ -54,34 +82,70 @@ impl ConnectionPool {
         })
     }
 
-    /// Lease a connection from the pool if one is already idle, without opening
-    /// a new connection or touching the filesystem.
+    /// Lease a connection from the pool if one is already idle and the
+    /// underlying database file on disk still matches its `(dev, ino)`.
+    /// Returns `None` on miss or file replacement so callers fall back to `get`.
     pub fn try_get_idle(&self) -> Option<PooledConnection> {
-        let conn = {
+        let live_id = current_db_file_id(&self.inner.db_path)?;
+        let entry = {
             let mut idle = self.inner.idle.lock().ok()?;
-            idle.pop()?
+            let mut chosen = None;
+            while let Some(candidate) = idle.pop() {
+                if candidate.file_id == Some(live_id) {
+                    chosen = Some(candidate);
+                    break;
+                }
+            }
+            chosen?
         };
         Some(PooledConnection {
-            conn: Some(conn),
+            conn: Some(entry.conn),
+            file_id: entry.file_id,
             pool: Arc::clone(&self.inner),
         })
     }
 
-    /// Lease a connection from the pool, opening a new one if none is idle.
+    /// Lease a connection from the pool, opening a new one if none is idle or
+    /// if the underlying database file on disk was replaced or became unusable.
     ///
-    /// Cheap when an idle connection is parked (no SQLite work). On a miss it
-    /// runs `open_connection` (just `Connection::open` + two PRAGMAs).
+    /// Cheap when an idle connection is parked and `(dev, ino)` still matches
+    /// (one `stat()`, no SQLite work). On a miss or path replacement it runs
+    /// `open_connection` (just `Connection::open` + two PRAGMAs).
     pub fn get(&self) -> Result<PooledConnection> {
-        let conn = {
+        let live_id = current_db_file_id(&self.inner.db_path);
+        let reused = {
             let mut idle = self.inner.idle.lock().expect("connection pool poisoned");
-            idle.pop()
+            match live_id {
+                Some(id) => {
+                    let mut chosen = None;
+                    while let Some(entry) = idle.pop() {
+                        if entry.file_id == Some(id) {
+                            chosen = Some(entry);
+                            break;
+                        }
+                    }
+                    chosen
+                }
+                None => {
+                    // DB path was removed, replaced with a non-file, or became
+                    // unreadable; drop stale descriptors so open_connection
+                    // surfaces the current filesystem state.
+                    idle.clear();
+                    None
+                }
+            }
         };
-        let conn = match conn {
-            Some(c) => c,
-            None => open_connection(&self.inner.db_path)?,
+        let (conn, file_id) = match reused {
+            Some(entry) => (entry.conn, entry.file_id),
+            None => {
+                let conn = open_connection(&self.inner.db_path)?;
+                let opened_id = current_db_file_id(&self.inner.db_path);
+                (conn, opened_id)
+            }
         };
         Ok(PooledConnection {
             conn: Some(conn),
+            file_id,
             pool: Arc::clone(&self.inner),
         })
     }
@@ -118,7 +182,10 @@ impl Drop for PooledConnection {
                 Err(_) => return,
             };
             if idle.len() < self.pool.capacity {
-                idle.push(conn);
+                idle.push(IdleConnection {
+                    conn,
+                    file_id: self.file_id,
+                });
             }
         }
     }
@@ -187,6 +254,40 @@ mod tests {
         drop(open_db(Some(tmp.path())).unwrap());
 
         let pool = ConnectionPool::new(Some(tmp.path()), 2).unwrap();
+        let lease = pool.get().unwrap();
+        let count: i64 = lease
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn pool_invalidates_idle_connections_when_db_file_is_replaced_or_unusable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("shipper.db");
+        let backup_path = dir.path().join("shipper.db.bak");
+        drop(open_db(Some(&db_path)).unwrap());
+
+        let pool = ConnectionPool::new(Some(&db_path), 2).unwrap();
+        {
+            let _lease = pool.get().unwrap();
+        }
+        assert_eq!(pool.inner.idle.lock().unwrap().len(), 1);
+
+        // Replace the DB path with a directory: pool must drop stale idle
+        // descriptors and fail open instead of silently reading the old inode.
+        std::fs::rename(&db_path, &backup_path).unwrap();
+        std::fs::create_dir(&db_path).unwrap();
+        assert!(pool.get().is_err());
+        assert_eq!(pool.inner.idle.lock().unwrap().len(), 0);
+
+        // Restoring the file lets the pool reopen and recover cleanly.
+        std::fs::remove_dir(&db_path).unwrap();
+        std::fs::rename(&backup_path, &db_path).unwrap();
         let lease = pool.get().unwrap();
         let count: i64 = lease
             .query_row(
