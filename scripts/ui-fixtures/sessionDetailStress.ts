@@ -249,7 +249,7 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
     presentation: {
       // What session_state_contract._primary mints for an executing
       // exec_command; clients show it verbatim.
-      primary: { key: "executing", label: "Using exec_command", tone: "running", observed_at: now },
+      primary: { key: "executing", label: "Running a command", tone: "running", observed_at: now },
       access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
       transcript: null,
     },
@@ -1438,7 +1438,7 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
           valid_until: "2026-04-15T16:02:00Z",
         },
         presentation: {
-          primary: { key: "executing", label: "Using exec_command", tone: "running", observed_at: "2026-04-15T15:50:00Z" },
+          primary: { key: "executing", label: "Running a command", tone: "running", observed_at: "2026-04-15T15:50:00Z" },
           access,
           transcript: null,
         },
@@ -2407,7 +2407,7 @@ export function buildSessionResearchTurnFixture(): SessionDetailFixture {
     working_set: "open",
     activity: { state: "executing", raw_kind: "running", tool: "bash", source: "managed_local_transport", observed_at: now, valid_until: "2026-04-15T16:30:00Z" },
     presentation: {
-      primary: { key: "executing", label: "Using bash", tone: "running", observed_at: now },
+      primary: { key: "executing", label: "Running a command", tone: "running", observed_at: now },
       access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
       transcript: null,
     },
@@ -2573,7 +2573,7 @@ export function buildSessionRunningCallFixture(expired: boolean): SessionDetailF
     working_set: "open",
     activity: { state: "executing", raw_kind: "running", tool: "Bash", source: "claude_hook", observed_at: observedAt, valid_until: validUntil },
     presentation: {
-      primary: { key: "executing", label: "Using Bash", tone: "running", observed_at: observedAt },
+      primary: { key: "executing", label: "Running a command", tone: "running", observed_at: observedAt },
       access: { key: "live_control", label: "Live control", tone: "live", observed_at: observedAt },
       transcript: null,
     },
@@ -2782,7 +2782,7 @@ export function buildSessionClaudeFidelityFixture(): SessionDetailFixture {
         ],
       },
       presentation: {
-        primary: { key: "executing", label: "Using Bash", tone: "running", observed_at: now },
+        primary: { key: "executing", label: "Running a command", tone: "running", observed_at: now },
         access: { key: "live_control", label: "Live control", tone: "live", observed_at: now },
         transcript: null,
       },
@@ -2885,7 +2885,7 @@ export function buildSessionClaudeFidelityFixture(): SessionDetailFixture {
         prompt: "Inspect why Claude prompt waits fail on bench",
       },
       tool_call_id: "fid-agent-call",
-      tool_intent: "Launch terminal-truth audit worker",
+      tool_intent: "Launch terminal-truth audit worker", tool_intent_source: "authored",
     } as Partial<AgentEvent>),
     makeEvent(nextId++, "tool", at("16:09:10"), {
       tool_name: "Agent",

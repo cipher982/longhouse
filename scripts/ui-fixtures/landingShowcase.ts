@@ -323,7 +323,7 @@ export function buildLandingSessionFixture(): ReturnType<typeof buildSessionDeta
       },
       run: { lifecycle: "running", started_at: at(9), ended_at: null },
       presentation: {
-        primary: { key: "executing", label: "Using Bash", tone: "running", observed_at: at(0.4) },
+        primary: { key: "executing", label: "Running a command", tone: "running", observed_at: at(0.4) },
         access: { key: "live_control", label: "Live control", tone: "live", observed_at: at(0.4) },
         transcript: null,
       },
