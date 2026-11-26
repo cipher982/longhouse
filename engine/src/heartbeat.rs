@@ -5000,10 +5000,13 @@ impl Serialize for PhaseLedgerStatus {
 ///
 /// Readers call the engine pulse fresh for 30 s and stale at 60 s, and the
 /// shortest validity window carried in the file is a phase-ledger row's 600 s.
-/// A 10 s pulse keeps every clock-only reader at least 3x inside its freshness
-/// horizon. The previous behaviour rewrote the whole file on every tick and
-/// every projection (2.8 writes/s of 2.9 MB on cinder, 2026-10-11).
-pub const STATUS_FILE_PULSE_INTERVAL: Duration = Duration::from_secs(10);
+/// `local_status_timer` ticks every 5 s; setting the threshold to 7.5 s keeps
+/// steady-state pulses at exactly once every 10 s (5 s < 7.5 s skips, 10 s >=
+/// 7.5 s fires) while guaranteeing any out-of-phase event write still receives
+/// its next pulse within 12.5 s instead of aliasing out to 15 s. The previous
+/// behaviour rewrote the whole file on every tick and every projection (2.8
+/// writes/s of 2.9 MB on cinder, 2026-10-11).
+pub const STATUS_FILE_PULSE_INTERVAL: Duration = Duration::from_millis(7_500);
 
 /// Owner of `~/.longhouse/agent/engine-status.json` publication.
 ///
