@@ -792,7 +792,7 @@ def _shell_headline(command: str) -> str | None:
         match = _SHELL_SETUP.match(current)
         if not match:
             break
-        current = current[match.end():]
+        current = current[match.end() :]
     line = _first_line(current)
     if not line or line.startswith("#") or line.rstrip("\\ \t") == "":
         return first
