@@ -1227,7 +1227,8 @@ describe("TimelinePane", () => {
 
     const row = screen.getByTestId("session-timeline-row");
     expect(row).toHaveTextContent("Listing running containers");
-    expect(row).not.toHaveTextContent("docker ps -a");
+    // The literal command sits dim beside the purpose, not in place of it.
+    expect(within(row).getByTestId("row-target")).toHaveTextContent("docker ps -a");
 
     expect(row.querySelector(".tl-action__name")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Listing running containers/ }));
@@ -2264,5 +2265,25 @@ describe("TimelinePane outbox", () => {
     expect(screen.queryByTestId("pinned-outline")).toBeNull();
     expect(screen.getByTestId("session-timeline-list")).toBe(listBefore);
     expect(draft.value).toBe("unsent draft");
+  });
+});
+
+describe("row heads", () => {
+  it("expand on a click but not when the press selected text", () => {
+    const item = makeToolWithMediaItem();
+    renderPane([item]);
+    const head = screen.getByTestId("session-timeline-row").querySelector<HTMLElement>(".tl-action__head")!;
+    expect(head).toHaveAttribute("role", "button");
+
+    const selection = { isCollapsed: false, toString: () => "capture", anchorNode: head.firstChild } as unknown as Selection;
+    const spy = vi.spyOn(window, "getSelection").mockReturnValue(selection);
+    fireEvent.click(head);
+    expect(head).toHaveAttribute("aria-expanded", "false");
+    spy.mockRestore();
+
+    fireEvent.click(head);
+    expect(head).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(head, { key: "Enter" });
+    expect(head).toHaveAttribute("aria-expanded", "false");
   });
 });

@@ -78,6 +78,7 @@ import { matchSendsToTranscript, type SendForMatch } from "./chat/unrecordedInpu
 import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./liteBodies";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 import { errorDetails } from "@/shared/ui/errorDetails";
+import { RowHead, TargetAside } from "./RowHead";
 import { parseUTC } from "@/shared/lib/dateUtils";
 import { RelativeTime } from "@/shared/ui/RelativeTime";
 
@@ -625,6 +626,12 @@ const MessageRow = memo(function MessageRow({
             <span className="tl-msg__node-ring" />
           </span>
         </div>
+      ) : isAssistant && !outside ? (
+        <div className="tl-msg__head tl-msg__head--aside">
+          <span className="tl-msg__node" aria-hidden="true">
+            <ProviderGlyph provider={provider} size={18} style={{ borderRadius: 999 }} />
+          </span>
+        </div>
       ) : (
         <div className="tl-msg__head">
           {isAssistant ? (
@@ -668,6 +675,11 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : null}
         <MediaStrip mediaRefs={mediaRefs} />
+        {isAssistant && !outside ? (
+          <span className="tl-msg__time tl-msg__time--aside" {...{ elementtiming: "longhouse-session-timeline-row" }}>
+            <RelativeTime iso={event.timestamp} testId="session-reply-time" />
+          </span>
+        ) : null}
         {isLong ? (
           <button
             type="button"
@@ -967,11 +979,10 @@ function ActionCard({
       data-status={statusTone}
       className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-action--purpose" : ""}`}
     >
-      <button
-        type="button"
+      <RowHead
         className="tl-action__head"
         {...bodyPrefetch}
-        onClick={() => {
+        onActivate={() => {
           onSelect();
           onToggleExpand();
         }}
@@ -989,7 +1000,7 @@ function ActionCard({
           </span>
         )}
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary" title={purpose ? getToolTargetText(interaction) ?? undefined : undefined}>
+        <span className="tl-action__summary">
           {intent ? (
             intent
           ) : editLabel ? (
@@ -998,6 +1009,7 @@ function ActionCard({
             summary || (dropped ? "dropped" : pending ? "running…" : "")
           )}
         </span>
+        {purpose ? <TargetAside target={getToolTargetText(interaction)} text={intent} /> : null}
         <span className="tl-action__meta">
           {intent && editLabel ? (
             <span className="tl-action__edit-stat" data-testid="tool-edit-stat">{editLabel}</span>
@@ -1013,7 +1025,7 @@ function ActionCard({
           {duration ? <span className="tl-action__time">{duration}</span> : null}
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
-      </button>
+      </RowHead>
       {!expanded && failurePreview ? <ToolOutputPreview text={failurePreview} failed pending={pending} /> : null}
       {!expanded && !failurePreview && outputPreview ? <ToolOutputPreview text={outputPreview} pending={pending} /> : null}
       <SubagentNode interaction={interaction} />
@@ -1125,11 +1137,10 @@ function ContextLine({
       data-status={statusTone}
       className={`tl-context${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-context--purpose" : ""}`}
     >
-      <button
-        type="button"
+      <RowHead
         className="tl-context__head"
         {...bodyPrefetch}
-        onClick={() => {
+        onActivate={() => {
           onSelect();
           onToggleExpand();
         }}
@@ -1143,15 +1154,16 @@ function ContextLine({
         >
           {info.displayName}
         </span>
-        <span className="tl-context__summary" title={target && target !== summary ? target : undefined}>
+        <span className="tl-context__summary">
           {summary || (dropped ? "dropped" : pending ? "running…" : "")}
         </span>
+        {purpose ? <TargetAside target={target} text={summary} /> : null}
         <span className="tl-context__meta">
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
           {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
           {duration ? <span className="tl-context__time">{duration}</span> : null}
         </span>
-      </button>
+      </RowHead>
       {expanded ? (
         <div id={detailId}>
           <ToolDetail interaction={interaction} renderMedia={renderMedia} />
@@ -1218,10 +1230,9 @@ function ActivityChip({
       data-row-kind="activity-group"
       className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
     >
-      <button
-        type="button"
+      <RowHead
         className="tl-noise__head"
-        onClick={() => {
+        onActivate={() => {
           onSelect();
           onToggleExpand();
         }}
@@ -1238,7 +1249,7 @@ function ActivityChip({
         {trail && intent && mechanics ? <span className="tl-trail__mechanics">{mechanics}</span> : null}
         <span className="tl-noise__time">{trail ? (timing.duration ?? "") : (timing.duration ?? timing.time)}</span>
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
-      </button>
+      </RowHead>
       {!expanded && edits.length > 0 ? (
         <div className="tl-trail__edits" data-testid="trail-edits">
           {edits.map((interaction) => {

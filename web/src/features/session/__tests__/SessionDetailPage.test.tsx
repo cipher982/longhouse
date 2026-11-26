@@ -526,8 +526,8 @@ describe("SessionDetailPage", () => {
     ).toBeTruthy();
 
     const toolLabel = screen.getByText("Shell");
-    const toolRow = toolLabel.closest("button");
-    if (!(toolRow instanceof HTMLButtonElement)) {
+    const toolRow = toolLabel.closest('[role="button"]');
+    if (!(toolRow instanceof HTMLElement)) {
       throw new Error("Expected the tool label to live inside a clickable row");
     }
 
@@ -993,8 +993,8 @@ describe("SessionDetailPage", () => {
     }
 
     const toolLabel = screen.getByText("Shell");
-    const toolRow = toolLabel.closest("button");
-    if (!(toolRow instanceof HTMLButtonElement)) {
+    const toolRow = toolLabel.closest('[role="button"]');
+    if (!(toolRow instanceof HTMLElement)) {
       throw new Error("Expected the tool label to live inside a clickable row");
     }
 

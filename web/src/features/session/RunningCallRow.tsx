@@ -15,6 +15,7 @@ import {
 } from "@/shared/session/model";
 import { sessionIsWorking, workClaimExpired } from "@/shared/session/sessionStatus";
 import { formatElapsedClock } from "./sessionHeaderState";
+import { RowHead, TargetAside } from "./RowHead";
 
 /**
  * The session evidence a running call reads. Motion follows the served work
@@ -214,16 +215,14 @@ export function RunningCallRow({
       data-run-state={run.state}
       className={`tl-action tl-run${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-action--purpose" : ""}`}
     >
-      <button
-        type="button"
+      <RowHead
         className="tl-action__head"
-        onClick={() => {
+        onActivate={() => {
           onSelect();
           onToggleExpand();
         }}
         aria-expanded={expanded}
         aria-controls={detailId}
-        title={command && command !== label ? command : undefined}
         aria-label={purpose ? `${info.displayName}: ${label}` : undefined}
       >
         <span className="tl-action__icon tl-run__glyph" aria-hidden="true">
@@ -235,6 +234,7 @@ export function RunningCallRow({
           </span>
         )}
         <span className="tl-action__summary">{label}</span>
+        {purpose ? <TargetAside target={command} text={label} /> : null}
         {note ? (
           <span className="tl-run__note" data-testid="running-call-note">
             {note}
@@ -251,7 +251,7 @@ export function RunningCallRow({
           </span>
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
-      </button>
+      </RowHead>
       {!expanded && preview ? preview : null}
       {tail ? (
         <pre className="tl-run__tail" data-testid="running-call-tail">

@@ -4905,3 +4905,66 @@ button.timeline-pane__status-chip:hover {
     font-size: 11.5px;
   }
 }
+
+/* Row heads act as buttons but stay selectable: press-and-drag highlights a
+   command or a purpose, and only a click that selected nothing expands the
+   row (RowHead). */
+.tl-action__head,
+.tl-context__head,
+.tl-noise__head {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.tl-action__head:focus-visible,
+.tl-context__head:focus-visible,
+.tl-noise__head:focus-visible {
+  outline: 2px solid var(--color-focus-ring, rgba(240, 138, 36, 0.6));
+  outline-offset: -2px;
+}
+
+/* Side by side: an authored purpose leads, and the literal command or path
+   sits dim on the same line in the row's empty middle, before the time.
+   Narrow screens drop it; the purpose needs the width. */
+.tl-row__target {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  padding-left: var(--space-3);
+  font-family: var(--font-family-mono);
+  font-size: 11.5px;
+  color: var(--color-text-tertiary, rgba(221, 209, 190, 0.42));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 900px) {
+  .tl-row__target {
+    display: none;
+  }
+}
+
+/* An assistant turn's time sits at the right of its first line instead of
+   on a line of its own above it. */
+.tl-msg__head--aside {
+  height: 0;
+  margin: 0;
+}
+.tl-msg__head--aside .tl-msg__node {
+  top: 13px;
+}
+.tl-msg__time--aside {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.tl-msg__body:has(> .tl-msg__time--aside) {
+  position: relative;
+}
+/* The reply's first block (a heading or a paragraph) leaves the time its
+   corner. */
+.tl-msg__body:has(> .tl-msg__time--aside) > :first-child {
+  padding-right: 88px;
+}

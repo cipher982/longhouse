@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TimelinePane } from "../TimelinePane";
 import { declaredTimeoutSeconds, type TimelineLiveness } from "../RunningCallRow";
@@ -158,9 +158,10 @@ describe("a running call", () => {
     expect(row).toHaveAttribute("data-run-state", "live");
     expect(row).toHaveClass("tl-action");
     expect(row).toHaveTextContent("Run Stage A basis search");
-    // The command is said once, on hover and in the detail, not as a second line.
-    expect(row).not.toHaveTextContent("basis_search_l0.py --procs 6");
-    expect(row.querySelector(".tl-action__head")).toHaveAttribute(
+    // The command sits dim beside the purpose on the same line, not as a second line.
+    expect(within(row).getByTestId("row-target")).toHaveTextContent("basis_search_l0.py --procs 6");
+    expect(row.querySelectorAll(".tl-run__tail")).toHaveLength(0);
+    expect(within(row).getByTestId("row-target")).toHaveAttribute(
       "title",
       "uv run python scripts/basis_search_l0.py --procs 6",
     );
