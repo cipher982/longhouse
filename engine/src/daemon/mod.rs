@@ -69,6 +69,7 @@ mod transcript_wake;
 use self::archive_repair::*;
 use self::discovery_scans::*;
 use self::managed_observation::*;
+use self::outbox_lanes::*;
 use self::path_jobs::*;
 use self::projection::*;
 use self::startup::*;
@@ -135,7 +136,7 @@ const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(30);
 /// How soon a startup scan that yielded to live work tries again.
 const STARTUP_RECONCILIATION_RETRY: Duration = Duration::from_secs(1);
-const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
+const LOCAL_STATUS_INTERVAL_SECS: u64 = 5;
 /// How long the local status projection may take before it is worth reporting.
 ///
 /// Derived from its own cadence rather than picked: the projection runs every
@@ -186,7 +187,12 @@ const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 const STATUS_POST_CONCURRENCY: usize = 8;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
-const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
+/// Idle fallback interval for draining outbox/status/runtime-events lanes.
+/// Active writes wake the daemon immediately via FSEvents on the outbox/status
+/// directories and `longhouse-shipper.db-wal`; while any lane is non-empty,
+/// `OUTBOX_DRAIN_ACTIVE_INTERVAL` keeps draining at 200 ms.
+const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_secs(2);
+const OUTBOX_DRAIN_ACTIVE_INTERVAL: Duration = Duration::from_millis(200);
 /// How long a runtime-outbox sweep that removed nothing keeps the next one
 /// from starting. The sweep collapses byte-identical status repeats (the
 /// 2026-09-17 flood was 9,382 of 9,394); a flood of distinct events gives it
@@ -321,6 +327,7 @@ struct PathTaskContext {
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
     storage_v2: std::sync::Arc<StorageV2Capabilities>,
+    claim_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -341,6 +348,8 @@ struct PathTaskResult {
     local_retry_after: Option<Duration>,
     local_retry_priority: Option<WorkPriority>,
     reconciled_to_head: bool,
+    settled_stamp: Option<discovery::SourceScanStamp>,
+    settled_claim_generation: u64,
     processing_elapsed: Duration,
 }
 
@@ -393,6 +402,7 @@ struct MachinePresencePostResult {
 
 struct OutboxCollectResult {
     presence: outbox::OutboxLocalDrainResult,
+    dir_stamp_before: Option<DirActivityStamp>,
     elapsed_ms: u64,
 }
 
@@ -461,6 +471,7 @@ struct StatusSlotResult {
     recorded: Vec<(String, (String, u64))>,
     owner_refresh_cursor: usize,
     managed_owner_refresh_cursor: usize,
+    dir_stamp_before: Option<DirActivityStamp>,
     elapsed_ms: u64,
 }
 #[derive(Debug, Default)]
@@ -582,6 +593,7 @@ impl StatusLedger {
 struct RuntimeCollectResult {
     posts: Vec<outbox::PendingRuntimeEventPost>,
     measurement: heartbeat::RuntimeEventOutboxSnapshot,
+    dir_stamp_before: Option<DirActivityStamp>,
     elapsed_ms: u64,
     saturated: bool,
 }
@@ -756,6 +768,9 @@ struct DaemonState {
     control_channel_task: Option<tokio::task::JoinHandle<()>>,
     control_channel_status: crate::control_channel::ControlChannelStatus,
     status_file: heartbeat::StatusFileWriter,
+    outbox_idle_stamps: OutboxIdleStamps,
+    agent_control_dirs: Vec<PathBuf>,
+    settled_scan_cache: SettledScanCache,
     runtime_events_outbox_dir: PathBuf,
     outbox_dir: PathBuf,
     daily_maintenance_tasks: JoinSet<()>,
@@ -1030,12 +1045,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         );
     }
     let adaptive_limiter = crate::scheduler::AdaptiveLimiter::new();
-    // Pool sized for the live cap + headroom for retry/scan tasks. Idle pool
-    // is bounded; spillover connections are dropped on return.
-    let db_pool = ConnectionPool::new(
-        config.shipper_config.db_path.as_deref(),
-        config.shipper_config.workers.max(1) + 4,
-    )?;
+    // Cap idle parked SQLite connections to 4 (at 4 MB cache each = 16 MB max)
+    // instead of keeping `workers + 4` (~22) connections parked with full page
+    // caches across idle periods. Spillover connections still open on demand and
+    // drop immediately on return.
+    let db_pool = ConnectionPool::new(config.shipper_config.db_path.as_deref(), 4)?;
+    let claim_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
     let (path_shutdown, _) = watch::channel(false);
     let _path_shutdown_guard = PathWorkersShutdown(path_shutdown.clone());
     let task_context = PathTaskContext {
@@ -1045,6 +1060,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
         storage_v2,
+        claim_generation: Arc::clone(&claim_generation),
         shutdown: path_shutdown.clone(),
     };
 
@@ -1053,7 +1069,40 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     for state_dir in &managed_state_dirs {
         std::fs::create_dir_all(state_dir)?;
     }
-    let watcher = SessionWatcher::new(&providers, &managed_state_dirs)?;
+    let mut watcher = SessionWatcher::new(&providers, &managed_state_dirs)?;
+    crate::dir_cache::register_watched_dirs(&managed_state_dirs);
+    let outbox_dir_watch = config::get_agent_outbox_dir()?;
+    let runtime_events_outbox_dir_watch = config::get_agent_runtime_events_outbox_dir()?;
+    // Watch outbox, runtime-events-outbox, status, and machine scope dir
+    // non-recursively. Intentionally do NOT watch `agent_dir` itself: the
+    // daemon's own SQLite writes to `longhouse-shipper.db-wal` would otherwise
+    // create a self-wakeup FSEvents feedback loop.
+    let mut agent_control_dirs = vec![
+        outbox_dir_watch.clone(),
+        runtime_events_outbox_dir_watch.clone(),
+        scope_dir.clone(),
+    ];
+    if let Ok(agent_dir) = config::get_agent_dir() {
+        let status_dir = crate::status_slot::status_slot_dir(&agent_dir);
+        let _ = std::fs::create_dir_all(&status_dir);
+        agent_control_dirs.push(status_dir);
+    }
+    for dir in &agent_control_dirs {
+        let _ = std::fs::create_dir_all(dir);
+        if let Err(error) = watcher.watch_nonrecursive(dir) {
+            tracing::debug!(path = %dir.display(), %error, "Could not watch auxiliary daemon dir");
+        }
+    }
+    // Store canonicalized forms too so macOS `/private/...` FSEvent paths match.
+    let mut canonical_agent_control_dirs = Vec::new();
+    for dir in &agent_control_dirs {
+        if let Ok(canonical) = std::fs::canonicalize(dir) {
+            if !agent_control_dirs.contains(&canonical) {
+                canonical_agent_control_dirs.push(canonical);
+            }
+        }
+    }
+    agent_control_dirs.extend(canonical_agent_control_dirs);
     tracing::info!(
         "Daemon ready — watching for file changes (flush interval: {:?})",
         WATCHER_FLUSH_INTERVAL
@@ -1141,15 +1190,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     fallback_timer.tick().await; // consume first immediate tick
                                  // A newly installed provider may create its first transcript store long
                                  // after startup. Refresh only the small root list, not the whole archive.
-    let mut provider_roots_timer = tokio::time::interval(Duration::from_secs(1));
+    let mut provider_roots_timer = tokio::time::interval(Duration::from_secs(15));
     provider_roots_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut hot_recheck_timer = tokio::time::interval(hot_sources::HOT_RECHECK_INTERVAL);
     hot_recheck_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     provider_roots_timer.tick().await;
     // `longhouse machine scope` rewrites the scope file while this daemon runs.
-    // Widening it must backfill what became eligible now, not at the next
-    // periodic scan, so a change is noticed within seconds and rescanned.
-    let mut scope_timer = tokio::time::interval(Duration::from_secs(2));
+    // FSEvents on the agent directory notices changes immediately; this 30 s
+    // timer is a low-cost fallback.
+    let mut scope_timer = tokio::time::interval(Duration::from_secs(30));
     scope_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     scope_timer.tick().await;
 
@@ -1341,6 +1390,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         control_channel_task,
         control_channel_status,
         status_file: heartbeat::StatusFileWriter::new(status_path),
+        outbox_idle_stamps: OutboxIdleStamps::default(),
+        agent_control_dirs,
+        settled_scan_cache: SettledScanCache::new(claim_generation),
         runtime_events_outbox_dir,
         outbox_dir,
         daily_maintenance_tasks,
@@ -1567,6 +1619,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             maybe_start_reconcile_scan(
                 &mut state.reconcile_tasks,
                 config.shipper_config.db_path.clone(),
+                state.task_context.db_pool.clone(),
             );
         }
 
@@ -1602,10 +1655,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             outbox_collect_result = state.outbox_collect_tasks.join_next(), if !state.outbox_collect_tasks.is_empty() => {
                 state.on_outbox_collect_done(phase_projection_timer.as_mut(), outbox_collect_result).await;
+                if state.outbox_idle_stamps.pending_force_outbox {
+                    state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                }
             }
 
             status_slot_result = state.status_slot_tasks.join_next(), if !state.status_slot_tasks.is_empty() => {
                 state.on_status_slot_done(status_slot_result).await;
+                if state.outbox_idle_stamps.pending_force_status {
+                    state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                }
             }
             status_post_result = state.status_post_tasks.join_next(), if !state.status_post_tasks.is_empty() => {
                 state.on_status_post_done(status_post_result);
@@ -1613,6 +1672,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             runtime_collect_result = state.runtime_collect_tasks.join_next(), if !state.runtime_collect_tasks.is_empty() => {
                 state.on_runtime_collect_done(runtime_collect_result).await;
+                if state.outbox_idle_stamps.pending_force_runtime {
+                    state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                }
             }
 
             runtime_sweep_result = state.runtime_sweep_tasks.join_next(), if !state.runtime_sweep_tasks.is_empty() => {
@@ -1621,10 +1683,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             outbox_post_result = state.outbox_post_tasks.join_next(), if !state.outbox_post_tasks.is_empty() => {
                 state.on_outbox_post_done(outbox_post_result);
+                if state.outbox_idle_stamps.pending_force_outbox {
+                    state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                }
             }
 
             runtime_outbox_post_result = state.runtime_outbox_post_tasks.join_next(), if !state.runtime_outbox_post_tasks.is_empty() => {
                 state.on_runtime_outbox_post_done(runtime_outbox_post_result);
+                if state.outbox_idle_stamps.pending_force_runtime {
+                    state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                }
             }
 
             heartbeat_post_result = state.heartbeat_post_tasks.join_next(), if !state.heartbeat_post_tasks.is_empty() => {
@@ -1684,7 +1752,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // WorkPriority::Live. Managed wake signals can pre-empt the small
             // filesystem coalescing window.
             Some(first_event) = state.watcher.next_event() => {
-                state.on_watcher_event(&config, first_event).await;
+                state
+                    .on_watcher_event(&config, first_event, phase_projection_timer.as_mut())
+                    .await;
             }
 
             _ = state.scope_timer.tick() => {
@@ -1714,11 +1784,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 state.failed_ship_retry_needed = true;
             }
 
-            // Outbox drain: presence events written by hooks. These are runtime
-            // overlay signals only; transcript shipping is owned by filesystem
-            // events plus reconciliation scans.
+            // Outbox drain: FSEvents wakes this immediately on writes; when
+            // idle, the fallback timer runs every 2 s (200 ms while active).
             _ = state.outbox_timer.tick() => {
-                state.on_outbox_tick(&config, phase_projection_timer.as_mut());
+                state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
+                let target_period = if state.outbox_idle_stamps.is_all_idle()
+                    && state.status_recorded.is_empty()
+                {
+                    OUTBOX_DRAIN_INTERVAL
+                } else {
+                    OUTBOX_DRAIN_ACTIVE_INTERVAL
+                };
+                if state.outbox_timer.period() != target_period {
+                    state.outbox_timer = tokio::time::interval(target_period);
+                    state
+                        .outbox_timer
+                        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    state.outbox_timer.reset();
+                }
             }
 
             // Wake the loop when delayed local retry work may now be ready.
@@ -5344,6 +5427,7 @@ mod tests {
                 path: path.clone(),
                 provider: "claude",
                 modified_at_ms: now_ms(),
+                stamp: None,
             }],
             WorkPriority::Scan,
             &mut HashMap::new(),

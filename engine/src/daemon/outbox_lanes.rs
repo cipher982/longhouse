@@ -3,6 +3,67 @@
 
 use super::*;
 
+/// Compact directory metadata stamp used to skip spawning blocking outbox/status
+/// directory scans when a directory was empty on the previous pass and its
+/// metadata has not moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DirActivityStamp {
+    inode: u64,
+    modified_nanos: i128,
+    ctime_nanos: i128,
+}
+
+pub(super) fn dir_activity_stamp(dir: &Path) -> Option<DirActivityStamp> {
+    let meta = std::fs::metadata(dir).ok()?;
+    let modified_nanos = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(-1);
+    #[cfg(unix)]
+    let (inode, ctime_nanos) = {
+        use std::os::unix::fs::MetadataExt;
+        (
+            meta.ino(),
+            (meta.ctime() as i128)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(meta.ctime_nsec() as i128),
+        )
+    };
+    #[cfg(not(unix))]
+    let (inode, ctime_nanos) = (0, -1);
+    Some(DirActivityStamp {
+        inode,
+        modified_nanos,
+        ctime_nanos,
+    })
+}
+
+#[derive(Default)]
+pub(super) struct OutboxIdleStamps {
+    pub(super) outbox_empty: Option<DirActivityStamp>,
+    pub(super) status_empty: Option<DirActivityStamp>,
+    pub(super) runtime_empty: Option<DirActivityStamp>,
+    /// Set when an FSEvent forced a scan while that lane's collect/post task
+    /// was already in flight, so the completing pass cannot mark the dir empty
+    /// and the next tick re-scans immediately.
+    pub(super) pending_force_outbox: bool,
+    pub(super) pending_force_status: bool,
+    pub(super) pending_force_runtime: bool,
+}
+
+impl OutboxIdleStamps {
+    pub(super) fn is_all_idle(&self) -> bool {
+        self.outbox_empty.is_some()
+            && self.status_empty.is_some()
+            && self.runtime_empty.is_some()
+            && !self.pending_force_outbox
+            && !self.pending_force_status
+            && !self.pending_force_runtime
+    }
+}
+
 impl DaemonState {
     pub(super) async fn on_outbox_collect_done(
         &mut self,
@@ -11,6 +72,14 @@ impl DaemonState {
     ) {
         match outbox_collect_result {
             Some(Ok(result)) => {
+                if result.presence.signals.is_empty()
+                    && result.presence.posts.is_empty()
+                    && !self.outbox_idle_stamps.pending_force_outbox
+                {
+                    self.outbox_idle_stamps.outbox_empty = result.dir_stamp_before;
+                } else {
+                    self.outbox_idle_stamps.outbox_empty = None;
+                }
                 if result.elapsed_ms > 100 {
                     tracing::warn!(
                         elapsed_ms = result.elapsed_ms,
@@ -96,6 +165,14 @@ impl DaemonState {
     ) {
         match runtime_collect_result {
             Some(Ok(result)) => {
+                if result.posts.is_empty()
+                    && result.measurement.pending_count == 0
+                    && !self.outbox_idle_stamps.pending_force_runtime
+                {
+                    self.outbox_idle_stamps.runtime_empty = result.dir_stamp_before;
+                } else {
+                    self.outbox_idle_stamps.runtime_empty = None;
+                }
                 self.latest_runtime_event_outbox = result.measurement;
                 if let Some(projection) = self.last_status_projection.as_mut() {
                     projection.set_runtime_event_outbox(self.latest_runtime_event_outbox.clone());
@@ -392,6 +469,7 @@ impl DaemonState {
         &mut self,
         config: &ConnectConfig,
         mut phase_projection_timer: std::pin::Pin<&mut tokio::time::Sleep>,
+        force_scan: bool,
     ) {
         // The hook outbox is only one of five phase-ledger writers. The
         // Codex bridge, both Console adapters, and OpenCode all run as
@@ -417,89 +495,143 @@ impl DaemonState {
             }
         }
         // Files remain durable while a POST is in flight. Do not scan,
-        // parse, and persist them again every 100ms until that attempt
-        // has either removed them or made them eligible for retry.
-        if self.outbox_collect_tasks.is_empty() && self.outbox_post_tasks.is_empty() {
-            let outbox_dir = self.outbox_dir.clone();
-            let db_path = config.shipper_config.db_path.clone();
-            self.outbox_collect_tasks.spawn_blocking(move || {
-                let started = Instant::now();
-                let presence =
-                    outbox::collect_outbox_with_local_state_result(&outbox_dir, db_path.as_deref());
-                OutboxCollectResult {
-                    presence,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                }
-            });
-        }
-        if self.status_slot_tasks.is_empty() {
-            let agent_dir = self
-                .runtime_events_outbox_dir
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| self.runtime_events_outbox_dir.clone());
-            let db_path = config.shipper_config.db_path.clone();
-            let already_recorded = self.status_recorded.clone();
-            let owner_evidence = self.last_status_owners.clone();
-            let owner_evidence_fresh = status_owner_snapshot_is_fresh(self.last_status_owners_at);
-            let owner_refresh_cursor = self.status_owner_refresh_cursor;
-            let managed_refresh_cursor = self.managed_owner_refresh_cursor;
-            self.status_slot_tasks.spawn_blocking(move || {
-                let started = Instant::now();
-                let dir = crate::status_slot::status_slot_dir(&agent_dir);
-                let slots = crate::status_slot::read_all(&dir);
-                let claims = read_status_slot_claims_for_slots(&slots);
-                let (owners, owner_refresh_cursor, next_managed_refresh_cursor) =
-                    status_owner_evidence_for_slots(
-                        &slots,
-                        &claims,
-                        owner_evidence.as_ref(),
-                        owner_evidence_fresh,
-                        crate::heartbeat::machine_boot_id().as_deref(),
-                        owner_refresh_cursor,
-                        managed_refresh_cursor,
+        // parse, and persist them again until that attempt has either removed
+        // them or made them eligible for retry. When a directory was empty on
+        // the previous pass and its metadata stamp has not changed (and no
+        // FSEvent forced a scan), skip spawning the blocking task altogether.
+        let force_outbox = force_scan || self.outbox_idle_stamps.pending_force_outbox;
+        let outbox_unchanged_empty = !force_outbox
+            && self.outbox_idle_stamps.outbox_empty.is_some()
+            && self.outbox_idle_stamps.outbox_empty == dir_activity_stamp(&self.outbox_dir);
+        if !outbox_unchanged_empty {
+            if self.outbox_collect_tasks.is_empty() && self.outbox_post_tasks.is_empty() {
+                self.outbox_idle_stamps.outbox_empty = None;
+                self.outbox_idle_stamps.pending_force_outbox = false;
+                let outbox_dir = self.outbox_dir.clone();
+                let db_path = config.shipper_config.db_path.clone();
+                self.outbox_collect_tasks.spawn_blocking(move || {
+                    let started = Instant::now();
+                    let dir_stamp_before = dir_activity_stamp(&outbox_dir);
+                    let presence = outbox::collect_outbox_with_local_state_result(
+                        &outbox_dir,
+                        db_path.as_deref(),
                     );
-                let slots = reconcile_status_slots(&dir, slots, &owners);
-                // The phase ledger is local truth, and the daemon is
-                // its single writer. Recording here is what lets a
-                // provider callback stop writing a file per frame.
-                let recorded =
-                    record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
-                StatusSlotResult {
-                    slots,
-                    recorded,
-                    owner_refresh_cursor,
-                    managed_owner_refresh_cursor: next_managed_refresh_cursor,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                }
-            });
+                    OutboxCollectResult {
+                        presence,
+                        dir_stamp_before,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                    }
+                });
+            } else if force_scan {
+                self.outbox_idle_stamps.outbox_empty = None;
+                self.outbox_idle_stamps.pending_force_outbox = true;
+            }
         }
-        if self.runtime_collect_tasks.is_empty()
-            && self.runtime_outbox_post_tasks.is_empty()
-            && self
-                .runtime_outbox_retry_after
-                .map(|retry_at| Instant::now() >= retry_at)
-                .unwrap_or(true)
-        {
-            let runtime_events_outbox_dir = self.runtime_events_outbox_dir.clone();
-            self.runtime_collect_tasks.spawn_blocking(move || {
-                let started = Instant::now();
-                let pass = outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
-                let measurement = heartbeat::RuntimeEventOutboxSnapshot {
-                    pending_count: pass.pending_count,
-                    pending_count_is_lower_bound: pass.pending_count_is_lower_bound,
-                    inspected_count: pass.inspected_count,
-                    saturated: pass.saturated,
-                    oldest_pending_at: pass.oldest_pending_at.map(|at| at.to_rfc3339()),
-                    observed_at: pass.observed_at.map(|at| at.to_rfc3339()),
-                };
-                RuntimeCollectResult {
-                    posts: pass.posts,
-                    measurement,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                    saturated: pass.saturated,
-                }
-            });
+        let status_dir = self
+            .runtime_events_outbox_dir
+            .parent()
+            .map(crate::status_slot::status_slot_dir);
+        let force_status = force_scan || self.outbox_idle_stamps.pending_force_status;
+        let status_unchanged_empty = !force_status
+            && self.status_recorded.is_empty()
+            && self.outbox_idle_stamps.status_empty.is_some()
+            && status_dir
+                .as_deref()
+                .and_then(dir_activity_stamp)
+                .is_some_and(|stamp| Some(stamp) == self.outbox_idle_stamps.status_empty);
+        if !status_unchanged_empty {
+            if self.status_slot_tasks.is_empty() {
+                self.outbox_idle_stamps.status_empty = None;
+                self.outbox_idle_stamps.pending_force_status = false;
+                let agent_dir = self
+                    .runtime_events_outbox_dir
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.runtime_events_outbox_dir.clone());
+                let db_path = config.shipper_config.db_path.clone();
+                let already_recorded = self.status_recorded.clone();
+                let owner_evidence = self.last_status_owners.clone();
+                let owner_evidence_fresh =
+                    status_owner_snapshot_is_fresh(self.last_status_owners_at);
+                let owner_refresh_cursor = self.status_owner_refresh_cursor;
+                let managed_refresh_cursor = self.managed_owner_refresh_cursor;
+                self.status_slot_tasks.spawn_blocking(move || {
+                    let started = Instant::now();
+                    let dir = crate::status_slot::status_slot_dir(&agent_dir);
+                    let dir_stamp_before = dir_activity_stamp(&dir);
+                    let slots = crate::status_slot::read_all(&dir);
+                    let claims = read_status_slot_claims_for_slots(&slots);
+                    let (owners, owner_refresh_cursor, next_managed_refresh_cursor) =
+                        status_owner_evidence_for_slots(
+                            &slots,
+                            &claims,
+                            owner_evidence.as_ref(),
+                            owner_evidence_fresh,
+                            crate::heartbeat::machine_boot_id().as_deref(),
+                            owner_refresh_cursor,
+                            managed_refresh_cursor,
+                        );
+                    let slots = reconcile_status_slots(&dir, slots, &owners);
+                    // The phase ledger is local truth, and the daemon is
+                    // its single writer. Recording here is what lets a
+                    // provider callback stop writing a file per frame.
+                    let recorded =
+                        record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
+                    StatusSlotResult {
+                        slots,
+                        recorded,
+                        owner_refresh_cursor,
+                        managed_owner_refresh_cursor: next_managed_refresh_cursor,
+                        dir_stamp_before,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                    }
+                });
+            } else if force_scan {
+                self.outbox_idle_stamps.status_empty = None;
+                self.outbox_idle_stamps.pending_force_status = true;
+            }
+        }
+        let force_runtime = force_scan || self.outbox_idle_stamps.pending_force_runtime;
+        let runtime_unchanged_empty = !force_runtime
+            && self.outbox_idle_stamps.runtime_empty.is_some()
+            && self.outbox_idle_stamps.runtime_empty
+                == dir_activity_stamp(&self.runtime_events_outbox_dir);
+        if !runtime_unchanged_empty {
+            if self.runtime_collect_tasks.is_empty()
+                && self.runtime_outbox_post_tasks.is_empty()
+                && self
+                    .runtime_outbox_retry_after
+                    .map(|retry_at| Instant::now() >= retry_at)
+                    .unwrap_or(true)
+            {
+                self.outbox_idle_stamps.runtime_empty = None;
+                self.outbox_idle_stamps.pending_force_runtime = false;
+                let runtime_events_outbox_dir = self.runtime_events_outbox_dir.clone();
+                self.runtime_collect_tasks.spawn_blocking(move || {
+                    let started = Instant::now();
+                    let dir_stamp_before = dir_activity_stamp(&runtime_events_outbox_dir);
+                    let pass =
+                        outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
+                    let measurement = heartbeat::RuntimeEventOutboxSnapshot {
+                        pending_count: pass.pending_count,
+                        pending_count_is_lower_bound: pass.pending_count_is_lower_bound,
+                        inspected_count: pass.inspected_count,
+                        saturated: pass.saturated,
+                        oldest_pending_at: pass.oldest_pending_at.map(|at| at.to_rfc3339()),
+                        observed_at: pass.observed_at.map(|at| at.to_rfc3339()),
+                    };
+                    RuntimeCollectResult {
+                        posts: pass.posts,
+                        measurement,
+                        dir_stamp_before,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        saturated: pass.saturated,
+                    }
+                });
+            } else if force_scan {
+                self.outbox_idle_stamps.runtime_empty = None;
+                self.outbox_idle_stamps.pending_force_runtime = true;
+            }
         }
     }
 }

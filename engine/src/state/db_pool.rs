@@ -54,6 +54,19 @@ impl ConnectionPool {
         })
     }
 
+    /// Lease a connection from the pool if one is already idle, without opening
+    /// a new connection or touching the filesystem.
+    pub fn try_get_idle(&self) -> Option<PooledConnection> {
+        let conn = {
+            let mut idle = self.inner.idle.lock().ok()?;
+            idle.pop()?
+        };
+        Some(PooledConnection {
+            conn: Some(conn),
+            pool: Arc::clone(&self.inner),
+        })
+    }
+
     /// Lease a connection from the pool, opening a new one if none is idle.
     ///
     /// Cheap when an idle connection is parked (no SQLite work). On a miss it

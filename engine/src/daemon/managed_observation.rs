@@ -74,7 +74,7 @@ pub(super) struct ProjectionBuildInput {
     /// is: a certificate says "as of this moment", not "always".
     pub(super) managed_captured_at: String,
     pub(super) unmanaged_snapshot_complete: bool,
-    pub(super) db_path: PathBuf,
+    pub(super) db_pool: crate::state::db_pool::ConnectionPool,
     pub(super) parse_tracker: RecentIssueTracker,
     pub(super) ship_stats: RecentShipStatsTracker,
     pub(super) is_offline: bool,
@@ -211,6 +211,32 @@ impl ManagedObservationSnapshot {
                 .cloned()
                 .collect(),
         }
+    }
+
+    pub(super) fn has_active_sessions(&self) -> bool {
+        self.codex.iter().any(|row| {
+            row.bridge_alive
+                || row.app_server_alive
+                || row.has_tui_attachment
+                || row.run_id.is_some()
+        }) || self
+            .antigravity
+            .iter()
+            .any(|row| row.provider_alive || row.run_id.is_some())
+            || self
+                .claude
+                .iter()
+                .any(|row| row.claude_alive || row.bridge_alive || row.run_id.is_some())
+            || self
+                .opencode
+                .iter()
+                .any(|row| row.server_alive || row.has_tui_attachment || row.run_id.is_some())
+            || self
+                .cursor
+                .iter()
+                .any(|row| row.live || row.run_id.is_some())
+            || self.pi.iter().any(|row| row.live || row.run_id.is_some())
+            || self.omp.iter().any(|row| row.live || row.run_id.is_some())
     }
 }
 
@@ -918,7 +944,7 @@ impl DaemonState {
                         managed_captured_at: self.last_managed_captured_at.clone(),
                         unmanaged_snapshot_complete: self
                             .last_projected_unmanaged_snapshot_complete,
-                        db_path: self.projection_db_path.clone(),
+                        db_pool: self.task_context.db_pool.clone(),
                         parse_tracker: self.parse_tracker.clone(),
                         ship_stats: self.ship_stats.clone(),
                         is_offline: self.offline.is_offline,
@@ -1260,7 +1286,7 @@ impl DaemonState {
                     managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
                     managed_captured_at: self.last_managed_captured_at.clone(),
                     unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
-                    db_path: self.projection_db_path.clone(),
+                    db_pool: self.task_context.db_pool.clone(),
                     parse_tracker: self.parse_tracker.clone(),
                     ship_stats: self.ship_stats.clone(),
                     is_offline: self.offline.is_offline,
@@ -1390,13 +1416,24 @@ impl DaemonState {
             self.managed_reconciliation
                 .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
         } else if !self.pending_full_reconciliation && !self.pending_wake_reconciliation {
-            maybe_start_managed_observation_scan(
-                self.projection_db_path.clone(),
-                &mut self.managed_observation_scan_tasks,
-                "periodic",
-                self.last_resume_contracts.is_none(),
-                &self.last_managed_observations,
-            );
+            // When no managed sessions are currently active and we have already
+            // built our initial snapshot, slow the periodic poll to 25 s (well
+            // within MANAGED_CERTIFICATE_KEEPALIVE_SECS = 45 s). Any new session
+            // launch writes to a watched managed state directory and triggers an
+            // immediate FSEvents reconciliation.
+            let active_managed = self.last_managed_observations.has_active_sessions();
+            let idle_due = self
+                .last_certified_at
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(25));
+            if active_managed || self.last_resume_contracts.is_none() || idle_due {
+                maybe_start_managed_observation_scan(
+                    self.projection_db_path.clone(),
+                    &mut self.managed_observation_scan_tasks,
+                    "periodic",
+                    self.last_resume_contracts.is_none(),
+                    &self.last_managed_observations,
+                );
+            }
         }
     }
 }

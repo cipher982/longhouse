@@ -1116,6 +1116,11 @@ impl DaemonState {
     ) {
         match status_slot_result {
             Some(Ok(result)) => {
+                if result.slots.is_empty() && !self.outbox_idle_stamps.pending_force_status {
+                    self.outbox_idle_stamps.status_empty = result.dir_stamp_before;
+                } else {
+                    self.outbox_idle_stamps.status_empty = None;
+                }
                 self.status_owner_refresh_cursor = result.owner_refresh_cursor;
                 self.managed_owner_refresh_cursor = result.managed_owner_refresh_cursor;
                 if result.elapsed_ms > 100 {

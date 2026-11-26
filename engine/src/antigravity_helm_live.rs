@@ -49,8 +49,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -79,9 +78,6 @@ const STATUS_DONE: i64 = 3;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// The thread wakes this often when actively following a streaming turn.
 const LOOP_SLICE: Duration = Duration::from_millis(25);
-/// Upper sleep cap when idle with no streaming sessions so shutdown stays fast
-/// while avoiding 40 wakeups/sec on an idle laptop.
-const IDLE_SLEEP_SLICE: Duration = Duration::from_millis(250);
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 /// Consecutive failures after which the reader stands down for good.
 const MAX_CONSECUTIVE_ERRORS: u32 = 8;
@@ -114,7 +110,7 @@ impl HelmLiveConfig {
 
 /// A running reader. Dropping it stops the thread.
 pub struct HelmLive {
-    stop: Arc<AtomicBool>,
+    stop: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -124,7 +120,11 @@ impl HelmLive {
     }
 
     fn shutdown(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        let (lock, cvar) = &*self.stop;
+        if let Ok(mut stopped) = lock.lock() {
+            *stopped = true;
+            cvar.notify_all();
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -143,7 +143,7 @@ pub fn spawn(config: HelmLiveConfig) -> Option<HelmLive> {
     if !reader_enabled() {
         return None;
     }
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new((Mutex::new(false), Condvar::new()));
     let flag = stop.clone();
     let thread = std::thread::Builder::new()
         .name("antigravity-helm-live".into())
@@ -607,7 +607,7 @@ fn newest_tool_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec
 // --- the loop -------------------------------------------------------------
 
 /// How often the hook state directory is rescanned for sessions.
-const SCAN_EVERY: Duration = Duration::from_secs(3);
+const SCAN_EVERY: Duration = Duration::from_secs(5);
 /// A state file untouched for this long belongs to no live session.
 const STATE_FILE_RECENT: Duration = Duration::from_secs(30 * 60);
 /// A "thinking" or "running" state older than this is a crashed turn, not a
@@ -855,10 +855,14 @@ fn rescan(config: &HelmLiveConfig, sessions: &mut HashMap<String, Session>) {
     }
 }
 
-fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
+fn run(config: HelmLiveConfig, stop: Arc<(Mutex<bool>, Condvar)>) {
     let mut sessions: HashMap<String, Session> = HashMap::new();
     let mut next_scan = Instant::now();
-    while !stop.load(Ordering::SeqCst) {
+    let (lock, cvar) = &*stop;
+    loop {
+        if *lock.lock().unwrap_or_else(|e| e.into_inner()) {
+            break;
+        }
         let now = Instant::now();
         if now >= next_scan {
             rescan(&config, &mut sessions);
@@ -895,12 +899,20 @@ fn run(config: HelmLiveConfig, stop: Arc<AtomicBool>) {
         } else if any_live {
             POLL_INTERVAL
         } else {
-            IDLE_SLEEP_SLICE
+            // When idle with no live Antigravity sessions, sleep until the next
+            // scan on the condvar so shutdown still wakes instantaneously while
+            // avoiding 4-40 idle wakeups/sec.
+            SCAN_EVERY
         };
         let sleep_for = next_wake
             .saturating_duration_since(Instant::now())
-            .min(sleep_cap);
-        std::thread::sleep(sleep_for.max(LOOP_SLICE));
+            .min(sleep_cap)
+            .max(LOOP_SLICE);
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if *guard {
+            break;
+        }
+        let _ = cvar.wait_timeout(guard, sleep_for);
     }
 }
 

@@ -226,6 +226,10 @@ pub(super) fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> Stri
 )]
 pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
     let task_started = Instant::now();
+    let settled_claim_generation = task_context
+        .claim_generation
+        .load(std::sync::atomic::Ordering::Acquire);
+    let settled_stamp = discovery::scan_stamp_for_path(&job.path, job.provider);
     let mut result = PathTaskResult {
         job,
         events_shipped: 0,
@@ -235,38 +239,43 @@ pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) ->
         local_retry_after: None,
         local_retry_priority: None,
         reconciled_to_head: false,
+        settled_stamp,
+        settled_claim_generation,
         processing_elapsed: Duration::ZERO,
     };
 
-    // Pool checkout may wait on SQLite contention. This task runs on the
-    // LocalSet that owns wake/control dispatch, so a synchronous checkout here
-    // can stall every managed session behind archive workers. Keep the wait on
-    // the blocking pool just like parsing/preparation below.
+    // Prefer an already-idle pooled connection directly (O(1) mutex pop); only
+    // hop through `spawn_blocking` on a cold open so we avoid a second blocking
+    // thread dispatch on every path job while keeping cold SQLite opens off the
+    // LocalSet.
     let db_pool = task_context.db_pool.clone();
-    let mut conn = match tokio::task::spawn_blocking(move || db_pool.get()).await {
-        Ok(Ok(conn)) => conn,
-        Ok(Err(e)) => {
-            if task_context.tracker.record_error() {
-                tracing::warn!(
-                    "Error opening shipper DB for {}: {}",
-                    result.job.path.display(),
-                    e
-                );
+    let mut conn = match db_pool.try_get_idle() {
+        Some(conn) => conn,
+        None => match tokio::task::spawn_blocking(move || db_pool.get()).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                if task_context.tracker.record_error() {
+                    tracing::warn!(
+                        "Error opening shipper DB for {}: {}",
+                        result.job.path.display(),
+                        e
+                    );
+                }
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                return finish_path_task(result, task_started);
             }
-            result.local_retry_after = Some(local_retry_delay(result.job.priority));
-            return finish_path_task(result, task_started);
-        }
-        Err(e) => {
-            if task_context.tracker.record_error() {
-                tracing::warn!(
-                    "Shipper DB checkout task failed for {}: {}",
-                    result.job.path.display(),
-                    e
-                );
+            Err(e) => {
+                if task_context.tracker.record_error() {
+                    tracing::warn!(
+                        "Shipper DB checkout task failed for {}: {}",
+                        result.job.path.display(),
+                        e
+                    );
+                }
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                return finish_path_task(result, task_started);
             }
-            result.local_retry_after = Some(local_retry_delay(result.job.priority));
-            return finish_path_task(result, task_started);
-        }
+        },
     };
 
     // Storage-v2 is the only transcript lane this engine has; `run` refuses
@@ -586,8 +595,11 @@ impl DaemonState {
                         }
                     } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
                         self.last_ship_at = Some(chrono::Utc::now().to_rfc3339());
+                        crate::state::source_inventory::invalidate_recent_epoch_progress();
+                        self.settled_scan_cache.invalidate_path(&retry_path);
                         if let Some(duration) = self.offline.mark_online() {
                             self.last_runtime_truth_signature = None;
+                            self.settled_scan_cache.invalidate_all();
                             tracing::info!(
                                 "Back online after {:.0}s — resuming shipping",
                                 duration.as_secs_f64()
@@ -598,9 +610,17 @@ impl DaemonState {
                         && !self.scheduler.has_path(&retry_path)
                         && !self.deferred_retries.contains_key(&retry_path)
                     {
+                        self.settled_scan_cache.record_settled(
+                            retry_path.clone(),
+                            retry_provider,
+                            result.settled_stamp,
+                            result.settled_claim_generation,
+                        );
                         if let Some(open) = self.open_history_reconciliation.as_mut() {
                             open.remaining_paths.remove(&retry_path);
                         }
+                    } else {
+                        self.settled_scan_cache.invalidate_path(&retry_path);
                     }
                     maybe_seal_history_reconciliation(
                         &mut self.conn,
@@ -624,12 +644,14 @@ impl DaemonState {
         &mut self,
         config: &ConnectConfig,
         first_event: WatcherEvent,
+        phase_projection_timer: std::pin::Pin<&mut tokio::time::Sleep>,
     ) {
-        let managed_state_changes = handle_live_transcript_file_events(
+        let outcome = handle_live_transcript_file_events(
             &mut self.watcher,
             first_event,
             &self.providers,
             &self.managed_state_dirs,
+            &self.agent_control_dirs,
             &self.conn,
             &mut self.transcript_wake_rx,
             &mut self.scheduler,
@@ -643,7 +665,19 @@ impl DaemonState {
             &mut self.hot_sources,
         )
         .await;
+        for path in &outcome.transcript_paths {
+            self.settled_scan_cache.invalidate_path(path);
+        }
+        if outcome.scope_changed {
+            self.on_scope_tick();
+        }
+        if outcome.outbox_or_wal_changed {
+            self.on_outbox_tick(config, phase_projection_timer, true);
+        }
+        let managed_state_changes = outcome.managed_state_changes;
         if !managed_state_changes.is_empty() {
+            self.settled_scan_cache
+                .invalidate_for_managed_changes(&managed_state_changes);
             let requires_discovery = managed_state_changes_require_full_reconciliation(
                 &self.last_managed_observations,
                 &managed_state_changes,
@@ -651,7 +685,7 @@ impl DaemonState {
             if requires_discovery {
                 // A watcher burst can contain many transient paths while
                 // a provider is writing one session. Queue one bounded
-                // full walk; the 5s observation tick starts it after the
+                // full walk; the observation tick starts it after the
                 // burst instead of starting one walk per event batch.
                 self.projection_generation = self.projection_generation.saturating_add(1);
                 self.pending_full_reconciliation = true;

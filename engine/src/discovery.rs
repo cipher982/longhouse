@@ -4,9 +4,12 @@
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use walkdir::WalkDir;
@@ -228,11 +231,154 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
         .collect()
 }
 
+/// Metadata stamp capturing a source file (and its SQLite WAL when applicable)
+/// so periodic reconciliation scans can skip files that have not moved since
+/// they were last reconciled to head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceScanStamp {
+    pub inode: u64,
+    pub len: u64,
+    pub modified_nanos: i128,
+    pub ctime_nanos: i128,
+    pub wal_len: u64,
+    pub wal_modified_nanos: i128,
+    /// True only when the file (and WAL, if present) has been unmodified for
+    /// at least `AT_REST_AFTER`, avoiding same-tick write races.
+    pub at_rest: bool,
+}
+
+fn system_time_nanos(value: SystemTime) -> i128 {
+    value
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as i128)
+        .unwrap_or(-1)
+}
+
+fn metadata_inode_and_ctime_nanos(metadata: &std::fs::Metadata) -> (u64, i128) {
+    #[cfg(unix)]
+    {
+        let ctime_nanos = (metadata.ctime() as i128)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(metadata.ctime_nsec() as i128);
+        (metadata.ino(), ctime_nanos)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        (0, -1)
+    }
+}
+
+fn is_time_at_rest(now: SystemTime, modified: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age >= crate::state::file_identity::AT_REST_AFTER)
+}
+
+fn source_scan_stamp_from_meta(
+    metadata: &std::fs::Metadata,
+    wal_meta: Option<&std::fs::Metadata>,
+    now: SystemTime,
+) -> Option<SourceScanStamp> {
+    let modified = metadata.modified().ok()?;
+    let (inode, ctime_nanos) = metadata_inode_and_ctime_nanos(metadata);
+    let (wal_len, wal_modified_nanos, wal_at_rest) = match wal_meta {
+        Some(wal) => {
+            let wal_mod = wal.modified().ok()?;
+            (
+                wal.len(),
+                system_time_nanos(wal_mod),
+                is_time_at_rest(now, wal_mod),
+            )
+        }
+        None => (0, -1, true),
+    };
+    Some(SourceScanStamp {
+        inode,
+        len: metadata.len(),
+        modified_nanos: system_time_nanos(modified),
+        ctime_nanos,
+        wal_len,
+        wal_modified_nanos,
+        at_rest: is_time_at_rest(now, modified) && wal_at_rest,
+    })
+}
+
+fn claude_subagent_sidecar_meta(path: &Path) -> Option<std::fs::Metadata> {
+    let name = path.file_name().and_then(|v| v.to_str())?;
+    let stem = name.strip_suffix(".jsonl")?;
+    if !stem.starts_with("agent-")
+        || !path
+            .components()
+            .any(|component| component.as_os_str() == "subagents")
+    {
+        return None;
+    }
+    path.with_file_name(format!("{stem}.meta.json"))
+        .metadata()
+        .ok()
+}
+
+/// Capture the current [`SourceScanStamp`] for `path` (plus `-wal` for SQLite
+/// providers or `.meta.json` sidecar for Claude subagents). Used before
+/// shipping a path so a settled verdict can only match a future scan if the
+/// file and its sidecar have not moved since before the job started.
+pub fn scan_stamp_for_path(path: &Path, provider: &str) -> Option<SourceScanStamp> {
+    let metadata = path.metadata().ok()?;
+    let now = SystemTime::now();
+    let needs_wal = (provider == "cursor"
+        && path.file_name().and_then(|v| v.to_str()) == Some("store.db"))
+        || (provider == "opencode" && crate::opencode_db::is_opencode_database_path(path));
+    let sidecar_meta = if needs_wal {
+        let mut wal_path = path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        Path::new(&wal_path).metadata().ok()
+    } else if provider == "claude" {
+        claude_subagent_sidecar_meta(path)
+    } else {
+        None
+    };
+    source_scan_stamp_from_meta(&metadata, sidecar_meta.as_ref(), now)
+}
+
+const MAX_OMP_HEADER_CACHE_ENTRIES: usize = 8192;
+
+static OMP_HEADER_CACHE: LazyLock<Mutex<HashMap<PathBuf, (u64, u64, i128, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cached_omp_native_id(path: &Path, stamp: Option<SourceScanStamp>) -> Option<String> {
+    let key = stamp
+        .filter(|s| s.at_rest)
+        .map(|s| (s.inode, s.len, s.modified_nanos));
+    if let Some((inode, len, modified_nanos)) = key {
+        if let Ok(cache) = OMP_HEADER_CACHE.lock() {
+            if let Some((c_ino, c_len, c_mod, native_id)) = cache.get(path) {
+                if *c_ino == inode && *c_len == len && *c_mod == modified_nanos {
+                    return Some(native_id.clone());
+                }
+            }
+        }
+    }
+    let header = crate::omp_session::read_session_header(path).ok()?;
+    if let Some((inode, len, modified_nanos)) = key {
+        if let Ok(mut cache) = OMP_HEADER_CACHE.lock() {
+            if cache.len() >= MAX_OMP_HEADER_CACHE_ENTRIES && !cache.contains_key(path) {
+                cache.clear();
+            }
+            cache.insert(
+                path.to_path_buf(),
+                (inode, len, modified_nanos, header.native_id.clone()),
+            );
+        }
+    }
+    Some(header.native_id)
+}
+
 #[derive(Clone, Debug)]
 pub struct DiscoveredFile {
     pub path: PathBuf,
     pub provider: &'static str,
     pub modified_at_ms: i64,
+    pub stamp: Option<SourceScanStamp>,
 }
 
 pub struct DiscoveryScan {
@@ -279,8 +425,9 @@ pub fn discover_files_in_scope(
     scope: &crate::import_scope::ImportScope,
 ) -> DiscoveryScan {
     let started = Instant::now();
+    let now = SystemTime::now();
     let mut excluded_by_scope: BTreeMap<&'static str, u64> = BTreeMap::new();
-    let mut files: Vec<(PathBuf, &'static str, SystemTime)> = Vec::new();
+    let mut files: Vec<(PathBuf, &'static str, SystemTime, Option<SourceScanStamp>)> = Vec::new();
     let mut inventory: BTreeMap<&'static str, ProviderSourceInventory> = BTreeMap::new();
     let mut scan_error_count = 0_u64;
 
@@ -320,7 +467,15 @@ pub fn discover_files_in_scope(
                 }
                 let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 let source_bytes = meta.len();
-                let (wal_bytes, footprint_errors) = source_wal_bytes(provider, path);
+                let (wal_meta, wal_bytes, footprint_errors) = source_wal_meta(provider, path);
+                let sidecar_meta = if wal_meta.is_some() {
+                    wal_meta
+                } else if provider.name == "claude" {
+                    claude_subagent_sidecar_meta(path)
+                } else {
+                    None
+                };
+                let stamp = source_scan_stamp_from_meta(&meta, sidecar_meta.as_ref(), now);
                 let footprint_bytes = source_bytes.saturating_add(wal_bytes);
                 scan_error_count = scan_error_count.saturating_add(footprint_errors);
                 let modified_at_ms = system_time_ms(modified);
@@ -349,17 +504,46 @@ pub fn discover_files_in_scope(
                         .newest_modified_at_ms
                         .map_or(modified_at_ms, |current| current.max(modified_at_ms)),
                 );
-                files.push((path.to_path_buf(), provider.name, modified));
+                files.push((path.to_path_buf(), provider.name, modified, stamp));
             }
         }
     }
 
+    // Only `pi` and `omp` can collide on the same physical session file.
+    // Skipping `canonicalize()` for the other providers avoids tens of thousands
+    // of redundant `realpath` / `__getattrlist` syscalls on every scan.
+    let has_pi_provider = providers.iter().any(|p| p.name == "pi");
+    let has_omp_provider = providers.iter().any(|p| p.name == "omp");
+    let check_pi_omp_ambiguity = has_pi_provider && has_omp_provider;
+    let pi_omp_canonical_providers: Vec<ProviderConfig> = if check_pi_omp_ambiguity {
+        providers
+            .iter()
+            .filter(|p| p.name == "pi" || p.name == "omp")
+            .map(|p| ProviderConfig {
+                name: p.name,
+                root: canonical_path(&p.root),
+                extension: p.extension,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let mut providers_by_physical_path: BTreeMap<PathBuf, BTreeSet<&'static str>> = BTreeMap::new();
-    for (path, provider, _) in &files {
-        providers_by_physical_path
-            .entry(path.canonicalize().unwrap_or_else(|_| path.clone()))
-            .or_default()
-            .insert(*provider);
+    let mut pi_omp_physical_paths: HashMap<PathBuf, PathBuf> = HashMap::new();
+    if check_pi_omp_ambiguity {
+        for (path, provider, _, _) in &files {
+            if *provider == "pi" || *provider == "omp" {
+                let physical = pi_omp_physical_paths
+                    .entry(path.clone())
+                    .or_insert_with(|| canonical_path(path))
+                    .clone();
+                providers_by_physical_path
+                    .entry(physical)
+                    .or_default()
+                    .insert(*provider);
+            }
+        }
     }
     let ambiguous_provider_paths: BTreeSet<PathBuf> = providers_by_physical_path
         .iter()
@@ -367,11 +551,11 @@ pub fn discover_files_in_scope(
         .map(|(path, _)| path.clone())
         .collect();
     let mut omp_sources_by_native_id: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    for (path, provider, _) in &files {
+    for (path, provider, _, stamp) in &files {
         if *provider == "omp" {
-            if let Ok(header) = crate::omp_session::read_session_header(path) {
+            if let Some(native_id) = cached_omp_native_id(path, *stamp) {
                 omp_sources_by_native_id
-                    .entry(header.native_id)
+                    .entry(native_id)
                     .or_default()
                     .push(path.clone());
             }
@@ -386,12 +570,27 @@ pub fn discover_files_in_scope(
     let mut seen = BTreeSet::new();
     let mut files = files
         .into_iter()
-        .filter_map(|(path, provider, modified)| {
-            let physical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if ambiguous_provider_paths.contains(&physical_path)
-                || ambiguous_provider_path(&path, providers)
-                || (provider == "omp" && ambiguous_omp_paths.contains(&path))
-            {
+        .filter_map(|(path, provider, modified, stamp)| {
+            if check_pi_omp_ambiguity && (provider == "pi" || provider == "omp") {
+                let physical_path = pi_omp_physical_paths
+                    .get(&path)
+                    .map(PathBuf::as_path)
+                    .unwrap_or(path.as_path());
+                let matches_pi = pi_omp_canonical_providers.iter().any(|p| {
+                    p.name == "pi"
+                        && physical_path.starts_with(&p.root)
+                        && is_provider_session_file(p, physical_path)
+                });
+                let matches_omp = pi_omp_canonical_providers.iter().any(|p| {
+                    p.name == "omp"
+                        && physical_path.starts_with(&p.root)
+                        && is_provider_session_file(p, physical_path)
+                });
+                if ambiguous_provider_paths.contains(physical_path) || (matches_pi && matches_omp) {
+                    return None;
+                }
+            }
+            if provider == "omp" && ambiguous_omp_paths.contains(&path) {
                 return None;
             }
             seen.insert((path.clone(), provider))
@@ -399,6 +598,7 @@ pub fn discover_files_in_scope(
                     path,
                     provider,
                     modified_at_ms: system_time_ms(modified),
+                    stamp,
                 })
         })
         .collect::<Vec<_>>();
@@ -550,25 +750,31 @@ pub fn cmd_import_scope(json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn source_wal_bytes(provider: &ProviderConfig, path: &Path) -> (u64, u64) {
+fn source_wal_meta(
+    provider: &ProviderConfig,
+    path: &Path,
+) -> (Option<std::fs::Metadata>, u64, u64) {
     if provider.name != "opencode" && provider.name != "cursor" {
-        return (0, 0);
+        return (None, 0, 0);
     }
     if !matches!(
         path.file_name().and_then(|value| value.to_str()),
         Some("store.db")
     ) && !(provider.name == "opencode" && crate::opencode_db::is_opencode_database_path(path))
     {
-        return (0, 0);
+        return (None, 0, 0);
     }
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-        return (0, 1);
+        return (None, 0, 1);
     };
     let wal_path = path.with_file_name(format!("{file_name}-wal"));
     match wal_path.metadata() {
-        Ok(metadata) => (metadata.len(), 0),
-        Err(error) if error.kind() == ErrorKind::NotFound => (0, 0),
-        Err(_) => (0, 1),
+        Ok(metadata) => {
+            let len = metadata.len();
+            (Some(metadata), len, 0)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => (None, 0, 0),
+        Err(_) => (None, 0, 1),
     }
 }
 
@@ -637,7 +843,7 @@ pub fn provider_for_path(
     providers: &[ProviderConfig],
 ) -> Option<&'static str> {
     let matches = matching_provider_names(path, providers);
-    if ambiguous_provider_path(path, providers) {
+    if matches.contains(&"pi") && matches.contains(&"omp") {
         return None;
     }
     matches.into_iter().next()

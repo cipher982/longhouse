@@ -228,7 +228,7 @@ enum EpochProgressRead {
 /// age, 2026-10-12). It feeds progress counters and the importing/current
 /// label only, so ten seconds of lag is invisible next to an import, and the
 /// periodic managed observation scan keeps rebuilding within that horizon.
-pub const EPOCH_PROGRESS_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10);
+pub const EPOCH_PROGRESS_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
 
 type EpochProgressByProvider = BTreeMap<String, EpochProgress>;
 
@@ -237,6 +237,14 @@ static RECENT_EPOCH_PROGRESS: std::sync::LazyLock<
         std::collections::HashMap<String, (std::time::Instant, EpochProgressByProvider)>,
     >,
 > = std::sync::LazyLock::new(Default::default);
+
+/// Clear cached epoch progress after real shipping writes so progress counters
+/// reflect newly acknowledged bytes on the next status projection.
+pub fn invalidate_recent_epoch_progress() {
+    if let Ok(mut cache) = RECENT_EPOCH_PROGRESS.lock() {
+        cache.clear();
+    }
+}
 
 fn epoch_progress(conn: &Connection, read: EpochProgressRead) -> Result<EpochProgressByProvider> {
     // Keyed by database file: an in-memory or unnamed database is never cached.
@@ -263,8 +271,26 @@ fn epoch_progress(conn: &Connection, read: EpochProgressRead) -> Result<EpochPro
 }
 
 fn query_epoch_progress(conn: &Connection) -> Result<EpochProgressByProvider> {
-    let mut stmt = conn.prepare(
-        "SELECT epoch.provider,
+    const INDEXED_SQL: &str = "SELECT epoch.provider,
+                COUNT(*),
+                COALESCE(SUM(CASE
+                    WHEN COALESCE(lane.last_position, 0) >= epoch.max_observed_len THEN 1
+                    ELSE 0 END), 0),
+                COALESCE(SUM(epoch.max_observed_len), 0),
+                COALESCE(SUM(CASE
+                    WHEN COALESCE(lane.last_position, 0) < epoch.max_observed_len
+                    THEN COALESCE(lane.last_position, 0)
+                    ELSE epoch.max_observed_len END), 0),
+                COALESCE(SUM(CASE
+                    WHEN COALESCE(lane.last_position, 0) < epoch.max_observed_len
+                    THEN epoch.max_observed_len - COALESCE(lane.last_position, 0)
+                    ELSE 0 END), 0)
+         FROM source_epoch_registry AS epoch INDEXED BY idx_source_epoch_active_progress
+         LEFT JOIN source_epoch_lane_state AS lane INDEXED BY idx_source_epoch_lane_durable
+           ON lane.source_epoch = epoch.source_epoch AND lane.lane = 'durable'
+         WHERE epoch.ended_at IS NULL
+         GROUP BY epoch.provider";
+    const FALLBACK_SQL: &str = "SELECT epoch.provider,
                 COUNT(*),
                 COALESCE(SUM(CASE
                     WHEN COALESCE(lane.last_position, 0) >= epoch.max_observed_len THEN 1
@@ -282,8 +308,11 @@ fn query_epoch_progress(conn: &Connection) -> Result<EpochProgressByProvider> {
          LEFT JOIN source_epoch_lane_state AS lane
            ON lane.source_epoch = epoch.source_epoch AND lane.lane = 'durable'
          WHERE epoch.ended_at IS NULL
-         GROUP BY epoch.provider",
-    )?;
+         GROUP BY epoch.provider";
+    let mut stmt = match conn.prepare(INDEXED_SQL) {
+        Ok(stmt) => stmt,
+        Err(_) => conn.prepare(FALLBACK_SQL)?,
+    };
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

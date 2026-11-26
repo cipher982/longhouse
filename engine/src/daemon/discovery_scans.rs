@@ -265,7 +265,193 @@ pub(super) fn start_startup_reconciliation(
 /// Live updates arrive via FSEvents/outbox; this fallback catches missed wakes
 /// well below `STARVED_LIVE_TRANSCRIPT_STALE_SECONDS` (120 s) without statting
 /// 1,500+ historical bindings every second.
-pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Maximum time a settled source's metadata stamp is trusted during periodic
+/// reconciliation scans before forcing a full re-verification pass.
+const SETTLED_FULL_VERIFY_INTERVAL: Duration = Duration::from_secs(3600);
+const MAX_SETTLED_SCAN_ENTRIES: usize = 50_000;
+
+#[derive(Clone, Copy)]
+struct SettledScanEntry {
+    provider: &'static str,
+    stamp: discovery::SourceScanStamp,
+    generation: u64,
+}
+
+/// Tracks sources already verified `reconciled_to_head` at a rested metadata
+/// stamp `(inode, len, mtime, ctime, wal)` so 5-minute reconciliation scans
+/// enqueue only sources that actually changed rather than all 10,000+ historical
+/// files on disk.
+pub(super) struct SettledScanCache {
+    entries: HashMap<PathBuf, SettledScanEntry>,
+    provider_generations: HashMap<&'static str, u64>,
+    global_generation: u64,
+    /// Shared monotonic counter incremented whenever claims/scope/roots change.
+    /// Jobs snapshot this counter BEFORE shipping so a claim change arriving
+    /// mid-job prevents the completing job from recording a stale settled entry.
+    claim_generation: Arc<std::sync::atomic::AtomicU64>,
+    last_full_verify_at: Instant,
+}
+
+impl SettledScanCache {
+    pub(super) fn new(claim_generation: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        Self {
+            entries: HashMap::new(),
+            provider_generations: HashMap::new(),
+            global_generation: 1,
+            claim_generation,
+            last_full_verify_at: Instant::now(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn default_for_test() -> Self {
+        Self::new(Arc::new(std::sync::atomic::AtomicU64::new(1)))
+    }
+
+    fn effective_generation(&self, provider: &'static str) -> u64 {
+        self.global_generation
+            .wrapping_add(*self.provider_generations.get(provider).unwrap_or(&0))
+    }
+
+    fn bump_claim_generation(&self) {
+        self.claim_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    pub(super) fn current_claim_generation(&self) -> u64 {
+        self.claim_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(super) fn record_settled(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        stamp: Option<discovery::SourceScanStamp>,
+        job_claim_generation: u64,
+    ) {
+        if job_claim_generation != self.current_claim_generation() {
+            self.entries.remove(&path);
+            return;
+        }
+        let Some(stamp) = stamp.filter(|s| s.at_rest) else {
+            self.entries.remove(&path);
+            return;
+        };
+        if self.entries.len() >= MAX_SETTLED_SCAN_ENTRIES && !self.entries.contains_key(&path) {
+            self.entries.clear();
+        }
+        let generation = self.effective_generation(provider);
+        self.entries.insert(
+            path,
+            SettledScanEntry {
+                provider,
+                stamp,
+                generation,
+            },
+        );
+    }
+
+    pub(super) fn is_settled(&self, file: &discovery::DiscoveredFile) -> bool {
+        let Some(stamp) = file.stamp.filter(|s| s.at_rest) else {
+            return false;
+        };
+        let Some(entry) = self.entries.get(&file.path) else {
+            return false;
+        };
+        entry.provider == file.provider
+            && entry.stamp == stamp
+            && entry.generation == self.effective_generation(file.provider)
+    }
+
+    pub(super) fn invalidate_path(&mut self, path: &Path) {
+        self.entries.remove(path);
+        // A Claude subagent `.meta.json` sidecar change affects its sibling `.jsonl`.
+        if let Some(name) = path.file_name().and_then(|v| v.to_str()) {
+            if let Some(stem) = name.strip_suffix(".meta.json") {
+                self.entries
+                    .remove(&path.with_file_name(format!("{stem}.jsonl")));
+            }
+        }
+    }
+
+    pub(super) fn invalidate_provider(&mut self, provider: &'static str) {
+        let entry = self.provider_generations.entry(provider).or_insert(0);
+        *entry = entry.wrapping_add(1);
+        self.bump_claim_generation();
+    }
+
+    pub(super) fn invalidate_all(&mut self) {
+        self.global_generation = self.global_generation.wrapping_add(1);
+        self.entries.clear();
+        self.bump_claim_generation();
+        self.last_full_verify_at = Instant::now();
+    }
+
+    pub(super) fn maybe_expire_for_full_verify(&mut self) -> bool {
+        if self.last_full_verify_at.elapsed() >= SETTLED_FULL_VERIFY_INTERVAL {
+            self.invalidate_all();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn invalidate_for_managed_changes(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            let mut matched_provider: Option<&'static str> = None;
+            let mut global_claim_dir = false;
+            for component in path.components() {
+                let Some(part) = component.as_os_str().to_str() else {
+                    continue;
+                };
+                match part {
+                    "turn-claims" | "claims" => {
+                        global_claim_dir = true;
+                        break;
+                    }
+                    "cursor-helm" | "cursor" | "cursor-console" => {
+                        matched_provider = Some("cursor");
+                    }
+                    "omp-helm" | "omp" | "omp-console" => {
+                        matched_provider = Some("omp");
+                    }
+                    "pi-helm" | "pi" | "pi-console" => {
+                        matched_provider = Some("pi");
+                    }
+                    "antigravity" | "antigravity-console" => {
+                        matched_provider = Some("antigravity");
+                    }
+                    "codex-bridge" | "codex" | "codex-console" => {
+                        matched_provider = Some("codex");
+                    }
+                    "claude-channel" | "claude" | "claude-console" | "claude-print" => {
+                        matched_provider = Some("claude");
+                    }
+                    "opencode" | "opencode-console" => {
+                        matched_provider = Some("opencode");
+                    }
+                    _ => {}
+                }
+            }
+            if global_claim_dir {
+                self.invalidate_all();
+                return;
+            }
+            match matched_provider {
+                Some(provider) => self.invalidate_provider(provider),
+                // Conservative fallback: any unrecognized managed-state path
+                // invalidates all providers rather than silently skipping.
+                None => {
+                    self.invalidate_all();
+                    return;
+                }
+            }
+        }
+    }
+}
 
 /// One source the reconciler wants scheduled.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,6 +575,7 @@ fn source_stat(metadata: &std::fs::Metadata) -> SourceStat {
 pub(super) fn maybe_start_reconcile_scan(
     tasks: &mut JoinSet<ReconcileScanResult>,
     db_path: Option<PathBuf>,
+    db_pool: crate::state::db_pool::ConnectionPool,
 ) -> bool {
     if !tasks.is_empty() {
         return false;
@@ -402,7 +589,7 @@ pub(super) fn maybe_start_reconcile_scan(
             error: None,
         };
         match crate::state::db::resolve_db_path(db_path.as_deref())
-            .and_then(|path| crate::state::db::open_connection(&path).map(|conn| (path, conn)))
+            .and_then(|path| db_pool.get().map(|conn| (path, conn)))
         {
             Ok((path, conn)) => {
                 match crate::state::session_binding::SessionBinding::new(&conn).list_bindings() {
@@ -476,9 +663,22 @@ impl DaemonState {
     ) {
         match discovery_result {
             Some(Ok(result)) => {
-                let reconciliation_paths = result
-                    .enqueue_files
-                    .then(|| result.files.iter().map(|file| file.path.clone()).collect());
+                let mut files_to_enqueue = result.files;
+                let mut skipped_settled = 0usize;
+                if result.enqueue_files && result.priority == WorkPriority::Scan {
+                    let full_verify = self.settled_scan_cache.maybe_expire_for_full_verify();
+                    if !full_verify {
+                        let before = files_to_enqueue.len();
+                        files_to_enqueue.retain(|file| !self.settled_scan_cache.is_settled(file));
+                        skipped_settled = before.saturating_sub(files_to_enqueue.len());
+                    }
+                }
+                let reconciliation_paths = result.enqueue_files.then(|| {
+                    files_to_enqueue
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect()
+                });
                 let previous_inventory_generation =
                     crate::state::source_inventory::load_inventory(&self.conn)
                         .ok()
@@ -496,8 +696,7 @@ impl DaemonState {
                     let now = std::time::SystemTime::now();
                     let hot_after_ms =
                         now_ms().saturating_sub(super::hot_sources::HOT_WINDOW.as_millis() as i64);
-                    for file in result
-                        .files
+                    for file in files_to_enqueue
                         .iter()
                         .filter(|file| file.modified_at_ms >= hot_after_ms)
                     {
@@ -505,17 +704,23 @@ impl DaemonState {
                     }
                     let queued = enqueue_discovered_files(
                         &mut self.scheduler,
-                        result.files,
+                        files_to_enqueue,
                         result.priority,
                         &mut self.deferred_retries,
                     );
-                    tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                    tracing::debug!(
+                        queued,
+                        skipped_settled,
+                        reason = result.reason,
+                        "Queued paths for discovery scan"
+                    );
                 }
                 match inventory {
                     Ok(snapshot) => {
                         tracing::info!(
                             generation = snapshot.generation,
                             source_count = snapshot.source_count,
+                            skipped_settled,
                             footprint_bytes = snapshot.footprint_bytes,
                             scan_error_count = snapshot.scan_error_count,
                             "Updated durable transcript source inventory"
@@ -567,7 +772,7 @@ impl DaemonState {
                                 managed_captured_at: self.last_managed_captured_at.clone(),
                                 unmanaged_snapshot_complete: self
                                     .last_projected_unmanaged_snapshot_complete,
-                                db_path: self.projection_db_path.clone(),
+                                db_pool: self.task_context.db_pool.clone(),
                                 parse_tracker: self.parse_tracker.clone(),
                                 ship_stats: self.ship_stats.clone(),
                                 is_offline: self.offline.is_offline,
@@ -639,6 +844,7 @@ impl DaemonState {
                 let scope = crate::config::import_scope();
                 crate::config::record_import_scope(&self.conn, &scope);
                 tracing::info!("Import scope: {}", scope.describe());
+                self.settled_scan_cache.invalidate_all();
                 start_discovery_task(
                     &mut self.discovery_tasks,
                     &self.providers,
@@ -654,6 +860,7 @@ impl DaemonState {
             .watcher
             .refresh_provider_roots(&mut self.providers, &mut self.pending_provider_roots)
         {
+            self.settled_scan_cache.invalidate_all();
             start_discovery_task(
                 &mut self.discovery_tasks,
                 &self.providers,
@@ -725,5 +932,117 @@ impl DaemonState {
                 now,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_stamp(len: u64, at_rest: bool) -> discovery::SourceScanStamp {
+        discovery::SourceScanStamp {
+            inode: 42,
+            len,
+            modified_nanos: 1_000_000_000,
+            ctime_nanos: 1_000_000_000,
+            wal_len: 0,
+            wal_modified_nanos: -1,
+            at_rest,
+        }
+    }
+
+    fn discovered(
+        path: &str,
+        provider: &'static str,
+        stamp: Option<discovery::SourceScanStamp>,
+    ) -> discovery::DiscoveredFile {
+        discovery::DiscoveredFile {
+            path: PathBuf::from(path),
+            provider,
+            modified_at_ms: 1_000,
+            stamp,
+        }
+    }
+
+    #[test]
+    fn settled_scan_cache_skips_unchanged_and_invalidates_on_change() {
+        let mut cache = SettledScanCache::default_for_test();
+        let path = PathBuf::from("/tmp/claude/session.jsonl");
+        let rested = sample_stamp(1024, true);
+
+        // Unrested files are never marked settled.
+        let gen0 = cache.current_claim_generation();
+        cache.record_settled(
+            path.clone(),
+            "claude",
+            Some(sample_stamp(1024, false)),
+            gen0,
+        );
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Rested file is skipped while stamp matches.
+        cache.record_settled(path.clone(), "claude", Some(rested), gen0);
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Length, mtime, or WAL change breaks the match immediately.
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(sample_stamp(2048, true))
+        )));
+
+        // Claude subagent sidecar invalidates sibling jsonl.
+        let sub = PathBuf::from("/tmp/claude/subagents/agent-1.jsonl");
+        cache.record_settled(sub.clone(), "claude", Some(rested), gen0);
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/subagents/agent-1.jsonl",
+            "claude",
+            Some(rested)
+        )));
+        cache.invalidate_path(Path::new("/tmp/claude/subagents/agent-1.meta.json"));
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/subagents/agent-1.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Provider-scoped managed claim change invalidates only that provider,
+        // and rejects stale in-flight completions captured before the claim change.
+        let cursor = PathBuf::from("/tmp/cursor/store.db");
+        let gen_before_claim = cache.current_claim_generation();
+        cache.record_settled(cursor.clone(), "cursor", Some(rested), gen_before_claim);
+        cache.invalidate_for_managed_changes(&[PathBuf::from(
+            "/Users/x/.longhouse/managed-local/cursor-helm/binding-probes/a.json",
+        )]);
+        assert!(!cache.is_settled(&discovered("/tmp/cursor/store.db", "cursor", Some(rested))));
+        // Completing a job started under the pre-claim generation must not re-settle it.
+        cache.record_settled(cursor.clone(), "cursor", Some(rested), gen_before_claim);
+        assert!(!cache.is_settled(&discovered("/tmp/cursor/store.db", "cursor", Some(rested))));
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Codex contract path invalidates codex specifically.
+        let codex = PathBuf::from("/tmp/codex/rollout.jsonl");
+        let gen_now = cache.current_claim_generation();
+        cache.record_settled(codex.clone(), "codex", Some(rested), gen_now);
+        cache.invalidate_for_managed_changes(&[PathBuf::from(
+            "/Users/x/.longhouse/managed-local/contracts/codex/c.json",
+        )]);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/codex/rollout.jsonl",
+            "codex",
+            Some(rested)
+        )));
     }
 }

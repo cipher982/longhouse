@@ -18,8 +18,9 @@ use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use sha2::{Digest, Sha256};
 
@@ -29,12 +30,91 @@ use crate::state::file_identity::AT_REST_AFTER;
 /// pathological caller from growing the map without limit.
 const MAX_DIRECTORIES: usize = 64;
 
+/// Safety re-verification horizon for FSEvents-watched directories.
+/// Normal changes invalidate immediately via `notify_watched_dir_changed` and
+/// directory `(ino, mtime, ctime)`; this cap also catches hypothetical missed
+/// OS watcher events on in-place file rewrites.
+const WATCHED_DIR_REVERIFY_INTERVAL: Duration = Duration::from_secs(15);
+
 type Signature = Vec<(OsString, u64, u64, i128)>;
+type DirStamp = (u64, i128, i128);
+
+static WATCHED_ROOTS: LazyLock<Mutex<Vec<PathBuf>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static WATCH_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Register directory roots actively watched recursively by `SessionWatcher`.
+/// Cached snapshots under these roots skip per-entry `readdir`/`getattrlistbulk`
+/// when the directory's own metadata and `WATCH_GENERATION` have not moved.
+pub(crate) fn register_watched_dirs(dirs: &[PathBuf]) {
+    if let Ok(mut roots) = WATCHED_ROOTS.lock() {
+        for dir in dirs {
+            let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+            if !roots.iter().any(|existing| existing == &canonical) {
+                roots.push(canonical);
+            }
+            if !roots.iter().any(|existing| existing == dir) {
+                roots.push(dir.clone());
+            }
+        }
+    }
+    WATCH_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Signal that the filesystem watcher observed a change under a watched state
+/// directory, forcing the next `parsed_json_dir` call to re-list entries.
+/// Safe to invoke directly from the OS watcher callback thread before event
+/// coalescing or channel bounds can delay or drop the notification.
+pub(crate) fn notify_watched_dir_changed(changed_path: &Path) {
+    if is_watched_dir(changed_path) {
+        WATCH_GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn is_watched_dir(dir: &Path) -> bool {
+    let Ok(roots) = WATCHED_ROOTS.lock() else {
+        return false;
+    };
+    if roots.is_empty() {
+        return false;
+    }
+    roots.iter().any(|root| dir.starts_with(root))
+}
+
+fn dir_rested_stamp(dir: &Path, now: SystemTime) -> Option<DirStamp> {
+    let meta = fs::metadata(dir).ok()?;
+    let modified = meta.modified().ok()?;
+    if !now
+        .duration_since(modified)
+        .is_ok_and(|age| age >= AT_REST_AFTER)
+    {
+        return None;
+    }
+    let modified_nanos = modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(-1);
+    #[cfg(unix)]
+    let (inode, ctime_nanos) = (
+        meta.ino(),
+        (meta.ctime() as i128)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(meta.ctime_nsec() as i128),
+    );
+    #[cfg(not(unix))]
+    let (inode, ctime_nanos) = (0, -1);
+    Some((inode, modified_nanos, ctime_nanos))
+}
 
 struct Entry {
     /// The whole directory's signature when it was at rest and every file
     /// read: an equal listing returns `parsed` without touching any file.
     signature: Option<Signature>,
+    /// Fast-check stamp for FSEvents-watched directories: `(inode, mtime, ctime)`
+    /// plus the `WATCH_GENERATION` observed before listing.
+    dir_stamp: Option<DirStamp>,
+    watch_gen: Option<u64>,
+    verified_at: Instant,
     parsed: Arc<dyn Any + Send + Sync>,
     /// Each file's parse by path, kept only for files that were at rest when
     /// read, with the stamp they were read at (a `Files<T>`).
@@ -97,6 +177,34 @@ pub(crate) fn parsed_json_dir<T>(
 where
     T: Send + Sync + 'static,
 {
+    let key: CacheKey = (
+        dir.to_path_buf(),
+        TypeId::of::<T>(),
+        parse as usize,
+        order as usize,
+    );
+    let watched = is_watched_dir(dir);
+    let watch_gen_before = WATCH_GENERATION.load(Ordering::Acquire);
+    let dir_stamp = if watched {
+        dir_rested_stamp(dir, SystemTime::now())
+    } else {
+        None
+    };
+    if watched && dir_stamp.is_some() {
+        if let Ok(cache) = CACHE.lock() {
+            if let Some(entry) = cache.get(&key) {
+                if entry.signature.is_some()
+                    && entry.dir_stamp == dir_stamp
+                    && entry.watch_gen == Some(watch_gen_before)
+                    && entry.verified_at.elapsed() < WATCHED_DIR_REVERIFY_INTERVAL
+                {
+                    if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<Arc<T>>>() {
+                        return Ok(parsed);
+                    }
+                }
+            }
+        }
+    }
     let listing = match list_json(dir) {
         Ok(listing) => listing,
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -107,16 +215,15 @@ where
             return Err(error);
         }
     };
-    let key: CacheKey = (
-        dir.to_path_buf(),
-        TypeId::of::<T>(),
-        parse as usize,
-        order as usize,
-    );
     let mut previous_files: Option<Arc<Files<T>>> = None;
-    if let Ok(cache) = CACHE.lock() {
-        if let Some(entry) = cache.get(&key) {
+    if let Ok(mut cache) = CACHE.lock() {
+        if let Some(entry) = cache.get_mut(&key) {
             if listing.signature.is_some() && entry.signature == listing.signature {
+                if watched && WATCH_GENERATION.load(Ordering::Acquire) == watch_gen_before {
+                    entry.dir_stamp = dir_stamp;
+                    entry.watch_gen = Some(watch_gen_before);
+                    entry.verified_at = Instant::now();
+                }
                 if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<Arc<T>>>() {
                     return Ok(parsed);
                 }
@@ -169,10 +276,15 @@ where
         if cache.len() >= MAX_DIRECTORIES && !cache.contains_key(&key) {
             cache.clear();
         }
+        let watch_gen = (watched && WATCH_GENERATION.load(Ordering::Acquire) == watch_gen_before)
+            .then_some(watch_gen_before);
         cache.insert(
             key,
             Entry {
                 signature: listing.signature.filter(|_| every_file_read),
+                dir_stamp: watch_gen.and(dir_stamp),
+                watch_gen,
+                verified_at: Instant::now(),
                 parsed: parsed.clone(),
                 files: Arc::new(files),
             },
@@ -688,6 +800,46 @@ mod tests {
             unread + 2,
             "a file that was read was counted"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watched_dir_reuses_snapshot_until_notified_and_invalidates_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.json");
+        fs::write(&file, "one").unwrap();
+        age(&file, 60);
+        // Age the directory mtime using utimensat so dir_rested_stamp considers it at rest.
+        let c_dir = std::ffi::CString::new(dir.path().as_os_str().as_encoded_bytes()).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(60);
+        let secs = old
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as libc::time_t;
+        let ts = libc::timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        };
+        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_dir.as_ptr(), [ts, ts].as_ptr(), 0) };
+        assert_eq!(rc, 0, "could not age temp directory");
+
+        register_watched_dirs(&[dir.path().to_path_buf()]);
+
+        let first = parsed_json_dir(dir.path(), parse, Ord::cmp).unwrap();
+        assert_eq!(owned(first.clone()), ["one"]);
+        assert_eq!(files_parsed(), 1);
+
+        // Second call returns the exact Arc without re-parsing or re-listing.
+        let second = parsed_json_dir(dir.path(), parse, Ord::cmp).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(files_parsed(), 1);
+
+        // After an in-place change + watcher notification, the new content is seen immediately.
+        fs::write(&file, "two").unwrap();
+        notify_watched_dir_changed(&file);
+        let third = parsed_json_dir(dir.path(), parse, Ord::cmp).unwrap();
+        assert_eq!(owned(third), ["two"]);
+        assert_eq!(files_parsed(), 2);
     }
 
     #[test]

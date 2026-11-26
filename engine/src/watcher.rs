@@ -28,7 +28,7 @@ fn has_session_extension(path: &std::path::Path) -> bool {
         .map_or(false, |e| SESSION_EXTENSIONS.contains(&e))
 }
 
-/// Temporary/swap file patterns to ignore.
+/// Temporary/swap file patterns and self-written status pulse files to ignore.
 fn is_temp_file(path: &std::path::Path) -> bool {
     let name = match path.file_name().and_then(|n| n.to_str()) {
         Some(n) => n,
@@ -40,6 +40,7 @@ fn is_temp_file(path: &std::path::Path) -> bool {
         || name.ends_with(".tmp")
         || name.ends_with('~')
         || name.contains(".#")
+        || name == "engine-status.json"
 }
 
 /// File watcher that delivers batches of changed session file paths.
@@ -86,6 +87,12 @@ impl SessionWatcher {
                 }
 
                 for path in event.paths {
+                    // Bump watched dir_cache generation immediately on the OS
+                    // watcher thread (before extension/temp filtering, channel
+                    // coalescing, or bounded-channel drops) so cached managed
+                    // state snapshots never serve stale parses across a write.
+                    crate::dir_cache::notify_watched_dir_changed(&path);
+
                     // Filter by extension
                     if !has_session_extension(&path) {
                         tracing::debug!(path = %path.display(), "Skipping watcher event path without session extension");
@@ -156,6 +163,17 @@ impl SessionWatcher {
             _watcher: watcher,
             rx,
         })
+    }
+
+    /// Watch an auxiliary directory non-recursively (e.g. outbox, status slots,
+    /// or the agent root for WAL/scope changes) so the daemon can wake on
+    /// FSEvents instead of polling at 100 ms intervals.
+    pub fn watch_nonrecursive(&mut self, dir: &Path) -> Result<()> {
+        if dir.exists() {
+            self._watcher.watch(dir, RecursiveMode::NonRecursive)?;
+            tracing::debug!(path = %dir.display(), "Watching auxiliary daemon directory");
+        }
+        Ok(())
     }
 
     /// Enroll provider stores created after the Machine Agent started.

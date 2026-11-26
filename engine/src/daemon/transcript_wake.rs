@@ -3,11 +3,19 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
+pub(super) struct WatcherEventOutcome {
+    pub(super) managed_state_changes: Vec<PathBuf>,
+    pub(super) outbox_or_wal_changed: bool,
+    pub(super) scope_changed: bool,
+    pub(super) transcript_paths: Vec<PathBuf>,
+}
+
 pub(super) async fn handle_live_transcript_file_events(
     watcher: &mut SessionWatcher,
     first_event: WatcherEvent,
     providers: &[ProviderConfig],
     managed_state_dirs: &[PathBuf],
+    agent_control_dirs: &[PathBuf],
     conn: &rusqlite::Connection,
     transcript_wake_rx: &mut mpsc::UnboundedReceiver<TranscriptWakeSignal>,
     scheduler: &mut PathScheduler,
@@ -19,7 +27,7 @@ pub(super) async fn handle_live_transcript_file_events(
     offline: bool,
     background_paused: bool,
     hot_sources: &mut super::hot_sources::HotSources,
-) -> Vec<PathBuf> {
+) -> WatcherEventOutcome {
     // Keep the coalescing wait cancellable by transcript wakes. The wake socket
     // is the managed-session completion lane, so it should not sit behind
     // filesystem batching.
@@ -54,15 +62,42 @@ pub(super) async fn handle_live_transcript_file_events(
     }
 
     let events = watcher.collect_ready_batch(first_event);
-    let (managed_state_changes, transcript_events) =
+    let (managed_state_changes, non_managed_events) =
         partition_managed_state_events(events, managed_state_dirs);
     if !managed_state_changes.is_empty() {
         crate::omp_session::note_managed_state_changes(&managed_state_changes);
+        for path in &managed_state_changes {
+            crate::dir_cache::notify_watched_dir_changed(path);
+        }
     }
+    let mut outbox_or_wal_changed = false;
+    let mut scope_changed = false;
+    let mut transcript_events = Vec::with_capacity(non_managed_events.len());
+    for event in non_managed_events {
+        if agent_control_dirs
+            .iter()
+            .any(|dir| event.path.starts_with(dir))
+        {
+            if event
+                .path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .is_some_and(|name| name.contains("scope"))
+            {
+                scope_changed = true;
+            } else {
+                outbox_or_wal_changed = true;
+            }
+            continue;
+        }
+        transcript_events.push(event);
+    }
+    let mut transcript_paths = Vec::new();
     // Read once per batch: the scope is a file a person can change while the
     // daemon runs, and one read is cheaper than a stat per event.
     let import_scope = crate::config::import_scope();
     for event in transcript_events {
+        transcript_paths.push(event.path.clone());
         let Some((session_path, provider)) =
             discovery::session_path_for_watcher_event(&event.path, providers)
         else {
@@ -72,6 +107,9 @@ pub(super) async fn handle_live_transcript_file_events(
             );
             continue;
         };
+        if session_path != event.path {
+            transcript_paths.push(session_path.clone());
+        }
         // An old session someone resumed writes to a file that was never in
         // scope; shipping its new lines would ship the session it belongs to.
         if !discovery::source_in_import_scope(&import_scope, provider, &session_path) {
@@ -143,7 +181,12 @@ pub(super) async fn handle_live_transcript_file_events(
             );
         }
     }
-    managed_state_changes
+    WatcherEventOutcome {
+        managed_state_changes,
+        outbox_or_wal_changed,
+        scope_changed,
+        transcript_paths,
+    }
 }
 
 #[cfg(unix)]

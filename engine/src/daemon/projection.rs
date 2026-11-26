@@ -64,7 +64,7 @@ pub(super) fn maybe_start_projection_build(
         managed_snapshot_complete,
         managed_captured_at,
         unmanaged_snapshot_complete,
-        db_path,
+        db_pool,
         parse_tracker,
         ship_stats,
         is_offline,
@@ -86,7 +86,8 @@ pub(super) fn maybe_start_projection_build(
     };
     tasks.spawn_blocking(move || {
         let started = Instant::now();
-        let result = crate::state::db::open_connection(&db_path)
+        let result = db_pool
+            .get()
             .map_err(|error| error.to_string())
             .map(|conn| {
                 let mut projection = build_local_status_projection_with_omp(
@@ -584,7 +585,7 @@ impl DaemonState {
                 managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
                 managed_captured_at: self.last_managed_captured_at.clone(),
                 unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
-                db_path: self.projection_db_path.clone(),
+                db_pool: self.task_context.db_pool.clone(),
                 parse_tracker: self.parse_tracker.clone(),
                 ship_stats: self.ship_stats.clone(),
                 is_offline: self.offline.is_offline,
@@ -621,7 +622,7 @@ impl DaemonState {
                 managed_snapshot_complete: self.last_projected_managed_snapshot_complete,
                 managed_captured_at: self.last_managed_captured_at.clone(),
                 unmanaged_snapshot_complete: self.last_projected_unmanaged_snapshot_complete,
-                db_path: self.projection_db_path.clone(),
+                db_pool: self.task_context.db_pool.clone(),
                 parse_tracker: self.parse_tracker.clone(),
                 ship_stats: self.ship_stats.clone(),
                 is_offline: self.offline.is_offline,
