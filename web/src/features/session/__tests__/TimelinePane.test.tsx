@@ -1585,7 +1585,7 @@ describe("TimelinePane outbox", () => {
       "queued",
     ]);
     expect(rows[0]).toHaveTextContent("Sending…");
-    expect(rows[1]).toHaveTextContent("Queued · sends after this turn");
+    expect(rows[1]).toHaveTextContent("Queued for after this turn");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -1734,7 +1734,7 @@ describe("TimelinePane outbox", () => {
       render(<TimelinePane {...paneProps} items={[earlier]} outbox={[send]} />);
       const row = screen.getByTestId("session-outbox-row");
       expect(row).toHaveClass("tl-msg--user");
-      expect(row).toHaveTextContent("You asked at");
+      expect(row.querySelector("[data-testid=session-ask-time]")).not.toBeNull();
       expect(row).toHaveTextContent("Longhouse");
       expect(row).toHaveTextContent("Sent");
     });

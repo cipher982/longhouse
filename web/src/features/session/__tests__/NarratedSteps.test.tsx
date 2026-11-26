@@ -112,11 +112,11 @@ describe("narrated steps", () => {
     expect(screen.getByTestId("tool-output-preview")).toBeInTheDocument();
   });
 
-  it("shows a thought's clock only when the minute changed", () => {
+  it("shows a thought's time only after a pause of five minutes or more", () => {
     renderPane([
       thought(1, "2026-04-15T16:10:00Z", "First."),
-      thought(2, "2026-04-15T16:10:40Z", "Same minute."),
-      thought(3, "2026-04-15T16:11:05Z", "Next minute."),
+      thought(2, "2026-04-15T16:13:40Z", "Steady work."),
+      thought(3, "2026-04-15T16:19:05Z", "After a pause."),
     ]);
     const rows = screen.getAllByTestId("session-timeline-reasoning");
     expect(rows[0].querySelector(".tl-thought__time")).not.toBeNull();

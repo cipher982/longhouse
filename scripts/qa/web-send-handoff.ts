@@ -18,7 +18,7 @@
  *   duplicate frames  frames with two or more                       (budget 0)
  *   remounts          new DOM nodes after the first one             (budget 0)
  *   shape changes     header changes other than the delivery status,
- *                     e.g. "You" to "You asked at 08:55 PM"         (budget 0)
+ *                     e.g. a time or origin label appearing late   (budget 0)
  *   max jump          largest frame-to-frame move of the row within
  *                     the transcript (scrolling is not a move)      (budget 2 px)
  *
@@ -122,8 +122,8 @@ const INIT_SCRIPT = `
       shown.push({
         node: ids.get(el),
         kind: el.matches("[data-testid=session-outbox-row]") ? "outbox:" + el.getAttribute("data-outbox-state") : "transcript",
-        head: shape(el.querySelector(".tl-msg__head")),
-        status: label(el.querySelector(".tl-msg__head [role=status]")),
+        head: shape(el.querySelector(".tl-msg__head")) + " | " + shape(el.querySelector(".tl-msg__meta")),
+        status: label(el.querySelector(".tl-msg__meta [role=status], .tl-msg__head [role=status]")),
         fromEnd: rows.length - 1 - index,
         top: Math.round(r.top),
         // Position within the transcript: moves only when rows above it change.

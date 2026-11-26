@@ -240,11 +240,31 @@
 .session-chat-composer__head-stop .session-chat-action-label {
   display: inline;
 }
+/* The lead is the running step's own label, which can be a full sentence:
+   it takes the free space and truncates; the hover title carries the rest. */
 .session-chat-composer__head-label {
-  flex-shrink: 0;
-  font-size: 14px;
-  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The turn clock is context, not the live signal (the running row's clock
+   is): muted, labelled, pushed to the line's end. */
+.session-chat-composer__turn-clock {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.session-chat-composer__turn-label {
+  letter-spacing: 0.02em;
 }
 .session-chat-composer__head-detail {
   min-width: 0;
@@ -1075,4 +1095,11 @@
   font-family: var(--font-family-mono);
   font-size: 11px;
   color: var(--color-text-secondary);
+}
+
+/* Phones: the clock's word goes first so the step's label keeps its room. */
+@media (max-width: 640px) {
+  .session-chat-composer__turn-label {
+    display: none;
+  }
 }

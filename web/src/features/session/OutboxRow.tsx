@@ -53,7 +53,7 @@ export interface OutboxEntry {
 export const OUTBOX_STATE_LABEL: Record<OutboxEntryState, string> = {
   sending: "Sending…",
   sent: "Sent",
-  queued: "Queued · sends after this turn",
+  queued: "Queued for after this turn",
   unconfirmed: "Not confirmed",
   failed: "Not delivered",
 };

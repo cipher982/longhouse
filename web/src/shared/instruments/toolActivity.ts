@@ -93,3 +93,9 @@ export function findRunningTool(items: TimelineItem[]): RunningToolInfo | null {
   if (!running) return null;
   return { toolName: running.toolName, label: getToolSummary(running) || running.toolName };
 }
+
+/** How many tool rows are running right now (parallel calls, subagents). */
+export function countRunningTools(items: TimelineItem[]): number {
+  return collectToolInteractions(items).filter((interaction) => isToolInteractionRunning(interaction))
+    .length;
+}

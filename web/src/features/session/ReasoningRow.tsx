@@ -1,4 +1,5 @@
 import { useLayoutEffect, useState } from "react";
+import { RelativeTime } from "@/shared/ui/RelativeTime";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
@@ -83,7 +84,7 @@ export function ReasoningRow({
         data-testid="session-reasoning-withheld"
         data-row-kind="reasoning"
       >
-        {time ? <span className="tl-thought__time">{time}</span> : null}
+        {time ? <RelativeTime iso={time} className="tl-thought__time" /> : null}
         <div className="tl-thought__head">
           <span className="tl-thought__prose tl-thought__prose--withheld">Reasoning withheld</span>
         </div>
@@ -137,7 +138,7 @@ function StoredReasoningRow({
       data-testid="session-timeline-reasoning"
       data-row-kind="reasoning"
     >
-      {time ? <span className="tl-thought__time">{time}</span> : null}
+      {time ? <RelativeTime iso={time} className="tl-thought__time" /> : null}
       {expanded ? (
         <>
           <div id={bodyId} className="tl-thought__body tl-msg__body" data-testid="session-timeline-reasoning-body">

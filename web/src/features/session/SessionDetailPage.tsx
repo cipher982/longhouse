@@ -1109,48 +1109,42 @@ function SessionDetailWorkspaceRoute({
                   </div>
                 ) : null}
                 {showAwayRecap && displaySession.recap?.text ? (
-                  <div className="session-away-recap" data-testid="session-away-recap">
-                    <div className="session-away-recap__head">
-                      <span className="session-away-recap__label">Since last view</span>
-                      <div className="session-away-recap__actions">
-                        {displaySession.recap.text.length > 120 ? (
-                          <button
-                            type="button"
-                            className="session-away-recap__action"
-                            onClick={() => setRecapExpanded((open) => !open)}
-                          >
-                            {recapExpanded ? "Less" : "More"}
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="session-away-recap__action"
-                          onClick={() => {
-                            timelineList?.scrollTo({
-                              top: timelineList.scrollHeight,
-                              behavior: "smooth",
-                            });
-                          }}
-                        >
-                          Jump to latest ↓
-                        </button>
-                        <button
-                          type="button"
-                          className="session-away-recap__dismiss"
-                          aria-label="Dismiss recap"
-                          title="Dismiss"
-                          data-testid="session-away-recap-dismiss"
-                          onClick={() => setRecapDismissedKey(recapKey)}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      className={`session-away-recap__text${recapExpanded ? " is-expanded" : ""}`}
+                  <div
+                    className={`session-away-recap${recapExpanded ? " is-expanded" : ""}`}
+                    data-testid="session-away-recap"
+                  >
+                    <span className="session-away-recap__label">Since you left</span>
+                    <button
+                      type="button"
+                      className="session-away-recap__text"
+                      aria-expanded={recapExpanded}
+                      title={recapExpanded ? undefined : displaySession.recap.text}
+                      onClick={() => setRecapExpanded((open) => !open)}
                     >
                       {displaySession.recap.text}
-                    </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="session-away-recap__action"
+                      onClick={() => {
+                        timelineList?.scrollTo({
+                          top: timelineList.scrollHeight,
+                          behavior: "smooth",
+                        });
+                      }}
+                    >
+                      Jump ↓
+                    </button>
+                    <button
+                      type="button"
+                      className="session-away-recap__dismiss"
+                      aria-label="Dismiss recap"
+                      title="Dismiss"
+                      data-testid="session-away-recap-dismiss"
+                      onClick={() => setRecapDismissedKey(recapKey)}
+                    >
+                      ×
+                    </button>
                   </div>
                 ) : null}
               </div>

@@ -904,22 +904,32 @@
 /* Hairline chip, matching the timeline row's Helm/Shadow mode chip
    (.inbox-row-mode-chip in styles/inbox.css) — no fill, a 1px inset border,
    muted text, no tracking. */
+/* Plain secondary text, not a bordered chip: a count worth knowing, rarely
+   worth acting on. */
 .timeline-pane__status-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 6px 10px;
-  border-radius: 3px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  box-shadow: inset 0 0 0 1px var(--color-border-primary);
+  box-shadow: none;
   color: var(--color-text-secondary);
+  font: inherit;
   font-size: 12px;
   letter-spacing: normal;
   cursor: pointer;
 }
+button.timeline-pane__status-chip:hover {
+  box-shadow: none;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
 .timeline-pane__status-chip--warning {
-  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.4);
+  box-shadow: none;
   color: rgba(233, 211, 163, 0.92);
 }
 
@@ -1744,6 +1754,40 @@
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
   color: var(--color-text-primary);
+}
+
+/* The ask carries no header line: the trace node marks it, the text is the
+   loudest thing in it, and the time, delivery state and origin sit in one
+   small line under it. The head stays (empty, zero height) so the node keeps
+   its place on the trace and the row keeps one shape from send to echo. */
+.tl-msg__head--ask {
+  height: 0;
+  margin: 0;
+}
+.tl-msg__head--ask .tl-msg__node {
+  top: calc(var(--tl-ask-size, 16px) * 0.75);
+}
+.tl-msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+.tl-msg__ago {
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.tl-msg__meta > .tl-msg__ago:not(:first-child)::before,
+.tl-msg__meta > .tl-msg__origin:not(:first-child)::before {
+  content: "·";
+  margin-right: var(--space-2);
+}
+.lh-reltime {
+  white-space: nowrap;
 }
 
 /* --- Outbox: one visible owner for a managed input operation. ---
@@ -3150,8 +3194,8 @@
   }
 
   .timeline-pane__status-chip {
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 2px 0;
+    font-size: 11.5px;
   }
 
   .timeline-pane__list {
@@ -4630,71 +4674,84 @@
     flex-shrink: 0;
   }
 }
+/* One quiet line, not a card: what happened while you were away, tap to
+   read all of it, jump to the end, or dismiss. Two lines on a phone so the
+   summary says something before it truncates. */
 .session-away-recap {
   max-width: min(var(--tl-tool-max), calc(100% - 2 * var(--space-4)));
   width: 100%;
-  margin: 6px auto 4px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(212, 184, 122, 0.25);
-  background: rgba(212, 184, 122, 0.06);
+  margin: 4px auto 2px;
+  padding: 4px 0 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-border-primary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 @media (max-width: 767px) {
   .session-away-recap {
-    max-width: calc(100% - 2 * var(--space-3));
-    margin: 2px auto 4px;
-    padding: 6px 10px;
+    max-width: calc(100% - 2 * var(--session-mobile-inset, 12px));
+    margin: 2px auto 2px;
+    padding: 2px 0 6px;
+    gap: 8px;
   }
 }
-.session-away-recap__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-}
 .session-away-recap__label {
-  font-family: var(--font-family-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  flex-shrink: 0;
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
-.session-away-recap__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.session-away-recap__text {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 767px) {
+  .session-away-recap__text {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+.session-away-recap.is-expanded .session-away-recap__text {
+  white-space: normal;
+  display: block;
 }
 .session-away-recap__action,
 .session-away-recap__dismiss {
   appearance: none;
+  flex-shrink: 0;
   border: 0;
   background: transparent;
-  padding: 0 4px;
-  font-family: var(--font-family-mono);
-  font-size: 11px;
-  color: var(--color-text-secondary);
+  padding: 0 2px;
+  font: inherit;
+  font-size: 12.5px;
+  color: rgba(226, 190, 112, 0.95);
   cursor: pointer;
+  white-space: nowrap;
+}
+.session-away-recap__dismiss {
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-text-secondary);
 }
 .session-away-recap__action:hover,
 .session-away-recap__dismiss:hover {
   color: var(--color-text-primary);
-}
-.session-away-recap__dismiss {
-  font-size: 15px;
-  line-height: 1;
-}
-.session-away-recap__text {
-  font-size: 13px;
-  line-height: 1.48;
-  color: var(--color-text-primary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.session-away-recap__text.is-expanded {
-  display: block;
 }
 .session-permission-pill {
   display: inline-flex;
@@ -4804,5 +4861,16 @@
     background: var(--color-surface-elevated, #14100d);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+}
+
+/* Phones: the origin is the least useful word on the ask's meta line, and the
+   line must not wrap into a dangling separator. */
+@media (max-width: 640px) {
+  .tl-msg__origin {
+    display: none;
+  }
+  .tl-msg__meta > * {
+    white-space: nowrap;
   }
 }

@@ -76,8 +76,12 @@ import { hasLiteBodies, useFullToolInteraction, useToolBodyPrefetch } from "./li
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "@/shared/api/agents";
 import { errorDetails } from "@/shared/ui/errorDetails";
 import { parseUTC } from "@/shared/lib/dateUtils";
+import { RelativeTime } from "@/shared/ui/RelativeTime";
 
 type EventFilter = "all" | "messages" | "tools";
+
+/** A pause this long between thoughts earns the later one a time label. */
+const THOUGHT_TIME_GAP_MS = 5 * 60_000;
 
 type TranscriptQuestionOption = {
   label: string;
@@ -609,24 +613,19 @@ const MessageRow = memo(function MessageRow({
       data-message-phase={resolvedPhase}
       className={`tl-msg tl-msg--${event.role}${send ? ` tl-msg--outbox tl-msg--outbox-${send.state}` : ""}${isCommentary ? " tl-msg--commentary" : ""}`}
     >
-      <div className="tl-msg__head">
-        {isAssistant || isUser ? (
+      {isUser ? (
+        <div className="tl-msg__head tl-msg__head--ask">
           <span className="tl-msg__node" aria-hidden="true">
-            {isAssistant ? (
+            <span className="tl-msg__node-ring" />
+          </span>
+        </div>
+      ) : (
+        <div className="tl-msg__head">
+          {isAssistant ? (
+            <span className="tl-msg__node" aria-hidden="true">
               <ProviderGlyph provider={provider} size={18} style={{ borderRadius: 999 }} />
-            ) : (
-              <span className="tl-msg__node-ring" />
-            )}
-          </span>
-        ) : null}
-        {isUser ? (
-          <span
-            className="tl-msg__who"
-            {...{ elementtiming: "longhouse-session-timeline-row" }}
-          >
-            {event.timestamp ? `You asked at ${formatTime(event.timestamp)}` : "You"}
-          </span>
-        ) : (
+            </span>
+          ) : null}
           <span
             className="tl-msg__time"
             {...{ elementtiming: "longhouse-session-timeline-row" }}
@@ -634,35 +633,11 @@ const MessageRow = memo(function MessageRow({
             {isAssistant ? "" : `${event.role} · `}
             {formatTime(event.timestamp)}
           </span>
-        )}
-        {outside ? (
-          <span className="tl-chip tl-chip--warning">outside active context</span>
-        ) : null}
-        {isUser && isLonghouseAuthored ? (
-          <span className="tl-chip" aria-label="Sent via Longhouse" data-testid="session-input-origin-longhouse">
-            Longhouse
-          </span>
-        ) : null}
-        {send ? (
-          <span className="tl-msg__outbox-status" role="status">
-            {OUTBOX_STATE_LABEL[send.state]}
-            {send.detail ? (
-              <span className="tl-msg__outbox-detail"> — {send.detail}</span>
-            ) : null}
-          </span>
-        ) : null}
-        {send?.actions?.map((action) => (
-          <button
-            key={action.label}
-            type="button"
-            className="tl-msg__outbox-action"
-            onClick={action.onClick}
-            disabled={action.disabled}
-          >
-            {action.label}
-          </button>
-        ))}
-      </div>
+          {outside ? (
+            <span className="tl-chip tl-chip--warning">outside active context</span>
+          ) : null}
+        </div>
+      )}
       {send?.warning ? (
         <div className="tl-msg__outbox-warning" role="note">
           {send.warning}
@@ -701,6 +676,38 @@ const MessageRow = memo(function MessageRow({
           </button>
         ) : null}
       </div>
+      {isUser ? (
+        <div className="tl-msg__meta" {...{ elementtiming: "longhouse-session-timeline-row" }}>
+          {send ? (
+            <span className="tl-msg__outbox-status" role="status">
+              {OUTBOX_STATE_LABEL[send.state]}
+              {send.detail ? (
+                <span className="tl-msg__outbox-detail">: {send.detail}</span>
+              ) : null}
+            </span>
+          ) : null}
+          {send?.actions?.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              className="tl-msg__outbox-action"
+              onClick={action.onClick}
+              disabled={action.disabled}
+            >
+              {action.label}
+            </button>
+          ))}
+          <RelativeTime iso={event.timestamp} className="tl-msg__ago" testId="session-ask-time" />
+          {isLonghouseAuthored ? (
+            <span className="tl-msg__origin" aria-label="Sent via Longhouse" data-testid="session-input-origin-longhouse">
+              via Longhouse
+            </span>
+          ) : null}
+          {outside ? (
+            <span className="tl-chip tl-chip--warning">outside active context</span>
+          ) : null}
+        </div>
+      ) : null}
       {inlineApiError ? (
         <div
           className={`tl-api-error tl-api-error--inline${apiErrorRecovered ? " tl-api-error--recovered" : ""}`}
@@ -1827,15 +1834,19 @@ export const TimelinePane = memo(function TimelinePane({
   const narration = useMemo(() => {
     // The grouping is the shared model's (narrationTrail); the clock is this pane's.
     const trail = narrationTrail(filteredItems);
+    // A thought carries a time only where the work paused: the first one, and
+    // any that starts THOUGHT_TIME_GAP_MS after the previous thought. Steady
+    // work reads as one run; a gap reads as "12 min ago".
     const thoughtTimes = new Map<string, string>();
-    let lastMinute: string | null = null;
+    let lastMs: number | null = null;
     for (const item of filteredItems) {
       if (item.kind !== "reasoning") continue;
-      const minute = formatTime(item.event.timestamp);
-      if (minute !== lastMinute) {
-        thoughtTimes.set(timelineItemIdentity(item), minute);
-        lastMinute = minute;
+      const ms = parseUTC(item.event.timestamp).getTime();
+      if (!Number.isFinite(ms)) continue;
+      if (lastMs === null || ms - lastMs >= THOUGHT_TIME_GAP_MS) {
+        thoughtTimes.set(timelineItemIdentity(item), item.event.timestamp);
       }
+      lastMs = ms;
     }
     // A running call is current until the model speaks again after it; one
     // it has moved past is not what the work claim is about.
@@ -2416,8 +2427,8 @@ export const TimelinePane = memo(function TimelinePane({
               onClick={() => onShowAbandonedBranchesChange(!showAbandonedBranches)}
             >
               {showAbandonedBranches
-                ? "Showing head + abandoned branches"
-                : `${abandonedEvents} abandoned branch events hidden`}
+                ? "Hide abandoned branches"
+                : `${abandonedEvents} events from abandoned branches hidden · Show`}
             </button>
           ) : null}
         </div>

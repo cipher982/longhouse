@@ -48,7 +48,7 @@ import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
 import { Nixie } from "@/shared/instruments/Nixie";
 import { StatusBulb } from "@/shared/instruments/StatusLamp";
-import { findRunningTool, getRunningTurnStartMs } from "@/shared/instruments/toolActivity";
+import { countRunningTools, findRunningTool, getRunningTurnStartMs } from "@/shared/instruments/toolActivity";
 import {
   formatClockTime,
   formatElapsedClock,
@@ -2852,7 +2852,20 @@ export function SessionChat({
     composerState.tone === "live" && !hasBackgroundRoster
       ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
       : null;
-  const composerHeadDetail = composerForegroundDetail || composerDelegatedDetail;
+  // The line leads with what is happening in the transcript's own words: the
+  // running row's label when one is running ("Run the driving unit tests"),
+  // a count when several run at once, the server's state phrase otherwise.
+  // The row's label is never repeated as a second detail beside it.
+  const runningToolCount = useMemo(
+    () => countRunningTools(timelineItems ?? []),
+    [timelineItems],
+  );
+  const composerLeadLabel =
+    composerState.tone === "live" && runningToolCount > 1
+      ? `${runningToolCount} calls running`
+      : composerForegroundDetail || composerWorkingLabel;
+  const composerHeadDetail =
+    composerLeadLabel === composerWorkingLabel ? composerDelegatedDetail : null;
   const leafRef = useRef<HTMLSpanElement | null>(null);
   const leafAnimationRef = useRef<Animation | null>(null);
   const leafLive = composerState.tone === "live" && !isDelegatedWork;
@@ -3239,27 +3252,39 @@ export function SessionChat({
             {showComposerUnavailableState ? null : composerState.tone === "live" ? (
               <>
                 <StatusBulb state="working" />
-                <span className="session-chat-composer__head-label">
-                  {composerWorkingLabel}
+                <span
+                  className="session-chat-composer__head-label"
+                  title={composerLeadLabel}
+                  data-testid={
+                    composerForegroundDetail && composerLeadLabel === composerForegroundDetail
+                      ? "session-chat-composer-foreground-detail"
+                      : undefined
+                  }
+                >
+                  {composerLeadLabel}
                 </span>
                 {composerHeadDetail ? (
                   <span
                     className="session-chat-composer__head-detail"
                     title={composerHeadDetail}
-                    data-testid={
-                      composerForegroundDetail
-                        ? "session-chat-composer-foreground-detail"
-                        : "session-chat-composer-delegated-detail"
-                    }
+                    data-testid="session-chat-composer-delegated-detail"
                   >
                     {composerHeadDetail}
                   </span>
                 ) : null}
                 {composerElapsedSeconds != null ? (
-                  <Nixie
-                    value={formatElapsedClock(composerElapsedSeconds)}
-                    flickerOnChange={false}
-                  />
+                  <span
+                    className="session-chat-composer__turn-clock"
+                    title="Time since your last message"
+                    data-testid="session-chat-composer-turn-clock"
+                  >
+                    <span className="session-chat-composer__turn-label">turn</span>
+                    <Nixie
+                      value={formatElapsedClock(composerElapsedSeconds)}
+                      flickerOnChange={false}
+                      dim
+                    />
+                  </span>
                 ) : null}
               </>
             ) : composerState.tone === "attention" ? (
