@@ -44,3 +44,9 @@ runner, `scripts/qa/native-test-bootstrap.py` keeps Xcode's derived data between
 jobs (one directory per Xcode build, emptied above 30 GiB or after a build fails
 in it) and a simulator template that each job clones, so a job compiles only what
 changed and does not wait for a new simulator's first boot.
+
+The UI tests that open a fixture share one launched app: `FixtureApp` (in the UI test
+target) writes the next fixture into a command directory and the app
+(`UITestFixtureChannel`, Debug builds) rebuilds its root view with it, which costs one to
+two seconds where a relaunch cost five to eight. Logic that a fixture only feeds (what a state
+displays, which rows show) is tested in the unit target against the same fixture data.

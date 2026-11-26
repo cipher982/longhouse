@@ -25,54 +25,76 @@ enum UITestHooks {
     static let transcriptBenchmarkDebuggerEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_DEBUGGER"
     static let transcriptBenchmarkTemperatureEnvironmentKey = "LONGHOUSE_TRANSCRIPT_BENCHMARK_TEMPERATURE"
     static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
+    /// A directory a UI test writes fixture commands to (UITestFixtureChannel), so it can
+    /// switch the running app to its next fixture instead of relaunching it.
+    static let fixtureChannelEnvironmentKey = "LONGHOUSE_UI_TEST_FIXTURE_CHANNEL"
+
+    /// Read once: `ProcessInfo.environment` builds a new dictionary on every access, and
+    /// view bodies read these hooks on each render.
+    private static let launchEnvironment = ProcessInfo.processInfo.environment
+
+    /// A launch-time value, or the value the last fixture command set. A command replaces
+    /// every LONGHOUSE_UI_TEST_ key at once, as a relaunch with its environment would.
+    private static func environmentValue(_ key: String) -> String? {
+        if key != fixtureChannelEnvironmentKey,
+           key.hasPrefix("LONGHOUSE_UI_TEST_"),
+           let replaced = UITestFixtureOverrides.shared.environment {
+            return replaced[key]
+        }
+        return launchEnvironment[key]
+    }
+
+    static var fixtureChannelDirectory: String? {
+        nonemptyEnvironmentValue(fixtureChannelEnvironmentKey)
+    }
 
     static var shouldResetState: Bool {
-        ProcessInfo.processInfo.environment[resetStateEnvironmentKey] == "1"
+        environmentValue(resetStateEnvironmentKey) == "1"
     }
 
     static var shouldCaptureHostedAuthAttempt: Bool {
-        ProcessInfo.processInfo.environment[captureHostedAuthEnvironmentKey] == "1"
+        environmentValue(captureHostedAuthEnvironmentKey) == "1"
     }
 
     static var chatFixtureName: String? {
-        let raw = ProcessInfo.processInfo.environment[chatFixtureEnvironmentKey]?
+        let raw = environmentValue(chatFixtureEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var chatFixtureEventCount: Int? {
-        guard let raw = ProcessInfo.processInfo.environment[chatFixtureEventCountEnvironmentKey] else {
+        guard let raw = environmentValue(chatFixtureEventCountEnvironmentKey) else {
             return nil
         }
         return Int(raw)
     }
 
     static var chatFixtureProbePath: String? {
-        let raw = ProcessInfo.processInfo.environment[chatFixtureProbePathEnvironmentKey]?
+        let raw = environmentValue(chatFixtureProbePathEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var chatFixtureChurnTriggerPath: String? {
-        let raw = ProcessInfo.processInfo.environment[chatFixtureChurnTriggerPathEnvironmentKey]?
+        let raw = environmentValue(chatFixtureChurnTriggerPathEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var chatFixtureTriggerPath: String? {
-        let raw = ProcessInfo.processInfo.environment[chatFixtureTriggerPathEnvironmentKey]?
+        let raw = environmentValue(chatFixtureTriggerPathEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var chatFixtureReplayPath: String? {
-        let raw = ProcessInfo.processInfo.environment[chatFixtureReplayPathEnvironmentKey]?
+        let raw = environmentValue(chatFixtureReplayPathEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var shouldUseTimelineOpenFixture: Bool {
-        ProcessInfo.processInfo.environment[timelineOpenFixtureEnvironmentKey] == "1"
+        environmentValue(timelineOpenFixtureEnvironmentKey) == "1"
     }
 
     /// XCUITest waits for the app to go quiescent before every query, and a
@@ -83,61 +105,61 @@ enum UITestHooks {
     }
 
     static var shouldUseInboxGalleryFixture: Bool {
-        ProcessInfo.processInfo.environment[inboxGalleryFixtureEnvironmentKey] == "1"
+        environmentValue(inboxGalleryFixtureEnvironmentKey) == "1"
     }
 
     /// The inbox gallery fixture advances its open sessions' counters every
     /// 1.2 s, so the timeline fires flare and spark as on a live card.
     static var shouldRunHearthLive: Bool {
-        ProcessInfo.processInfo.environment[hearthLiveEnvironmentKey] == "1"
+        environmentValue(hearthLiveEnvironmentKey) == "1"
     }
 
     /// The inbox gallery fixture plays the scripted Hearth pitch scene
     /// (HearthPitchFixture) instead of its static rows.
     static var shouldRunHearthPitch: Bool {
-        ProcessInfo.processInfo.environment[hearthPitchEnvironmentKey] == "1"
+        environmentValue(hearthPitchEnvironmentKey) == "1"
     }
 
     static var shouldUseLaunchSessionFixture: Bool {
-        ProcessInfo.processInfo.environment[launchSessionFixtureEnvironmentKey] == "1"
+        environmentValue(launchSessionFixtureEnvironmentKey) == "1"
     }
     static var shouldUseMachinesFixture: Bool {
-        ProcessInfo.processInfo.environment[machinesFixtureEnvironmentKey] == "1"
+        environmentValue(machinesFixtureEnvironmentKey) == "1"
     }
 
     static var machineFixtureScreen: String {
-        let value = ProcessInfo.processInfo.environment[machineFixtureScreenEnvironmentKey]?
+        let value = environmentValue(machineFixtureScreenEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return value?.isEmpty == false ? value! : "machines"
     }
     static var mobileDetailDelayMs: Int? {
-        guard let raw = ProcessInfo.processInfo.environment[mobileDetailDelayMsEnvironmentKey] else {
+        guard let raw = environmentValue(mobileDetailDelayMsEnvironmentKey) else {
             return nil
         }
         return Int(raw)
     }
 
     static var mobileTailDelayMs: Int? {
-        guard let raw = ProcessInfo.processInfo.environment[mobileTailDelayMsEnvironmentKey] else {
+        guard let raw = environmentValue(mobileTailDelayMsEnvironmentKey) else {
             return nil
         }
         return Int(raw)
     }
 
     static var transcriptBenchmarkRenderer: String? {
-        let raw = ProcessInfo.processInfo.environment[transcriptBenchmarkRendererEnvironmentKey]?
+        let raw = environmentValue(transcriptBenchmarkRendererEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return raw?.isEmpty == false ? raw : nil
     }
 
     static var shouldAutoStartTranscriptBenchmark: Bool {
-        ProcessInfo.processInfo.environment[transcriptBenchmarkAutoStartEnvironmentKey] == "1"
+        environmentValue(transcriptBenchmarkAutoStartEnvironmentKey) == "1"
     }
 
     static var transcriptBenchmarkRunID: String? {
-        let raw = ProcessInfo.processInfo.environment[transcriptBenchmarkRunIDEnvironmentKey]?
+        let raw = environmentValue(transcriptBenchmarkRunIDEnvironmentKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
@@ -155,7 +177,8 @@ enum UITestHooks {
     }
 
     static var appearanceOverride: String? {
-        guard let raw = launchArgumentValue(for: appearanceOverrideArgument)?
+        let override = UITestFixtureOverrides.shared.appearance
+        guard let raw = (override ?? launchArgumentValue(for: appearanceOverrideArgument))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() else {
             return nil
@@ -183,8 +206,35 @@ enum UITestHooks {
     }
 
     private static func nonemptyEnvironmentValue(_ key: String) -> String? {
-        let raw = ProcessInfo.processInfo.environment[key]?
+        let raw = environmentValue(key)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
+    }
+}
+
+/// What the last UI-test fixture command replaced (see UITestFixtureChannel). Empty until a
+/// test sends one, so a normal launch reads its own environment and arguments.
+final class UITestFixtureOverrides: @unchecked Sendable {
+    static let shared = UITestFixtureOverrides()
+
+    private let lock = NSLock()
+    private var replacedEnvironment: [String: String]?
+    private var replacedAppearance: String??
+
+    /// The LONGHOUSE_UI_TEST_ environment the running fixture was given, or nil before any command.
+    var environment: [String: String]? {
+        lock.withLock { replacedEnvironment }
+    }
+
+    /// "light" or "dark" from the last command; nil before any command or when it set none.
+    var appearance: String? {
+        lock.withLock { replacedAppearance ?? nil }
+    }
+
+    func replace(environment: [String: String], appearance: String?) {
+        lock.withLock {
+            replacedEnvironment = environment
+            replacedAppearance = .some(appearance)
+        }
     }
 }

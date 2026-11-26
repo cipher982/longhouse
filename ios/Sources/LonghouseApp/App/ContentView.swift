@@ -2,8 +2,36 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+#if DEBUG
+    @ObservedObject private var fixtureChannel = UITestFixtureChannel.shared
+#endif
 
     var body: some View {
+#if DEBUG
+        Group {
+            if fixtureChannel.isSwitching {
+                Color.clear.onAppear {
+                    DispatchQueue.main.async { fixtureChannel.finishSwitch() }
+                }
+            } else {
+                root
+            }
+        }
+            // A UI test's fixture command (UITestFixtureChannel) rebuilds everything below.
+            .id(fixtureChannel.generation)
+            .overlay(alignment: .topTrailing) {
+                if UITestHooks.fixtureChannelDirectory != nil {
+                    UITestFixtureReadyMarker(token: fixtureChannel.token)
+                        .id(fixtureChannel.generation)
+                }
+            }
+            .task { fixtureChannel.startIfRequested() }
+#else
+        root
+#endif
+    }
+
+    private var root: some View {
         Group {
 #if DEBUG
             if UITestHooks.shouldUseMachinesFixture {

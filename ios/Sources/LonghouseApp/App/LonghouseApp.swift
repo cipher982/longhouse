@@ -99,6 +99,9 @@ private extension View {
 
 #if DEBUG
 private struct UITestAppearanceOverrideModifier: ViewModifier {
+    /// A fixture command can change the appearance of the running app.
+    @ObservedObject private var fixtureChannel = UITestFixtureChannel.shared
+
     private var colorScheme: ColorScheme? {
         switch UITestHooks.appearanceOverride {
         case "light":

@@ -19,7 +19,8 @@
         "SessionChatUITests\/testCaptureToolsTranscriptLightScreenshot()",
         "SessionChatUITests\/testCaptureToolsTranscriptDarkScreenshot()",
         "InboxCaptureUITests\/testCaptureInboxGalleryLight()",
-        "InboxCaptureUITests\/testCaptureInboxGalleryDark()"
+        "InboxCaptureUITests\/testCaptureInboxGalleryDark()",
+        "InboxCaptureUITests\/testCaptureHearthScroll()"
       ],
       "target" : {
         "containerPath" : "container:LonghouseIOS.xcodeproj",

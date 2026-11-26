@@ -124,10 +124,12 @@ make ios-ui-shot TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderRe
 ```
 
 Write the test like those in `ios/Tests/LonghouseIOSUITests/SessionChatUITests.swift`:
-launch a chat fixture (`launchChatFixture(eventCount:)` or a named fixture in
+open a chat fixture (`launchChatFixture(eventCount:)` or a named fixture in
 `ios/Sources/LonghouseApp/Fixtures/ChatUITestWorkspaceClient.swift`), wait for the
-element, then `add(XCTAttachment(screenshot: app.screenshot()))` with
-`lifetime = .keepAlways`. Transcript text is exposed as `staticTexts` (query with
+element, then `attachScreenshot(app, named:)`. Fixture tests share one launched app
+and switch fixtures in process (`FixtureApp`), so open fixtures through it rather than
+`XCUIApplication().launch()`. The merge gate drops these screenshots; `ios-ui-shot`
+keeps them. Transcript text is exposed as `staticTexts` (query with
 `NSPredicate(format: "label CONTAINS %@", ...)`). Add any new served field to the
 fixture too. XCTest failure screenshots are exported as well. Only the
 `LonghouseSmoke` scheme carries the UI test target; the target handles that.

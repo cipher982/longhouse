@@ -58,6 +58,8 @@ if [[ "$build_status" -ne 0 ]]; then
 fi
 # xcodebuild strips TEST_RUNNER_ and injects the remainder into the UI test
 # runner. Ordinary parent environment alone is not a test-host contract.
+# The merge gate does not keep the screenshots tests attach for people; this does.
+export TEST_RUNNER_LONGHOUSE_UI_SHOTS=1
 for suffix in SERVER_URL AUTH_TOKEN SESSION_ID MARKERS_JSON; do
   key="LONGHOUSE_FIDELITY_${suffix}"
   if [[ -n "${!key:-}" ]]; then

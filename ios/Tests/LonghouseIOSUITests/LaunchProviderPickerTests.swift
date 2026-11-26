@@ -6,52 +6,33 @@ import XCTest
 /// leading edge: the blank half of a row was transparent to hit testing, so
 /// tapping the right side — where the checkmark sits — did nothing.
 @MainActor
-final class LaunchProviderPickerTests: XCTestCase {
-    private enum LaunchEnvironment {
-        static let launchSessionFixture = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
-    }
-
-    private enum LaunchArgument {
-        static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
-    }
-
-    override func setUpWithError() throws {
-        continueAfterFailure = false
-    }
-
-    /// Positive control: the picker opens, and the tap that already worked still
-    /// selects. Fails if the harness stops reaching the picker at all.
-    func testProviderRowAcceptsTapOnItsName() {
+final class LaunchProviderPickerTests: FixtureUITestCase {
+    /// The reported defect, then the positive control: the trailing half of the Claude
+    /// row selects Claude, and the name of the Codex row (the fixture's default) selects
+    /// Codex again, so each tap is seen to change the selection.
+    func testProviderRowAcceptsTapAcrossItsWidth() {
         let app = launchLaunchSheet()
-        openProviderPicker(in: app)
+        XCTAssertTrue(selectedProvider(in: app)?.hasPrefix("Codex") == true, "the fixture starts on Codex")
 
+        openProviderPicker(in: app)
         let claude = app.buttons["launch-provider-row-claude"]
         XCTAssertTrue(claude.waitToExist(timeout: 5), "Provider picker did not list Claude.")
-        claude.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-
-        XCTAssertTrue(
-            waitUntil(timeout: 3) { self.selectedProvider(in: app)?.hasPrefix("Claude") == true },
-            "Tapping the provider name did not select Claude. row=\(String(describing: selectedProvider(in: app)))"
-        )
-    }
-
-    /// The reported defect.
-    func testProviderRowAcceptsTapOnItsTrailingHalf() {
-        let app = launchLaunchSheet()
-        openProviderPicker(in: app)
-
-        let claude = app.buttons["launch-provider-row-claude"]
-        XCTAssertTrue(claude.waitToExist(timeout: 5), "Provider picker did not list Claude.")
-        attach(app.screenshot(), name: "provider-picker")
-
+        attachScreenshot(app, named: "provider-picker")
         let row = claude.frame
         claude.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).tap()
-
         XCTAssertTrue(
-            waitUntil(timeout: 3) { self.selectedProvider(in: app)?.hasPrefix("Claude") == true },
+            poll(timeout: 3) { self.selectedProvider(in: app)?.hasPrefix("Claude") == true },
             "Tapping the trailing side of the Claude row did not select it. row=\(row) app=\(app.frame)"
         )
-        attach(app.screenshot(), name: "provider-picker-after-trailing-tap")
+
+        openProviderPicker(in: app)
+        let codex = app.buttons["launch-provider-row-codex"]
+        XCTAssertTrue(codex.waitToExist(timeout: 5), "Provider picker did not list Codex.")
+        codex.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        XCTAssertTrue(
+            poll(timeout: 3) { self.selectedProvider(in: app)?.hasPrefix("Codex") == true },
+            "Tapping the provider name did not select Codex. row=\(String(describing: selectedProvider(in: app)))"
+        )
     }
 
     /// The machine chooser is the same list-of-rows shape inside the same flow,
@@ -62,61 +43,45 @@ final class LaunchProviderPickerTests: XCTestCase {
 
         let cinder = app.buttons["launch-machine-row-cinder"]
         XCTAssertTrue(cinder.waitToExist(timeout: 5), "Machine chooser did not list cinder.")
-        attach(app.screenshot(), name: "machine-chooser")
+        attachScreenshot(app, named: "machine-chooser")
 
         let row = cinder.frame
         cinder.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).tap()
 
         XCTAssertTrue(
-            waitUntil(timeout: 3) { app.navigationBars["New Session"].exists },
+            poll(timeout: 3) { app.navigationBars["New Session"].exists },
             "Tapping the trailing side of the cinder row did not choose it. row=\(row) app=\(app.frame)"
         )
     }
 
-    func testModelChooserRendersRecentRows() {
+    /// The model row says what it is, and its chooser lists recent models with when each
+    /// was last used. The provider row directly above already reads "Coding agent", so a
+    /// bare provider name or a "Coding model" subtitle on the model row reads as a
+    /// near-duplicate label rather than as an answer about which model will run.
+    func testModelRowStatesTheChoiceAndListsRecentModels() {
         let app = launchLaunchSheet()
-        openModelChooser(in: app)
 
+        let row = app.descendants(matching: .any)["launch-model-picker"]
+        XCTAssertTrue(row.waitToExist(timeout: 20), "Launch sheet did not render the model row.")
+        XCTAssertTrue(row.label.contains("Model ·"), "Model row does not name itself. label=\(row.label)")
+        XCTAssertFalse(
+            row.label.contains("Coding model"),
+            "Model row still uses the near-duplicate subtitle. label=\(row.label)"
+        )
+        attachScreenshot(app, named: "launch-model-row")
+
+        open(picker: "launch-model-picker", pushed: "Choose Model", in: app)
         let recent = app.buttons["launch-model-row-gpt-5.6-luna"]
         XCTAssertTrue(recent.waitToExist(timeout: 5), "Model chooser did not list the recent model.")
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Last used '")).firstMatch.waitToExist(timeout: 3),
             "Recent model did not render a relative last-used label."
         )
-        attach(app.screenshot(), name: "model-chooser")
-    }
-
-    private func openModelChooser(in app: XCUIApplication) {
-        open(picker: "launch-model-picker", pushed: "Choose Model", in: app)
-    }
-
-    /// The model row must say what it is. The provider row directly above it
-    /// already reads "Coding agent", so a bare provider name or a
-    /// "Coding model" subtitle here reads as a near-duplicate label rather than
-    /// as an answer about which model will run.
-    func testLaunchSheetModelRowStatesTheChoice() {
-        let app = launchLaunchSheet()
-
-        let row = app.descendants(matching: .any)["launch-model-picker"]
-        XCTAssertTrue(row.waitToExist(timeout: 20), "Launch sheet did not render the model row.")
-        attach(app.screenshot(), name: "launch-model-row")
-
-        XCTAssertTrue(
-            row.label.contains("Model ·"),
-            "Model row does not name itself. label=\(row.label)"
-        )
-        XCTAssertFalse(
-            row.label.contains("Coding model"),
-            "Model row still uses the near-duplicate subtitle. label=\(row.label)"
-        )
+        attachScreenshot(app, named: "model-chooser")
     }
 
     private func launchLaunchSheet() -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchEnvironment[LaunchEnvironment.launchSessionFixture] = "1"
-        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
-        app.launch()
-
+        let app = FixtureApp.open(FixtureApp.Fixture(environment: ["LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE": "1"]))
         XCTAssertTrue(app.navigationBars["New Session"].waitToExist(timeout: 20), app.debugDescription)
         return app
     }
@@ -148,21 +113,5 @@ final class LaunchProviderPickerTests: XCTestCase {
         guard app.navigationBars["New Session"].exists else { return nil }
         let row = app.descendants(matching: .any)["launch-provider-picker"]
         return row.exists ? row.label : nil
-    }
-
-    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return true }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        }
-        return condition()
-    }
-
-    private func attach(_ screenshot: XCUIScreenshot, name: String) {
-        let attachment = XCTAttachment(screenshot: screenshot)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }

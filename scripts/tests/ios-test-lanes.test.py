@@ -61,7 +61,7 @@ class CiCoversTheMergeGateTests(unittest.TestCase):
     def test_the_smoke_scheme_test_plan_is_found(self):
         # plan_skipped() reads project.yml with a regex; a reformat must fail here
         # instead of turning every plan check below into a pass.
-        self.assertEqual(len(plan_skipped("LonghouseSmoke")), 4)
+        self.assertEqual(len(plan_skipped("LonghouseSmoke")), 5)
 
     def test_selected_classes_exist(self):
         sources = "\n".join(

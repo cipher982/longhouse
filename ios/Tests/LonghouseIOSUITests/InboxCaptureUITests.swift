@@ -1,9 +1,24 @@
 import XCTest
 
-/// Frames of the inbox gallery fixture in both appearances, for before/after
-/// visual comparison (`make ios-ui-shot TEST=InboxCaptureUITests/<test>`). Skipped by
-/// the smoke plan method by method: a class-level skip would also swallow an
-/// explicit -only-testing selection. They capture, they do not gate.
+/// The timeline (the inbox) over its gallery fixture: every kind of session row.
+@MainActor
+final class TimelineUITests: FixtureUITestCase {
+    /// The timeline lists the gallery's sessions and keeps them through a scroll.
+    func testTimelineListsSessionsAndScrolls() {
+        let app = FixtureApp.open(FixtureApp.Fixture(environment: ["LONGHOUSE_UI_TEST_INBOX_GALLERY_FIXTURE": "1"]))
+        XCTAssertTrue(app.navigationBars["Timeline"].waitToExist(timeout: 20))
+        let rows = app.descendants(matching: .any).matching(identifier: "timeline-session-row")
+        XCTAssertTrue(rows.firstMatch.waitToExist(timeout: 10), "the timeline rendered no session rows")
+        XCTAssertGreaterThan(rows.count, 3, "the gallery fixture has more sessions than this")
+        app.scrollViews.firstMatch.swipeUp()
+        XCTAssertTrue(rows.firstMatch.waitToExist(timeout: 5), "the timeline lost its rows after a scroll")
+    }
+}
+
+/// Frames of the inbox gallery fixture for before/after visual comparison
+/// (`make ios-ui-shot TEST=InboxCaptureUITests/<test>`). Skipped by the smoke plan method
+/// by method (a class-level skip would also swallow an explicit -only-testing selection):
+/// they capture, they do not gate.
 @MainActor
 final class InboxCaptureUITests: XCTestCase {
     override func setUpWithError() throws {

@@ -262,46 +262,14 @@ struct SessionRuntimeDock: View {
         "\(detail.id):\(detail.stateFacts.delegation?.validUntil ?? "")"
     }
 
-    private enum DelegationPresentation {
-        case absent
-        case unknown
-        case known(SessionDelegationFacts)
-
-        var isUnknown: Bool {
-            if case .unknown = self { return true }
-            return false
-        }
+    /// What the background work shows; SessionDelegationSummary decides it.
+    private var delegation: SessionDelegationSummary {
+        SessionDelegationSummary(detail: detail, asOf: evidenceNow)
     }
 
-    private var delegationPresentation: DelegationPresentation {
-        guard let facts = detail.stateFacts.delegation else { return .absent }
-        let state = facts.state.lowercased()
-        if facts.items?.isEmpty == true {
-            return .absent
-        }
-        if state == "unknown" {
-            let hasObservation = facts.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            guard hasObservation else { return .absent }
-        }
-        guard facts.isValid(asOf: evidenceNow), state != "unknown" else {
-            return .unknown
-        }
-        return .known(facts)
-    }
+    private var delegationPresentation: SessionDelegationSummary.Presentation { delegation.presentation }
 
-    private var delegationSummaryLabel: String? {
-        switch delegationPresentation {
-        case .absent:
-            if let pending = detail.pendingBackgroundAgentCount, pending > 0 {
-                return "Waiting for \(pending) background \(pending == 1 ? "agent" : "agents") to finish"
-            }
-            return nil
-        case .unknown:
-            return "Background work status unknown"
-        case .known(let facts):
-            return delegationSummary(for: facts)
-        }
-    }
+    private var delegationSummaryLabel: String? { delegation.label }
 
     private var delegationRosterPreview: String? {
         guard case .known(let facts) = delegationPresentation,
@@ -461,62 +429,8 @@ struct SessionRuntimeDock: View {
     }
 
 
-    private func delegationSummary(for facts: SessionDelegationFacts) -> String? {
-        if let items = facts.items {
-            guard !items.isEmpty else { return facts.recentItems?.isEmpty == false ? "Recently finished background work" : nil }
-            let waitingAgents = items.filter {
-                SessionDelegationCategory(kind: $0.kind) == .agents && $0.status.lowercased() == "waiting"
-            }.count
-            return categorySummary(
-                counts: items.reduce(into: [SessionDelegationCategory: Int]()) { counts, task in
-                    counts[SessionDelegationCategory(kind: task.kind), default: 0] += 1
-                },
-                total: items.count,
-                waitingAgents: waitingAgents
-            )
-        }
-        if facts.state.lowercased() == "none" {
-            return nil
-        }
-        guard let count = facts.count, count > 0 else {
-            return "Background work reported"
-        }
-        let counts = (facts.kinds ?? [:]).reduce(into: [SessionDelegationCategory: Int]()) { result, pair in
-            guard pair.value > 0 else { return }
-            result[SessionDelegationCategory(kind: pair.key), default: 0] += pair.value
-        }
-        return categorySummary(counts: counts, total: count)
-    }
-
-    private func categorySummary(
-        counts: [SessionDelegationCategory: Int],
-        total: Int,
-        waitingAgents: Int = 0
-    ) -> String {
-        let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
-        let parts = order.compactMap { category -> String? in
-            guard let count = counts[category], count > 0 else { return nil }
-            let base = category.countLabel(count)
-            if category == .agents, waitingAgents > 0 {
-                return "\(base) (\(waitingAgents) waiting)"
-            }
-            return base
-        }
-        if parts.isEmpty {
-            return "Background · \(total) \(total == 1 ? "task" : "tasks")"
-        }
-        return "Background · " + parts.joined(separator: " · ")
-    }
-
     private func usesPrimaryDelegationHeadline(for state: SessionLedgerEvidence) -> Bool {
-        guard detail.activePauseRequest == nil else { return false }
-        if detail.stateFacts.primary?.key == "delegated_work" { return true }
-        if let summary = delegationSummaryLabel,
-           detail.runtimeHeadline.trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(summary) == .orderedSame {
-            return true
-        }
-        return false
+        delegation.replacesHeadline
     }
 
     @ViewBuilder
@@ -1034,5 +948,120 @@ struct SessionRuntimeDock: View {
             parts.append(notice == .finished ? "Turn finished" : "Activity evidence restored")
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+/// Whether a session's background work shows a summary line, what it says, and whether
+/// that line stands in for the session's own headline. Kept out of the view so it is
+/// tested directly (SessionDelegationSummaryTests) against the fixtures the UI tests open.
+struct SessionDelegationSummary {
+    enum Presentation {
+        case absent
+        case unknown
+        case known(SessionDelegationFacts)
+
+        var isUnknown: Bool {
+            if case .unknown = self { return true }
+            return false
+        }
+    }
+
+    let presentation: Presentation
+    /// The summary line, or nil when nothing about background work is shown.
+    let label: String?
+    /// The summary is the session's headline instead of a line under it.
+    let replacesHeadline: Bool
+
+    init(detail: SessionDetail, asOf now: Date) {
+        let presentation = Self.presentation(of: detail.stateFacts.delegation, asOf: now)
+        let label: String?
+        switch presentation {
+        case .absent:
+            if let pending = detail.pendingBackgroundAgentCount, pending > 0 {
+                label = "Waiting for \(pending) background \(pending == 1 ? "agent" : "agents") to finish"
+            } else {
+                label = nil
+            }
+        case .unknown:
+            label = "Background work status unknown"
+        case .known(let facts):
+            label = Self.summary(for: facts)
+        }
+        self.presentation = presentation
+        self.label = label
+        if detail.activePauseRequest != nil {
+            replacesHeadline = false
+        } else if detail.stateFacts.primary?.key == "delegated_work" {
+            replacesHeadline = true
+        } else if let label,
+                  detail.runtimeHeadline.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(label) == .orderedSame {
+            replacesHeadline = true
+        } else {
+            replacesHeadline = false
+        }
+    }
+
+    private static func presentation(of facts: SessionDelegationFacts?, asOf now: Date) -> Presentation {
+        guard let facts else { return .absent }
+        let state = facts.state.lowercased()
+        if facts.items?.isEmpty == true {
+            return .absent
+        }
+        if state == "unknown" {
+            let hasObservation = facts.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            guard hasObservation else { return .absent }
+        }
+        guard facts.isValid(asOf: now), state != "unknown" else {
+            return .unknown
+        }
+        return .known(facts)
+    }
+
+    private static func summary(for facts: SessionDelegationFacts) -> String? {
+        if let items = facts.items {
+            guard !items.isEmpty else { return facts.recentItems?.isEmpty == false ? "Recently finished background work" : nil }
+            let waitingAgents = items.filter {
+                SessionDelegationCategory(kind: $0.kind) == .agents && $0.status.lowercased() == "waiting"
+            }.count
+            return categorySummary(
+                counts: items.reduce(into: [SessionDelegationCategory: Int]()) { counts, task in
+                    counts[SessionDelegationCategory(kind: task.kind), default: 0] += 1
+                },
+                total: items.count,
+                waitingAgents: waitingAgents
+            )
+        }
+        if facts.state.lowercased() == "none" {
+            return nil
+        }
+        guard let count = facts.count, count > 0 else {
+            return "Background work reported"
+        }
+        let counts = (facts.kinds ?? [:]).reduce(into: [SessionDelegationCategory: Int]()) { result, pair in
+            guard pair.value > 0 else { return }
+            result[SessionDelegationCategory(kind: pair.key), default: 0] += pair.value
+        }
+        return categorySummary(counts: counts, total: count)
+    }
+
+    private static func categorySummary(
+        counts: [SessionDelegationCategory: Int],
+        total: Int,
+        waitingAgents: Int = 0
+    ) -> String {
+        let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
+        let parts = order.compactMap { category -> String? in
+            guard let count = counts[category], count > 0 else { return nil }
+            let base = category.countLabel(count)
+            if category == .agents, waitingAgents > 0 {
+                return "\(base) (\(waitingAgents) waiting)"
+            }
+            return base
+        }
+        if parts.isEmpty {
+            return "Background · \(total) \(total == 1 ? "task" : "tasks")"
+        }
+        return "Background · " + parts.joined(separator: " · ")
     }
 }
