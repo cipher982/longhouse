@@ -139,7 +139,10 @@
             "version": 2,
             "wrapper_recedes": false
           },
-          "turn_end": null
+          "turn_end": null,
+          "tool_intent": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && ec",
+          "tool_intent_source": "derived",
+          "tool_target": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && echo step-9 && echo step-10 && echo step-11 && echo step-12 && echo step-13 && echo step-14 && echo step-15 && echo step-16 && echo step-17 && echo step-18 && echo step-19 && echo step-20 && echo step-21 && echo step-22 && echo step-23 && echo step-24 && echo step-25 && echo step-26 && echo step-27 && echo step-28 && echo step-29 && echo step-30 && echo step-31 && echo step-32 && echo step-33 && echo step-34 && echo step-35 && echo step-36 && echo step-37 && echo step-38 && echo step-39 && echo step-40 && echo step-41 && echo step-42 && echo step-43 && echo step-44 && echo step-45 && echo step-46 && echo step-47 && echo step-48 && echo step-49 && echo step-50 && echo step-51 && echo step-52 && echo step-53 && echo step-54 && echo step-55 && echo step-56 && echo step-57 && echo step-58 && echo step-59"
         },
         "kind": "event",
         "origin_label": null,
@@ -243,7 +246,10 @@
             "version": 2,
             "wrapper_recedes": false
           },
-          "turn_end": null
+          "turn_end": null,
+          "tool_intent": "src/app.py",
+          "tool_intent_source": "derived",
+          "tool_target": "/repo/src/app.py"
         },
         "kind": "event",
         "origin_label": null,
@@ -343,7 +349,10 @@
             "version": 2,
             "wrapper_recedes": false
           },
-          "turn_end": null
+          "turn_end": null,
+          "tool_intent": "q",
+          "tool_intent_source": "derived",
+          "tool_target": "q"
         },
         "kind": "event",
         "origin_label": null,
@@ -449,7 +458,10 @@
             "version": 2,
             "wrapper_recedes": false
           },
-          "turn_end": null
+          "turn_end": null,
+          "tool_intent": null,
+          "tool_intent_source": null,
+          "tool_target": null
         },
         "kind": "event",
         "origin_label": null,

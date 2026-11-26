@@ -40,12 +40,12 @@
             "command": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && echo step-9 && echo step-10 && echo step-11 && echo step-12 && echo step-13 && echo step-14 && echo step-15 && echo step-16 && echo step-17 &&"
           },
           "tool_input_truncated": true,
+          "tool_intent": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && ec",
+          "tool_intent_source": "derived",
           "tool_name": "Bash",
           "tool_presentation_input": "same",
           "tool_presentation_ref": "87d8cfef4bcf",
-          "tool_intent": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && ec",
-          "tool_intent_source": "derived",
-          "tool_target": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && echo step-9 && echo step-10 && echo step-11 && echo step-12 && echo step-13 && echo step-14 && echo step-15 && echo step-16 && echo step-17 &&"
+          "tool_target": "rg -n 'needle' src/ && echo step-0 && echo step-1 && echo step-2 && echo step-3 && echo step-4 && echo step-5 && echo step-6 && echo step-7 && echo step-8 && echo step-9 && echo step-10 && echo step-11 && echo step-12 && echo step-13 && echo step-14 && echo step-15 && echo step-16 && echo step-17 &…"
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:02Z"
@@ -76,11 +76,11 @@
             "new_string": "b\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\nb\n",
             "old_string": "a\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\na\n"
           },
+          "tool_intent": "src/app.py",
+          "tool_intent_source": "derived",
           "tool_name": "Edit",
           "tool_presentation_input": "same",
           "tool_presentation_ref": "2d02ef15e09c",
-          "tool_intent": "src/app.py",
-          "tool_intent_source": "derived",
           "tool_target": "/repo/src/app.py"
         },
         "kind": "event",
@@ -108,11 +108,11 @@
           "tool_input_json": {
             "query": "q"
           },
+          "tool_intent": "q",
+          "tool_intent_source": "derived",
           "tool_name": "mcp_call",
           "tool_presentation_input": "same",
           "tool_presentation_ref": "376472d7f4d9",
-          "tool_intent": "q",
-          "tool_intent_source": "derived",
           "tool_target": "q"
         },
         "kind": "event",
@@ -148,10 +148,7 @@
           },
           "tool_name": "StructuredOutput",
           "tool_presentation_input": "same",
-          "tool_presentation_ref": "df0b934d6321",
-          "tool_intent": null,
-          "tool_intent_source": null,
-          "tool_target": null
+          "tool_presentation_ref": "df0b934d6321"
         },
         "kind": "event",
         "timestamp": "2026-10-06T12:00:10Z"

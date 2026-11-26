@@ -217,6 +217,10 @@ def _lite_event(event: dict[str, Any], *, item_timestamp: Any, presentations: di
             out[key] = value
     if event.get("timestamp") != item_timestamp:
         out["timestamp"] = event.get("timestamp")
+    # A lite row shows the target only on hover; cut it like the input preview.
+    target = out.get("tool_target")
+    if isinstance(target, str) and len(target) > _INPUT_STRING_MAX_CHARS:
+        out["tool_target"] = target[: _INPUT_STRING_MAX_CHARS - 1] + "…"
 
     if full_input is not None:
         if is_edit:

@@ -330,3 +330,15 @@ def test_swarm_summaries_unwrap_json_quoted_args_and_skip_mcp_collisions():
     )
     assert call_text_for("read_board", {"since": 40})["tool_intent"] == "since #40"
     assert call_text_for("mcp__board__post_message", {"text": "hi"})["tool_intent"] is None
+
+
+def test_review_spellings_paths_lists_argv_and_json_patch():
+    from zerg.services.tool_presentation import call_text_for
+
+    assert call_text_for("list_dir", {"DirectoryPath": "/a/b/c"})["tool_intent"] == "b/c"
+    assert call_text_for("LS", {"path": "/Users/x/git/zerg/server"})["tool_intent"] == "zerg/server"
+    assert call_text_for("read_many_files", {"paths": ["a/x.md", "b/y.md"]})["tool_intent"] == "a/x.md + 1 file"
+    argv = call_text_for("shell", {"command": ["bash", "-lc", "ls -la"]})
+    assert argv["tool_intent"] == "ls -la" and argv["tool_target"] == "ls -la"
+    as_json = call_text_for("apply_patch", '{"patch": "*** Begin Patch\\n*** Update File: web/src/a.ts\\n*** End Patch"}')
+    assert as_json == {"tool_intent": "src/a.ts", "tool_intent_source": "derived", "tool_target": "web/src/a.ts"}

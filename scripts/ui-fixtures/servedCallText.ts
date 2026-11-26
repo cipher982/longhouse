@@ -7,7 +7,7 @@ import type { AgentEvent } from "../../web/src/shared/api/agents";
  * fixture event must carry it. Covers the shapes these fixtures use; the
  * server is the authority.
  */
-const PATH_KEYS = ["file_path", "path", "filePath", "Path", "AbsolutePath", "target_file", "notebook_path"];
+const PATH_KEYS = ["file_path", "path", "filePath", "Path", "AbsolutePath", "DirectoryPath", "target_file", "notebook_path"];
 const AUTHORED_KEYS = ["i", "toolSummary"];
 const DESCRIPTION_TOOLS = new Set(["bash", "shell", "shell_command", "exec_command", "run_shell_command", "run_terminal_cmd", "task", "agent", "monitor"]);
 const SEARCH_TOOLS = new Set(["grep", "glob", "search", "rg", "grep_search", "codebase_search", "find"]);

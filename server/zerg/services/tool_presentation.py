@@ -451,6 +451,11 @@ def _shell_command(tool_input: Mapping[str, Any]) -> str | None:
         value = tool_input.get(key)
         if isinstance(value, str):
             return value
+        # Codex `shell` sends argv (`["bash", "-lc", "ls -la"]`): the script is the last word.
+        if isinstance(value, list) and value and all(isinstance(part, str) for part in value):
+            if len(value) >= 3 and value[-2] in {"-c", "-lc"}:
+                return value[-1]
+            return " ".join(value)
     return None
 
 
@@ -639,7 +644,16 @@ def _path_tail(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:_INTENT_CHARS])
 
 
-_PATH_KEYS = ("file_path", "path", "filePath", "Path", "AbsolutePath", "target_file", "notebook_path")
+_PATH_KEYS = (
+    "file_path",
+    "path",
+    "filePath",
+    "Path",
+    "AbsolutePath",
+    "DirectoryPath",
+    "target_file",
+    "notebook_path",
+)
 _PATTERN_KEYS = ("pattern", "query", "Query", "glob", "glob_pattern", "Pattern")
 _WEB_KEYS = ("query", "url", "Url", "Query")
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.MULTILINE)
@@ -654,6 +668,22 @@ def _first_text(parsed: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
+def _path_list(parsed: Mapping[str, Any]) -> list[str]:
+    """Several files in one call (``paths``, ``file_paths``)."""
+    for key in ("paths", "file_paths"):
+        value = parsed.get(key)
+        if isinstance(value, list):
+            return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return []
+
+
+def _files_summary(paths: list[str]) -> str:
+    unique = list(dict.fromkeys(paths))
+    extra = len(unique) - 1
+    first = _path_tail(unique[0])
+    return first if extra <= 0 else f"{first} + {extra} {'file' if extra == 1 else 'files'}"
+
+
 def _first_line(text: str) -> str | None:
     for line in text.strip().splitlines():
         compact = " ".join(line.split())
@@ -664,23 +694,20 @@ def _first_line(text: str) -> str | None:
 
 def _patch_source(tool_input_json: Any, parsed: Mapping[str, Any] | None) -> str | None:
     """Patch text from Codex apply_patch, stored raw or under ``patch``/``input``."""
-    if isinstance(tool_input_json, str) and "*** Begin Patch" in tool_input_json:
-        return tool_input_json
     if parsed is not None:
         for key in ("patch", "input"):
             value = parsed.get(key)
             if isinstance(value, str) and "*** Begin Patch" in value:
                 return value
+        return None
+    if isinstance(tool_input_json, str) and "*** Begin Patch" in tool_input_json:
+        return tool_input_json
     return None
 
 
 def _patch_summary(patch: str) -> str:
     paths = [m.strip() for m in _PATCH_FILE.findall(patch)]
-    if not paths:
-        return "Applied patch"
-    first = _path_tail(paths[0])
-    extra = len(dict.fromkeys(paths)) - 1
-    return first if extra <= 0 else f"{first} + {extra} {'file' if extra == 1 else 'files'}"
+    return _files_summary(paths) if paths else "Applied patch"
 
 
 def _swarm_summary(name: str, parsed: Mapping[str, Any]) -> str | None:
@@ -730,9 +757,15 @@ def _swarm_summary(name: str, parsed: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _label_for(name: str, rules_path: Path) -> str | None:
-    meta = _lookup_tool(_load_rules(str(rules_path.resolve())), name)
+@lru_cache(maxsize=4096)
+def _label_for_cached(name: str, rules_key: str) -> str | None:
+    meta = _lookup_tool(_load_rules(rules_key), name)
     return str(meta.get("label")) if meta is not None else None
+
+
+def _label_for(name: str, rules_path: Path) -> str | None:
+    rules_key = str(DEFAULT_RULES_PATH.resolve()) if rules_path is DEFAULT_RULES_PATH else str(rules_path.resolve())
+    return _label_for_cached(name, rules_key)
 
 
 def extract_derived_tool_intent(
@@ -764,9 +797,16 @@ def extract_derived_tool_intent(
 
     if label in {"Read", "Edit", "Write", "Notebook"}:
         path = _first_text(parsed, _PATH_KEYS)
-        return _path_tail(path) if path else None
+        if path:
+            return _path_tail(path)
+        paths = _path_list(parsed)
+        return _files_summary(paths) if paths else None
     if label in {"Search", "List"}:
-        return _compact(_first_text(parsed, _PATTERN_KEYS) or _first_text(parsed, _PATH_KEYS))
+        pattern = _first_text(parsed, _PATTERN_KEYS)
+        if pattern:
+            return _compact(pattern)
+        path = _first_text(parsed, _PATH_KEYS)
+        return _path_tail(path) if path else None
     if label in {"Fetch", "Web search"}:
         return _compact(_first_text(parsed, _WEB_KEYS))
     if label == "Shell":
@@ -786,6 +826,9 @@ def extract_derived_tool_intent(
     path = _first_text(parsed, _PATH_KEYS)
     if path:
         return _path_tail(path)
+    paths = _path_list(parsed)
+    if paths:
+        return _files_summary(paths)
     for key in ("command", "cmd", "pattern", "query", "url", "prompt", "key"):
         value = parsed.get(key)
         if isinstance(value, str):
@@ -810,8 +853,9 @@ def extract_tool_target(
     if not name:
         return None
     parsed = _input_mapping(tool_input_json)
-    if _patch_source(tool_input_json, parsed) is not None:
-        paths = list(dict.fromkeys(m.strip() for m in _PATCH_FILE.findall(_patch_source(tool_input_json, parsed) or "")))
+    patch = _patch_source(tool_input_json, parsed)
+    if patch is not None:
+        paths = list(dict.fromkeys(m.strip() for m in _PATCH_FILE.findall(patch)))
         return ", ".join(paths)[:_TARGET_CHARS] or None
     if parsed is None:
         return None
@@ -826,7 +870,7 @@ def extract_tool_target(
         order = ("url", "Url", "query", "Query")
     else:
         order = (*_PATH_KEYS, "command", "cmd", "CommandLine", "pattern", "url", "query")
-    value = _first_text(parsed, order)
+    value = _first_text(parsed, order) or ", ".join(_path_list(parsed))
     return value[:_TARGET_CHARS] if value else None
 
 
