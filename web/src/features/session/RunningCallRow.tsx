@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { SessionStateFacts } from "@/shared/api/agents";
 import { useWallClock } from "@/shared/hooks/useWallClock";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { parseUTC } from "@/shared/lib/dateUtils";
 import {
   getInteractionDisplayInfo,
@@ -89,10 +90,14 @@ type RunningState = "live" | "uncertain" | "quiet";
  */
 export function useRunningCallState(interaction: ToolInteraction) {
   const { liveness, currentRunning, provider } = useTimelineLiveness();
+  const windowActivity = useWindowActivity();
   const facts = liveness?.facts ?? null;
   const validUntilMs = Date.parse(facts?.activity.valid_until ?? "");
   const renderNowMs = Date.now();
-  const nowMs = Math.max(renderNowMs, useWallClock(renderNowMs <= validUntilMs, 1_000));
+  const nowMs = Math.max(
+    renderNowMs,
+    useWallClock(renderNowMs <= validUntilMs, windowActivity === "ambient" ? 15_000 : 1_000),
+  );
   const current = currentRunning.has(interaction.key);
   const working = facts ? sessionIsWorking(facts, nowMs) : false;
   const expired = facts ? workClaimExpired(facts, nowMs) : false;

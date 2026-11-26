@@ -57,12 +57,14 @@ export function emitRenderBeacon(params: {
   stateObservedAtMs?: number | null;
 }): void {
   if (typeof window === "undefined") return;
+  if (typeof document !== "undefined" && document.hidden) return;
   if (!params.latestEventEmittedAtMs) return;
   const beaconKey = `${params.sessionId}:${params.latestEventId}`;
   if (beaconKey === _lastBeaconedEventKey) return;
   _lastBeaconedEventKey = beaconKey;
 
   const send = () => {
+    if (typeof document !== "undefined" && document.hidden) return;
     const payload: BeaconPayload = {
       event_id: String(params.latestEventId),
       session_id: params.sessionId,
@@ -113,6 +115,7 @@ export function emitStateRenderBeacon(params: {
   pubsubSeq?: number | null;
 }): void {
   if (typeof window === "undefined") return;
+  if (typeof document !== "undefined" && document.hidden) return;
   if (!Number.isFinite(params.catalogCommitSeq) || params.catalogCommitSeq <= 0) return;
   if (!params.serverFanoutAtMs) return;
 
@@ -121,6 +124,7 @@ export function emitStateRenderBeacon(params: {
   _lastBeaconedEventKey = beaconKey;
 
   const send = () => {
+    if (typeof document !== "undefined" && document.hidden) return;
     const payload: BeaconPayload = {
       event_id: `state:${params.catalogCommitSeq}`,
       session_id: params.sessionId,

@@ -21,6 +21,7 @@ import {
 } from "@/shared/api/useAgentSessions";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
 import { useResumeRevalidation } from "@/shared/hooks/useResumeRevalidation";
+import { useWallClock } from "@/shared/hooks/useWallClock";
 import { useAmbientSessionAttentionCue } from "./useAmbientSessionAttentionCue";
 import { useTimelineSessionStream } from "./useTimelineSessionStream";
 import { plural } from "@/shared/lib/plural";
@@ -70,41 +71,6 @@ const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
 const SESSION_WORKSPACE_PREFETCH_LIMIT = 200;
 const SESSION_CARD_SCROLL_SUPPRESSION_MS = 250;
-
-// ---------------------------------------------------------------------------
-// useRelativeTimeClock
-// ---------------------------------------------------------------------------
-
-function useRelativeTimeClock(enabled: boolean): number {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    let intervalId: number | null = null;
-    const scheduleRepeatingUpdates = () => {
-      setNowMs(Date.now());
-      intervalId = window.setInterval(() => {
-        setNowMs(Date.now());
-      }, 60_000);
-    };
-
-    setNowMs(Date.now());
-    const delayUntilNextMinute = Math.max(1, 60_000 - (Date.now() % 60_000));
-    const timeoutId = window.setTimeout(scheduleRepeatingUpdates, delayUntilNextMinute);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-      }
-    };
-  }, [enabled]);
-
-  return nowMs;
-}
 
 /**
  * A machine's first history import is still running. Show a percentage only
@@ -242,7 +208,7 @@ export default function SessionsPage() {
   );
 
   const documentVisible = useDocumentVisible();
-  const relativeNowMs = useRelativeTimeClock(documentVisible);
+  const relativeNowMs = useWallClock(documentVisible, 60_000);
   const debouncedQuery = useDebouncedValue(searchQuery, aiSearch ? 700 : 300);
   const aiSearchPending = aiSearch && searchQuery !== debouncedQuery;
 

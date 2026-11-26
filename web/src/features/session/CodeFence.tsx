@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { hasAnsiSequences, parseAnsiSegments } from "./ansiSegments";
 import { emberPrismTheme, resolveHighlightLanguage, SyntaxHighlighter } from "./syntaxHighlighter";
 
@@ -53,7 +53,7 @@ export interface CodeFenceProps {
  * Prism highlighting within the 400-line / 20 KB cap, and optional ANSI
  * color rendering on plain tool outputs.
  */
-export function CodeFence({
+export const CodeFence = memo(function CodeFence({
   text,
   language = null,
   variant = "prose",
@@ -164,4 +164,4 @@ export function CodeFence({
       </div>
     </div>
   );
-}
+});

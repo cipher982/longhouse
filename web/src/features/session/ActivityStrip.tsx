@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import clsx from "clsx";
+import { getWindowActivity, subscribeWindowActivity } from "@/shared/hooks/useWindowActivity";
 import {
   ACTIVITY_FRAME_WEIGHT,
   ACTIVITY_STRIP_WINDOW_MS,
@@ -22,6 +23,8 @@ interface ActivityStripProps {
 
 const BAR_WIDTH = 1.5;
 const PADDING = 1;
+/** 15 fps is visually smooth for a 12-second drift strip and avoids 120 Hz rAF spin. */
+const ACTIVITY_STRIP_INTERVAL_MS = 1000 / 15;
 
 function monotonicNow(): number {
   return typeof performance !== "undefined" &&
@@ -76,10 +79,27 @@ export function ActivityStrip({
       barColor;
 
     let frameId = 0;
+    let nextTimer = 0;
     let expiryTimer = 0;
     let disposed = false;
 
+    const isFocused = () =>
+      (typeof document === "undefined" || !document.hidden) &&
+      getWindowActivity() === "focused";
+
+    const stopLoop = () => {
+      if (nextTimer) {
+        window.clearTimeout(nextTimer);
+        nextTimer = 0;
+      }
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+        frameId = 0;
+      }
+    };
+
     const draw = (): boolean => {
+      if (width <= 0 || height <= 0) return false;
       const now = monotonicNow();
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
@@ -108,14 +128,20 @@ export function ActivityStrip({
 
     const loop = () => {
       frameId = 0;
-      if (disposed) return;
+      if (disposed || !isFocused()) return;
       if (draw()) {
-        frameId = window.requestAnimationFrame(loop);
+        nextTimer = window.setTimeout(() => {
+          nextTimer = 0;
+          if (!disposed && !frameId && isFocused()) {
+            frameId = window.requestAnimationFrame(loop);
+          }
+        }, ACTIVITY_STRIP_INTERVAL_MS);
       }
     };
 
     const wake = () => {
-      if (disposed) return;
+      if (disposed || width <= 0 || height <= 0) return;
+      if (!isFocused()) return;
       if (reduceMotion) {
         // No drift, so nothing would otherwise clear a bar once it leaves the
         // window. One deferred repaint after the newest frame expires does it.
@@ -126,25 +152,32 @@ export function ActivityStrip({
         }, ACTIVITY_STRIP_WINDOW_MS + 50);
         return;
       }
-      if (!frameId) {
+      if (!frameId && !nextTimer) {
         frameId = window.requestAnimationFrame(loop);
       }
+    };
+
+    const onActivityChange = () => {
+      if (!isFocused()) {
+        stopLoop();
+        return;
+      }
+      if (showHistory) wake();
     };
 
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
+    const unsubscribeActivity = subscribeWindowActivity(onActivityChange);
     if (showHistory) wake();
     const unsubscribe = feed && showHistory ? feed.subscribe(wake) : null;
 
     return () => {
       disposed = true;
       observer.disconnect();
+      unsubscribeActivity();
       window.clearTimeout(expiryTimer);
-      if (frameId) {
-        window.cancelAnimationFrame(frameId);
-        frameId = 0;
-      }
+      stopLoop();
       unsubscribe?.();
     };
   }, [feed, tone, height, reduceMotionProp, showHistory]);

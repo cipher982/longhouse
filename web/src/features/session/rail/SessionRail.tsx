@@ -27,6 +27,7 @@ import type { TimelineSessionCard } from "@/shared/api/agents";
 import { useAgentSessions } from "@/shared/api/useAgentSessions";
 import { useMobileNavSlot } from "@/app/headerSlot";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useResumeRevalidation } from "@/shared/hooks/useResumeRevalidation";
 import { useStoredState } from "@/shared/hooks/useStoredState";
@@ -34,7 +35,7 @@ import { useWallClock } from "@/shared/hooks/useWallClock";
 import type { StatusLampState } from "@/shared/instruments/StatusLamp";
 import { ProviderGlyph } from "@/shared/ui/ProviderGlyph";
 import { PlusIcon, SearchIcon, XIcon } from "@/shared/ui/icons";
-import { HearthLamp, HearthProvider } from "@/shared/instruments/hearth/Hearth";
+import { HearthLamp } from "@/shared/instruments/hearth/Hearth";
 import { hearthModeForLamp, hearthSnapshotFromSession } from "@/shared/instruments/hearth/signals";
 import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 import { delegatedWorkLabel, pendingInteractionLabel, workingStatusLabel } from "@/shared/session/sessionStatus";
@@ -280,10 +281,15 @@ function SessionRail({
   const mac = useMemo(isMacPlatform, []);
   const newSessionKey = newSessionHotkeyLabel(mac);
   const documentVisible = useDocumentVisible();
+  const windowActivity = useWindowActivity();
   const { data, refetch } = useAgentSessions(RAIL_SESSION_FILTERS, {
-    refetchInterval: documentVisible ? 30_000 : false,
+    refetchInterval: !documentVisible
+      ? false
+      : windowActivity === "ambient"
+        ? 120_000
+        : 30_000,
   });
-  const resumeRevalidating = useResumeRevalidation(documentVisible, refetch, {
+  useResumeRevalidation(documentVisible, refetch, {
     enabled: Boolean(data),
   });
   const [switcherOpen, setSwitcherOpenState] = useState(false);
@@ -315,9 +321,13 @@ function SessionRail({
     [data?.sessions, nowMs, activeSession],
   );
   // ⌘K is a search: it finds every listed session, automation runs included.
+  // Skip building the second row list while the switcher modal is closed.
   const switcherRows = useMemo(
-    () => buildRailRows(data?.sessions ?? [], nowMs, activeSession, { includeAutomation: true }),
-    [data?.sessions, nowMs, activeSession],
+    () =>
+      switcherOpen
+        ? buildRailRows(data?.sessions ?? [], nowMs, activeSession, { includeAutomation: true })
+        : [],
+    [switcherOpen, data?.sessions, nowMs, activeSession],
   );
   // The machine lives in the tooltip. A row shows it only when another row
   // has the same title, where it is the one thing telling them apart.
@@ -530,7 +540,6 @@ function SessionRail({
             document.body,
           )
         : null}
-      <HearthProvider revalidating={resumeRevalidating}>
       {groups.map((group) => {
         const groupRows = rows
           .map((row, index) => ({ row, index }))
@@ -548,7 +557,6 @@ function SessionRail({
           </section>
         );
       })}
-      </HearthProvider>
     </nav>
   );
 }

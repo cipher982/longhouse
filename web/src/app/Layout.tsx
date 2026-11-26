@@ -16,6 +16,7 @@ import {
 import { useBodyScrollLock } from "@/shared/hooks/useBodyScrollLock";
 import { useClickOutside } from "@/shared/hooks/useClickOutside";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useWebClientPresence } from "./useWebClientPresence";
 import { useConfirm } from "@/shared/ui/confirm";
@@ -427,6 +428,7 @@ function WelcomeHeader({
 // server error (see apiHealth.ts for why a 4xx never counts).
 function NavStatus({ compact = false }: { compact?: boolean }) {
   const documentVisible = useDocumentVisible();
+  const windowActivity = useWindowActivity();
   const [queryEnabled, setQueryEnabled] = useState(false);
   const apiError = useApiHealth();
 
@@ -446,7 +448,11 @@ function NavStatus({ compact = false }: { compact?: boolean }) {
 
   const { data: directory, dataUpdatedAt, isError: directoryUnavailable, error: directoryError } = useMachineDirectory({
     enabled: queryEnabled,
-    refetchInterval: documentVisible ? 30_000 : false,
+    refetchInterval: !documentVisible
+      ? false
+      : windowActivity === "ambient"
+        ? 120_000
+        : 30_000,
   });
 
   const machines = directory?.machines ?? [];

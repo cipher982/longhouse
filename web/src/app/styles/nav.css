@@ -5,23 +5,13 @@
 .main-header {
   padding: 0 28px;
   border-bottom: 1px solid var(--color-border-muted);
-  background: rgba(16, 13, 10, 0.78);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
+  background: #120e0b;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: stretch;
   height: 60px;
   position: relative;
   z-index: var(--z-toolbar);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .main-header {
-    background: #120e0b;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
 }
 
 .header-left {

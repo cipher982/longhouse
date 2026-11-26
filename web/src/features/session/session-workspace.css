@@ -3494,14 +3494,12 @@
   z-index: 4;
   appearance: none;
   border: 1px solid var(--session-energy-border);
-  background: rgba(20, 14, 10, 0.94);
+  background: #140e0a;
   color: var(--color-text-primary);
   padding: 6px 14px;
   font-size: 12px;
   font-weight: 500;
   border-radius: 999px;
-  -webkit-backdrop-filter: blur(16px) saturate(1.25);
-  backdrop-filter: blur(16px) saturate(1.25);
   cursor: pointer;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
   transition: transform var(--motion-duration-fast)
@@ -4198,6 +4196,7 @@
   flex-shrink: 0;
 }
 .tl-run__dot {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -4205,12 +4204,29 @@
 }
 .tl-run[data-run-state="live"] .tl-run__dot {
   background: var(--color-intent-warning);
+}
+.tl-run[data-run-state="live"] .tl-run__dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(240, 138, 36, 0.55);
+  pointer-events: none;
   animation: tl-run-pulse 1.6s ease-out infinite;
 }
 @keyframes tl-run-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0.55); }
-  70% { box-shadow: 0 0 0 6px rgba(240, 138, 36, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0); }
+  0% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  70% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
 }
 .tl-run__clock {
   font-family: var(--font-family-mono);
@@ -4281,8 +4297,11 @@
 @media (prefers-reduced-motion: reduce) {
   /* Still evidence of life, without motion: a steady glow. */
   .tl-run[data-run-state="live"] .tl-run__dot {
-    animation: none;
     box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
+  }
+  .tl-run[data-run-state="live"] .tl-run__dot::after {
+    animation: none;
+    opacity: 0;
   }
 }
 

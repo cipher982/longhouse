@@ -3,10 +3,12 @@ import { useLocation } from "react-router";
 import config from "@/shared/lib/config";
 import { postWebClientPresence } from "@/shared/api/clientPresence";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { getWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { NEW_SESSION_PATH } from "@/features/launch/newSessionPath";
 
 const WEB_CLIENT_ID_STORAGE_KEY = "longhouse.webClientId";
 const WEB_CLIENT_HEARTBEAT_MS = 30_000;
+const WEB_CLIENT_AMBIENT_HEARTBEAT_MS = 120_000;
 
 function randomClientId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -59,6 +61,7 @@ export function useWebClientPresence(): void {
     }
 
     let cancelled = false;
+    let timeoutId: number | null = null;
     const sendHeartbeat = () => {
       if (cancelled) {
         return;
@@ -74,17 +77,27 @@ export function useWebClientPresence(): void {
       });
     };
 
-    sendHeartbeat();
-    if (!documentVisible) {
-      return () => {
-        cancelled = true;
-      };
-    }
+    const scheduleNext = () => {
+      if (cancelled || !documentVisible) return;
+      const delay =
+        getWindowActivity() === "ambient"
+          ? WEB_CLIENT_AMBIENT_HEARTBEAT_MS
+          : WEB_CLIENT_HEARTBEAT_MS;
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null;
+        if (cancelled) return;
+        sendHeartbeat();
+        scheduleNext();
+      }, delay);
+    };
 
-    const intervalId = window.setInterval(sendHeartbeat, WEB_CLIENT_HEARTBEAT_MS);
+    sendHeartbeat();
+    scheduleNext();
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [clientId, documentVisible, enabled, route, sessionId]);
 }

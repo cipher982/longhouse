@@ -15,6 +15,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import {
   usePerformanceMonitoring,
 } from "./usePerformance";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import config from "@/shared/lib/config";
 import { Spinner } from "@/shared/ui/Spinner";
 import { loadDocsRoutes, loadMachinesPage, loadSessionDetailPage } from "./routeChunks";
@@ -358,6 +359,8 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
 }
 
 export default function App() {
+  // Keep `<html data-window-activity>` live across every route for CSS/rAF gating.
+  useWindowActivity();
   // Performance monitoring
   usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
 

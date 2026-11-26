@@ -15,6 +15,7 @@
 
 import { NP, NS, PH, PW, SLOT_X, TH, TW, buildBlackbodyLUT, hearthShaders } from "./shaders";
 import { SessionHeat, T_AMB, kindOf, type HearthEvent, type HearthSnapshot, type ToolKind } from "./signals";
+import { getWindowActivity, subscribeWindowActivity } from "@/shared/hooks/useWindowActivity";
 
 const JACOBI = 20;
 const H = 1 / 60;
@@ -36,7 +37,7 @@ const GLOW_MAX = 0.085;
 const RM_SETTLE_STEPS = 90;
 const RM_STEPS_PER_FRAME = 15;
 /** Minimum interval between GPU height-probe readbacks (PI controller tau = 350 ms). */
-const MEASURE_INTERVAL_MS = 250;
+const MEASURE_INTERVAL_MS = 500;
 /** Presentation cadence (30 fps over 60 Hz solver, matching iOS HearthEngine). */
 const PRESENT_INTERVAL_MS = 1000 / 30;
 /** Hidden gap after which returning snaps stale flames instead of cooling over 4.5s. */
@@ -172,7 +173,9 @@ export class HearthRenderer {
   private simRuns: [number, number][] = [];
   private io: IntersectionObserver | null = null;
   private ro: ResizeObserver | null = null;
+  private unsubscribeWindowActivity: (() => void) | null = null;
   private raf = 0;
+  private presentTimer: number | null = null;
   private last = 0;
   private acc = 0;
   private simTime = 0;
@@ -183,7 +186,7 @@ export class HearthRenderer {
   private measT = 0;
   private lastMeasureStart = 0;
   private lastPresentMs = 0;
-  private hiddenAtMs: number | null = null;
+  private pausedAtMs: number | null = null;
   private revalidating = false;
   private snapUntilMs = 0;
   private q: WebGLQuery | null = null;
@@ -223,7 +226,7 @@ export class HearthRenderer {
     private readonly canvas: HTMLCanvasElement,
     gl: WebGL2RenderingContext,
     capacity: number,
-    private readonly reducedMotion: boolean,
+    private reducedMotion: boolean,
     private readonly onLost: () => void,
   ) {
     this.gl = gl;
@@ -282,8 +285,8 @@ export class HearthRenderer {
     this.tileCell = Array.from({ length: capacity }, () => null);
 
     canvas.addEventListener("webglcontextlost", this.handleLost, false);
-    document.addEventListener("visibilitychange", this.handleVisibility);
-    window.addEventListener("scroll", this.touchSoon, { capture: true, passive: true });
+    this.unsubscribeWindowActivity = subscribeWindowActivity(this.handleActivityChange);
+    window.addEventListener("scroll", this.handleScroll, { capture: true, passive: true });
     window.addEventListener("resize", this.touchSoon, { passive: true });
     if (typeof IntersectionObserver !== "undefined") {
       this.io = new IntersectionObserver(this.handleIntersect, { rootMargin: "48px 0px" });
@@ -414,10 +417,17 @@ export class HearthRenderer {
     this.requestFrame();
   }
 
-  /** Rows moved (drag, reflow): redraw for a moment even if nothing burns. */
+  /** Rows moved (drag, reflow): relayout and redraw once without bypassing the frame cap. */
   touch(): void {
     this.layoutDirty = true;
-    this.stillUntil = Math.max(this.stillUntil, performance.now() + 350);
+    this.requestFrame();
+  }
+
+  setReducedMotion(reduced: boolean): void {
+    if (this.dead || this.reducedMotion === reduced) return;
+    this.reducedMotion = reduced;
+    this.rmSettle = RM_SETTLE_STEPS;
+    this.layoutDirty = true;
     this.requestFrame();
   }
 
@@ -428,18 +438,33 @@ export class HearthRenderer {
   destroy(): void {
     if (this.dead) return;
     this.dead = true;
-    if (this.raf) cancelAnimationFrame(this.raf);
-    this.raf = 0;
+    this.cancelScheduledFrame();
     this.io?.disconnect();
     this.ro?.disconnect();
     this.canvas.removeEventListener("webglcontextlost", this.handleLost, false);
-    document.removeEventListener("visibilitychange", this.handleVisibility);
-    window.removeEventListener("scroll", this.touchSoon, { capture: true } as EventListenerOptions);
+    this.unsubscribeWindowActivity?.();
+    this.unsubscribeWindowActivity = null;
+    window.removeEventListener("scroll", this.handleScroll, { capture: true } as EventListenerOptions);
     window.removeEventListener("resize", this.touchSoon);
     if (!this.gl.isContextLost()) this.gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 
   // ---------------- events ----------------
+
+  private isActiveWindow(): boolean {
+    return !document.hidden && getWindowActivity() === "focused";
+  }
+
+  private cancelScheduledFrame(): void {
+    if (this.raf) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    if (this.presentTimer !== null) {
+      window.clearTimeout(this.presentTimer);
+      this.presentTimer = null;
+    }
+  }
 
   private handleLost = (e: Event) => {
     e.preventDefault();
@@ -447,21 +472,19 @@ export class HearthRenderer {
     this.onLost();
   };
 
-  private handleVisibility = () => {
-    if (document.hidden) {
-      this.hiddenAtMs = performance.now();
-      if (this.raf) {
-        cancelAnimationFrame(this.raf);
-        this.raf = 0;
-      }
+  private handleActivityChange = () => {
+    if (!this.isActiveWindow()) {
+      if (this.pausedAtMs === null) this.pausedAtMs = performance.now();
+      this.cancelScheduledFrame();
+      this.stats.running = false;
       return;
     }
     const nowMs = performance.now();
-    const gap = this.hiddenAtMs != null ? nowMs - this.hiddenAtMs : 0;
-    this.hiddenAtMs = null;
+    const gap = this.pausedAtMs != null ? nowMs - this.pausedAtMs : 0;
+    this.pausedAtMs = null;
     if (gap >= RESUME_SNAP_GAP_MS) {
-      // Quench stale working flames immediately on the visibility event rather
-      // than waiting a frame for React's revalidation effect.
+      // Quench stale working flames immediately on resume rather than
+      // waiting a frame for React's revalidation effect.
       this.quenchStaleWorkingTiles(nowMs);
       this.snapUntilMs = Math.max(this.snapUntilMs, nowMs + 2_000);
       this.stillUntil = Math.max(this.stillUntil, nowMs + 80);
@@ -469,6 +492,21 @@ export class HearthRenderer {
     this.last = 0;
     this.layoutDirty = true;
     this.requestFrame();
+  };
+
+  private handleScroll = (event: Event) => {
+    const target = event.target;
+    const host = this.canvas.parentElement;
+    if (
+      host &&
+      target !== document &&
+      target !== window &&
+      target !== host &&
+      !(target instanceof Node && target.contains(host))
+    ) {
+      return;
+    }
+    this.touch();
   };
 
   private touchSoon = () => this.touch();
@@ -490,8 +528,25 @@ export class HearthRenderer {
   };
 
   private requestFrame = () => {
-    if (this.dead || this.raf || document.hidden) return;
+    if (this.dead || this.raf || !this.isActiveWindow()) return;
+    if (this.presentTimer !== null) {
+      window.clearTimeout(this.presentTimer);
+      this.presentTimer = null;
+    }
     this.raf = requestAnimationFrame(this.frame);
+  };
+
+  private scheduleNextPresent = (nowMs: number) => {
+    if (this.dead || this.raf || this.presentTimer !== null || !this.isActiveWindow()) return;
+    const remaining = Math.max(0, PRESENT_INTERVAL_MS - (nowMs - this.lastPresentMs) - 2);
+    if (remaining <= 4) {
+      this.raf = requestAnimationFrame(this.frame);
+      return;
+    }
+    this.presentTimer = window.setTimeout(() => {
+      this.presentTimer = null;
+      this.requestFrame();
+    }, remaining);
   };
 
   // ---------------- tiles ----------------
@@ -516,10 +571,11 @@ export class HearthRenderer {
       const v = (this.vis[t] = freshVis(t));
       const heat = this.heats.get(cell.key)?.heat;
       // A row arriving on screen already burning is warmed up to its height
-      // before it is drawn, not relit from bare coals.
+      // before it is drawn, not relit from bare coals. Waiting rows rest as
+      // warm steady coals (matching StatusLamp), so only active working fires warm.
       if (heat) v.hcmd = this.reducedMotion ? 0 : heat.target(now / 1000);
-      if (heat && !this.reducedMotion && (v.hcmd > 0 || heat.snap?.mode === "waiting")) v.warm = WARM_STEPS;
-      v.frozen = false;
+      if (heat && !this.reducedMotion && v.hcmd > 0) v.warm = WARM_STEPS;
+      v.frozen = !(v.hcmd > 0.01);
       this.settleT = now;
       this.rmSettle = RM_SETTLE_STEPS;
       this.layoutDirty = true;
@@ -550,7 +606,7 @@ export class HearthRenderer {
 
   private frame = (nowMs: number) => {
     this.raf = 0;
-    if (this.dead || document.hidden) return;
+    if (this.dead || !this.isActiveWindow()) return;
     const gl = this.gl;
     const t = nowMs / 1000;
     const realDt = this.last ? Math.min(0.1, t - this.last) : H;
@@ -559,11 +615,12 @@ export class HearthRenderer {
     const wall = Date.now();
     this.assignTiles(nowMs);
 
-    // Signals: advance every session; events land on the tile showing it.
+    // Signals: advance tiles currently visible (plus any session with pending events).
     const tileOfKey = new Map<string, number>();
     for (const cell of this.cells.values()) if (cell.tile >= 0) tileOfKey.set(cell.key, cell.tile);
     for (const [key, { heat }] of this.heats) {
       const tile = tileOfKey.get(key);
+      if (tile == null && !heat.hasPending()) continue;
       if (this.reducedMotion) heat.step(t + 3, 3, wall);
       else heat.step(t, realDt, wall, tile == null ? undefined : (e) => this.emit(tile, e, t));
     }
@@ -590,12 +647,9 @@ export class HearthRenderer {
       }
       if (heat.hasPending()) pendingEvents = true;
       if (!heat.isActive(t) && heat.isCooling(wall)) cooling = true;
-      let ht = heat.target(t);
-      if (snap.mode === "waiting") {
-        // Guttering: a low flame that dips and recovers, calmer than work but never still.
-        const g = 0.5 + 0.5 * Math.sin(t * 1.3 + v.seed * 11) * Math.sin(t * 0.47 + v.seed * 5);
-        ht = 0.2 + 0.13 * g;
-      }
+      // Waiting sessions rest as hot glowing coals (matching StatusLamp's
+      // steady state) instead of simulating fluid 24/7 when no agent works.
+      const ht = heat.target(t);
       // Subagents are extra flame roots while the session works.
       const roots = heat.isActive(t) && snap.mode === "working" ? Math.min(SLOT_X.length - 1, snap.subagents) : 0;
       for (let k = 1; k <= roots; k++) v.puff[k] = Math.max(v.puff[k], 0.55);
@@ -620,8 +674,6 @@ export class HearthRenderer {
     this.stats.burning = burning;
     this.stats.tiles = this.tileCell.filter(Boolean).length;
     this.setRuns();
-    this.packUniforms(wall);
-    const warming = this.warmUp();
 
     const needsLayout = this.layoutDirty || nowMs < this.stillUntil;
     const visibleTiles = needsLayout ? this.layout() : this.visibleTiles;
@@ -632,11 +684,12 @@ export class HearthRenderer {
     if (!visibleTiles) {
       // Nothing on screen: no GPU work at all. A scroll or visibility change wakes us.
       this.stats.running = false;
-      if ((pendingEvents || warming) && !this.reducedMotion) this.raf = requestAnimationFrame(this.frame);
+      if (pendingEvents && !this.reducedMotion) this.scheduleNextPresent(nowMs);
       return;
     }
 
     if (this.reducedMotion) {
+      this.packUniforms(wall);
       // A still frame: settle each lit tile from its current state a few
       // steps per frame, then draw once; nothing moves after that.
       const settling = this.rmSettle > 0 && this.simRuns.length > 0;
@@ -651,17 +704,20 @@ export class HearthRenderer {
       return;
     }
 
-    const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
-    this.acc += realDt;
     const presentDue = nowMs - this.lastPresentMs >= PRESENT_INTERVAL_MS - 1;
+    const hasWarming = this.vis.some((v, i) => this.tileCell[i] && v.warm > 0);
     // Cap presentation to 30 fps over the 60 Hz fixed-timestep solver (matching
     // iOS HearthEngine). Layout moves, warming, and first frames draw right away.
     const needsDraw =
       needsLayout ||
-      warming ||
+      hasWarming ||
       this.stats.frames === 0 ||
-      (presentDue && (this.acc >= H || cooling || nowMs < this.stillUntil));
+      (presentDue && (this.acc + realDt >= H || cooling || nowMs < this.stillUntil));
+    let warming = hasWarming;
+    this.acc += realDt;
     if (needsDraw) {
+      this.packUniforms(wall);
+      warming = this.warmUp();
       let n = 0;
       while (this.acc >= H && n < 3) {
         n++;
@@ -679,7 +735,7 @@ export class HearthRenderer {
       for (let k = 0; k < n; k++) this.simStep();
       this.render(true);
       this.lastPresentMs = nowMs;
-      if (this.simRuns.length) this.measureAsync(nowMs);
+      if (burning > 0 && this.simRuns.length) this.measureAsync(nowMs);
       if (useQ && this.timerExt) gl.endQuery(this.timerExt.TIME_ELAPSED_EXT);
       else if (this.q && this.timerExt && gl.getQueryParameter(this.q, gl.QUERY_RESULT_AVAILABLE)) {
         if (!gl.getParameter(this.timerExt.GPU_DISJOINT_EXT)) {
@@ -691,9 +747,12 @@ export class HearthRenderer {
       }
       this.stats.frames++;
     }
+    const keepGoing = burning > 0 || cooling || pendingEvents || warming || t < this.sparkUntil || nowMs < this.stillUntil;
     this.stats.running = keepGoing;
-    if (keepGoing) this.raf = requestAnimationFrame(this.frame);
-    else if (this.q) {
+    if (keepGoing) {
+      if (warming || nowMs < this.stillUntil) this.raf = requestAnimationFrame(this.frame);
+      else this.scheduleNextPresent(nowMs);
+    } else if (this.q) {
       gl.deleteQuery(this.q);
       this.q = null;
     }
@@ -832,6 +891,11 @@ export class HearthRenderer {
   }
 
   private packUniforms(wall: number) {
+    const nowSec = performance.now() / 1000;
+    const uTile = this.uTile;
+    const uSrc = this.uSrc;
+    const uBed = this.uBed;
+    const uGlow = this.uGlow;
     for (let i = 0; i < this.nt; i++) {
       const v = this.vis[i];
       const cell = this.tileCell[i];
@@ -842,7 +906,7 @@ export class HearthRenderer {
       let ash = 0;
       if (heat && snap) {
         if (snap.mode === "ended") ash = 1;
-        else if (heat.isActive(performance.now() / 1000)) {
+        else if (heat.isActive(nowSec)) {
           Ts = heat.surface;
           Tc = heat.core;
         } else {
@@ -851,18 +915,38 @@ export class HearthRenderer {
           Tc = bed.core;
         }
       }
+      const o = i * 4;
       const turb = 0.3 + 0.7 * Math.min(1, v.hcmd / 0.8);
-      this.uTile.set([(Ts - T_AMB) / 1000, v.gust, EPS0 * turb, turb], i * 4);
+      uTile[o] = (Ts - T_AMB) / 1000;
+      uTile[o + 1] = v.gust;
+      uTile[o + 2] = EPS0 * turb;
+      uTile[o + 3] = turb;
       const u = v.hcmd > 0.02 ? Math.min(2500, FF(v.hcmd) * Math.exp(v.gain)) : 0;
       const b = i * NS * 4;
-      this.uSrc.set([0.5, 0.08 + 0.06 * v.hcmd, u, 0.06 * u + 1.2 * v.hcmd], b);
-      for (let k = 0; k < SLOT_X.length; k++) this.uSrc.set([SLOT_X[k], 0.06, v.puff[k] * 1.4, v.puff[k] * 0.6], b + (k + 1) * 4);
-      this.uBed.set([Ts, Tc, v.seed, ash], i * 4);
+      uSrc[b] = 0.5;
+      uSrc[b + 1] = 0.08 + 0.06 * v.hcmd;
+      uSrc[b + 2] = u;
+      uSrc[b + 3] = 0.06 * u + 1.2 * v.hcmd;
+      for (let k = 0; k < SLOT_X.length; k++) {
+        const s = b + (k + 1) * 4;
+        const puff = v.puff[k];
+        uSrc[s] = SLOT_X[k];
+        uSrc[s + 1] = 0.06;
+        uSrc[s + 2] = puff * 1.4;
+        uSrc[s + 3] = puff * 0.6;
+      }
+      uBed[o] = Ts;
+      uBed[o + 1] = Tc;
+      uBed[o + 2] = v.seed;
+      uBed[o + 3] = ash;
       // Light spill follows the flame (its size, a flicker, a stoke), never idle coals.
       const lit = Math.min(1, Math.max(0, (v.hcmd - 0.04) / 0.7));
       const flick = 0.85 + 0.15 * Math.sin(this.simTime * 9.1 + v.seed * 17) * Math.sin(this.simTime * 5.3 + v.seed * 3);
       const I = GLOW_MAX * lit * flick + Math.min(0.03, v.gust * 0.0006);
-      this.uGlow.set([I, I * 0.5, I * 0.16, I > 0.002 ? 1 : 0], i * 4);
+      uGlow[o] = I;
+      uGlow[o + 1] = I * 0.5;
+      uGlow[o + 2] = I * 0.16;
+      uGlow[o + 3] = I > 0.002 ? 1 : 0;
     }
   }
 

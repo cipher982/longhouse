@@ -171,8 +171,8 @@ function SessionDetailWorkspaceRoute({
   // trip "Rendered more hooks than during the previous render" once the
   // session loads.
   const headerActivityBuckets = useMemo(
-    () => bucketToolActivityByMinute(items, nowMs, 30),
-    [items, nowMs],
+    () => (readoutsOpen ? bucketToolActivityByMinute(items, nowMs, 30) : []),
+    [readoutsOpen, items, nowMs],
   );
   // null (not 0) when there are no tool calls this turn, so the readout
   // rail omits the row entirely on an empty thread rather than showing "0".

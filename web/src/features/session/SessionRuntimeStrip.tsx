@@ -4,6 +4,7 @@ import type { SessionInteractionCapabilities } from "@/shared/session/model";
 import { getToolInputRecord } from "@/shared/session/model";
 import type { SessionActivityFeed } from "./sessionActivityFeed";
 import { useWallClock } from "@/shared/hooks/useWallClock";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { activityEvidenceIsLive, delegationEvidenceIsLive } from "@/shared/session/activityEvidence";
 import { needsSessionAttention, resolveSessionRuntimeState, sessionHasFailedRun } from "@/shared/session/sessionRuntime";
 import {
@@ -483,7 +484,33 @@ export function SessionRuntimeStrip({
   compact = false,
 }: SessionRuntimeStripProps) {
   const closed = session.session_state.disposition.state === "closed";
-  const nowMs = useWallClock(!closed, 1_000);
+  const windowActivity = useWindowActivity();
+  const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const [graceExpired, setGraceExpired] = useState(false);
+  const [expiryTick, setExpiryTick] = useState(0);
+  const facts = session.session_state;
+  const rawWorking =
+    facts.activity.state === "thinking" || facts.activity.state === "executing";
+  const validUntilMs = Date.parse(facts.activity.valid_until ?? "");
+  const renderNowMs = Date.now();
+  const hasFutureExpiry =
+    !closed && Number.isFinite(validUntilMs) && validUntilMs > renderNowMs;
+  // Compact mode hides the headline and elapsed clock via CSS, leaving only
+  // the info disclosure button. Do not tick at 1 Hz while the popover is closed.
+  const tickClock =
+    !closed &&
+    (!compact ? rawWorking || hasFutureExpiry || disclosureOpen : disclosureOpen);
+  const clockIntervalMs = windowActivity === "ambient" ? 15_000 : 1_000;
+  const clockedNowMs = useWallClock(tickClock, clockIntervalMs);
+  const nowMs = tickClock ? clockedNowMs : renderNowMs;
+  // When not ticking at 1 Hz, schedule one single wakeup at valid_until so
+  // work-claim expiry still transitions on time without a 1 Hz interval.
+  useEffect(() => {
+    if (tickClock || !hasFutureExpiry) return;
+    const delay = Math.max(50, validUntilMs - Date.now() + 25);
+    const timer = window.setTimeout(() => setExpiryTick((n) => n + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [tickClock, hasFutureExpiry, validUntilMs, expiryTick]);
   const startupRef = useRef<{
     sessionId: string;
     startedAt: number;
@@ -499,14 +526,27 @@ export function SessionRuntimeStrip({
     startupRef.current.connected = true;
   }
   const startup = startupRef.current;
-  const initialConnectionGrace =
+  const awaitingInitialGrace =
     !closed &&
     session.session_state.working_set === "open" &&
     !streamConnected &&
     startup !== null &&
-    !startup.connected &&
+    !startup.connected;
+  useEffect(() => {
+    setGraceExpired(false);
+    if (!awaitingInitialGrace || !startup) return;
+    const remaining = INITIAL_CONNECTION_GRACE_MS - (Date.now() - startup.startedAt);
+    if (remaining <= 0) {
+      setGraceExpired(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setGraceExpired(true), remaining);
+    return () => window.clearTimeout(timer);
+  }, [awaitingInitialGrace, session.id, startup]);
+  const initialConnectionGrace =
+    awaitingInitialGrace &&
+    !graceExpired &&
     nowMs - startup.startedAt < INITIAL_CONNECTION_GRACE_MS;
-  const facts = session.session_state;
   const observedMs = Date.parse(
     facts.activity.observed_at ?? facts.presentation.primary?.observed_at ?? "",
   );
@@ -587,7 +627,8 @@ export function SessionRuntimeStrip({
         state={state}
         surface={compact ? "composer" : "ledger"}
         notice={notice}
-        activityFeed={state.connection === "recorded" ? null : activityFeed}
+        activityFeed={compact || state.connection === "recorded" ? null : activityFeed}
+        onDisclosureToggle={setDisclosureOpen}
         testId="live-work-ribbon"
       />
     </div>

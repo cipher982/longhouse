@@ -60,6 +60,7 @@ import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
 import { useWallClock } from "@/shared/hooks/useWallClock";
+import { getWindowActivity, useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import {
   isActivityExecuting,
   isActivityStalled,
@@ -717,11 +718,15 @@ export function SessionChat({
   editedFilesTitle = null,
 }: SessionChatProps) {
   const outboxInTranscript = Boolean(onOutboxChange);
+  const windowActivity = useWindowActivity();
   const activity = session.session_state.activity;
   const renderNowMs = Date.now();
   const activityNowMs = Math.max(
     renderNowMs,
-    useWallClock(renderNowMs <= Date.parse(activity.valid_until ?? ""), 1_000),
+    useWallClock(
+      renderNowMs <= Date.parse(activity.valid_until ?? ""),
+      windowActivity === "ambient" ? 15_000 : 1_000,
+    ),
   );
   const isSessionExecuting = isActivityExecuting(activity, activityNowMs);
   const isStalled = isActivityStalled(activity, activityNowMs);
@@ -1037,7 +1042,10 @@ export function SessionChat({
     enabled: Boolean(session.id),
     retry: false,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => (query.state.data?.locked ? 2_000 : false),
+    refetchInterval: (query) => {
+      if (windowActivity === "hidden" || !query.state.data?.locked) return false;
+      return windowActivity === "ambient" ? 10_000 : 2_000;
+    },
     staleTime: 15_000,
   });
 
@@ -1065,17 +1073,18 @@ export function SessionChat({
     retry: false,
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
+      if (windowActivity === "hidden") return false;
       const rows = query.state.data ?? [];
-      return rows.some((row) => {
+      const active = rows.some((row) => {
         if (inTranscript(row)) return false;
         const turnState = row.turn?.state;
         if (turnState && NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)) {
           return row.turn?.is_fresh === true;
         }
         return row.status === "queued" || row.status === "delivering";
-      })
-        ? 2_000
-        : false;
+      });
+      if (!active) return false;
+      return windowActivity === "ambient" ? 10_000 : 2_000;
     },
     staleTime: 10_000,
   });
@@ -1114,13 +1123,14 @@ export function SessionChat({
       refetchOnWindowFocus: false,
       staleTime: 1_000,
       refetchInterval: (query: { state: { data: unknown } }) => {
-        if (pending.phase === "delivered") return false;
+        if (windowActivity === "hidden" || pending.phase === "delivered") return false;
+        const pollMs = windowActivity === "ambient" ? 10_000 : 2_000;
         const row = query.state.data as QueuedInputSummary | null | undefined;
         const turnState = row?.turn?.state;
         if (turnState && NONTERMINAL_CONSOLE_TURN_STATES.has(turnState)) {
-          return row?.turn?.is_fresh === true ? 2_000 : false;
+          return row?.turn?.is_fresh === true ? pollMs : false;
         }
-        return 2_000;
+        return pollMs;
       },
     })),
   });
@@ -2866,20 +2876,18 @@ export function SessionChat({
       return;
     }
     node.style.opacity = "0.22";
-    node.style.boxShadow = "none";
+    // Static glow stays off the main-thread repaint path; WAAPI animates opacity only.
+    node.style.boxShadow = "0 0 10px 1px rgba(240, 138, 36, 0.55)";
     const unsubscribe = activityFeed?.subscribe((frame) => {
       if (!frame || frame.kind === "state") return;
+      if (getWindowActivity() !== "focused") return;
       leafAnimationRef.current?.cancel();
       if (typeof node.animate !== "function") return;
       leafAnimationRef.current = node.animate(
         [
-          { opacity: 0.22, boxShadow: "none" },
-          {
-            opacity: 1,
-            boxShadow: "0 0 12px 1px rgba(240, 138, 36, 0.6)",
-            offset: 0.14,
-          },
-          { opacity: 0.22, boxShadow: "none" },
+          { opacity: 0.22 },
+          { opacity: 1, offset: 0.14 },
+          { opacity: 0.22 },
         ],
         {
           duration: 550,

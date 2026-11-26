@@ -9,6 +9,7 @@ import {
   useAgentSessionWorkspace,
 } from "@/shared/api/useAgentSessions";
 import { useDocumentVisible } from "@/shared/hooks/useDocumentVisible";
+import { useWindowActivity } from "@/shared/hooks/useWindowActivity";
 import { useOnlineEpoch } from "./useOnlineEpoch";
 import {
   emitRenderBeacon,
@@ -50,6 +51,8 @@ const PUSHED_DELTA_WAIT_MS = 2_000;
 // lag is invisible, and the transcript has its own revision-driven lane.
 export const BASE_REFRESH_MIN_INTERVAL_MS = 1_000;
 const INITIAL_EVENTS_PAGE_SIZE = 200;
+/** Cap retained tail-evicted rows so a 24/7 open session stays bounded in DOM/heap. */
+const MAX_EVICTED_TAIL_ITEMS = 400;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
 /** Fallback polling interval when SSE stream is disconnected.
@@ -57,6 +60,8 @@ const AUTO_SCROLL_EPSILON_PX = 1;
 const WORKSPACE_FALLBACK_REFRESH_MS =
   (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) ||
   5_000;
+/** Console control-liveness poll cadence when the window is unfocused (ambient). */
+const CONSOLE_AMBIENT_REFRESH_MS = 30_000;
 
 /** Backoff for a transcript round that failed while the page is behind:
  *  1 s, 2 s, 4 s ... capped, until a round lands or a newer report starts one. */
@@ -169,6 +174,9 @@ export function useSessionWorkspace(
 ) {
   const highlightEventId = options.highlightEventId ?? null;
   const documentVisible = useDocumentVisible();
+  const windowActivity = useWindowActivity();
+  const windowActivityRef = useRef(windowActivity);
+  windowActivityRef.current = windowActivity;
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
@@ -250,10 +258,11 @@ export function useSessionWorkspace(
         // Machine-control connect/disconnect is process-local state, not a
         // durable workspace mutation, so it does not wake the session SSE
         // stream. Keep a focused Console workspace polling until that state
-        // has its own fanout contract; otherwise "Control offline" can remain
-        // stale forever after the Machine Agent reconnects.
+        // has its own fanout contract; back off when the window is ambient.
         if (currentSession.session_state.mode === "console") {
-          return WORKSPACE_FALLBACK_REFRESH_MS;
+          return windowActivityRef.current === "ambient"
+            ? CONSOLE_AMBIENT_REFRESH_MS
+            : WORKSPACE_FALLBACK_REFRESH_MS;
         }
         return false;
       }
@@ -769,9 +778,12 @@ export function useSessionWorkspace(
     const droppedItems = previousTailPage.items.slice(0, evictedCount);
     if (droppedItems.length === 0) return;
 
-    setEvictedTailItems((current) =>
-      mergeProjectionItems(current, droppedItems),
-    );
+    setEvictedTailItems((current) => {
+      const merged = mergeProjectionItems(current, droppedItems);
+      return merged.length > MAX_EVICTED_TAIL_ITEMS
+        ? merged.slice(merged.length - MAX_EVICTED_TAIL_ITEMS)
+        : merged;
+    });
   }, [sortedProjectionPages, workspaceData?.projection]);
 
   const projectionItems = useMemo(() => {
@@ -810,14 +822,51 @@ export function useSessionWorkspace(
     [sortedProjectionPages],
   );
 
+  const settleMode =
+    session?.runtime_display?.lifecycle === "closed"
+      ? "closed"
+      : session?.provider === "cursor" && session?.session_state?.run?.lifecycle === "ended"
+        ? "cursor_ended"
+        : "open";
+  const settledProjectionItems = useMemo(() => {
+    if (settleMode === "open") return projectionItems;
+    return settleRunningTools(projectionItems, session);
+    // Re-settle only when projection items change or settleMode flips, not on
+    // every fresh `session` JSON reference from a header refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectionItems, settleMode]);
+
+  const previewSessionId = session?.id ?? null;
+  const previewPayload = session?.transcript_preview ?? null;
+  const previewKey = useMemo(
+    () =>
+      previewPayload
+        ? JSON.stringify([
+            previewSessionId,
+            previewPayload.event_id,
+            previewPayload.kind ?? null,
+            previewPayload.timestamp ?? null,
+            previewPayload.text ?? null,
+            previewPayload.tool_name ?? null,
+            previewPayload.tool_call_state ?? null,
+            previewPayload.tool_output_text ?? null,
+            previewPayload.is_provisional ?? null,
+            previewPayload.is_stale ?? null,
+          ])
+        : null,
+    [previewSessionId, previewPayload],
+  );
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   const visibleProjectionItems = useMemo(
     () =>
       projectionItemsWithTranscriptPreview(
-        settleRunningTools(projectionItems, session),
-        session,
+        settledProjectionItems,
+        previewKey !== null || streamThinking !== null ? sessionRef.current : null,
         streamThinking,
       ),
-    [projectionItems, session, streamThinking],
+    [settledProjectionItems, previewKey, streamThinking],
   );
   // Workers this session spawned. Hidden from the timeline by design, so the
   // transcript is the only place they surface — attached to the tool call that

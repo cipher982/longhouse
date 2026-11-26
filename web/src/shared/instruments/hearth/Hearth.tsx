@@ -11,7 +11,7 @@
  * Styles: the ".hearth-lamp" block of styles/instruments.css.
  */
 
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { StatusLampState } from "../StatusLamp";
 import { T_AMB, initialBed, snapshotSignature, type HearthSnapshot } from "./signals";
 import type { HearthRenderer, HearthStats } from "./renderer";
@@ -58,11 +58,16 @@ export function HearthProvider({
   useEffect(() => {
     if (!webgl2Available()) return;
     let cancelled = false;
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+    const onMotionChange = () => {
+      rendererRef.current?.setReducedMotion(media?.matches ?? false);
+    };
+    media?.addEventListener?.("change", onMotionChange);
     import("./renderer")
       .then(({ HearthRenderer }) => {
         const canvas = canvasRef.current;
         if (cancelled || !canvas) return;
-        const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+        const reducedMotion = media?.matches ?? false;
         const renderer = HearthRenderer.create(canvas, {
           reducedMotion,
           onLost: () => {
@@ -90,6 +95,7 @@ export function HearthProvider({
       });
     return () => {
       cancelled = true;
+      media?.removeEventListener?.("change", onMotionChange);
       rendererRef.current?.destroy();
       rendererRef.current = null;
       delete window.__longhouseHearth;
@@ -129,7 +135,7 @@ export function HearthProvider({
   );
 }
 
-export function HearthLamp({
+export const HearthLamp = memo(function HearthLamp({
   sessionKey,
   snapshot,
   state,
@@ -150,7 +156,6 @@ export function HearthLamp({
   const register = ctx?.register;
   const unregister = ctx?.unregister;
   const update = ctx?.update;
-  const touch = ctx?.touch;
   const signature = snapshotSignature(snapshot);
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;
@@ -171,11 +176,6 @@ export function HearthLamp({
     update?.(id, snapRef.current);
   }, [update, id, sessionKey, signature]);
 
-  // Any re-render may have moved the row (a drag transform, a reflow).
-  useLayoutEffect(() => {
-    touch?.();
-  });
-
   const glyph = !ctx || ctx.status === "fallback" || starved;
   // The fire is decoration: the visible label beside it carries the state.
   return (
@@ -186,7 +186,7 @@ export function HearthLamp({
       <span className="hearth-lamp__label">{label}</span>
     </span>
   );
-}
+});
 
 /** Coal colour for a bed temperature, matching the blackbody ramp's reading. */
 export function coalColor(kelvin: number): string {

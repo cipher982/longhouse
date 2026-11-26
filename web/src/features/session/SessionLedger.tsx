@@ -86,6 +86,7 @@ export interface SessionLedgerProps {
   actionSlot?: ReactNode;
   /** Ref-backed stream feed; drawing it does not re-render the workspace per packet. */
   activityFeed?: SessionActivityFeed | null;
+  onDisclosureToggle?: (open: boolean) => void;
   testId?: string;
 }
 
@@ -214,8 +215,10 @@ export function SessionLedger({
   notice = null,
   actionSlot = null,
   activityFeed = null,
+  onDisclosureToggle,
   testId = "session-ledger",
 }: SessionLedgerProps) {
+  const isComposerSurface = surface === "composer";
   const systemReduceMotion = useSystemReducedMotion();
   const effectiveReduceMotion = reduceMotion || systemReduceMotion;
   const clockedMotion = motionTimeMs !== undefined;
@@ -235,7 +238,12 @@ export function SessionLedger({
 
   // Only this wrapper owns geometry. New wording is already committed inside
   // it; resizing never fades old claims or changes the composer's dimensions.
+  // In composer surface only the info disclosure button renders, so skip ResizeObserver.
   useLayoutEffect(() => {
+    if (isComposerSurface) {
+      setContentHeight(undefined);
+      return;
+    }
     const content = contentRef.current;
     if (!content) return;
     const measure = () =>
@@ -244,9 +252,10 @@ export function SessionLedger({
     const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => observer.disconnect();
-  }, []);
+  }, [isComposerSurface]);
 
   useLayoutEffect(() => {
+    if (isComposerSurface) return;
     const node = receiptRef.current;
     if (!node) return;
     const stop = () => {
@@ -286,7 +295,7 @@ export function SessionLedger({
         );
       }
     });
-  }, [activityFeed, workEvidence, effectiveReduceMotion]);
+  }, [activityFeed, workEvidence, effectiveReduceMotion, isComposerSurface]);
   useLayoutEffect(
     () => () => {
       receiptAnimation.current?.cancel();
@@ -324,53 +333,57 @@ export function SessionLedger({
       data-surface={surface}
       data-prominence={prominence}
     >
-      <span className="session-ledger__work-sheen" aria-hidden="true">
-        <span />
-      </span>
-      <span
-        ref={receiptRef}
-        className="session-ledger__receipt-flash"
-        aria-hidden="true"
-      />
-      <div className="session-ledger__history" aria-hidden="true">
-        {activityFeed && state.connection !== "recorded" ? (
-          <ActivityStrip
-            feed={activityFeed}
-            tone="live"
-            height={76}
-            reduceMotion={effectiveReduceMotion}
-            showHistory={workEvidence}
-            label="Received updates"
-            title="Received updates, not proof of provider progress"
-          />
-        ) : workEvidence && state.connection !== "recorded" ? (
-          <span
-            className="session-ledger__receipts"
-            data-testid="receipt-trail"
-          >
-            {state.receiptMarks.map((mark) => {
-              if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
-                return null;
-              const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
-              const position = effectiveReduceMotion
-                ? (mark.sequence % 22) / 21
-                : 1 - freshness;
-              return (
-                <span
-                  key={mark.id}
-                  className="session-ledger__receipt"
-                  data-replay={mark.replay ? "true" : "false"}
-                  data-receipt-id={mark.id}
-                  style={{
-                    right: `${position * 100}%`,
-                    opacity: effectiveReduceMotion ? 1 : freshness,
-                  }}
-                />
-              );
-            })}
+      {!isComposerSurface ? (
+        <>
+          <span className="session-ledger__work-sheen" aria-hidden="true">
+            <span />
           </span>
-        ) : null}
-      </div>
+          <span
+            ref={receiptRef}
+            className="session-ledger__receipt-flash"
+            aria-hidden="true"
+          />
+          <div className="session-ledger__history" aria-hidden="true">
+            {activityFeed && state.connection !== "recorded" ? (
+              <ActivityStrip
+                feed={activityFeed}
+                tone="live"
+                height={76}
+                reduceMotion={effectiveReduceMotion}
+                showHistory={workEvidence}
+                label="Received updates"
+                title="Received updates, not proof of provider progress"
+              />
+            ) : workEvidence && state.connection !== "recorded" ? (
+              <span
+                className="session-ledger__receipts"
+                data-testid="receipt-trail"
+              >
+                {state.receiptMarks.map((mark) => {
+                  if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
+                    return null;
+                  const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
+                  const position = effectiveReduceMotion
+                    ? (mark.sequence % 22) / 21
+                    : 1 - freshness;
+                  return (
+                    <span
+                      key={mark.id}
+                      className="session-ledger__receipt"
+                      data-replay={mark.replay ? "true" : "false"}
+                      data-receipt-id={mark.id}
+                      style={{
+                        right: `${position * 100}%`,
+                        opacity: effectiveReduceMotion ? 1 : freshness,
+                      }}
+                    />
+                  );
+                })}
+              </span>
+            ) : null}
+          </div>
+        </>
+      ) : null}
       <span
         className="sr-only"
         role="status"
@@ -381,10 +394,13 @@ export function SessionLedger({
       </span>
       <div
         className="session-ledger__status-content"
-        style={{ height: contentHeight }}
+        style={isComposerSurface ? undefined : { height: contentHeight }}
       >
         <div ref={contentRef} className="session-ledger__status-content-inner">
-          <details className="session-ledger__observation">
+          <details
+            className="session-ledger__observation"
+            onToggle={(event) => onDisclosureToggle?.(event.currentTarget.open)}
+          >
             <summary
               className="session-ledger__primary"
               title="Inspect the observed session evidence"

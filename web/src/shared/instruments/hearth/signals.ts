@@ -304,21 +304,42 @@ export class SessionHeat {
     const snap = this.snap;
     if (!snap) return;
     if (this.pending.length) {
-      const due = this.pending.filter((p) => p.at <= t);
-      if (due.length) {
-        this.pending = this.pending.filter((p) => p.at > t);
-        for (const p of due) {
-          this.deposit(p.event, t);
-          this.lastEventT = t;
-          if (p.event.type === "prompt") this.surface += 0.3 * (T_HOT - this.surface);
-          if (p.event.type === "tool") this.surface += 0.03 * (T_HOT - this.surface);
-          emit?.(p.event);
+      let hasDue = false;
+      for (let i = 0; i < this.pending.length; i++) {
+        if (this.pending[i].at <= t) {
+          hasDue = true;
+          break;
         }
       }
+      if (hasDue) {
+        const remaining: Pending[] = [];
+        for (let i = 0; i < this.pending.length; i++) {
+          const p = this.pending[i];
+          if (p.at <= t) {
+            this.deposit(p.event, t);
+            this.lastEventT = t;
+            if (p.event.type === "prompt") this.surface += 0.3 * (T_HOT - this.surface);
+            if (p.event.type === "tool") this.surface += 0.03 * (T_HOT - this.surface);
+            emit?.(p.event);
+          } else {
+            remaining.push(p);
+          }
+        }
+        this.pending = remaining;
+      }
     }
-    this.deposits = this.deposits.filter((d) => d.end > t);
     let r = 0;
-    for (const d of this.deposits) r += d.rate;
+    if (this.deposits.length) {
+      let write = 0;
+      for (let i = 0; i < this.deposits.length; i++) {
+        const d = this.deposits[i];
+        if (d.end > t) {
+          this.deposits[write++] = d;
+          r += d.rate;
+        }
+      }
+      this.deposits.length = write;
+    }
     const active = this.isActive(t);
     const base = active && snap.mode === "working" ? BASE_WORK.working + densityWork(snap) : 0;
     const k = 1 - Math.exp(-dt / WORK_TAU);

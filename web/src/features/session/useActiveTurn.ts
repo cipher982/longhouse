@@ -206,12 +206,27 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
         watched.add(el);
       }
     };
+    let observedRowsEl: Element | null = null;
+    const rowsMutations = new MutationObserver(schedule);
+    const syncRowsObserver = () => {
+      const nextRowsEl = list.querySelector(".timeline-pane__rows");
+      if (nextRowsEl === observedRowsEl) return;
+      rowsMutations.disconnect();
+      observedRowsEl = nextRowsEl;
+      if (observedRowsEl) {
+        rowsMutations.observe(observedRowsEl, { childList: true });
+      }
+    };
+    // Direct childList only on `list` and `.timeline-pane__rows` (no subtree):
+    // catches row insertions/removals without firing on streaming text deltas.
     const mutations = new MutationObserver(() => {
       watchChildren();
+      syncRowsObserver();
       schedule();
     });
-    mutations.observe(list, { childList: true, subtree: true });
+    mutations.observe(list, { childList: true });
     watchChildren();
+    syncRowsObserver();
 
     return () => {
       if (frame !== 0) cancelAnimationFrame(frame);
@@ -223,6 +238,7 @@ export function useActiveTurn(list: HTMLElement | null): ActiveTurn {
       list.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
       mutations.disconnect();
+      rowsMutations.disconnect();
       resizes?.disconnect();
     };
   }, [list]);

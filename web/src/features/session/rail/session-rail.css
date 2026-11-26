@@ -262,7 +262,6 @@
 @keyframes session-rail-dot-pulse {
   50% {
     opacity: 0.45;
-    box-shadow: 0 0 2px rgba(70, 214, 140, 0.3);
   }
 }
 
