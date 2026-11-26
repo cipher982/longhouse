@@ -8,6 +8,7 @@ import {
   getToolInputRecord,
   getToolIntentLabel,
   isToolIntentAuthored,
+  isAgentLaunchInteraction,
   getToolSummary,
   type ToolInteraction,
 } from "@/shared/session/model";
@@ -223,11 +224,12 @@ export function RunningCallRow({
         aria-expanded={expanded}
         aria-controls={detailId}
         title={command && command !== label ? command : undefined}
+        aria-label={purpose ? `${info.displayName}: ${label}` : undefined}
       >
         <span className="tl-action__icon tl-run__glyph" aria-hidden="true">
           <span className="tl-run__dot" />
         </span>
-        {(trail && intent) || purpose ? null : (
+        {(trail && intent) || (purpose && !isAgentLaunchInteraction(interaction)) ? null : (
           <span className="tl-action__name" {...{ elementtiming: "longhouse-session-timeline-row" }}>
             {info.displayName}
           </span>

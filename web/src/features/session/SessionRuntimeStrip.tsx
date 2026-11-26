@@ -1,4 +1,4 @@
-import { resolveToolInfo } from "@/shared/session/model/toolTiers.generated";
+import { toolStatusPhrase } from "@/shared/session/model/toolStatus";
 import { useEffect, useRef, useState } from "react";
 import type { AgentSession } from "@/shared/api/agents";
 import type { SessionInteractionCapabilities } from "@/shared/session/model";
@@ -115,7 +115,7 @@ function delegatedWorkDetail(inspector: SessionBackgroundInspector | null): stri
   const lead = subagents[0] ?? activeTasks[0];
   const tool = lead.nativeProgress?.current_tool?.trim();
   const progressStatus = lead.nativeProgress?.status?.trim().toLowerCase();
-  const step = tool ? resolveToolInfo(tool).status : progressStatus === "thinking" ? "Thinking" : null;
+  const step = tool ? toolStatusPhrase(tool) : progressStatus === "thinking" ? "Thinking" : null;
   const leadSummary = [lead.name, step].filter(Boolean).join(" · ");
   if (!leadSummary) return null;
   const totalActive = Math.max(

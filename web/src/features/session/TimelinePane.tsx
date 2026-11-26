@@ -41,6 +41,8 @@ import {
   getToolExitCode,
   getToolIntentLabel,
   isToolIntentAuthored,
+  isAgentLaunchInteraction,
+  getToolTargetText,
   getToolOutputPreview,
   getLiveToolOutputPreview,
   countTimelineItems,
@@ -922,8 +924,9 @@ function ActionCard({
   const dropped = isToolInteractionDropped(interaction);
   const pending = isToolInteractionRunning(interaction);
   const isAgent = isAgentToolInteraction(interaction);
+  const launchesAgent = isAgent || isAgentLaunchInteraction(interaction);
   const inputRecord = getToolInputRecord(interaction.callEvent?.tool_input_json);
-  const agentType = isAgent
+  const agentType = launchesAgent
     ? (inputRecord?.subagent_type as string | undefined)
     : undefined;
   const outside =
@@ -971,9 +974,10 @@ function ActionCard({
         }}
         aria-expanded={expanded}
         aria-controls={detailId}
+        aria-label={purpose && intent ? `${agentType || info.displayName}: ${intent}` : undefined}
       >
         <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-        {(trail && intent) || (purpose && !agentType) ? null : (
+        {(trail && intent) || (purpose && !launchesAgent) ? null : (
           <span
             className="tl-action__name"
             {...{ elementtiming: "longhouse-session-timeline-row" }}
@@ -982,7 +986,7 @@ function ActionCard({
           </span>
         )}
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary" title={purpose && summary ? summary : undefined}>
+        <span className="tl-action__summary" title={purpose ? getToolTargetText(interaction) ?? undefined : undefined}>
           {intent ? (
             intent
           ) : editLabel ? (
@@ -992,6 +996,9 @@ function ActionCard({
           )}
         </span>
         <span className="tl-action__meta">
+          {intent && editLabel ? (
+            <span className="tl-action__edit-stat" data-testid="tool-edit-stat">{editLabel}</span>
+          ) : null}
           {failed ? (
             <span className="tl-chip tl-chip--error">
               {exitCode != null && exitCode !== 0 ? `exit ${exitCode}` : "failed"}

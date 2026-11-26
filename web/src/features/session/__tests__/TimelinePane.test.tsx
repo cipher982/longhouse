@@ -1222,6 +1222,40 @@ describe("TimelinePane", () => {
     expect(row).toHaveTextContent("docker ps -a");
   });
 
+  it("keeps the agent name and type on a subagent row with a written purpose", () => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.callEvent || !item.interaction.resultEvent) throw new Error("fixture");
+    item.interaction.toolName = "Task";
+    item.interaction.callEvent.tool_name = "Task";
+    item.interaction.callEvent.tool_input_json = { description: "Audit the bench failure", subagent_type: "Explore", prompt: "..." };
+    item.interaction.callEvent.tool_intent = "Audit the bench failure";
+    item.interaction.callEvent.tool_intent_source = "authored";
+    renderPane([item]);
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveTextContent("Explore");
+    expect(row).toHaveTextContent("Audit the bench failure");
+  });
+
+  it("names the tool for assistive tech when a written purpose hides it", () => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.callEvent) throw new Error("fixture");
+    item.interaction.callEvent.tool_intent = "Run the driving unit tests";
+    item.interaction.callEvent.tool_intent_source = "authored";
+    renderPane([item]);
+    expect(screen.getByRole("button", { name: /: Run the driving unit tests$/ })).toBeInTheDocument();
+  });
+
+  it("treats a derived intent as a target, keeping the tool name", () => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.callEvent) throw new Error("fixture");
+    item.interaction.callEvent.tool_intent = "make validate";
+    item.interaction.callEvent.tool_intent_source = "derived";
+    renderPane([item]);
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).not.toHaveClass("tl-action--purpose");
+    expect(row.querySelector(".tl-action__name")).not.toBeNull();
+  });
+
   it("shows a bounded successful output preview and the full output after expansion", () => {
     const item = makeToolWithMediaItem();
     if (item.kind !== "tool" || !item.interaction.resultEvent) throw new Error("fixture");

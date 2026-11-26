@@ -4885,3 +4885,10 @@ button.timeline-pane__status-chip:hover {
   font-family: var(--font-family-mono);
   font-size: 12.5px;
 }
+@media (max-width: 900px) {
+  .tl-action--purpose .tl-action__summary,
+  .tl-trail.tl-action--purpose .tl-action__summary,
+  .tl-action:not(.tl-action--purpose):not(.tl-trail) .tl-action__summary {
+    font-size: 11.5px;
+  }
+}

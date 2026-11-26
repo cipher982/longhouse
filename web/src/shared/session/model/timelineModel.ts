@@ -295,7 +295,41 @@ export function isToolIntentAuthored(interaction: ToolInteraction): boolean {
   if (typeof callIntent === "string" && callIntent.trim()) {
     return interaction.callEvent?.tool_intent_source === "authored";
   }
-  return getToolIntentLabel(interaction) !== null;
+  // No served intent: mirror the server's rule. OMP's `i` and a shell call's
+  // description are purposes; an `intent` key in some other tool's arguments
+  // (an MCP or artifact payload) is data, never a purpose.
+  const toolName = interaction.presentation?.tool_name ?? interaction.toolName;
+  if (toolName.startsWith("mcp__")) return false;
+  const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
+  const fields = isShellTool(toolName) ? (["i", "description"] as const) : (["i"] as const);
+  return fields.some((field) =>
+    inputs.some((input) => {
+      const value = getToolInputRecord(input)?.[field];
+      return typeof value === "string" && value.trim().length > 0;
+    }),
+  );
+}
+
+/** True for a call that starts a subagent (Agent, Task, spawn_agent). */
+export function isAgentLaunchInteraction(interaction: ToolInteraction): boolean {
+  const names = [interaction.toolName, interaction.presentation?.tool_name]
+    .filter((n): n is string => typeof n === "string")
+    .map((n) => n.toLowerCase());
+  return names.some((n) => AGENT_LAUNCH_TOOLS.has(n));
+}
+
+/**
+ * The literal target behind a purpose row (the command, the path), for the
+ * row's hover title. Null when the arguments carry neither.
+ */
+export function getToolTargetText(interaction: ToolInteraction): string | null {
+  const input = getToolInputRecord(interaction.callEvent?.tool_input_json);
+  if (!input) return null;
+  for (const key of ["command", "cmd", "CommandLine", "file_path", "path", "filePath", "Path", "pattern", "url", "query"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
