@@ -799,7 +799,7 @@ details.trail .tool-meta {
 }
 
 /* A step ends where the next row that is not part of it starts: give it air. */
-.trail + :not(.trail):not(.failure-preview):not(.subagents) {
+.trail + :not(.trail):not(.failure-preview):not(.subagents):not(.running-output-tail) {
   margin-top: 10px;
 }
 
@@ -827,13 +827,57 @@ details.trail .tool-meta {
   max-width: 45%;
 }
 
+/* A running call is the row it becomes when it returns; a dot and the clock
+   say it is live, and the output so far hangs off it on a hairline, two lines
+   at most (the web's .tl-run__tail). */
+/* In the row's left padding, so the label sits where it will when the call
+   returns: nothing shifts on settle. */
+summary:has(> .run-dot) {
+  position: relative;
+}
+
+.run-dot {
+  position: absolute;
+  left: 0;
+  top: calc(50% - 2.5px);
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--tertiary);
+}
+
+.run-dot.live {
+  background: #e2a452;
+  animation: run-dot-pulse 1.6s ease-out infinite;
+}
+
+@keyframes run-dot-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(226, 164, 82, 0.55); }
+  70% { box-shadow: 0 0 0 3px rgba(226, 164, 82, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(226, 164, 82, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-dot.live {
+    animation: none;
+  }
+}
+
+.tool-meta.running[data-started-at-ms] {
+  color: #e2a452;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* The tail belongs to the row above it: no gap between them. */
+.row:has(+ .running-output-tail) {
+  margin-bottom: 0;
+}
+
 .running-output-tail {
-  margin: 0 10px 8px;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  background: var(--code);
-  padding: 5px 8px;
-  overflow-x: auto;
+  margin: 0 10px 8px 12px;
+  padding: 0 0 0 8px;
+  border-left: 1px solid var(--rule);
+  overflow: hidden;
 }
 
 .running-output-tail pre,
@@ -843,9 +887,10 @@ details.trail .tool-meta {
   background: transparent;
   font: 11px ui-monospace, "SF Mono", Menlo, monospace;
   line-height: 1.45;
-  color: var(--secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  color: var(--tertiary);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .task-notice-dot,
@@ -1556,6 +1601,7 @@ details.trail .tool-meta {
 		return `
         <details class="tool row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
+            ${item.status === "running" ? `<span class="run-dot${hasFreshRunningClock ? " live" : ""}" aria-hidden="true"></span>` : ""}
             ${item.narrationTrail && item.toolIntent ? "" : `<span class="tool-title">${escapeHtml(item.title || "Tool")}</span>`}
             <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
             ${intentNote}

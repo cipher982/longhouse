@@ -793,7 +793,7 @@ function LiteToolDetail({ interaction, renderMedia }: { interaction: ToolInterac
 /** Why an unanswered call shows no output yet, from the session's evidence. */
 function AwaitingResultNote({ interaction }: { interaction: ToolInteraction }) {
   const run = useRunningCallState(interaction);
-  return <>{run.enabled ? run.note : "No output recorded yet."}</>;
+  return <>{run.enabled ? run.detailNote : "No output recorded yet."}</>;
 }
 
 function ToolDetailView({

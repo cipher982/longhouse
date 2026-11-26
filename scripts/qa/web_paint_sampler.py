@@ -23,8 +23,8 @@ SNAP = r"""(() => {
       body: txt(e.querySelector('[data-testid="session-timeline-reasoning-body"]')),
       ariaExpanded: e.querySelector("button")?.getAttribute("aria-expanded"), stored: localStorage.getItem("longhouse.liveThinking.expanded")})),
     storedThinking: q('[data-testid="session-timeline-reasoning"]:not([data-live="true"])').map((e) => txt(e).slice(0, 160)),
-    run: q(".tl-run").map((e) => ({id: e.id, state: e.dataset.runState, headline: txt(e.querySelector(".tl-run__headline")),
-      command: txt(e.querySelector(".tl-run__command")), tool: txt(e.querySelector('[data-testid="running-call-tool"]')), tail: (e.querySelector(".tl-run__tail")?.innerText || ""), full: txt(e)})),
+    run: q(".tl-run").map((e) => ({id: e.id, state: e.dataset.runState, headline: txt(e.querySelector(".tl-action__summary")),
+      command: e.querySelector(".tl-action__head")?.title || "", tool: txt(e.querySelector(".tl-action__name")), tail: (e.querySelector(".tl-run__tail")?.innerText || ""), full: txt(e)})),
     rows: q("[data-row-kind]").map((e) => ({id: e.id, kind: e.dataset.rowKind, live: e.dataset.live || "", text: txt(e).slice(0, 200)})),
     // The state strip: header pill and composer ledger on desktop; at phone width the header only shows a dot, so the composer's own text counts.
     ribbon: [...["session-header-state", "session-control-strip", "live-work-ribbon", "session-activity-strip"]

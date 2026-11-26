@@ -108,7 +108,18 @@ export function useRunningCallState(interaction: ToolInteraction) {
   const sinceSignal = hasSignal ? agoWords((nowMs - lastSignalMs) / 1_000) : null;
   const host = liveness?.host ?? "the machine";
 
+  // Live, the composer already says the session is working: the row stays
+  // quiet. It speaks only when it can no longer vouch for the call.
   const note =
+    state === "live"
+      ? null
+      : state === "uncertain"
+        ? sinceSignal
+          ? `no signal from ${host} for ${sinceSignal}`
+          : `no recent signal from ${host}`
+        : "no output recorded";
+  // Expanded, the detail pane has room for the full account.
+  const detailNote =
     state === "live"
       ? `Waiting for return${sinceSignal ? ` · ${host} signal ${sinceSignal} ago` : ""}`
       : state === "uncertain"
@@ -121,22 +132,33 @@ export function useRunningCallState(interaction: ToolInteraction) {
     elapsedSeconds,
     timeoutSeconds: declaredTimeoutSeconds(interaction, provider),
     note,
+    detailNote,
   };
 }
 
-const LIVE_TAIL_LINES = 12;
+const LIVE_TAIL_LINES = 2;
 
-/** The last lines of a running call's output so far, when the live preview supplied it. */
+/** The last non-blank lines of a running call's output so far, when the live preview supplied it. */
 export function liveOutputTail(interaction: ToolInteraction): string | null {
   const text = interaction.callEvent?.tool_output_text;
   if (typeof text !== "string" || !text.trim()) return null;
-  return text.replace(/\s+$/, "").split("\n").slice(-LIVE_TAIL_LINES).join("\n");
+  const lines = text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+  return lines.length ? lines.slice(-LIVE_TAIL_LINES).join("\n") : null;
 }
 
+/** The budget shows once half of it is spent: a fast call never needs it. */
+const BUDGET_VISIBLE_FRACTION = 0.5;
+
 /**
- * A running call that looks alive: the agent's description as the headline,
- * the command beneath it in mono, an elapsed clock, and — when the call
- * declared a timeout — a thin track of how much of that budget is spent.
+ * A running call is the same one-line row it becomes when it returns: same
+ * height, same label, same right column. Only the leading glyph (a dot that
+ * pulses while the work claim is fresh) and the ticking clock say it is live,
+ * so nothing reshapes when the result lands. The session's own health lives in
+ * the composer; the row speaks only when the claim lapses.
  */
 export function RunningCallRow({
   interaction,
@@ -146,6 +168,7 @@ export function RunningCallRow({
   onSelect,
   onToggleExpand,
   detail,
+  trail = false,
 }: {
   interaction: ToolInteraction;
   rowId: string;
@@ -154,6 +177,7 @@ export function RunningCallRow({
   onSelect: () => void;
   onToggleExpand: () => void;
   detail: ReactNode;
+  trail?: boolean;
 }) {
   const run = useRunningCallState(interaction);
   const info = getInteractionDisplayInfo(interaction);
@@ -161,14 +185,13 @@ export function RunningCallRow({
   const summary = getToolSummary(interaction);
   const input = getToolInputRecord(interaction.callEvent?.tool_input_json);
   const command = typeof input?.command === "string" ? input.command : typeof input?.cmd === "string" ? input.cmd : null;
-  const headline = intent || summary || info.displayName;
-  const subline = command && command !== headline ? command : null;
+  const label = intent || summary || "running…";
   const fraction =
-    run.timeoutSeconds != null && run.elapsedSeconds != null
-      ? Math.min(1, run.elapsedSeconds / run.timeoutSeconds)
-      : null;
+    run.timeoutSeconds != null && run.elapsedSeconds != null ? run.elapsedSeconds / run.timeoutSeconds : null;
+  const showBudget = run.timeoutSeconds != null && fraction != null && fraction >= BUDGET_VISIBLE_FRACTION;
   const detailId = `${rowId}-detail`;
-  const tail = liveOutputTail(interaction);
+  const tail = expanded ? null : liveOutputTail(interaction);
+  const note = run.note;
 
   return (
     <div
@@ -178,67 +201,51 @@ export function RunningCallRow({
       data-tool-tier="action"
       data-status="pending"
       data-run-state={run.state}
-      className={`tl-run${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+      className={`tl-action tl-run${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
     >
       <button
         type="button"
-        className="tl-run__head"
+        className="tl-action__head"
         onClick={() => {
           onSelect();
           onToggleExpand();
         }}
         aria-expanded={expanded}
         aria-controls={detailId}
+        title={command && command !== label ? command : undefined}
       >
-        <span className="tl-run__dot" aria-hidden="true" />
-        <span className="tl-run__text">
-          <span className="tl-run__headline" {...{ elementtiming: "longhouse-session-timeline-row" }}>
-            {headline}
-          </span>
-          {subline ? (
-            <span className="tl-run__command">
-              <span className="tl-run__glyph" aria-hidden="true">{info.icon}</span> {subline}
-            </span>
-          ) : null}
+        <span className="tl-action__icon tl-run__glyph" aria-hidden="true">
+          <span className="tl-run__dot" />
         </span>
-        <span className="tl-run__clock" data-testid="running-call-clock">
-          <span className="tl-run__elapsed">
-            {run.elapsedSeconds != null ? formatElapsedClock(run.elapsedSeconds) : "—"}
+        {trail && intent ? null : (
+          <span className="tl-action__name" {...{ elementtiming: "longhouse-session-timeline-row" }}>
+            {info.displayName}
           </span>
-          {/* The headline is the agent's description or the command, so the tool itself is named here. */}
-          {info.displayName && info.displayName !== headline ? (
-            <span className="tl-run__tool" data-testid="running-call-tool">
-              {info.displayName}
-            </span>
-          ) : null}
-          {run.timeoutSeconds != null ? (
-            <span className="tl-run__budget">of {formatElapsedClock(run.timeoutSeconds)} timeout</span>
-          ) : null}
+        )}
+        <span className="tl-action__summary">{label}</span>
+        {note ? (
+          <span className="tl-run__note" data-testid="running-call-note">
+            {note}
+          </span>
+        ) : null}
+        <span className="tl-action__meta">
+          <span className="tl-action__time tl-run__clock" data-testid="running-call-clock">
+            {run.elapsedSeconds != null ? formatElapsedClock(run.elapsedSeconds) : "…"}
+            {showBudget ? (
+              <span className={`tl-run__budget${fraction >= 0.9 ? " is-near" : ""}`}>
+                {" "}/ {formatElapsedClock(run.timeoutSeconds as number)}
+              </span>
+            ) : null}
+          </span>
+          <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
       </button>
-      {fraction != null ? (
-        <div className="tl-run__track" aria-hidden="true">
-          <div className="tl-run__fill" style={{ width: `${(fraction * 100).toFixed(1)}%` }} />
-          {run.state === "live" ? <div className="tl-run__shimmer" /> : null}
-        </div>
-      ) : null}
-      {/* Expanded, the output block below says the same thing. */}
       {tail ? (
         <pre className="tl-run__tail" data-testid="running-call-tail">
           {tail}
         </pre>
       ) : null}
-      {expanded ? (
-        <div id={detailId}>{detail}</div>
-      ) : tail ? null : (
-        <div
-          className="tl-run__note"
-          data-testid="running-call-note"
-          title={run.state === "live" ? "The transcript records a call's output when the call returns." : undefined}
-        >
-          {run.note}
-        </div>
-      )}
+      {expanded ? <div id={detailId}>{detail}</div> : null}
     </div>
   );
 }

@@ -829,8 +829,9 @@ describe("SessionDetailPage", () => {
         .querySelector<HTMLElement>(".timeline-pane__rows");
       if (!transcriptList) throw new Error("Expected transcript rows");
 
-      // A running call is the alive row: the command as its headline (no
-      // description was given), a clock, and why there is no output yet.
+      // A running call is the one-line row with the command as its label (no
+      // description was given) and a clock; expanded, it says why there is
+      // no output yet.
       const row = transcriptList.querySelector<HTMLElement>('[data-row-kind="tool"]');
       if (!row) throw new Error("Expected the running call row");
       expect(row).toHaveAttribute("data-status", "pending");

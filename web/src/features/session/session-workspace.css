@@ -4185,44 +4185,21 @@
   }
 }
 
-/* --- A running call that looks alive (RunningCallRow.tsx) ---
-   Headline is the agent's own description, the command sits beneath it in
-   mono, the clock is in the row. Motion — the dot's pulse and the budget
-   track's ember shimmer — runs only while data-run-state="live", which is the
-   served work claim inside its window. Uncertain and quiet are still. */
-.tl-run {
-  position: relative;
-  display: block;
-  max-width: var(--tl-tool-max);
-  margin: 4px auto 2px;
-  width: 100%;
-  padding: 10px 12px 9px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border-primary);
-  background: rgba(246, 235, 214, 0.025);
-}
-.tl-run[data-run-state="live"] {
-  border-color: rgba(240, 138, 36, 0.35);
-  background: linear-gradient(180deg, rgba(240, 138, 36, 0.06), rgba(240, 138, 36, 0.015));
-}
-.tl-run__head {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+/* --- A running call (RunningCallRow.tsx) ---
+   The same one-line row as a settled call (.tl-action head, .tl-trail when it
+   follows a thought). Only the glyph and the clock differ: a dot that pulses
+   while data-run-state="live" (the served work claim inside its window) and a
+   clock in the live accent. Uncertain and quiet are still and grey. */
+.tl-run__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
 }
 .tl-run__dot {
-  width: 8px;
-  height: 8px;
-  margin: 7px 0 0 3px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--color-text-muted);
 }
@@ -4232,101 +4209,50 @@
 }
 @keyframes tl-run-pulse {
   0% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0.55); }
-  70% { box-shadow: 0 0 0 7px rgba(240, 138, 36, 0); }
+  70% { box-shadow: 0 0 0 6px rgba(240, 138, 36, 0); }
   100% { box-shadow: 0 0 0 0 rgba(240, 138, 36, 0); }
 }
-.tl-run__text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.tl-run__headline {
-  font-size: 14.5px;
-  line-height: 1.45;
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-.tl-run__command {
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.tl-run__glyph {
-  color: var(--color-intent-warning);
-}
 .tl-run__clock {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
   font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums;
-}
-.tl-run__tool {
-  max-width: 12em;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
-  color: var(--color-text-muted);
 }
-.tl-run__elapsed {
-  font-size: 15px;
-  color: var(--color-text-secondary);
-}
-.tl-run[data-run-state="live"] .tl-run__elapsed {
+.tl-run[data-run-state="live"] .tl-run__clock {
   color: #ffb25a;
 }
 .tl-run__budget {
-  font-size: 10.5px;
   color: var(--color-text-muted);
 }
-.tl-run__track {
-  position: relative;
-  height: 3px;
-  margin: 9px 0 0 24px;
-  border-radius: 3px;
-  background: var(--color-border-subtle);
-  overflow: hidden;
-}
-.tl-run__fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 3px;
-  background: rgba(124, 135, 144, 0.6);
-}
-.tl-run[data-run-state="live"] .tl-run__fill {
-  background: rgba(240, 138, 36, 0.55);
-}
-.tl-run__shimmer {
-  position: absolute;
-  inset: 0;
-  width: 30%;
-  background: linear-gradient(90deg, transparent 0, rgba(255, 210, 122, 0.85) 50%, transparent 100%);
-  animation: tl-run-shimmer 2.6s ease-in-out infinite;
-}
-@keyframes tl-run-shimmer {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(340%); }
+.tl-run__budget.is-near {
+  color: var(--color-intent-warning);
 }
 .tl-run__note {
-  margin: 7px 0 0 24px;
-  font-size: 12px;
-  line-height: 1.45;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
   color: var(--color-text-muted);
 }
+.tl-run .tl-action__summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Output so far: at most two lines, hung off the row like a result. */
 .tl-run__tail {
-  margin: 7px 0 0 24px;
-  max-height: 12.5em;
-  overflow: auto;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  margin: 0 0 4px calc(var(--space-2) + 22px);
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--color-border-subtle);
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: 11.5px;
   line-height: 1.4;
-  white-space: pre-wrap;
-  color: var(--color-text-secondary);
+  white-space: pre;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
 }
 .tl-thought__live {
   display: inline-flex;
@@ -4357,9 +4283,6 @@
   .tl-run[data-run-state="live"] .tl-run__dot {
     animation: none;
     box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
-  }
-  .tl-run__shimmer {
-    display: none;
   }
 }
 

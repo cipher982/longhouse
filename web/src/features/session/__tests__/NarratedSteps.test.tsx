@@ -147,26 +147,34 @@ describe("a running call", () => {
       "2026-04-15T15:30:07Z",
     );
 
-  it("leads with the description, keeps the command beneath, and runs its clock on a fresh claim", () => {
+  it("is the same one-line row it settles into: the description, a live clock, no health note", () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
     renderPane([longCall()], liveness("2026-04-15T16:20:00Z", "2026-04-15T16:11:56Z"));
 
     const row = screen.getByTestId("session-timeline-row");
     expect(row).toHaveAttribute("data-run-state", "live");
+    expect(row).toHaveClass("tl-action");
     expect(row).toHaveTextContent("Run Stage A basis search");
-    expect(row).toHaveTextContent("basis_search_l0.py --procs 6");
-    expect(screen.getByTestId("running-call-clock")).toHaveTextContent("41:53");
-    expect(screen.getByTestId("running-call-clock")).toHaveTextContent("of 1:00:00 timeout");
-    expect(row.querySelector(".tl-run__shimmer")).not.toBeNull();
-    expect(screen.getByTestId("running-call-note")).toHaveTextContent("Waiting for return · cinder signal 4 s ago");
+    // The command is said once, on hover and in the detail, not as a second line.
+    expect(row).not.toHaveTextContent("basis_search_l0.py --procs 6");
+    expect(row.querySelector(".tl-action__head")).toHaveAttribute(
+      "title",
+      "uv run python scripts/basis_search_l0.py --procs 6",
+    );
+    // 41:53 of a one-hour budget is past half, so the budget shows.
+    expect(screen.getByTestId("running-call-clock")).toHaveTextContent("41:53 / 1:00:00");
+    // Live, the composer carries session health; the row says nothing more.
+    expect(screen.queryByTestId("running-call-note")).toBeNull();
   });
 
-  it("names the tool on the row when the headline is the description or the command", () => {
+  it("hides the timeout budget while less than half of it is spent", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(now);
-    renderPane([longCall()], liveness("2026-04-15T16:20:00Z", "2026-04-15T16:11:56Z"));
-    expect(screen.getByTestId("running-call-tool")).toHaveTextContent(/^bash$/i);
+    vi.setSystemTime(Date.parse("2026-04-15T15:40:07Z"));
+    renderPane([longCall()], liveness("2026-04-15T15:50:00Z", "2026-04-15T15:40:05Z"));
+    const clock = screen.getByTestId("running-call-clock");
+    expect(clock).toHaveTextContent("10:00");
+    expect(clock).not.toHaveTextContent("/");
   });
 
   it("goes still and says it cannot confirm once the claim lapses", () => {
@@ -176,12 +184,9 @@ describe("a running call", () => {
 
     const row = screen.getByTestId("session-timeline-row");
     expect(row).toHaveAttribute("data-run-state", "uncertain");
-    expect(row.querySelector(".tl-run__shimmer")).toBeNull();
     // The clock stops at the last signal rather than running on inference.
     expect(screen.getByTestId("running-call-clock")).toHaveTextContent("38:53");
-    expect(screen.getByTestId("running-call-note")).toHaveTextContent(
-      "Unconfirmed · no signal from cinder for 3 min",
-    );
+    expect(screen.getByTestId("running-call-note")).toHaveTextContent("no signal from cinder for 3 min");
   });
 
   it("does not animate a call the model has already moved past", () => {

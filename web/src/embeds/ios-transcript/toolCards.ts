@@ -139,6 +139,7 @@ export function toolDetails(item: TranscriptItem): string {
   return `
         <details class="tool row${item.narrationTrail ? " trail" : ""}"${bodyAttributes(item)}>
           <summary>
+            ${item.status === "running" ? `<span class="run-dot${hasFreshRunningClock ? " live" : ""}" aria-hidden="true"></span>` : ""}
             ${item.narrationTrail && item.toolIntent ? "" : `<span class="tool-title">${escapeHtml(item.title || "Tool")}</span>`}
             <span class="tool-subtitle">${escapeHtml(subtitleText)}</span>
             ${intentNote}
