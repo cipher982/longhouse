@@ -431,16 +431,16 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
 
-/// "How long in current state" — the headline number in the pill.
-/// Uses `timelineAnchor`, which the backend re-anchors on phase changes
-/// and progress signals (server/zerg/services/session_runtime.py).
-/// Returns nil for closed sessions (we don't want to show a counter there).
+/// How long ago the row last moved ("50m ago"). `timelineAnchor` is the
+/// server's recency anchor (session_views.py), not how long the session has
+/// been in its current state, so the label says "ago" rather than reading as
+/// a duration beside the status. Nil for closed sessions.
 func stateDurationLabel(for session: SessionSummary) -> String? {
     // Use the receded state (disposition closed or run ended), matching the
     // dot/accent and signal so closed or exited rows never show a live counter.
     if session.isReceded { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
-    return compactDuration(since: date)
+    return "\(compactDuration(since: date)) ago"
 }
 
 private func runtimeBadgeAccessibilityLabel(for session: SessionSummary, stale: Bool) -> String {

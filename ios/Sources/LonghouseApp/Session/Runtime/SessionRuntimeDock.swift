@@ -685,7 +685,9 @@ struct SessionRuntimeDock: View {
             // passed and nothing has replaced it.
             return "Activity uncertain"
         case .attention:
-            if detail.activePauseRequest != nil { return "Permission needed" }
+            if let pause = detail.activePauseRequest {
+                return pause.questions.isEmpty ? "Needs approval" : "Needs your answer"
+            }
             return detail.runtimeHeadline
         default:
             if detail.stateFacts.primary?.key == "delegated_work",
