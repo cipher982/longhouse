@@ -5476,7 +5476,9 @@ def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: Evid
         path.is_file() and parity_fixture.name in path.read_text(encoding="utf-8") for path in (web_parity_test, ios_parity_test)
     )
     provider_has_fingerprint = bool(provider_replay and provider_replay["rows"])
-    drift_canary_detected = any(row["provider"] == "cursor" and row["tool_name"] == "CallDynamicTool" for row in unknown_rows)
+    # RareFixtureTool is a synthetic Cursor tool (tests/fixtures/tool-translation/cursor.jsonl) that
+    # config/tool-tiers.json deliberately never lists, so it must always surface as an unknown shape.
+    drift_canary_detected = any(row["provider"] == "cursor" and row["tool_name"] == "RareFixtureTool" for row in unknown_rows)
     action_proofs = {
         "provider_shape_inventory": bool(provider_report and provider_report.get("source_events") and provider_has_fingerprint),
         "schema_drift_detect": bool(

@@ -48,7 +48,7 @@ def test_golden_replay_conserves_and_pairs_every_provider_event():
     assert first["unknowns"] == [
         {
             "provider": "cursor",
-            "tool_name": "CallDynamicTool",
+            "tool_name": "RareFixtureTool",
             "input_shape": {"fixture": "bool"},
             "count": 1,
             "with_result_id": 1,
