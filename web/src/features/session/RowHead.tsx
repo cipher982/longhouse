@@ -16,9 +16,12 @@ export function RowHead({
 }) {
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    // A press that selected text in this head (from either end) is a
+    // selection, not a click.
     if (selection && !selection.isCollapsed && selection.toString().trim()) {
-      const node = selection.anchorNode;
-      if (node && event.currentTarget.contains(node)) return;
+      const head = event.currentTarget;
+      const touches = [selection.anchorNode, selection.focusNode].some((node) => node && head.contains(node));
+      if (touches) return;
     }
     onActivate();
   };
@@ -27,7 +30,8 @@ export function RowHead({
     if (event.defaultPrevented || event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      onActivate();
+      // Holding the key auto-repeats keydown; a button toggles once.
+      if (!event.repeat) onActivate();
     }
   };
   return (

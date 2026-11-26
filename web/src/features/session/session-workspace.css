@@ -4929,6 +4929,7 @@ button.timeline-pane__status-chip:hover {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 40%;
+  margin-left: auto;
   padding-left: var(--space-3);
   font-family: var(--font-family-mono);
   font-size: 11.5px;
@@ -4953,18 +4954,24 @@ button.timeline-pane__status-chip:hover {
   top: 13px;
 }
 .tl-msg__time--aside {
-  position: absolute;
-  top: 3px;
-  right: 0;
+  float: right;
+  margin: 3px 0 0 var(--space-4);
   font-size: 11.5px;
   color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
-.tl-msg__body:has(> .tl-msg__time--aside) {
-  position: relative;
+/* The reply's first block starts beside the time: only the lines next to it
+   wrap short, and a wider label (yesterday, the exact time) just reflows.
+   Specific enough to beat the heading and paragraph margins. */
+.tl-msg__body > .tl-msg__time--aside + * {
+  margin-top: 0;
 }
-/* The reply's first block (a heading or a paragraph) leaves the time its
-   corner. */
-.tl-msg__body:has(> .tl-msg__time--aside) > :first-child {
-  padding-right: 88px;
+/* A block that cannot wrap around it (a code fence, a table, media) starts
+   below the time instead of being squeezed beside it. */
+.tl-msg__body > .tl-msg__time--aside + :is(pre, table, .tl-msg__table-wrap, .tl-md-fence, figure, img, div) {
+  clear: right;
+}
+.tl-row__target + .tl-action__meta,
+.tl-row__target + .tl-context__meta {
+  margin-left: 0;
 }

@@ -657,6 +657,11 @@ const MessageRow = memo(function MessageRow({
         </div>
       ) : null}
       <div className="tl-msg__body">
+        {isAssistant && !outside ? (
+          <span className="tl-msg__time tl-msg__time--aside" {...{ elementtiming: "longhouse-session-timeline-row" }}>
+            <RelativeTime iso={event.timestamp} testId="session-reply-time" />
+          </span>
+        ) : null}
         {isAssistant || isUser ? (
           <MarkdownBody content={visible} />
         ) : (
@@ -675,11 +680,6 @@ const MessageRow = memo(function MessageRow({
           </div>
         ) : null}
         <MediaStrip mediaRefs={mediaRefs} />
-        {isAssistant && !outside ? (
-          <span className="tl-msg__time tl-msg__time--aside" {...{ elementtiming: "longhouse-session-timeline-row" }}>
-            <RelativeTime iso={event.timestamp} testId="session-reply-time" />
-          </span>
-        ) : null}
         {isLong ? (
           <button
             type="button"
@@ -1000,7 +1000,7 @@ function ActionCard({
           </span>
         )}
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary">
+        <span className="tl-action__summary" title={purpose ? undefined : (getToolTargetText(interaction) ?? undefined)}>
           {intent ? (
             intent
           ) : editLabel ? (
@@ -1154,7 +1154,7 @@ function ContextLine({
         >
           {info.displayName}
         </span>
-        <span className="tl-context__summary">
+        <span className="tl-context__summary" title={purpose ? undefined : (target ?? undefined)}>
           {summary || (dropped ? "dropped" : pending ? "running…" : "")}
         </span>
         {purpose ? <TargetAside target={target} text={summary} /> : null}

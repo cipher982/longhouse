@@ -233,7 +233,7 @@ export function RunningCallRow({
             {info.displayName}
           </span>
         )}
-        <span className="tl-action__summary">{label}</span>
+        <span className="tl-action__summary" title={purpose ? undefined : (command ?? undefined)}>{label}</span>
         {purpose ? <TargetAside target={command} text={label} /> : null}
         {note ? (
           <span className="tl-run__note" data-testid="running-call-note">
