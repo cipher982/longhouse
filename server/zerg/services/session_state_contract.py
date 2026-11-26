@@ -190,13 +190,15 @@ class SessionDelegationProgress(_FrozenModel):
     duration_ms: int | None = None
     #: The task's current step in words, decided here so every client shows
     #: the same line: the provider's own intent, else the status phrase for
-    #: its current tool ("Running a command"), else "Thinking".
+    #: its current tool ("Running a command"), else "Thinking". Always
+    #: derived from the fields beside it, never trusted from the input: stored
+    #: progress is merged and revalidated, so a carried label would freeze.
     step_label: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def _derive_step_label(cls, data: Any) -> Any:
-        if not isinstance(data, dict) or data.get("step_label") is not None:
+        if not isinstance(data, dict):
             return data
         last_intent = data.get("last_intent")
         current_tool = data.get("current_tool")

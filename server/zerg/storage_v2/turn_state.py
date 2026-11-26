@@ -146,10 +146,24 @@ def fold_turn_tails(tails: Iterable[Mapping[str, Any] | None]) -> dict[str, Any]
     return state
 
 
+# The catalog snapshot cuts text columns at a byte limit (store._CATALOG_TEXT_LIMITS
+# "turn_state"); a cut JSON value would erase the whole axis, so encoding stays
+# well under it by dropping intents, then the oldest calls.
+MAX_TURN_JSON_BYTES = 32_768
+
+
 def encode_turn_json(value: Mapping[str, Any] | None) -> str | None:
     if value is None:
         return None
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    if len(encoded.encode("utf-8")) <= MAX_TURN_JSON_BYTES or not isinstance(value.get("open"), list):
+        return encoded
+    calls = [{**call, "intent": None} if index else dict(call) for index, call in enumerate(value["open"])]
+    while True:
+        encoded = json.dumps({**value, "open": calls}, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        if len(encoded.encode("utf-8")) <= MAX_TURN_JSON_BYTES or not calls:
+            return encoded
+        calls = calls[1:] if len(calls) > 1 else []
 
 
 def decode_turn_json(value: object) -> dict[str, Any] | None:

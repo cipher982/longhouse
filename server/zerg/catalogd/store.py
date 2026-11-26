@@ -3842,6 +3842,26 @@ def _advance_transcript_revision(connection, *, session_ids: Iterable[str], comm
     )
 
 
+def _fold_generation_turn_state(rows: Iterable[Any]) -> dict[str, Any]:
+    """Fold every object's turn tail in transcript order (storage_v2.turn_state).
+
+    ``through`` records the last folded order key, so an ingest commit can tell
+    an object that lands before what it already folded and refold instead.
+    """
+
+    ordered = sorted(
+        (row for row in rows if int(row["event_count"]) > 0 and row["first_order_key"] is not None),
+        key=lambda row: tuple(json.loads(str(row["first_order_key"]))),
+    )
+    state = fold_turn_tails(decode_turn_json(row["turn_tail"]) for row in ordered)
+    through = None
+    for row in ordered:
+        if row["last_order_key"] is not None:
+            through = _maximum_order_key(through, row["last_order_key"])
+    state["through"] = through
+    return state
+
+
 def _recompute_render_generation_projection(
     connection,
     *,
@@ -3929,15 +3949,7 @@ def _recompute_render_generation_projection(
         ),
         "first_user_message_preview": (str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
         "last_visible_text_preview": (str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
-        "turn_state": encode_turn_json(
-            fold_turn_tails(
-                decode_turn_json(row["turn_tail"])
-                for row in sorted(
-                    (row for row in rows if int(row["event_count"]) > 0 and row["first_order_key"] is not None),
-                    key=lambda row: tuple(json.loads(str(row["first_order_key"]))),
-                )
-            )
-        ),
+        "turn_state": encode_turn_json(_fold_generation_turn_state(rows)),
     }
     reset_title = bool(
         reset_derived_title

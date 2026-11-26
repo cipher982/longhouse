@@ -40,6 +40,7 @@ from zerg.catalogd.store import _as_aware_utc
 from zerg.catalogd.store import _bind_orphan_subagents_to_parent
 from zerg.catalogd.store import _delegation_native_ids
 from zerg.catalogd.store import _delegation_parent_id
+from zerg.catalogd.store import _fold_generation_turn_state
 from zerg.catalogd.store import _insert_provider_facts
 from zerg.catalogd.store import _machine_is_automation
 from zerg.catalogd.store import _maximum_order_key
@@ -1614,9 +1615,30 @@ class IngestMixin:
                         if existing_session is not None and existing_session.get("current_render_generation") is not None
                         else EMPTY_TURN_STATE
                     )
-                    projection_values["turn_state"] = encode_turn_json(
-                        fold_turn_state(prior_turn_state, decode_turn_json(render_manifest.get("turn_tail")))
-                    )
+                    through = prior_turn_state.get("through") if prior_turn_state is not None else None
+                    if (
+                        through is not None
+                        and render_manifest["first_order_key"] is not None
+                        and _maximum_order_key(through, render_manifest["first_order_key"]) != render_manifest["first_order_key"]
+                    ):
+                        # This object lands before what the state already
+                        # folded: refold the generation in transcript order
+                        # (rare; one read of this generation's object rows).
+                        turn_state = _fold_generation_turn_state(
+                            connection.execute(
+                                select(render_object).where(
+                                    render_object.c.session_id == session_key,
+                                    render_object.c.generation_id == generation_key,
+                                    render_object.c.retired_at.is_(None),
+                                )
+                            )
+                            .mappings()
+                            .all()
+                        )
+                    else:
+                        turn_state = fold_turn_state(prior_turn_state, decode_turn_json(render_manifest.get("turn_tail")))
+                        turn_state["through"] = _maximum_order_key(through, render_manifest["last_order_key"])
+                    projection_values["turn_state"] = encode_turn_json(turn_state)
                     connection.execute(
                         update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
                     )

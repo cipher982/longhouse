@@ -5477,3 +5477,52 @@ async def test_commits_fold_turn_tails_into_the_served_turn(daemon_paths):
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_an_object_landing_before_the_folded_tail_refolds_in_transcript_order(daemon_paths):
+    """Ingest folds in commit order; an object that sorts before what is already
+    folded must not let a stale prompt or a finished call win."""
+
+    from zerg.catalogd.store import _assemble_session_facts
+    from zerg.services.session_state_facts_projector import project_turn_facts
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    base = 1_700_000_000_000_000
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        # Committed first but later in the transcript: the newest prompt.
+        later = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
+        later_manifest = _render_manifest(generation_id, position=10)
+        later_manifest["turn_tail"] = {"turn_at_us": base + 10, "cleared": True, "open": [], "closed": []}
+        later.update(render_state="ready", render_manifest=later_manifest)
+        await client.call("storage.raw_object.commit.v2", later)
+
+        # Committed second but earlier in the transcript: an older prompt and call.
+        earlier = _raw_params(epoch=epoch, session_id=session_id, start=6, end=13, records=(b"second\n",), sealed_at=now)
+        earlier_manifest = _render_manifest(generation_id, seed=b"second-render", position=2)
+        earlier_manifest["turn_tail"] = {
+            "turn_at_us": base + 2,
+            "cleared": True,
+            "open": [{"id": "old", "tool": "Bash", "at_us": base + 3, "intent": None}],
+            "closed": [],
+        }
+        earlier.update(render_state="ready", render_manifest=earlier_manifest)
+        await client.call("storage.raw_object.commit.v2", earlier)
+
+        engine = create_catalog_engine(database_path)
+        with engine.connect() as connection:
+            facts = _assemble_session_facts(connection, session_ids=[str(session_id)], observed_at=now, compact=True)
+        turn = project_turn_facts(facts[0]["catalog"]["turn_state"])
+        assert turn.started_at == datetime.fromtimestamp((base + 10) / 1_000_000, tz=UTC)
+        assert turn.active_call_count == 0
+    finally:
+        await client.close()
+        await daemon.close()

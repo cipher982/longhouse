@@ -124,3 +124,15 @@ def test_the_catalog_accepts_only_the_tail_shape_it_folds():
     assert validate_turn_tail({**tail, "extra": 1}) is None
     assert validate_turn_tail({**tail, "open": [{"id": "a"}]}) is None
     assert validate_turn_tail(None) is None
+
+
+def test_an_oversized_state_still_encodes_as_valid_bounded_json():
+    import json
+
+    from zerg.storage_v2.turn_state import MAX_TURN_JSON_BYTES
+
+    calls = [{"id": f"c{n}" + "x" * 250, "tool": "t" * 255, "at_us": n, "intent": "é" * 160} for n in range(64)]
+    encoded = encode_turn_json({"turn_at_us": T0, "open": calls})
+    assert len(encoded.encode("utf-8")) <= MAX_TURN_JSON_BYTES
+    decoded = json.loads(encoded)
+    assert decoded["turn_at_us"] == T0 and decoded["open"]

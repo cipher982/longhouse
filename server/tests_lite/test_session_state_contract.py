@@ -1810,6 +1810,15 @@ def test_delegation_progress_serves_its_step_label(progress, step):
     from zerg.services.session_state_contract import SessionDelegationProgress
 
     assert SessionDelegationProgress(**progress).step_label == step
-    # A label the payload already carries survives a round trip unchanged.
+    # A round trip derives the same label.
     dumped = SessionDelegationProgress(**progress).model_dump(mode="json")
     assert SessionDelegationProgress.model_validate(dumped).step_label == step
+
+
+def test_stored_step_label_never_freezes_the_step():
+    """Stored progress is merged and revalidated; a carried label must not win."""
+    from zerg.services.session_state_contract import SessionDelegationProgress
+
+    stored = SessionDelegationProgress(current_tool="Bash").model_dump(mode="json", exclude_none=True)
+    merged = {**stored, "last_intent": "Editing the parser"}
+    assert SessionDelegationProgress.model_validate(merged).step_label == "Editing the parser"
