@@ -244,7 +244,7 @@ struct ChatUITestFixtureView: View {
                 if fixtureName == "assistant-stream-latency" {
                     await waitForStressTrigger()
                 } else {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    await waitForTrigger(orDelay: 1_500_000_000)
                 }
                 await client.streamAssistantMessage(
                     chunks: [
@@ -268,7 +268,7 @@ struct ChatUITestFixtureView: View {
             } else {
                 message = "Assistant fixture live update at bottom."
             }
-            try? await Task.sleep(nanoseconds: delay)
+            await waitForTrigger(orDelay: delay)
             let rowID = await client.appendAssistantMessage(message)
             await reloadUntilPublished(rowID: rowID)
         }
@@ -313,6 +313,17 @@ struct ChatUITestFixtureView: View {
         // trace while WebKit is still mounting the first document.
         while !Task.isCancelled && !viewModel.isTranscriptFrameReady {
             try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    /// The update waits for the test to say it is ready (it writes the trigger file once it
+    /// has seen the first frame or opened the keyboard), so it cannot land before that on a
+    /// slow runner. Without a trigger (the stress suites) it keeps its fixed delay.
+    private func waitForTrigger(orDelay nanoseconds: UInt64) async {
+        if let triggerPath = UITestHooks.chatFixtureTriggerPath {
+            await waitForFile(at: triggerPath)
+        } else {
+            try? await Task.sleep(nanoseconds: nanoseconds)
         }
     }
 

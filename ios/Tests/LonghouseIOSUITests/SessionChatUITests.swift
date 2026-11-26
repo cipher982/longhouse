@@ -86,6 +86,18 @@ class SessionChatUITestCase: FixtureUITestCase {
         return app
     }
 
+    /// A file the fixture waits for before it sends its scripted update (LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH).
+    fileprivate func makeTrigger() -> URL {
+        let trigger = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-fixture-trigger-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: trigger) }
+        return trigger
+    }
+
+    fileprivate func fire(_ trigger: URL) {
+        XCTAssertNoThrow(try "1".write(to: trigger, atomically: true, encoding: .utf8))
+    }
+
     /// Wait for the transcript to finish its first render: the native beacon, because WebKit
     /// does not reliably publish DOM text to XCUITest's accessibility tree.
     fileprivate func waitForRenderedTranscript(
@@ -675,9 +687,7 @@ final class SessionChatComposerUITests: SessionChatUITestCase {
     func testHelmSteerReplacesOptimisticRowWithOneCleanDurableMessage() {
         // The fixture holds the durable echo until this file exists, so the optimistic state is
         // checked before the echo can replace it.
-        let trigger = FileManager.default.temporaryDirectory
-            .appendingPathComponent("longhouse-helm-echo-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: trigger) }
+        let trigger = makeTrigger()
         let app = launchChatFixture(name: "helm-channel-reconcile", eventCount: 0, triggerPath: trigger.path)
         let composer = app.textFields["session-chat-composer"]
         let sendButton = app.buttons["session-chat-send"]
@@ -697,7 +707,7 @@ final class SessionChatComposerUITests: SessionChatUITestCase {
         XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
         XCTAssertTrue(app.staticTexts["Sending…"].exists)
         attachScreenshot(app, named: "helm-send-optimistic")
-        try? "1".write(to: trigger, atomically: true, encoding: .utf8)
+        fire(trigger)
 
         let longhouseOrigin = app.staticTexts["Longhouse"]
         XCTAssertTrue(longhouseOrigin.waitToExist(timeout: 30))
@@ -755,20 +765,28 @@ final class SessionChatPinningUITests: SessionChatUITestCase {
     }
 
     func testAssistantUpdateKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-update", eventCount: 40)
+        let trigger = makeTrigger()
+        let app = launchChatFixture(name: "assistant-update", eventCount: 40, triggerPath: trigger.path)
         let currentLastMessage = app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
         let liveUpdate = app.staticTexts["Assistant fixture live update at bottom."]
 
         XCTAssertTrue(currentLastMessage.waitToExist(timeout: Self.webTranscriptTimeout))
+        fire(trigger)
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: Self.patient(5)))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."], in: app)
     }
 
     func testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome() {
-        let app = launchChatFixture(name: "assistant-update-long", eventCount: 40)
+        let trigger = makeTrigger()
+        let app = launchChatFixture(name: "assistant-update-long", eventCount: 40, triggerPath: trigger.path)
         let liveUpdate = app.staticTexts["Assistant fixture live update with wrapped tail above the floating composer card."]
 
+        XCTAssertTrue(
+            app.staticTexts["Assistant fixture message 39: streaming-style response with enough body to exercise row layout."]
+                .waitToExist(timeout: Self.webTranscriptTimeout)
+        )
+        fire(trigger)
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 20))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
@@ -776,11 +794,14 @@ final class SessionChatPinningUITests: SessionChatUITestCase {
     }
 
     func testAssistantUpdateWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40)
+        let trigger = makeTrigger()
+        let app = launchChatFixture(name: "assistant-update-keyboard", eventCount: 40, triggerPath: trigger.path)
         let composer = app.textFields["session-chat-composer"]
         let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
 
         focusComposer(composer, in: app)
+        // The update arrives only now, with the keyboard up.
+        fire(trigger)
 
         XCTAssertTrue(liveUpdate.waitToExist(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
@@ -789,11 +810,14 @@ final class SessionChatPinningUITests: SessionChatUITestCase {
     }
 
     func testAssistantStreamingWithKeyboardOpenKeepsPinnedTranscriptAtBottom() {
-        let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40)
+        let trigger = makeTrigger()
+        let app = launchChatFixture(name: "assistant-stream-keyboard", eventCount: 40, triggerPath: trigger.path)
         let composer = app.textFields["session-chat-composer"]
         let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
 
         focusComposer(composer, in: app)
+        // The stream starts only now, with the keyboard up.
+        fire(trigger)
 
         XCTAssertTrue(finalChunk.waitToExist(timeout: Self.webTranscriptTimeout))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
