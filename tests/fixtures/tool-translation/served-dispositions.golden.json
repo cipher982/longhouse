@@ -104,11 +104,11 @@
           "child_dispositions": [],
           "disposition": "unknown",
           "paired_with_result": true,
-          "rule_id": "tool:calldynamictool",
-          "source_tool_name": "CallDynamicTool",
+          "rule_id": "tool:rarefixturetool",
+          "source_tool_name": "RareFixtureTool",
           "tier": "action",
           "tool_call_id": "call-cursor-rare",
-          "tool_name": "CallDynamicTool",
+          "tool_name": "RareFixtureTool",
           "wrapper_recedes": false
         }
       ],

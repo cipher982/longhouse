@@ -36,6 +36,10 @@ def validate(data: dict) -> None:
         status = meta.get("status")
         if not isinstance(status, str) or not status.strip():
             raise ValueError(f"tool {name!r}: missing `status` phrase")
+        for field in ("icon", "label", "status"):
+            # render_swift interpolates these into string literals unescaped.
+            if any(ch in str(meta.get(field, "")) for ch in '"\\\n'):
+                raise ValueError(f"tool {name!r}: {field} must not contain a quote, backslash or newline")
         key = name.lower()
         if key in seen:
             raise ValueError(f"tools {seen[key]!r} and {name!r} differ only in case; lookup is case-insensitive, keep one")

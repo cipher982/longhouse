@@ -80,6 +80,7 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "Glob": { tier: "noise", aggregate: "list", icon: "*", label: "List", color: "muted", status: "Listing files" },
   "LS": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },
   "list_files": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },
+  "list": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },
   "list_dir": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },
   "list_directory": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },
   "find_by_name": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted", status: "Listing files" },

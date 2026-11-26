@@ -91,6 +91,7 @@ public enum ToolTiers {
         "Glob": ToolTierMeta(tier: .noise, aggregate: .list, icon: "*", label: "List", color: .muted, status: "Listing files"),
         "LS": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),
         "list_files": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),
+        "list": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),
         "list_dir": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),
         "list_directory": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),
         "find_by_name": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "List", color: .muted, status: "Listing files"),

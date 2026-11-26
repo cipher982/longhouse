@@ -101,6 +101,7 @@ def test_every_label_is_canonical_and_every_entry_has_a_status():
         ("omp", "grep", "Search"),
         ("omp", "find", "Search"),
         ("omp", "glob", "List"),
+        ("opencode", "list", "List"),
         ("opencode", "webfetch", "Fetch"),
         ("omp", "web_fetch", "Fetch"),
         ("omp", "web_search", "Web search"),
@@ -219,7 +220,9 @@ def test_cursor_and_opencode_authored_descriptions():
         ("update_plan", "Updating the plan", "Plan"),
         ("AskUserQuestion", "Asking a question", "Ask"),
         ("wait", "Waiting", "Wait"),
-        ("mcp__trove__search_personal_memory", "Using search personal memory", "search_personal_memory"),
+        ("mcp__trove__search_personal_memory", "Using search personal memory", "search personal memory"),
+        # Words after the name that are not JSON make it a command line.
+        ("echo {a,b}", "Running a command", "Shell"),
         # Antigravity ACP puts the command line, or `name {json}`, in the tool slot.
         ("sleep 6", "Running a command", "Shell"),
         ("find . -name '*.py'", "Running a command", "Shell"),

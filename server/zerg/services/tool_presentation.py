@@ -740,7 +740,15 @@ def _split_activity_tool(tool: str | None) -> tuple[str, bool] | None:
     parts = raw.split(None, 1)
     name = re.split(r"[({\[]", parts[0], maxsplit=1)[0] or parts[0]
     rest = parts[1].strip() if len(parts) > 1 else ""
-    return name, bool(rest) and not rest.startswith(("{", "[", "("))
+    if not rest:
+        return name, False
+    try:
+        args = json.loads(rest)
+    except ValueError:
+        args = None
+    # Only `name {json}` / `name [json]` is a tool with arguments; `sleep 6` and
+    # `echo {a,b}` are command lines.
+    return name, not isinstance(args, (dict, list))
 
 
 def tool_status_phrase(tool: str | None, *, rules_path: Path = DEFAULT_RULES_PATH) -> str | None:
@@ -757,9 +765,9 @@ def tool_status_phrase(tool: str | None, *, rules_path: Path = DEFAULT_RULES_PAT
     name, is_command_line = split
     rules = _load_rules(str(rules_path.resolve()))
     if is_command_line:
-        return str(rules["labels"]["Shell"])
+        return str(rules.get("labels", {}).get("Shell") or "Running a command")
     meta = _lookup_tool(rules, name)
-    if meta is not None:
+    if meta is not None and meta.get("status"):
         return str(meta["status"])
     mcp = _mcp_parts(name)
     if mcp is not None:
@@ -781,5 +789,5 @@ def tool_display_label(tool: str | None, *, rules_path: Path = DEFAULT_RULES_PAT
         return str(meta["label"])
     mcp = _mcp_parts(name)
     if mcp is not None:
-        return mcp[1][:_STATUS_NAME_CHARS]
+        return (mcp[1].replace("_", " ").strip() or mcp[1])[:_STATUS_NAME_CHARS]
     return name[:_STATUS_NAME_CHARS]
