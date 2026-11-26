@@ -4409,12 +4409,6 @@ summary:has(> .run-dot) {
 		if (!text) return null;
 		return boundToolOutputPreview(text);
 	}
-	/**
-	* Return the provider's human-readable intent, when one was supplied: OMP's
-	* `i`/`intent` on any tool, and Claude's `description` on a shell call (on
-	* other tools `description` is often the tool's own payload, so it is not
-	* read there).
-	*/
 	function getToolIntentLabel(interaction) {
 		const callIntent = interaction.callEvent?.tool_intent;
 		if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();
