@@ -7,12 +7,14 @@ import argparse
 import fcntl
 import json
 import os
+import plistlib
 import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from test_boundary import boundary_active, create_boundary, native_runner
@@ -104,17 +106,72 @@ def kept_derived_data(runner_temp: Path) -> Path:
     return path
 
 
-# A simulator that has been through its first boot, kept on the bench runner between jobs. A job
-# clones it, so each job still starts from the same clean device, and the clone boots in seconds:
-# a new device spent about 88 s on its first boot before the first unit test (run 45687712205).
+# A simulator kept on the bench runner between jobs. A job clones it, so each job still starts
+# from the same clean device, and the clone boots in seconds: a new device spent about 88 s on its
+# first boot before the first unit test (run 45687712205).
 # The simulators live in the runner user's own device set (CoreSimulator ignores the scratch HOME).
-SIMULATOR_TEMPLATE = "Longhouse CI template"
+#
+# The template is booted until the simulator is idle, twice, before it is kept. A template shut
+# down right after its first boot left every clone to download and unpack about 1 GB of speech
+# assets again (mobileassetd and STExtractionService), with all six cores busy for about four
+# minutes after boot, through the unit and UI tests. A clone of a settled template is idle about
+# 105 s after boot instead. The name changes when what the template holds changes, so an older
+# one is deleted (remove_simulators) and this one is made by the next job.
+SIMULATOR_TEMPLATE = "Longhouse CI template (settled)"
+SETTLE_QUIET_SECONDS = 60
+SETTLE_LIMIT_SECONDS = 600
+
+# Simulator launchd jobs each clone starts with disabled. PosterBoard renders the lock screen and
+# wallpaper posters (a dozen poster extensions) after every boot: with it off the clone's install
+# took about 19 s at boot instead of 29 s, and the simulator was idle about 65 s after boot
+# instead of 105. Nothing under test draws the lock screen or wallpaper. Disabling other jobs
+# tried at the same time (news, health, home, mail, sleep, maps and others) did not help and made
+# SpringBoard retry the missing services in a loop. CoreSimulator keeps this list per device on
+# the host, not in the device, so a clone does not inherit it from the template.
+SIMULATOR_DISABLED_SERVICES = ("com.apple.PosterBoard",)
 
 
 def _simctl(*args: str, timeout: int = 600) -> str:
     return subprocess.run(
         ["xcrun", "simctl", *args], capture_output=True, text=True, check=True, timeout=timeout
     ).stdout.strip()
+
+
+def _launchd_state_dir(udid: str) -> Path:
+    return Path("/private/var/tmp") / f"com.apple.CoreSimulator.SimDevice.{udid}"
+
+
+def _simulator_cpu_percent() -> float:
+    """CPU use of every process running from an iOS simulator runtime, in percent of one core."""
+
+    listing = subprocess.run(["ps", "-A", "-o", "%cpu=,comm="], capture_output=True, text=True, check=True).stdout
+    return sum(
+        float(line.split(None, 1)[0])
+        for line in listing.splitlines()
+        if "SimulatorRuntime" in line and line.strip()
+    )
+
+
+def _settle(udid: str) -> None:
+    """Boot the simulator, wait until its processes have been idle for a minute, and shut it down."""
+
+    _simctl("bootstatus", udid, "-b", timeout=900)
+    started = time.monotonic()
+    quiet_since = None
+    while time.monotonic() - started < SETTLE_LIMIT_SECONDS:
+        time.sleep(5)
+        if _simulator_cpu_percent() < 25:
+            quiet_since = quiet_since or time.monotonic()
+            if time.monotonic() - quiet_since >= SETTLE_QUIET_SECONDS:
+                break
+        else:
+            quiet_since = None
+    print(
+        f"native-test-bootstrap: template boot settled after {time.monotonic() - started:.0f} s"
+        + ("" if quiet_since else " (limit reached, still busy)"),
+        flush=True,
+    )
+    _simctl("shutdown", udid)
 
 
 def cloned_simulator() -> str:
@@ -138,14 +195,27 @@ def cloned_simulator() -> str:
             else:  # an older runtime's, or a second copy
                 _simctl("delete", device["udid"])
     if template is None:
-        print("native-test-bootstrap: making the simulator template (first boot)", flush=True)
+        print("native-test-bootstrap: making the simulator template (two boots until idle)", flush=True)
         template = _simctl("create", SIMULATOR_TEMPLATE, device_type["identifier"], runtime["identifier"])
-        _simctl("bootstatus", template, "-b", timeout=900)
-        _simctl("shutdown", template)
+        try:
+            # The second boot finishes what the first one started (another asset download).
+            _settle(template)
+            _settle(template)
+        except BaseException:
+            subprocess.run(["xcrun", "simctl", "delete", template], check=False, capture_output=True)
+            raise
     clone = _simctl("clone", template, f"Longhouse CI {device_type['name']}")
+    state = _launchd_state_dir(clone)
+    state.mkdir(parents=True, exist_ok=True)
+    with open(state / "disabled.plist", "wb") as handle:
+        plistlib.dump({label: True for label in SIMULATOR_DISABLED_SERVICES}, handle)
     # xcodebuild boots it when the tests start. Booting it during the build made the build
     # take 108 s instead of 33 (run 45691666834).
-    print(f"native-test-bootstrap: simulator cloned from the template: {clone}", flush=True)
+    print(
+        f"native-test-bootstrap: simulator cloned from the template: {clone}, "
+        f"disabled: {', '.join(SIMULATOR_DISABLED_SERVICES)}",
+        flush=True,
+    )
     return f"platform=iOS Simulator,id={clone}"
 
 
@@ -165,6 +235,8 @@ def remove_simulators(environment: dict[str, str]) -> None:
                     ["xcrun", "simctl", "delete", device["udid"]],
                     env=environment, check=False, timeout=120, capture_output=True,
                 )
+                # CoreSimulator leaves the device's launchd state (the disabled list above, logs) behind.
+                shutil.rmtree(_launchd_state_dir(device["udid"]), ignore_errors=True)
 
 
 def main() -> int:

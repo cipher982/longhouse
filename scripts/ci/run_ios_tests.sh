@@ -183,6 +183,8 @@ boot_destination() {
   fi
   stage "booting simulator ${udid}"
   xcrun simctl bootstatus "${udid}" -b >/dev/null
+  # Launchd jobs the simulator runs with disabled (native-test-bootstrap.py sets them on the bench).
+  xcrun simctl spawn "${udid}" launchctl print-disabled system | grep "=> disabled" || true
 }
 
 echo "Running iOS schemes: ${IOS_TEST_SCHEMES}"
