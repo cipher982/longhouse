@@ -141,7 +141,9 @@ setsid bash -c 'cat >/dev/null; echo "remote: client went away; stopping run $2"
   sleep 25
   kill -KILL -- "-$1" 2>/dev/null; [ -n "$t" ] && kill -KILL -- "-$t" 2>/dev/null' _ "$$" "$run" "$base/timeout.pid" <&3 &
 watchdog=$!
-trap 'kill "$watchdog" 2>/dev/null' EXIT
+# Kill the watchdog's whole group: its `cat` child holds this session's stdout and stderr, and if it outlives the
+# run the ssh channel never closes, so the client hangs after the command has already exited.
+trap 'kill -- "-$watchdog" 2>/dev/null' EXIT
 waited=0; slot=
 while [ -z "$slot" ]; do
   for i in $(seq 1 "$slots"); do

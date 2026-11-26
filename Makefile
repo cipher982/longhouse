@@ -473,7 +473,7 @@ test-engine-single: ## @internal Exact Rust engine unit tests (TEST="module::tes
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
 	@out=$$(mktemp); trap 'rm -f "$$out"' EXIT; \
-	status=0; $(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine -- "$(strip $(TEST))" --exact --nocapture --test-threads=1 >"$$out" || status=$$?; \
+	status=0; $(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(ENGINE_TEST_PROFILE) $(ENGINE_TEST_FEATURES) --bin longhouse-engine -- $(strip $(TEST)) --exact --nocapture --test-threads=1 >"$$out" || status=$$?; \
 	cat "$$out"; \
 	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 	if grep -q "running 0 tests" "$$out"; then echo "No engine test matched TEST=$(strip $(TEST))" >&2; exit 1; fi
