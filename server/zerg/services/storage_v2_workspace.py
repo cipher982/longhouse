@@ -37,8 +37,8 @@ from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.tool_presentation import DESCRIPTION_IS_INTENT
-from zerg.services.tool_presentation import resolve_tool_intent
 from zerg.services.tool_presentation import project_tool_presentation
+from zerg.services.tool_presentation import resolve_tool_intent
 from zerg.services.transcript_lite import DETAIL_FULL
 from zerg.services.transcript_lite import DETAIL_LITE
 from zerg.services.transcript_lite import DETAIL_MODES

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 349,
+  "file_count": 350,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2272,6 +2272,17 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_tool_vocabulary.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode"
       ]
     },
     {

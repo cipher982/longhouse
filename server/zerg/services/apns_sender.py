@@ -30,8 +30,8 @@ from zerg.provider_contract.session_visibility_policy import facts_from_row
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
 from zerg.services.notification_policy import user_time_sensitive_blocked
-from zerg.services.tool_presentation import tool_display_label
 from zerg.services.session_kernel_projection import project_session_control_fields
+from zerg.services.tool_presentation import tool_display_label
 
 logger = logging.getLogger(__name__)
 

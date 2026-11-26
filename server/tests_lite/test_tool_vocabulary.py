@@ -58,8 +58,21 @@ def _served(tool_name, tool_input, *, provider, item_intent=None, facts=None):
 def test_every_label_is_canonical_and_every_entry_has_a_status():
     labels = RULES["labels"]
     assert set(labels) == {
-        "Shell", "Read", "Edit", "Write", "Notebook", "Search", "List", "Fetch",
-        "Web search", "Agent", "Plan", "Ask", "Wait", "Result", "Tool",
+        "Shell",
+        "Read",
+        "Edit",
+        "Write",
+        "Notebook",
+        "Search",
+        "List",
+        "Fetch",
+        "Web search",
+        "Agent",
+        "Plan",
+        "Ask",
+        "Wait",
+        "Result",
+        "Tool",
     }
     lowered = [name.lower() for name in RULES["tools"]]
     assert len(lowered) == len(set(lowered)), "names differing only in case duplicate a case-insensitive lookup"

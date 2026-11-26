@@ -39,7 +39,6 @@ from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
-from zerg.services.tool_presentation import tool_display_label
 from zerg.services.session_launch_lifecycle import ExecutionLifetime
 from zerg.services.session_launch_lifecycle import LaunchLifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -56,6 +55,7 @@ from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_state_contract import STEERABLE_ACTIVITY_STATES
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.tool_presentation import tool_display_label
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
