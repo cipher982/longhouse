@@ -59,7 +59,8 @@ export function formatAgo(date: Date, now: number): string {
   if (mins < 60) return `${mins} min ago`;
   const hours = Math.floor(diff / 3_600_000);
   if (diff < DAY_MS) return `${hours} h ago`;
-  const yesterday = new Date(now - DAY_MS);
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
   if (sameLocalDay(date, yesterday)) return `Yesterday ${clockTime(date)}`;
   const sameYear = date.getFullYear() === new Date(now).getFullYear();
   const day = date.toLocaleDateString(undefined, sameYear
@@ -94,18 +95,30 @@ export function RelativeTime({
   const date = parseUTC(iso);
   if (Number.isNaN(date.getTime())) return null;
   const full = formatExact(date);
+  const ago = formatAgo(date, Math.max(now, Date.now() - TICK_MS));
+  const toggle = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation();
+    setExact((v) => !v);
+  };
   return (
     <time
       dateTime={date.toISOString()}
       title={full}
+      role="button"
+      tabIndex={0}
+      aria-label={`${ago}, ${full}`}
+      aria-pressed={exact}
       className={className ? `lh-reltime ${className}` : "lh-reltime"}
       data-testid={testId}
-      onClick={(e) => {
-        e.stopPropagation();
-        setExact((v) => !v);
+      onClick={toggle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle(e);
+        }
       }}
     >
-      {exact ? full : formatAgo(date, Math.max(now, Date.now() - TICK_MS))}
+      {exact ? full : ago}
     </time>
   );
 }

@@ -1765,7 +1765,7 @@ button.timeline-pane__status-chip:hover {
   margin: 0;
 }
 .tl-msg__head--ask .tl-msg__node {
-  top: calc(var(--tl-ask-size, 16px) * 0.75);
+  top: calc(var(--tl-ask-size, 16px) * 0.75 + 4px);
 }
 .tl-msg__meta {
   display: flex;
@@ -4703,14 +4703,7 @@ button.timeline-pane__status-chip:hover {
   color: var(--color-text-secondary);
 }
 .session-away-recap__text {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  font: inherit;
-  text-align: left;
   color: var(--color-text-primary);
-  cursor: pointer;
   flex: 1;
   min-width: 0;
   white-space: nowrap;
@@ -4741,6 +4734,9 @@ button.timeline-pane__status-chip:hover {
   color: rgba(226, 190, 112, 0.95);
   cursor: pointer;
   white-space: nowrap;
+}
+.session-away-recap__more {
+  color: var(--color-text-secondary);
 }
 .session-away-recap__dismiss {
   margin-left: 6px;
@@ -4870,7 +4866,7 @@ button.timeline-pane__status-chip:hover {
   .tl-msg__origin {
     display: none;
   }
-  .tl-msg__meta > * {
+  .tl-msg__meta > .tl-msg__ago {
     white-space: nowrap;
   }
 }

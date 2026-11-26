@@ -106,7 +106,7 @@ const INIT_SCRIPT = `
   const shape = (el) => {
     if (!el) return "";
     const copy = el.cloneNode(true);
-    copy.querySelectorAll("[role=status], button").forEach((node) => node.remove());
+    copy.querySelectorAll("[role=status], button, time").forEach((node) => node.remove());
     return label(copy);
   };
   function read() {

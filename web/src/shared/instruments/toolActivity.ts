@@ -85,17 +85,34 @@ export interface RunningToolInfo {
   label: string;
 }
 
+/**
+ * Tool rows running now: the running calls after the model last spoke (a
+ * thought or a message). A call the model has moved past, or one left
+ * "running" by a turn that was killed, is history, not current work. The
+ * timeline pane's running-row claim uses the same boundary.
+ */
+export function currentRunningTools(items: TimelineItem[]): ToolInteraction[] {
+  const out: ToolInteraction[] = [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "reasoning" || item.kind === "message") break;
+    if (item.kind === "tool" && isToolInteractionRunning(item.interaction)) {
+      out.unshift(item.interaction);
+    } else if (item.kind === "activity_group") {
+      out.unshift(...item.group.interactions.filter((interaction) => isToolInteractionRunning(interaction)));
+    }
+  }
+  return out;
+}
+
 /** The currently running tool row, if any. */
 export function findRunningTool(items: TimelineItem[]): RunningToolInfo | null {
-  const running = collectToolInteractions(items).find((interaction) =>
-    isToolInteractionRunning(interaction),
-  );
+  const running = currentRunningTools(items)[0];
   if (!running) return null;
   return { toolName: running.toolName, label: getToolSummary(running) || running.toolName };
 }
 
 /** How many tool rows are running right now (parallel calls, subagents). */
 export function countRunningTools(items: TimelineItem[]): number {
-  return collectToolInteractions(items).filter((interaction) => isToolInteractionRunning(interaction))
-    .length;
+  return currentRunningTools(items).length;
 }

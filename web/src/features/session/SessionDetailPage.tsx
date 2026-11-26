@@ -1114,15 +1114,22 @@ function SessionDetailWorkspaceRoute({
                     data-testid="session-away-recap"
                   >
                     <span className="session-away-recap__label">Since you left</span>
-                    <button
-                      type="button"
+                    <span
                       className="session-away-recap__text"
-                      aria-expanded={recapExpanded}
                       title={recapExpanded ? undefined : displaySession.recap.text}
-                      onClick={() => setRecapExpanded((open) => !open)}
                     >
                       {displaySession.recap.text}
-                    </button>
+                    </span>
+                    {displaySession.recap.text.length > 90 ? (
+                      <button
+                        type="button"
+                        className="session-away-recap__action session-away-recap__more"
+                        aria-expanded={recapExpanded}
+                        onClick={() => setRecapExpanded((open) => !open)}
+                      >
+                        {recapExpanded ? "Less" : "More"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="session-away-recap__action"
