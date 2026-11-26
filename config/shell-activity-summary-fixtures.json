@@ -105,7 +105,7 @@
           "category": "run"
         }
       ],
-      "expected": "Ran gh run view and 2 other"
+      "expected": "Ran gh run view and 2 other commands"
     },
     {
       "name": "first and last survive a noisy edit verification commit group",
@@ -179,7 +179,7 @@
           "category": "wait"
         }
       ],
-      "expected": "Edited 1, ran git add, git commit, 3 more and 1 other, waited 4 times"
+      "expected": "Edited 1, ran git add, git commit, 3 more and 1 other command, waited 4 times"
     },
     {
       "name": "all opaque falls back to count",

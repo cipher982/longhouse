@@ -46,7 +46,6 @@ import { isSessionClosed } from "@/shared/session/sessionRuntime";
 import { copyToClipboard } from "@/shared/lib/clipboard";
 import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
-import { Nixie } from "@/shared/instruments/Nixie";
 import { StatusBulb } from "@/shared/instruments/StatusLamp";
 import {
   getRunningTurnStartMs,
@@ -3258,6 +3257,15 @@ export function SessionChat({
                 >
                   {composerLeadLabel}
                 </span>
+                {composerElapsedSeconds != null ? (
+                  <span
+                    className="session-chat-composer__turn-clock"
+                    title="Time since your last message"
+                    data-testid="session-chat-composer-turn-clock"
+                  >
+                    {formatElapsedClock(composerElapsedSeconds)}
+                  </span>
+                ) : null}
                 {composerHeadDetail ? (
                   <span
                     className="session-chat-composer__head-detail"
@@ -3265,20 +3273,6 @@ export function SessionChat({
                     data-testid="session-chat-composer-delegated-detail"
                   >
                     {composerHeadDetail}
-                  </span>
-                ) : null}
-                {composerElapsedSeconds != null ? (
-                  <span
-                    className="session-chat-composer__turn-clock"
-                    title="Time since your last message"
-                    data-testid="session-chat-composer-turn-clock"
-                  >
-                    <span className="session-chat-composer__turn-label">turn</span>
-                    <Nixie
-                      value={formatElapsedClock(composerElapsedSeconds)}
-                      flickerOnChange={false}
-                      dim
-                    />
                   </span>
                 ) : null}
               </>

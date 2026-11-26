@@ -4272,7 +4272,7 @@ summary:has(> .run-dot) {
 		list: "Listed",
 		view: "Viewed",
 		edit: "Edited",
-		call: "Called",
+		call: "Made",
 		run: "Ran",
 		wait: "Waited"
 	};
@@ -4407,6 +4407,12 @@ summary:has(> .run-dot) {
 		return typeof callIntent === "string" && callIntent.trim() ? callIntent.trim() : null;
 	}
 	/** Completed, attributable calls may join a prose-bounded activity run. */
+	/** A thought the provider withheld and left empty: a marker, not content. */
+	function isBareWithheldReasoning(event) {
+		const raw = event.content_text || "";
+		const cleaned = (raw.startsWith("Thinking:\n") ? raw.slice(10) : raw).trim();
+		return (Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld") && (!cleaned || cleaned === "[Reasoning withheld]");
+	}
 	function isActivityEligible(interaction) {
 		if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
 		if ((interaction.children?.length ?? 0) > 0) return false;
@@ -4510,7 +4516,7 @@ summary:has(> .run-dot) {
 			const visible = (operations.length > 2 ? [operations[0], operations[operations.length - 1]] : operations).map((operation) => operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label);
 			const hiddenDistinct = Math.max(0, operations.length - visible.length);
 			if (hiddenDistinct > 0) visible.push(`${hiddenDistinct} more`);
-			if (unnamedRuns > 0) visible.push(`${unnamedRuns} other`);
+			if (unnamedRuns > 0) visible.push(`${unnamedRuns} other ${pluralizeNoun("run", unnamedRuns)}`);
 			parts.push(`Ran ${joinWithAnd(visible)}`);
 		}
 		return parts.map((part, index) => index === 0 ? part : lowerFirst(part)).join(", ");
@@ -4865,6 +4871,7 @@ summary:has(> .run-dot) {
 				buffer.push(item.interaction);
 				continue;
 			}
+			if (buffer.length > 0 && item.kind === "reasoning" && isBareWithheldReasoning(item.event)) continue;
 			flush();
 			groupedItems.push(item);
 		}

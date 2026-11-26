@@ -60,6 +60,7 @@ export {
   isToolInteractionRunning,
   isNarrationLeader,
   messagePhase,
+  isBareWithheldReasoning,
   narrationTrail,
   timelineItemIdentity,
   parseLonghouseOutput,

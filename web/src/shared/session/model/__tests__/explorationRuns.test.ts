@@ -465,3 +465,42 @@ describe("exploration run integration", () => {
     expect(model.activityGroups[0].interactions.map((i) => i.toolName)).toEqual(["Grep", "Grep"]);
   });
 });
+
+describe("withheld thoughts between calls", () => {
+  // Claude Opus writes an empty, withheld thought before nearly every call.
+  // The pane shows one "Reasoning withheld" per turn, so the hidden ones must
+  // not split a run of finished calls into a row each.
+  it("groups calls separated only by empty withheld thoughts", () => {
+    const events: AgentEvent[] = [];
+    let id = 1;
+    const at = () => `2026-01-01T00:00:${String(id).padStart(2, "0")}Z`;
+    for (let index = 0; index < 4; index += 1) {
+      events.push(
+        event({ id, role: "assistant", content_text: "", reasoning_withheld: true, item: { kind: "reasoning", visibility: "withheld" }, timestamp: at() } as Partial<AgentEvent> & Pick<AgentEvent, "id" | "role" | "timestamp">),
+      );
+      id += 1;
+      events.push(event({ id, role: "assistant", tool_name: "Bash", tool_call_id: `c${index}`, tool_input_json: { command: `ls ${index}` }, timestamp: at() }));
+      id += 1;
+      events.push(event({ id, role: "tool", tool_call_id: `c${index}`, tool_output_text: "ok", timestamp: at() }));
+      id += 1;
+    }
+
+    const model = buildTimelineModel(projection(events));
+
+    // The first thought leads the run and stays (the pane's one marker); the
+    // ones between calls fold away.
+    expect(model.items.map((item) => item.kind)).toEqual(["reasoning", "activity_group"]);
+    expect(model.activityGroups[0].interactions).toHaveLength(4);
+  });
+
+  it("keeps a thought with text as a break between calls", () => {
+    const events: AgentEvent[] = [
+      event({ id: 1, role: "assistant", tool_name: "Bash", tool_call_id: "a", tool_input_json: { command: "ls" }, timestamp: "2026-01-01T00:00:01Z" }),
+      event({ id: 2, role: "tool", tool_call_id: "a", tool_output_text: "ok", timestamp: "2026-01-01T00:00:02Z" }),
+      event({ id: 3, role: "assistant", content_text: "Now check the frames.", item: { kind: "reasoning" }, timestamp: "2026-01-01T00:00:03Z" } as Partial<AgentEvent> & Pick<AgentEvent, "id" | "role" | "timestamp">),
+      event({ id: 4, role: "assistant", tool_name: "Bash", tool_call_id: "b", tool_input_json: { command: "ls" }, timestamp: "2026-01-01T00:00:04Z" }),
+      event({ id: 5, role: "tool", tool_call_id: "b", tool_output_text: "ok", timestamp: "2026-01-01T00:00:05Z" }),
+    ];
+    expect(buildTimelineModel(projection(events)).items.map((item) => item.kind)).toEqual(["tool", "reasoning", "tool"]);
+  });
+});

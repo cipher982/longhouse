@@ -70,7 +70,7 @@ const ACTIVITY_SUMMARY_LABEL: Record<ActivityCategory, string> = {
   list: "Listed",
   view: "Viewed",
   edit: "Edited",
-  call: "Called",
+  call: "Made",
   run: "Ran",
   wait: "Waited",
 };
@@ -317,6 +317,14 @@ export function getToolIntentLabel(interaction: ToolInteraction): string | null 
 }
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
+/** A thought the provider withheld and left empty: a marker, not content. */
+export function isBareWithheldReasoning(event: AgentEvent): boolean {
+  const raw = event.content_text || "";
+  const cleaned = (raw.startsWith("Thinking:\n") ? raw.slice("Thinking:\n".length) : raw).trim();
+  const isWithheld = Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
+  return isWithheld && (!cleaned || cleaned === "[Reasoning withheld]");
+}
+
 export function isActivityEligible(interaction: ToolInteraction): boolean {
   if (!(interaction.presentation?.tool_name ?? interaction.toolName)) return false;
   if ((interaction.children?.length ?? 0) > 0) return false;
@@ -448,7 +456,7 @@ export function formatActivitySummary(interactions: ToolInteraction[]): string {
     );
     const hiddenDistinct = Math.max(0, operations.length - visible.length);
     if (hiddenDistinct > 0) visible.push(`${hiddenDistinct} more`);
-    if (unnamedRuns > 0) visible.push(`${unnamedRuns} other`);
+    if (unnamedRuns > 0) visible.push(`${unnamedRuns} other ${pluralizeNoun("run", unnamedRuns)}`);
     parts.push(`Ran ${joinWithAnd(visible)}`);
   }
   // Natural phrasing across categories ("Ran 1 command, waited 6 times"),
@@ -1210,6 +1218,11 @@ export function buildTimelineModel(
       buffer.push(item.interaction);
       continue;
     }
+    // Some providers (Claude Opus) write an empty, withheld thought before
+    // nearly every call. The pane shows one "Reasoning withheld" per turn and
+    // hides the rest, so letting the hidden ones split a run left every call
+    // as its own row with nothing visible between them.
+    if (buffer.length > 0 && item.kind === "reasoning" && isBareWithheldReasoning(item.event)) continue;
     flush();
     groupedItems.push(item);
   }

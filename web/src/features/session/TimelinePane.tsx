@@ -58,6 +58,7 @@ import {
   isToolInteractionFailed,
   isToolInteractionRunning,
   messagePhase,
+  isBareWithheldReasoning,
   narrationTrail,
   timelineItemIdentity,
   parseLonghouseOutput,
@@ -150,12 +151,7 @@ interface TimelinePaneProps {
   subagents?: readonly SubagentChild[];
 }
 
-function isWithheldReasoningEvent(event: AgentEvent): boolean {
-  const raw = event.content_text || "";
-  const cleaned = (raw.startsWith("Thinking:\n") ? raw.slice("Thinking:\n".length) : raw).trim();
-  const isWithheld = Boolean(event.reasoning_withheld) || event.item?.visibility === "withheld";
-  return isWithheld && (!cleaned || cleaned === "[Reasoning withheld]");
-}
+const isWithheldReasoningEvent = isBareWithheldReasoning;
 
 function tier3ItemLabel(item: TimelineItem): string | null {
   if (item.kind === "compaction") {

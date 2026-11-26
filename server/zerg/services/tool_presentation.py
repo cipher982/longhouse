@@ -768,6 +768,29 @@ def _label_for(name: str, rules_path: Path) -> str | None:
     return _label_for_cached(name, rules_key)
 
 
+_SHELL_WORD = r"""(?:"[^"]*"|'[^']*'|[^\s;&|'"])+"""
+# Leading setup that says where or with what, not what: `cd <dir> &&`,
+# `cd <dir>;`, `VAR=value;`, `export VAR=value &&`. A bare `VAR=value cmd`
+# (an environment prefix) stays, since it belongs to the command.
+_SHELL_SETUP = re.compile(
+    rf"""^\s*(?:cd\s+{_SHELL_WORD}|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:{_SHELL_WORD})?)\s*(?:&&|;)\s*"""
+)
+
+
+def _shell_headline(line: str) -> str:
+    """A command's first line without its leading cd and variable setup.
+
+    `cd /tmp/x/scratchpad && python3 - <<'EOF'` reads as `python3 - <<'EOF'`.
+    The full command stays the call's target, shown beside or on hover.
+    """
+    current = line
+    while True:
+        match = _SHELL_SETUP.match(current)
+        if not match or not current[match.end():].strip():
+            return current.strip()
+        current = current[match.end():]
+
+
 def extract_derived_tool_intent(
     tool_name: str | None,
     tool_input_json: Any,
@@ -812,6 +835,7 @@ def extract_derived_tool_intent(
     if label == "Shell":
         cmd = _shell_command(parsed)
         line = _first_line(cmd) if isinstance(cmd, str) else None
+        line = _shell_headline(line) if line else None
         return line[:_INTENT_CHARS] if line else None
     swarm = _swarm_summary(lowered, parsed)
     if swarm:

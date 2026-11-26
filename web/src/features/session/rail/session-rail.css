@@ -607,27 +607,31 @@
 }
 
 /* --- New session: the first thing in the rail, like a chat app's New chat. */
+/* New session is an ordinary rail row, not a call to action: it is used
+   now and then (and has a shortcut), so it should not be the first thing the
+   eye lands on. The shortcut shows on hover. */
 .session-rail__new {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 32px;
-  margin: 2px 0 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--color-border-primary);
+  min-height: 30px;
+  margin: 0 0 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
+  background: transparent;
+  color: var(--color-text-secondary);
   font-family: var(--font-family-base);
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 400;
   text-align: left;
   cursor: pointer;
 }
 
 .session-rail__new:hover {
-  border-color: rgba(233, 185, 73, 0.45);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
 }
 
 .session-rail__new:focus-visible {
@@ -636,12 +640,18 @@
 }
 
 .session-rail__new.is-active {
-  border-color: rgba(233, 185, 73, 0.55);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
   box-shadow: inset 2px 0 0 var(--color-brand-primary);
 }
 
 .session-rail__new svg {
   flex: none;
+  color: var(--color-text-muted);
+}
+
+.session-rail__new:hover svg,
+.session-rail__new.is-active svg {
   color: var(--color-brand-primary);
 }
 
@@ -650,6 +660,12 @@
   font-family: var(--font-family-mono);
   font-size: 10.5px;
   color: var(--color-text-muted);
+  opacity: 0;
+}
+
+.session-rail__new:hover .session-rail__new-key,
+.session-rail__new:focus-visible .session-rail__new-key {
+  opacity: 1;
 }
 
 .session-rail__new--icon {

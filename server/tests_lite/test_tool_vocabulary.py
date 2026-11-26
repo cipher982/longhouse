@@ -342,3 +342,19 @@ def test_review_spellings_paths_lists_argv_and_json_patch():
     assert argv["tool_intent"] == "ls -la" and argv["tool_target"] == "ls -la"
     as_json = call_text_for("apply_patch", '{"patch": "*** Begin Patch\\n*** Update File: web/src/a.ts\\n*** End Patch"}')
     assert as_json == {"tool_intent": "src/a.ts", "tool_intent_source": "derived", "tool_target": "web/src/a.ts"}
+
+
+def test_shell_intent_drops_leading_cd_and_variable_setup():
+    from zerg.services.tool_presentation import call_text_for
+
+    def intent(command: str) -> str | None:
+        return call_text_for("Bash", {"command": command})["tool_intent"]
+
+    assert intent("cd /tmp/x/scratchpad && git -C site pull --ff-only") == "git -C site pull --ff-only"
+    assert intent("D=/tmp/x/scratchpad; cd $D/lh && python3 - <<'EOF'\nprint(1)\nEOF") == "python3 - <<'EOF'"
+    assert intent('export A="x y" && npm test') == "npm test"
+    # An environment prefix belongs to the command, and a bare cd is the command.
+    assert intent("FOO=1 make test") == "FOO=1 make test"
+    assert intent("cd /repo") == "cd /repo"
+    # The target keeps the literal command.
+    assert call_text_for("Bash", {"command": "cd /r && ls"})["tool_target"] == "cd /r && ls"

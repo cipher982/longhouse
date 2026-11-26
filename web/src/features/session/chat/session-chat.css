@@ -253,18 +253,17 @@
   white-space: nowrap;
 }
 /* The turn clock is context, not the live signal (the running row's clock
-   is): muted, labelled, pushed to the line's end. */
+   is): plain muted digits right after the label, "Thinking · 4:42". It does
+   not push to the line's end: that space belongs to the evidence icon. */
 .session-chat-composer__turn-clock {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
   flex-shrink: 0;
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
 }
-.session-chat-composer__turn-label {
-  letter-spacing: 0.02em;
+.session-chat-composer__turn-clock::before {
+  content: "\00b7";
+  margin-right: 6px;
 }
 .session-chat-composer__head-detail {
   min-width: 0;
