@@ -1206,6 +1206,11 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
         state = db.get(LiveRuntimeState, event.runtime_key)
         if state is None:
             return "ignored"
+        existing_terminal_state = str(state.terminal_state or "").strip()
+        if existing_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES | EXPLICIT_CLOSED_TERMINAL_STATES:
+            return "ignored"
+        if event.run_id is not None and state.run_id is not None and event.run_id != state.run_id:
+            return "ignored"
         occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
         if state.last_asserted_at is not None and normalize_utc(state.last_asserted_at) >= occurred_at:
             # A replay carries the assertion time it was minted with, so it
@@ -1215,6 +1220,27 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
         db.add(state)
         db.flush()
         return "applied"
+
+    if event.kind == "binding_signal":
+        # Binding aliases are an idempotent graph side effect, not a run
+        # lifecycle transition. Never synthesize a runtime row, never reassign
+        # run_id (moving run_id onto a terminated row makes the new run's own
+        # phase_signal hit protected_terminal), and never touch terminal state.
+        state = db.get(LiveRuntimeState, event.runtime_key)
+        if state is None:
+            return "ignored"
+        changed = False
+        if event.session_id is not None and state.session_id is None:
+            state.session_id = event.session_id
+            changed = True
+        if event.thread_id is not None and state.thread_id is None:
+            state.thread_id = event.thread_id
+            changed = True
+        if changed:
+            state.runtime_version = int(state.runtime_version or 0) + 1
+            db.flush()
+            return "applied"
+        return "ignored"
 
     state = _ensure_state(db, event)
     before = _state_snapshot(state)
@@ -1228,8 +1254,13 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
     incoming_run = None
     superseded_run = False
     run_order_known = False
+    terminal_from_prior_run = False
     if event.run_id is not None and event.kind in {"phase_signal", "progress_signal", "terminal_signal"}:
         incoming_run = db.get(LiveSessionRun, str(event.run_id))
+        if incoming_run is not None and state.terminal_at is not None:
+            # A run cannot have terminated before it started. Self-heals any
+            # row whose run_id was moved onto an earlier run's terminal state.
+            terminal_from_prior_run = normalize_utc(state.terminal_at) < normalize_utc(incoming_run.started_at)
         if opens_new_run and current_run_id is not None and incoming_run is not None:
             current_run = db.get(LiveSessionRun, str(current_run_id))
             if current_run is not None:
@@ -1273,7 +1304,8 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
     if existing_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return "protected_session_ended"
 
-    if existing_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES and not opens_new_run:
+    stale_prior_terminal = terminal_from_prior_run and incoming_run is not None and incoming_run.ended_at is None
+    if existing_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES and not opens_new_run and not stale_prior_terminal:
         # A later transcript/phase signal can arrive after a process exit. It is
         # evidence about the ended run, not proof that the run reopened. New
         # work must identify a new run before it may clear terminal state.
@@ -1436,6 +1468,7 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
             and existing_terminal_state in RUN_TERMINAL_STATES
             and current_run_id is not None
             and (event.run_id is None or event.run_id == current_run_id)
+            and not terminal_from_prior_run
         )
         if same_run_terminal_replay:
             return "applied" if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at) else "ignored"
@@ -1468,10 +1501,6 @@ def _reduce_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEven
         pause_changed = expire_live_interactions_for_terminal(db, event) > 0
         if terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
             _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
-
-    elif event.kind == "binding_signal":
-        if event.session_id is not None:
-            state.session_id = event.session_id
 
     after = _state_snapshot(state)
     if after != before:
