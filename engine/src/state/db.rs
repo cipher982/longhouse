@@ -64,13 +64,31 @@ pub fn resolve_db_path(db_path: Option<&Path>) -> Result<PathBuf> {
 pub fn open_connection(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
+    configure_fast_connection(&conn)?;
+    Ok(conn)
+}
+
+/// Open an *existing* shipper DB without `SQLITE_OPEN_CREATE`.
+///
+/// Used by `ConnectionPool` so a deleted or replaced canonical DB path fails
+/// loudly instead of creating an empty schema-less database file on disk.
+pub fn open_existing_connection(db_path: &Path) -> Result<Connection> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(db_path, flags)
+        .with_context(|| format!("opening existing SQLite DB: {}", db_path.display()))?;
+    configure_fast_connection(&conn)?;
+    Ok(conn)
+}
+
+fn configure_fast_connection(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA foreign_keys=ON;
          PRAGMA synchronous=NORMAL;
          PRAGMA busy_timeout=5000;
          PRAGMA cache_size=-4096;",
     )?;
-    Ok(conn)
+    Ok(())
 }
 /// Open a fresh connection to an already-initialized shipper DB with a custom busy timeout.
 ///

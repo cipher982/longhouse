@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use rusqlite::Connection;
 
-use super::db::{open_connection, resolve_db_path};
+use super::db::{open_existing_connection, resolve_db_path};
 
 /// Reusable pool of fast-path SQLite connections.
 ///
@@ -106,11 +106,15 @@ impl ConnectionPool {
     }
 
     /// Lease a connection from the pool, opening a new one if none is idle or
-    /// if the underlying database file on disk was replaced or became unusable.
+    /// if the underlying database file on disk was unlinked/replaced or became
+    /// unusable.
     ///
     /// Cheap when an idle connection is parked and `(dev, ino)` still matches
-    /// (one `stat()`, no SQLite work). On a miss or path replacement it runs
-    /// `open_connection` (just `Connection::open` + two PRAGMAs).
+    /// (one `stat()`, no SQLite work). Note that inode checks catch rename or
+    /// unlink replacements (not in-place overwrites keeping the same inode).
+    /// On a miss or path replacement it runs `open_existing_connection` (no
+    /// `SQLITE_OPEN_CREATE`, so a deleted DB fails cleanly instead of creating
+    /// an empty schema-less file).
     pub fn get(&self) -> Result<PooledConnection> {
         let live_id = current_db_file_id(&self.inner.db_path);
         let reused = {
@@ -128,8 +132,8 @@ impl ConnectionPool {
                 }
                 None => {
                     // DB path was removed, replaced with a non-file, or became
-                    // unreadable; drop stale descriptors so open_connection
-                    // surfaces the current filesystem state.
+                    // unreadable; drop stale descriptors so open surfaces the
+                    // current filesystem state.
                     idle.clear();
                     None
                 }
@@ -138,9 +142,14 @@ impl ConnectionPool {
         let (conn, file_id) = match reused {
             Some(entry) => (entry.conn, entry.file_id),
             None => {
-                let conn = open_connection(&self.inner.db_path)?;
-                let opened_id = current_db_file_id(&self.inner.db_path);
-                (conn, opened_id)
+                let conn = open_existing_connection(&self.inner.db_path)?;
+                // Only tag `file_id` when `(dev, ino)` matched both before and
+                // after open; if a rename raced the open, leave `file_id = None`
+                // so the connection is discarded on return instead of parked
+                // under the wrong inode.
+                let after_id = current_db_file_id(&self.inner.db_path);
+                let stable_id = live_id.filter(|before| Some(*before) == after_id);
+                (conn, stable_id)
             }
         };
         Ok(PooledConnection {
@@ -177,6 +186,9 @@ impl std::ops::DerefMut for PooledConnection {
 impl Drop for PooledConnection {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
+            let Some(file_id) = self.file_id else {
+                return;
+            };
             let mut idle = match self.pool.idle.lock() {
                 Ok(guard) => guard,
                 Err(_) => return,
@@ -184,7 +196,7 @@ impl Drop for PooledConnection {
             if idle.len() < self.pool.capacity {
                 idle.push(IdleConnection {
                     conn,
-                    file_id: self.file_id,
+                    file_id: Some(file_id),
                 });
             }
         }
@@ -285,8 +297,16 @@ mod tests {
         assert!(pool.get().is_err());
         assert_eq!(pool.inner.idle.lock().unwrap().len(), 0);
 
-        // Restoring the file lets the pool reopen and recover cleanly.
+        // Removing the DB entirely must also fail without creating a fresh
+        // schema-less database file at the canonical path.
         std::fs::remove_dir(&db_path).unwrap();
+        assert!(pool.get().is_err());
+        assert!(
+            !db_path.exists(),
+            "ConnectionPool::get must not create an empty DB when the canonical file is missing"
+        );
+
+        // Restoring the file lets the pool reopen and recover cleanly.
         std::fs::rename(&backup_path, &db_path).unwrap();
         let lease = pool.get().unwrap();
         let count: i64 = lease

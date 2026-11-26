@@ -66,9 +66,6 @@ pub(super) async fn handle_live_transcript_file_events(
         partition_managed_state_events(events, managed_state_dirs);
     if !managed_state_changes.is_empty() {
         crate::omp_session::note_managed_state_changes(&managed_state_changes);
-        for path in &managed_state_changes {
-            crate::dir_cache::notify_watched_dir_changed(path);
-        }
     }
     let mut outbox_or_wal_changed = false;
     let mut scope_changed = false;

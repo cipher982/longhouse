@@ -366,6 +366,22 @@ impl ProviderClaimGenerations {
             slot.full.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
     }
+
+    pub(super) fn bump_all_recent(&self) {
+        for slot in [
+            &self.claude,
+            &self.codex,
+            &self.cursor,
+            &self.omp,
+            &self.pi,
+            &self.opencode,
+            &self.antigravity,
+            &self.other,
+        ] {
+            slot.recent
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -375,11 +391,78 @@ struct SettledScanEntry {
     full_generation: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ManagedStateInvalidation {
+    Ignore,
     Global,
+    RecentAll,
     FullProvider(&'static str),
     RecentProvider(&'static str),
+    ClaimTargeted {
+        provider: &'static str,
+        full_provider: bool,
+        source_path: Option<PathBuf>,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct ManagedClaimHint {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+}
+
+fn canonical_provider_name(provider: &str) -> Option<&'static str> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "cursor" => Some("cursor"),
+        "omp" | "oh-my-pi" | "pi-omp" => Some("omp"),
+        "pi" => Some("pi"),
+        "opencode" => Some("opencode"),
+        "antigravity" => Some("antigravity"),
+        _ => None,
+    }
+}
+
+/// Classify a change inside `managed-local/claims` or `agent/turn-claims`
+/// without flushing all 10,000+ historical settled sources on every Console
+/// turn or session end.
+///
+/// Non-`.json` lock/temp files are ignored. Readable claim files scope
+/// invalidation to their named provider (plus exact-path invalidation on
+/// `source_path` so adopting an older >24h source still takes effect
+/// immediately). Deleted or transiently unreadable claim files fall back to
+/// `RecentAll` (24h window) so active sessions are re-checked without wiping
+/// months-old settled history.
+fn classify_claim_file_change(path: &Path) -> ManagedStateInvalidation {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+        return ManagedStateInvalidation::Ignore;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return ManagedStateInvalidation::RecentAll;
+    };
+    let Ok(hint) = serde_json::from_slice::<ManagedClaimHint>(&bytes) else {
+        return ManagedStateInvalidation::RecentAll;
+    };
+    let Some(provider) = hint.provider.as_deref().and_then(canonical_provider_name) else {
+        return ManagedStateInvalidation::RecentAll;
+    };
+    let source_path = hint
+        .source_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    // OpenCode stores all sessions in one SQLite DB file, so invalidating the
+    // whole provider costs one file and guarantees rebinding regardless of age.
+    let full_provider = provider == "opencode";
+    ManagedStateInvalidation::ClaimTargeted {
+        provider,
+        full_provider,
+        source_path,
+    }
 }
 
 fn recent_cutoff_nanos(window: Duration) -> i128 {
@@ -404,7 +487,7 @@ fn classify_managed_state_change(path: &Path) -> ManagedStateInvalidation {
     if let Some(idx) = parts.iter().rposition(|&part| part == "managed-local") {
         let sub = &parts[idx + 1..];
         return match sub.first().copied() {
-            Some("claims") => ManagedStateInvalidation::Global,
+            Some("claims") => classify_claim_file_change(path),
             Some("cursor-helm" | "cursor" | "cursor-console") => {
                 ManagedStateInvalidation::FullProvider("cursor")
             }
@@ -452,7 +535,7 @@ fn classify_managed_state_change(path: &Path) -> ManagedStateInvalidation {
 
     if let Some(idx) = parts.iter().rposition(|&part| part == "agent") {
         if matches!(parts.get(idx + 1).copied(), Some("turn-claims")) {
-            return ManagedStateInvalidation::Global;
+            return classify_claim_file_change(path);
         }
     }
 
@@ -553,16 +636,15 @@ impl SettledScanCache {
         self.claim_generations.bump_provider(provider);
     }
 
-    pub(super) fn invalidate_provider_recent(&mut self, provider: &'static str, window: Duration) {
+    pub(super) fn invalidate_all_recent(&mut self, window: Duration) {
         let cutoff_nanos = recent_cutoff_nanos(window);
-        self.claim_generations.bump_provider_recent(provider);
+        self.claim_generations.bump_all_recent();
         self.entries.retain(|_, entry| {
-            entry.provider != provider
-                || entry
-                    .stamp
-                    .modified_nanos
-                    .max(entry.stamp.wal_modified_nanos)
-                    < cutoff_nanos
+            entry
+                .stamp
+                .modified_nanos
+                .max(entry.stamp.wal_modified_nanos)
+                < cutoff_nanos
         });
     }
 
@@ -581,20 +663,86 @@ impl SettledScanCache {
         }
     }
 
+    /// Collapse a coalesced managed-state watcher batch into deduplicated
+    /// provider/path invalidations before scanning `self.entries`, so a
+    /// 300-path burst pays at most one `O(entries)` pass instead of 300.
     pub(super) fn invalidate_for_managed_changes(&mut self, paths: &[PathBuf]) {
+        let mut full_providers: Vec<&'static str> = Vec::new();
+        let mut recent_providers: Vec<&'static str> = Vec::new();
+        let mut recent_all = false;
+        let mut explicit_paths: Vec<PathBuf> = Vec::new();
+
         for path in paths {
             match classify_managed_state_change(path) {
+                ManagedStateInvalidation::Ignore => {}
                 ManagedStateInvalidation::Global => {
                     self.invalidate_all();
                     return;
                 }
+                ManagedStateInvalidation::RecentAll => {
+                    recent_all = true;
+                }
                 ManagedStateInvalidation::FullProvider(provider) => {
-                    self.invalidate_provider(provider);
+                    if !full_providers.contains(&provider) {
+                        full_providers.push(provider);
+                    }
                 }
                 ManagedStateInvalidation::RecentProvider(provider) => {
-                    self.invalidate_provider_recent(provider, RECENT_STATE_INVALIDATION_WINDOW);
+                    if !recent_providers.contains(&provider) {
+                        recent_providers.push(provider);
+                    }
+                }
+                ManagedStateInvalidation::ClaimTargeted {
+                    provider,
+                    full_provider,
+                    source_path,
+                } => {
+                    if let Some(source_path) = source_path {
+                        explicit_paths.push(source_path);
+                    }
+                    if full_provider {
+                        if !full_providers.contains(&provider) {
+                            full_providers.push(provider);
+                        }
+                    } else if !recent_providers.contains(&provider) {
+                        recent_providers.push(provider);
+                    }
                 }
             }
+        }
+
+        for path in explicit_paths {
+            self.invalidate_path(&path);
+            if let Ok(canonical) = std::fs::canonicalize(&path) {
+                if canonical != path {
+                    self.invalidate_path(&canonical);
+                }
+            }
+        }
+        for provider in &full_providers {
+            self.invalidate_provider(provider);
+        }
+        if recent_all {
+            self.invalidate_all_recent(RECENT_STATE_INVALIDATION_WINDOW);
+            return;
+        }
+        let pending_recent: Vec<&'static str> = recent_providers
+            .into_iter()
+            .filter(|provider| !full_providers.contains(provider))
+            .collect();
+        if !pending_recent.is_empty() {
+            let cutoff_nanos = recent_cutoff_nanos(RECENT_STATE_INVALIDATION_WINDOW);
+            for provider in &pending_recent {
+                self.claim_generations.bump_provider_recent(provider);
+            }
+            self.entries.retain(|_, entry| {
+                !pending_recent.contains(&entry.provider)
+                    || entry
+                        .stamp
+                        .modified_nanos
+                        .max(entry.stamp.wal_modified_nanos)
+                        < cutoff_nanos
+            });
         }
     }
 }
@@ -1310,5 +1458,71 @@ mod tests {
             Some(rested)
         )));
         assert!(!cache.is_settled(&discovered("/tmp/omp/session.jsonl", "omp", Some(rested))));
+    }
+
+    #[test]
+    fn claim_and_turn_claim_changes_do_not_flush_historical_settled_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let claims_dir = dir.path().join("managed-local/claims");
+        let turn_claims_dir = dir.path().join("agent/turn-claims");
+        std::fs::create_dir_all(&claims_dir).unwrap();
+        std::fs::create_dir_all(&turn_claims_dir).unwrap();
+
+        let mut cache = SettledScanCache::default_for_test();
+        let old = sample_stamp(1024, true);
+        let recent = recent_stamp(1024, true);
+
+        let old_claude = PathBuf::from("/tmp/claude/old.jsonl");
+        let adopted_claude = PathBuf::from("/tmp/claude/adopted-old.jsonl");
+        let recent_claude = PathBuf::from("/tmp/claude/recent.jsonl");
+        let old_omp = PathBuf::from("/tmp/omp/old.jsonl");
+        let recent_omp = PathBuf::from("/tmp/omp/recent.jsonl");
+
+        let claude_gen = cache.current_claim_generation("claude");
+        let omp_gen = cache.current_claim_generation("omp");
+        cache.record_settled(old_claude.clone(), "claude", Some(old), claude_gen);
+        cache.record_settled(adopted_claude.clone(), "claude", Some(old), claude_gen);
+        cache.record_settled(recent_claude.clone(), "claude", Some(recent), claude_gen);
+        cache.record_settled(old_omp.clone(), "omp", Some(old), omp_gen);
+        cache.record_settled(recent_omp.clone(), "omp", Some(recent), omp_gen);
+
+        // Lockfile touches in managed-local/claims are ignored completely.
+        cache.invalidate_for_managed_changes(&[claims_dir.join(".claims.lock")]);
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/recent.jsonl",
+            "claude",
+            Some(recent)
+        )));
+        assert!(cache.is_settled(&discovered("/tmp/omp/recent.jsonl", "omp", Some(recent))));
+
+        // A claim naming claude + explicit old source_path invalidates that
+        // exact path and recent claude files, keeping historical claude + omp.
+        let claim_file = claims_dir.join("sess-1.json");
+        std::fs::write(
+            &claim_file,
+            r#"{"provider":"claude","source_path":"/tmp/claude/adopted-old.jsonl"}"#,
+        )
+        .unwrap();
+        cache.invalidate_for_managed_changes(&[claim_file]);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/adopted-old.jsonl",
+            "claude",
+            Some(old)
+        )));
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/recent.jsonl",
+            "claude",
+            Some(recent)
+        )));
+        assert!(cache.is_settled(&discovered("/tmp/claude/old.jsonl", "claude", Some(old))));
+        assert!(cache.is_settled(&discovered("/tmp/omp/old.jsonl", "omp", Some(old))));
+        assert!(cache.is_settled(&discovered("/tmp/omp/recent.jsonl", "omp", Some(recent))));
+
+        // A deleted turn-claim file invalidates recent entries across providers
+        // without flushing months-old historical entries.
+        cache.invalidate_for_managed_changes(&[turn_claims_dir.join("gone.json")]);
+        assert!(!cache.is_settled(&discovered("/tmp/omp/recent.jsonl", "omp", Some(recent))));
+        assert!(cache.is_settled(&discovered("/tmp/claude/old.jsonl", "claude", Some(old))));
+        assert!(cache.is_settled(&discovered("/tmp/omp/old.jsonl", "omp", Some(old))));
     }
 }

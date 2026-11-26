@@ -19,7 +19,7 @@ use std::io::ErrorKind;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use sha2::{Digest, Sha256};
@@ -33,51 +33,79 @@ const MAX_DIRECTORIES: usize = 64;
 /// Safety re-verification horizon for FSEvents-watched directories.
 /// Normal changes invalidate immediately via `notify_watched_dir_changed` and
 /// directory `(ino, mtime, ctime)`; this cap also catches hypothetical missed
-/// OS watcher events on in-place file rewrites.
-const WATCHED_DIR_REVERIFY_INTERVAL: Duration = Duration::from_secs(15);
+/// OS watcher events on in-place file rewrites without expiring every 15 s
+/// between idle observation ticks.
+const WATCHED_DIR_REVERIFY_INTERVAL: Duration = Duration::from_secs(60);
 
 type Signature = Vec<(OsString, u64, u64, i128)>;
 type DirStamp = (u64, i128, i128);
 
-static WATCHED_ROOTS: LazyLock<Mutex<Vec<PathBuf>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-static WATCH_GENERATION: AtomicU64 = AtomicU64::new(1);
+/// Per-root generation counters for directories watched by `SessionWatcher`.
+/// Both the original path and its canonicalized path share one `Arc<AtomicU64>`
+/// so symlinked aliases (e.g. `/tmp` vs `/private/tmp`) invalidate together
+/// without disturbing unrelated watched directories.
+static WATCHED_ROOTS: LazyLock<RwLock<Vec<(PathBuf, Arc<AtomicU64>)>>> =
+    LazyLock::new(|| RwLock::new(Vec::new()));
 
 /// Register directory roots actively watched recursively by `SessionWatcher`.
 /// Cached snapshots under these roots skip per-entry `readdir`/`getattrlistbulk`
-/// when the directory's own metadata and `WATCH_GENERATION` have not moved.
+/// when the directory's own metadata and its root's watch generation have not
+/// moved.
 pub(crate) fn register_watched_dirs(dirs: &[PathBuf]) {
-    if let Ok(mut roots) = WATCHED_ROOTS.lock() {
+    if let Ok(mut roots) = WATCHED_ROOTS.write() {
         for dir in dirs {
             let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
-            if !roots.iter().any(|existing| existing == &canonical) {
-                roots.push(canonical);
+            let counter = roots
+                .iter()
+                .find(|(existing, _)| existing == &canonical || existing == dir)
+                .map(|(_, gen)| Arc::clone(gen))
+                .unwrap_or_else(|| Arc::new(AtomicU64::new(1)));
+            counter.fetch_add(1, Ordering::AcqRel);
+            if !roots.iter().any(|(existing, _)| existing == &canonical) {
+                roots.push((canonical, Arc::clone(&counter)));
             }
-            if !roots.iter().any(|existing| existing == dir) {
-                roots.push(dir.clone());
+            if !roots.iter().any(|(existing, _)| existing == dir) {
+                roots.push((dir.clone(), counter));
             }
         }
     }
-    WATCH_GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
 /// Signal that the filesystem watcher observed a change under a watched state
-/// directory, forcing the next `parsed_json_dir` call to re-list entries.
+/// directory, bumping only the matching watched root(s) so unrelated state
+/// directories keep their fast-path cache hits.
 /// Safe to invoke directly from the OS watcher callback thread before event
 /// coalescing or channel bounds can delay or drop the notification.
 pub(crate) fn notify_watched_dir_changed(changed_path: &Path) {
-    if is_watched_dir(changed_path) {
-        WATCH_GENERATION.fetch_add(1, Ordering::AcqRel);
+    let Ok(roots) = WATCHED_ROOTS.read() else {
+        return;
+    };
+    if roots.is_empty() {
+        return;
+    }
+    let mut bumped: Vec<*const AtomicU64> = Vec::new();
+    for (root, counter) in roots.iter() {
+        if changed_path.starts_with(root) {
+            let ptr = Arc::as_ptr(counter);
+            if !bumped.contains(&ptr) {
+                counter.fetch_add(1, Ordering::AcqRel);
+                bumped.push(ptr);
+            }
+        }
     }
 }
 
-fn is_watched_dir(dir: &Path) -> bool {
-    let Ok(roots) = WATCHED_ROOTS.lock() else {
-        return false;
-    };
+fn watched_root_counter(dir: &Path) -> Option<Arc<AtomicU64>> {
+    let roots = WATCHED_ROOTS.read().ok()?;
     if roots.is_empty() {
-        return false;
+        return None;
     }
-    roots.iter().any(|root| dir.starts_with(root))
+    // Prefer the most specific (longest) registered root matching `dir`.
+    roots
+        .iter()
+        .filter(|(root, _)| dir.starts_with(root))
+        .max_by_key(|(root, _)| root.as_os_str().len())
+        .map(|(_, counter)| Arc::clone(counter))
 }
 
 fn dir_rested_stamp(dir: &Path, now: SystemTime) -> Option<DirStamp> {
@@ -183,19 +211,21 @@ where
         parse as usize,
         order as usize,
     );
-    let watched = is_watched_dir(dir);
-    let watch_gen_before = WATCH_GENERATION.load(Ordering::Acquire);
-    let dir_stamp = if watched {
+    let watch_counter = watched_root_counter(dir);
+    let watch_gen_before = watch_counter
+        .as_ref()
+        .map(|counter| counter.load(Ordering::Acquire));
+    let dir_stamp = if watch_counter.is_some() {
         dir_rested_stamp(dir, SystemTime::now())
     } else {
         None
     };
-    if watched && dir_stamp.is_some() {
+    if watch_gen_before.is_some() && dir_stamp.is_some() {
         if let Ok(cache) = CACHE.lock() {
             if let Some(entry) = cache.get(&key) {
                 if entry.signature.is_some()
                     && entry.dir_stamp == dir_stamp
-                    && entry.watch_gen == Some(watch_gen_before)
+                    && entry.watch_gen == watch_gen_before
                     && entry.verified_at.elapsed() < WATCHED_DIR_REVERIFY_INTERVAL
                 {
                     if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<Arc<T>>>() {
@@ -219,10 +249,12 @@ where
     if let Ok(mut cache) = CACHE.lock() {
         if let Some(entry) = cache.get_mut(&key) {
             if listing.signature.is_some() && entry.signature == listing.signature {
-                if watched && WATCH_GENERATION.load(Ordering::Acquire) == watch_gen_before {
-                    entry.dir_stamp = dir_stamp;
-                    entry.watch_gen = Some(watch_gen_before);
-                    entry.verified_at = Instant::now();
+                if let (Some(counter), Some(gen_before)) = (&watch_counter, watch_gen_before) {
+                    if counter.load(Ordering::Acquire) == gen_before {
+                        entry.dir_stamp = dir_stamp;
+                        entry.watch_gen = Some(gen_before);
+                        entry.verified_at = Instant::now();
+                    }
                 }
                 if let Ok(parsed) = Arc::clone(&entry.parsed).downcast::<Vec<Arc<T>>>() {
                     return Ok(parsed);
@@ -276,8 +308,12 @@ where
         if cache.len() >= MAX_DIRECTORIES && !cache.contains_key(&key) {
             cache.clear();
         }
-        let watch_gen = (watched && WATCH_GENERATION.load(Ordering::Acquire) == watch_gen_before)
-            .then_some(watch_gen_before);
+        let watch_gen = match (&watch_counter, watch_gen_before) {
+            (Some(counter), Some(gen_before)) if counter.load(Ordering::Acquire) == gen_before => {
+                Some(gen_before)
+            }
+            _ => None,
+        };
         cache.insert(
             key,
             Entry {
@@ -840,6 +876,21 @@ mod tests {
         let third = parsed_json_dir(dir.path(), parse, Ord::cmp).unwrap();
         assert_eq!(owned(third), ["two"]);
         assert_eq!(files_parsed(), 2);
+
+        // Notifying an unrelated watched root must not invalidate `dir`'s counter.
+        let other_dir = tempfile::tempdir().unwrap();
+        register_watched_dirs(&[other_dir.path().to_path_buf()]);
+        let gen_before = watched_root_counter(dir.path())
+            .unwrap()
+            .load(Ordering::Acquire);
+        notify_watched_dir_changed(&other_dir.path().join("other.json"));
+        let gen_after = watched_root_counter(dir.path())
+            .unwrap()
+            .load(Ordering::Acquire);
+        assert_eq!(
+            gen_before, gen_after,
+            "change in another watched root must not bump this root's watch generation"
+        );
     }
 
     #[test]

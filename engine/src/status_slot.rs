@@ -529,8 +529,9 @@ fn read_slot(path: &Path) -> Option<StatusSlot> {
 /// Re-verifies `(dev, ino)` after acquiring `flock` so concurrent lock-file
 /// pruning cannot let two writers lock different inodes for the same session.
 fn lock_session(dir: &Path, session_id: &str) -> std::io::Result<std::fs::File> {
+    const MAX_LOCK_ATTEMPTS: usize = 16;
     let lock_path = dir.join(format!(".{session_id}.lock"));
-    loop {
+    for _ in 0..MAX_LOCK_ATTEMPTS {
         let mut options = OpenOptions::new();
         options.write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -559,6 +560,14 @@ fn lock_session(dir: &Path, session_id: &str) -> std::io::Result<std::fs::File> 
         #[cfg(not(unix))]
         return Ok(file);
     }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        format!(
+            "status slot lock {} raced past {} attempts",
+            lock_path.display(),
+            MAX_LOCK_ATTEMPTS
+        ),
+    ))
 }
 
 /// Read every current slot. Bounded by the number of live sessions.

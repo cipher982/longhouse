@@ -1787,12 +1787,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Outbox drain: FSEvents wakes this immediately on writes; when
-            // idle, the fallback timer runs every 2 s (500 ms while active).
+            // all outbox/status/runtime lanes are quiet, relax the fallback
+            // timer to 2 s (500 ms only while a lane is actively draining).
+            // Live status-slot liveness still reconciles on the 2 s cadence
+            // without keeping a 500 ms timer pinned whenever any session exists.
             _ = state.outbox_timer.tick() => {
                 state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
-                let target_period = if state.outbox_idle_stamps.is_all_idle()
-                    && state.status_recorded.is_empty()
-                {
+                let target_period = if state.outbox_idle_stamps.is_all_idle() {
                     OUTBOX_DRAIN_INTERVAL
                 } else {
                     OUTBOX_DRAIN_ACTIVE_INTERVAL

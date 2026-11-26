@@ -644,8 +644,9 @@ fn newest_tool_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec
 // --- the loop -------------------------------------------------------------
 
 /// How often the hook state directory is rescanned for sessions as a fallback
-/// backstop when filesystem events are delayed or unavailable.
-const SCAN_EVERY: Duration = Duration::from_secs(3);
+/// backstop when filesystem events are delayed or unavailable. Normal state
+/// changes wake the reader in ~15 ms via `notify_if_state_paths_changed`.
+const SCAN_EVERY: Duration = Duration::from_secs(30);
 /// A state file untouched for this long belongs to no live session.
 const STATE_FILE_RECENT: Duration = Duration::from_secs(30 * 60);
 /// A "thinking" or "running" state older than this is a crashed turn, not a
