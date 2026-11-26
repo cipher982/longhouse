@@ -19,7 +19,27 @@ SWIFT_OUT = REPO / "ios" / "Sources" / "Shared" / "Generated" / "ToolTiers.gener
 
 
 def load() -> dict:
-    return json.loads(CONFIG.read_text())
+    data = json.loads(CONFIG.read_text())
+    validate(data)
+    return data
+
+
+def validate(data: dict) -> None:
+    """Every entry speaks the canonical vocabulary; no two names differ only in case."""
+    labels = data.get("labels")
+    if not isinstance(labels, dict) or not labels:
+        raise ValueError("config/tool-tiers.json: `labels` must map each canonical label to its status phrase")
+    seen: dict[str, str] = {}
+    for name, meta in data["tools"].items():
+        if meta.get("label") not in labels:
+            raise ValueError(f"tool {name!r}: label {meta.get('label')!r} is not a canonical label {sorted(labels)}")
+        status = meta.get("status")
+        if not isinstance(status, str) or not status.strip():
+            raise ValueError(f"tool {name!r}: missing `status` phrase")
+        key = name.lower()
+        if key in seen:
+            raise ValueError(f"tools {seen[key]!r} and {name!r} differ only in case; lookup is case-insensitive, keep one")
+        seen[key] = name
 
 
 def _aggregate_literal(value: object) -> str:
@@ -48,7 +68,8 @@ def render_ts(data: dict) -> str:
         aggregate = meta.get("aggregate", default_aggregate)
         entries.append(
             f'  {quote(name)}: {{ tier: {quote(meta["tier"])}, aggregate: {_aggregate_literal(aggregate)}, '
-            f'icon: {quote(meta["icon"])}, label: {quote(meta["label"])}, color: {quote(meta["color"])} }},'
+            f'icon: {quote(meta["icon"])}, label: {quote(meta["label"])}, color: {quote(meta["color"])}, '
+            f'status: {quote(meta["status"])} }},'
         )
 
     mcp_entries = []
@@ -71,8 +92,11 @@ export interface ToolTierMeta {{
   /** When set, completed calls may join consecutive exploration runs. */
   aggregate: ToolAggregate | null;
   icon: string;
+  /** Canonical label from config/tool-tiers.json `labels` (Shell, Read, Edit, ...). */
   label: string;
   color: ToolColorToken;
+  /** Present-tense phrase for a status line while the tool runs ("Running a command"). */
+  status: string;
 }}
 
 export interface McpNamespaceMeta {{
@@ -88,6 +112,11 @@ export const MCP_DEFAULT_AGGREGATE: ToolAggregate | null = {_aggregate_literal(m
 export const TOOL_TIERS: Record<string, ToolTierMeta> = {{
 {chr(10).join(entries)}
 }};
+
+/** Lowercased tool name -> entry; lookup is case-insensitive on every surface. */
+const TOOL_TIERS_BY_LOWER: Record<string, ToolTierMeta> = Object.fromEntries(
+  Object.entries(TOOL_TIERS).map(([name, meta]) => [name.toLowerCase(), meta]),
+);
 
 export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {{
 {chr(10).join(mcp_entries)}
@@ -122,6 +151,7 @@ export interface ResolvedToolInfo {{
   icon: string;
   label: string;
   color: ToolColorToken;
+  status: string;
   mcpNamespace?: string;
 }}
 
@@ -140,6 +170,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
           icon: meta.icon,
           label: mcp.method,
           color: meta.color,
+          status: `Using ${{mcp.method.replace(/_/g, " ")}}`,
           mcpNamespace: mcp.namespace,
         }};
       }}
@@ -150,17 +181,13 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
       icon: "M",
       label: mcp.method,
       color: "muted",
+      status: `Using ${{mcp.method.replace(/_/g, " ")}}`,
       mcpNamespace: mcp.namespace,
     }};
   }}
 
-  const exact = TOOL_TIERS[toolName];
-  if (exact) return {{ ...exact }};
-
-  const lower = toolName.toLowerCase();
-  for (const [key, meta] of Object.entries(TOOL_TIERS)) {{
-    if (key.toLowerCase() === lower) return {{ ...meta }};
-  }}
+  const known = TOOL_TIERS[toolName] ?? TOOL_TIERS_BY_LOWER[toolName.toLowerCase()];
+  if (known) return {{ ...known }};
 
   return {{
     tier: DEFAULT_TOOL_TIER,
@@ -168,6 +195,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
     icon: (toolName[0] || " ").toUpperCase(),
     label: toolName,
     color: "muted",
+    status: `Using ${{toolName}}`,
   }};
 }}
 
@@ -197,7 +225,8 @@ export function isFinalAnswerTool(toolName: string): boolean {{
 // --- Shell classifier constants (grammar is handwritten in shellSalience.ts;
 // parity with Swift is enforced by config/shell-salience-fixtures.json). ---
 
-export const SHELL_TOOLS: ReadonlySet<string> = new Set({json.dumps(shell["shell_tools"])});
+/** Lowercased; compare with `name.toLowerCase()`. */
+export const SHELL_TOOLS: ReadonlySet<string> = new Set({json.dumps([t.lower() for t in shell["shell_tools"]])});
 export const SHELL_READ_ONLY_COMMANDS: ReadonlySet<string> = new Set({json.dumps(shell["read_only_commands"])});
 export const SHELL_GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set({json.dumps(shell["git_read_subcommands"])});
 export const SHELL_AGGREGATE_BY_HEAD: Record<string, ToolAggregate> = {json.dumps(shell["aggregate_by_head"])};
@@ -224,7 +253,8 @@ def render_swift(data: dict) -> str:
         tool_entries.append(
             f'        "{name}": ToolTierMeta(tier: .{meta["tier"]}, '
             f'aggregate: {swift_aggregate(aggregate)}, '
-            f'icon: "{meta["icon"]}", label: "{meta["label"]}", color: .{meta["color"]}),'
+            f'icon: "{meta["icon"]}", label: "{meta["label"]}", color: .{meta["color"]}, '
+            f'status: "{meta["status"]}"),'
         )
 
     mcp_entries = []
@@ -261,6 +291,7 @@ public struct ToolTierMeta: Sendable {{
     public let icon: String
     public let label: String
     public let color: ToolColorToken
+    public let status: String
 }}
 
 public struct McpNamespaceMeta: Sendable {{
@@ -278,6 +309,11 @@ public enum ToolTiers {{
 {chr(10).join(tool_entries)}
     ]
 
+    /// Lowercased tool name -> entry; lookup is case-insensitive on every surface.
+    private static let toolsByLower: [String: ToolTierMeta] = Dictionary(
+        uniqueKeysWithValues: tools.map {{ ($0.key.lowercased(), $0.value) }}
+    )
+
     public static let mcpNamespaces: [String: McpNamespaceMeta] = [
 {chr(10).join(mcp_entries)}
     ]
@@ -288,6 +324,7 @@ public enum ToolTiers {{
         public let icon: String
         public let label: String
         public let color: ToolColorToken
+        public let status: String
         public let mcpNamespace: String?
     }}
 
@@ -300,25 +337,25 @@ public enum ToolTiers {{
                    ns.hasPrefix(prefix + "-") || ns.hasPrefix(prefix + "_") {{
                     return Resolved(tier: mcpDefaultTier, aggregate: mcpDefaultAggregate,
                                     icon: meta.icon, label: mcp.method, color: meta.color,
-                                    mcpNamespace: mcp.namespace)
+                                    status: mcpStatus(mcp.method), mcpNamespace: mcp.namespace)
                 }}
             }}
             return Resolved(tier: mcpDefaultTier, aggregate: mcpDefaultAggregate, icon: "M",
                             label: mcp.method, color: .muted,
-                            mcpNamespace: mcp.namespace)
+                            status: mcpStatus(mcp.method), mcpNamespace: mcp.namespace)
         }}
-        if let exact = tools[name] {{
-            return Resolved(tier: exact.tier, aggregate: exact.aggregate, icon: exact.icon,
-                            label: exact.label, color: exact.color, mcpNamespace: nil)
-        }}
-        let lower = name.lowercased()
-        for (key, meta) in tools where key.lowercased() == lower {{
-            return Resolved(tier: meta.tier, aggregate: meta.aggregate, icon: meta.icon,
-                            label: meta.label, color: meta.color, mcpNamespace: nil)
+        if let known = tools[name] ?? toolsByLower[name.lowercased()] {{
+            return Resolved(tier: known.tier, aggregate: known.aggregate, icon: known.icon,
+                            label: known.label, color: known.color, status: known.status,
+                            mcpNamespace: nil)
         }}
         let fallbackIcon = String(name.first.map {{ String($0).uppercased() }} ?? " ")
         return Resolved(tier: defaultTier, aggregate: defaultAggregate, icon: fallbackIcon,
-                        label: name, color: .muted, mcpNamespace: nil)
+                        label: name, color: .muted, status: "Using \\(name)", mcpNamespace: nil)
+    }}
+
+    private static func mcpStatus(_ method: String) -> String {{
+        "Using " + method.replacingOccurrences(of: "_", with: " ")
     }}
 
     public static func tier(_ name: String) -> ToolTier {{
@@ -350,7 +387,8 @@ public enum ToolTiers {{
 // parity with TS is enforced by config/shell-salience-fixtures.json). ---
 
 public enum ShellClassifierConstants {{
-    public static let shellTools: Set<String> = [{", ".join(f'"{t}"' for t in shell["shell_tools"])}]
+    /// Lowercased; compare with `name.lowercased()`.
+    public static let shellTools: Set<String> = [{", ".join(f'"{t.lower()}"' for t in shell["shell_tools"])}]
     public static let readOnlyCommands: Set<String> = [{", ".join(f'"{t}"' for t in shell["read_only_commands"])}]
     public static let gitReadSubcommands: Set<String> = [{", ".join(f'"{t}"' for t in shell["git_read_subcommands"])}]
     public static let aggregateByHead: [String: ToolAggregate] = [{", ".join(f'"{k}": .{v}' for k, v in shell["aggregate_by_head"].items())}]

@@ -28,8 +28,9 @@ export interface ShellSalience {
   aggregate: ToolAggregate;
 }
 
+/** Case-insensitive, like every tool-tier lookup: Bash, bash and Cursor's Shell all match. */
 export function isShellTool(toolName: string): boolean {
-  return SHELL_TOOLS.has(toolName);
+  return SHELL_TOOLS.has(toolName.toLowerCase());
 }
 
 /**

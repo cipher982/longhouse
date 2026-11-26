@@ -524,7 +524,7 @@ describe("SessionDetailPage", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    const toolLabel = screen.getByText("Bash");
+    const toolLabel = screen.getByText("Shell");
     const toolRow = toolLabel.closest("button");
     if (!(toolRow instanceof HTMLButtonElement)) {
       throw new Error("Expected the tool label to live inside a clickable row");
@@ -985,12 +985,12 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     {
-      const label = screen.getByText("Bash");
+      const label = screen.getByText("Shell");
       const row = label.closest('[data-row-kind="tool"]');
       expect(row).toHaveTextContent("dropped");
     }
 
-    const toolLabel = screen.getByText("Bash");
+    const toolLabel = screen.getByText("Shell");
     const toolRow = toolLabel.closest("button");
     if (!(toolRow instanceof HTMLButtonElement)) {
       throw new Error("Expected the tool label to live inside a clickable row");
@@ -998,7 +998,7 @@ describe("SessionDetailPage", () => {
 
     fireEvent.click(toolRow);
 
-    const row = screen.getByText("Bash").closest('[data-row-kind="tool"]');
+    const row = screen.getByText("Shell").closest('[data-row-kind="tool"]');
     expect(row).not.toBeNull();
     expect(row).toHaveTextContent(
       "Tool call dropped \u2014 no result was ever recorded.",

@@ -607,6 +607,8 @@ export interface AgentEvent {
   tool_presentation?: AgentToolPresentation | null;
   tool_call_state?: "running" | "completed" | "dropped" | null;
   tool_intent?: string | null;
+  /** authored: the agent wrote tool_intent as the purpose; derived: Longhouse built it from the arguments. */
+  tool_intent_source?: "authored" | "derived" | null;
   message_phase?: "commentary" | "final_answer" | null;
   reasoning_withheld?: boolean;
   task_notification?: TaskNotificationPayload | null;

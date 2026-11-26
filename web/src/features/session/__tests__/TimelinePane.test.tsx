@@ -1105,7 +1105,7 @@ describe("TimelinePane", () => {
     expect(row).toHaveTextContent(
       "*** Begin Patch *** Update File: example.ts",
     );
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
     expect(row).toHaveTextContent("*** Begin Patch");
     expect(row).toHaveTextContent("*** Update File: example.ts");
   });
@@ -1179,7 +1179,7 @@ describe("TimelinePane", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
     const image = screen.getByAltText("Session media def456abc123");
     expect(image).toHaveAttribute("src", "/api/media/def456/blob");
     expect(screen.getByTestId("session-event-media")).toBeInTheDocument();
@@ -1217,7 +1217,7 @@ describe("TimelinePane", () => {
     expect(row).toHaveTextContent("Listing running containers");
     expect(row).not.toHaveTextContent("docker ps -a");
 
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
     expect(row).toHaveTextContent("docker ps -a");
   });
 
@@ -1236,7 +1236,7 @@ describe("TimelinePane", () => {
     expect(preview).toHaveTextContent("10 more lines");
     expect(preview).not.toHaveTextContent("output line 10");
 
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
     expect(row).toHaveTextContent("output line 10");
     expect(screen.queryByTestId("tool-output-preview")).not.toBeInTheDocument();
   });

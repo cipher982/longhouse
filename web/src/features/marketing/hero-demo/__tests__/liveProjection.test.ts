@@ -37,7 +37,7 @@ describe("live phone projection", () => {
     expect(toolRows.map((row) => getInteractionDisplayInfo(row.interaction).displayName)).toEqual([
       "Read",
       "Edit",
-      "Bash",
+      "Shell",
     ]);
     expect(toolRows.map((row) => getToolSummary(row.interaction))).toEqual([
       "/demo-repo/inventory.py",

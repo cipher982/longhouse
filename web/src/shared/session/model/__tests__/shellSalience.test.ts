@@ -46,7 +46,9 @@ describe("classifyShellCommand conformance corpus", () => {
 
 describe("isShellTool", () => {
   it("covers the configured shell tools and nothing surprising", () => {
-    for (const name of ["Bash", "shell", "shell_command", "exec_command", "run_shell_command"]) {
+    // Every provider's shell spelling, any case: Claude Bash, OpenCode/Pi/OMP
+    // bash, Cursor Shell, Codex exec_command, Antigravity run_command.
+    for (const name of ["Bash", "bash", "shell", "Shell", "shell_command", "exec_command", "run_shell_command", "run_command"]) {
       expect(isShellTool(name)).toBe(true);
     }
     expect(isShellTool("write_stdin")).toBe(false);

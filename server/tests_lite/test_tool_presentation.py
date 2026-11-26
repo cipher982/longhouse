@@ -104,7 +104,7 @@ text(await tools.apply_patch(patch));"""
 
     assert presentation is not None
     assert presentation["tool_name"] == "apply_patch"
-    assert presentation["label"] == "Edited"
+    assert presentation["label"] == "Edit"
     assert presentation["wrapper_recedes"] is True
     assert presentation["tool_input_json"] == {"patch": "*** Begin Patch\n*** Update File: app.py\n*** End Patch"}
 
@@ -214,7 +214,7 @@ def test_wait_alias_is_scoped_to_codex():
     claude = project_tool_presentation("write_stdin", payload, provider="claude")
 
     assert codex is not None and codex["label"] == "Wait" and codex["aggregate"] == "wait"
-    assert claude is not None and claude["label"] == "stdin" and claude["aggregate"] is None
+    assert claude is not None and claude["label"] == "Shell" and claude["aggregate"] is None
 
 
 def test_default_rules_path_prefers_packaged_copy(tmp_path, monkeypatch):

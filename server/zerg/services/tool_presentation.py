@@ -42,7 +42,16 @@ def _load_rules(path: str = str(DEFAULT_RULES_PATH)) -> dict[str, Any]:
     value = json.loads(Path(path).read_text())
     if not isinstance(value, dict) or not isinstance(value.get("tools"), dict):
         raise ValueError(f"invalid tool presentation rules: {path}")
+    # Lookup is exact name first, then case-insensitive, on every surface.
+    value["_tools_by_lower"] = {str(name).lower(): meta for name, meta in value["tools"].items()}
     return value
+
+
+def _lookup_tool(rules: Mapping[str, Any], tool_name: str) -> Mapping[str, Any] | None:
+    exact = rules["tools"].get(tool_name)
+    if exact is not None:
+        return exact
+    return rules["_tools_by_lower"].get(tool_name.lower())
 
 
 def _skip_space(text: str, index: int) -> int:
@@ -381,11 +390,7 @@ def _mcp_parts(tool_name: str) -> tuple[str, str] | None:
 
 def _base_projection(tool_name: str, tool_input_json: Any, *, rules_path: Path) -> dict[str, Any]:
     rules = _load_rules(str(rules_path.resolve()))
-    tools = rules["tools"]
-    exact = tools.get(tool_name)
-    if exact is None:
-        lower = tool_name.lower()
-        exact = next((value for name, value in tools.items() if name.lower() == lower), None)
+    exact = _lookup_tool(rules, tool_name)
     mcp = _mcp_parts(tool_name)
     if exact is not None:
         meta = exact
@@ -440,6 +445,15 @@ def _base_projection(tool_name: str, tool_input_json: Any, *, rules_path: Path) 
     }
 
 
+def _shell_command(tool_input: Mapping[str, Any]) -> str | None:
+    """The command text under any provider's key (Antigravity run_command uses ``CommandLine``)."""
+    for key in ("command", "cmd", "CommandLine"):
+        value = tool_input.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
 def _attach_shell_summary(projection: dict[str, Any], *, rules_path: Path) -> dict[str, Any]:
     """Attach a disposable shell summary to the final presented tool only."""
 
@@ -450,9 +464,7 @@ def _attach_shell_summary(projection: dict[str, Any], *, rules_path: Path) -> di
     tool_input = projection.get("tool_input_json")
     if not isinstance(tool_input, dict):
         return projection
-    source = tool_input.get("command")
-    if not isinstance(source, str):
-        source = tool_input.get("cmd")
+    source = _shell_command(tool_input)
     summary = summarize_shell_source(source)
     if summary is not None:
         projection["shell_summary"] = summary
@@ -548,22 +560,37 @@ def project_tool_presentation(
     }
 
 
-def extract_tool_intent(
-    tool_name: str | None,
-    tool_input_json: Any,
-    *,
-    provider: str | None = None,
-) -> str | None:
-    """Extract a clean one-line human intent label from normalized tool arguments.
+# Tools whose ``description`` argument states why the call was made. Mirrors the
+# engine's DESCRIPTION_IS_INTENT (engine/src/pipeline/items.rs) plus Claude
+# ``Monitor``, whose description is its purpose on ~96% of calls. On any other
+# tool (an MCP issue tracker, Claude ``Artifact``) ``description`` is payload.
+DESCRIPTION_IS_INTENT = frozenset(
+    {
+        "bash",
+        "shell",
+        "shell_command",
+        "exec_command",
+        "run_shell_command",
+        "run_terminal_cmd",
+        "task",
+        "agent",
+        "monitor",
+    }
+)
+# Tools whose ``reason`` / ``summary`` argument is the model's own one-line purpose.
+_REASON_IS_INTENT = frozenset({"enter_plan_mode", "enterplanmode", "schedulewakeup"})
+_SUMMARY_IS_INTENT = frozenset({"sendmessage"})
+_INTENT_CHARS = 160
 
-    Kept separate from ``project_tool_presentation`` so harness presentation
-    payload contracts remain unchanged while timeline/iOS callers can surface
-    concise action summaries (Claude ``description``, ``file_path``, ``pattern``,
-    ``query``, ``prompt``, etc.).
-    """
-    _ = provider
-    if tool_input_json is None:
+
+def _compact(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
+    compact = " ".join(value.split()).strip()
+    return compact[:_INTENT_CHARS] if compact else None
+
+
+def _input_mapping(tool_input_json: Any) -> Mapping[str, Any] | None:
     parsed: Any = tool_input_json
     if isinstance(parsed, str):
         stripped = parsed.strip()
@@ -573,43 +600,186 @@ def extract_tool_intent(
             parsed = json.loads(stripped)
         except Exception:
             return None
-    if not isinstance(parsed, Mapping):
+    return parsed if isinstance(parsed, Mapping) else None
+
+
+def extract_authored_tool_intent(tool_name: str | None, tool_input_json: Any) -> str | None:
+    """The purpose the agent itself wrote into the call's arguments, if any.
+
+    OMP/Pi ``i`` (OMP ``eval`` uses ``title``), Antigravity ``toolSummary``, and
+    ``description`` only on tools where it is the purpose (Claude/Cursor/OpenCode
+    shell and subagent calls). An MCP tool's arguments are its payload, never
+    its intent.
+    """
+    name = str(tool_name or "").strip()
+    if not name or _mcp_parts(name) is not None:
         return None
+    parsed = _input_mapping(tool_input_json)
+    if parsed is None:
+        return None
+    lowered = name.lower()
+    candidates: list[object] = [parsed.get("i"), parsed.get("toolSummary")]
+    if lowered == "eval":
+        candidates.append(parsed.get("title"))
+    if lowered in DESCRIPTION_IS_INTENT:
+        candidates.append(parsed.get("description"))
+    if lowered in _REASON_IS_INTENT:
+        candidates.append(parsed.get("reason"))
+    if lowered in _SUMMARY_IS_INTENT:
+        candidates.append(parsed.get("summary"))
+    for value in candidates:
+        compact = _compact(value)
+        if compact:
+            return compact
+    return None
 
-    for key in ("description", "intent", "summary", "reason"):
-        val = parsed.get(key)
-        if isinstance(val, str):
-            compact = " ".join(val.split()).strip()
+
+def _path_tail(path: str) -> str:
+    parts = [p for p in path.strip().replace("\\", "/").split("/") if p]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:_INTENT_CHARS])
+
+
+def extract_derived_tool_intent(
+    tool_name: str | None,
+    tool_input_json: Any,
+    *,
+    rules_path: Path = DEFAULT_RULES_PATH,
+) -> str | None:
+    """A one-line label Longhouse derives from the call's arguments.
+
+    Chosen by the tool's canonical label in config/tool-tiers.json, so every
+    provider's spelling of a read, search or shell call gets the same rule: a
+    path tail, a pattern, a query or URL, the first line of a command, or the
+    first line of a subagent prompt. This is what the call does, not why.
+    """
+    name = str(tool_name or "").strip()
+    if not name:
+        return None
+    parsed = _input_mapping(tool_input_json)
+    if parsed is None:
+        return None
+    meta = _lookup_tool(_load_rules(str(rules_path.resolve())), name)
+    label = str(meta.get("label")) if meta is not None else None
+
+    if label in {"Read", "Edit", "Write", "Notebook"}:
+        for key in ("file_path", "path", "filePath", "Path", "AbsolutePath", "target_file", "notebook_path"):
+            path = parsed.get(key)
+            if isinstance(path, str) and path.strip():
+                return _path_tail(path)
+        return None
+    if label in {"Search", "List"}:
+        for key in ("pattern", "query", "Query", "glob", "glob_pattern", "Pattern"):
+            compact = _compact(parsed.get(key))
             if compact:
-                return compact[:160]
-
-    normalized_tool = str(tool_name or "").strip().lower()
-    if normalized_tool in {"read", "read_file", "edit", "write", "multiedit", "notebookedit"}:
-        path = parsed.get("file_path") or parsed.get("path") or parsed.get("notebook_path")
-        if isinstance(path, str) and path.strip():
-            parts = [p for p in path.strip().replace("\\", "/").split("/") if p]
-            return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:160])
-
-    if normalized_tool in {"grep", "search_content", "glob"}:
-        pattern = parsed.get("pattern") or parsed.get("query") or parsed.get("glob")
-        if isinstance(pattern, str) and pattern.strip():
-            return " ".join(pattern.split())[:160]
-
-    if normalized_tool in {"websearch", "webfetch", "web_search", "fetch"}:
-        target = parsed.get("query") or parsed.get("url")
-        if isinstance(target, str) and target.strip():
-            return " ".join(target.split())[:160]
-
-    if normalized_tool in {"bash", "exec", "exec_command"}:
-        cmd = parsed.get("command") or parsed.get("cmd")
+                return compact
+        return None
+    if label in {"Fetch", "Web search"}:
+        for key in ("query", "url", "Url", "Query"):
+            compact = _compact(parsed.get(key))
+            if compact:
+                return compact
+        return None
+    if label == "Shell":
+        cmd = _shell_command(parsed)
         if isinstance(cmd, str) and cmd.strip():
             first_line = cmd.strip().splitlines()[0].strip()
-            return first_line[:160] if first_line else None
-
-    if normalized_tool in {"agent", "task", "subagent"}:
-        prompt = parsed.get("prompt")
+            return first_line[:_INTENT_CHARS] if first_line else None
+        return None
+    if label == "Agent" or name.lower() == "subagent":
+        prompt = parsed.get("prompt") or parsed.get("Prompt")
         if isinstance(prompt, str) and prompt.strip():
             first_line = " ".join(prompt.strip().splitlines()[0].split())
-            return first_line[:160] if first_line else None
-
+            return first_line[:_INTENT_CHARS] if first_line else None
     return None
+
+
+def resolve_tool_intent(
+    tool_name: str | None,
+    tool_input_json: Any,
+    *,
+    provider_intents: tuple[str | None, ...] = (),
+    rules_path: Path = DEFAULT_RULES_PATH,
+) -> tuple[str | None, str | None]:
+    """``(tool_intent, tool_intent_source)`` for one call.
+
+    Provider-authored purpose always wins over text Longhouse derives from the
+    arguments. ``provider_intents`` are intents the engine already extracted
+    from the provider record (block-level OMP ``intent``, guarded
+    ``description``, Antigravity ``toolSummary``), in order of preference.
+    Source is ``"authored"`` or ``"derived"``, and None when there is no intent.
+    """
+    if not tool_name:
+        return None, None
+    for value in provider_intents:
+        compact = _compact(value)
+        if compact:
+            return compact, "authored"
+    authored = extract_authored_tool_intent(tool_name, tool_input_json)
+    if authored:
+        return authored, "authored"
+    derived = extract_derived_tool_intent(tool_name, tool_input_json, rules_path=rules_path)
+    if derived:
+        return derived, "derived"
+    return None, None
+
+
+_STATUS_NAME_CHARS = 32
+
+
+def _split_activity_tool(tool: str | None) -> tuple[str, bool] | None:
+    """``(tool name, is_command_line)`` for a raw activity tool value.
+
+    Some producers put a whole command line in the tool slot (Antigravity ACP
+    sends ``CommandLine``, or ``name {json args}``). A tool name never contains
+    whitespace, so words after the first token that are not JSON arguments
+    mean the value is a command line.
+    """
+    raw = str(tool or "").strip()
+    if not raw:
+        return None
+    parts = raw.split(None, 1)
+    name = re.split(r"[({\[]", parts[0], maxsplit=1)[0] or parts[0]
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    return name, bool(rest) and not rest.startswith(("{", "[", "("))
+
+
+def tool_status_phrase(tool: str | None, *, rules_path: Path = DEFAULT_RULES_PATH) -> str | None:
+    """Present-tense status-line phrase for the tool a session is running.
+
+    A known tool gets its canonical ``status`` ("Running a command"); an MCP
+    tool ``mcp__ns__method`` gets "Using method"; anything else "Using <name>",
+    with the name cut to its first token and 32 characters; a command line
+    (see ``_split_activity_tool``) is "Running a command".
+    """
+    split = _split_activity_tool(tool)
+    if split is None:
+        return None
+    name, is_command_line = split
+    rules = _load_rules(str(rules_path.resolve()))
+    if is_command_line:
+        return str(rules["labels"]["Shell"])
+    meta = _lookup_tool(rules, name)
+    if meta is not None:
+        return str(meta["status"])
+    mcp = _mcp_parts(name)
+    if mcp is not None:
+        method = mcp[1].replace("_", " ").strip() or mcp[1]
+        return f"Using {method[:_STATUS_NAME_CHARS]}"
+    return f"Using {name[:_STATUS_NAME_CHARS]}"
+
+
+def tool_display_label(tool: str | None, *, rules_path: Path = DEFAULT_RULES_PATH) -> str | None:
+    """Canonical short label (Shell, Read, ...) for a raw tool name, MCP method, or sanitized name."""
+    split = _split_activity_tool(tool)
+    if split is None:
+        return None
+    name, is_command_line = split
+    if is_command_line:
+        return "Shell"
+    meta = _lookup_tool(_load_rules(str(rules_path.resolve())), name)
+    if meta is not None:
+        return str(meta["label"])
+    mcp = _mcp_parts(name)
+    if mcp is not None:
+        return mcp[1][:_STATUS_NAME_CHARS]
+    return name[:_STATUS_NAME_CHARS]

@@ -431,7 +431,7 @@ def test_failed_run_yields_to_interaction_only_when_it_can_be_answered(can_respo
 
 @pytest.mark.parametrize(
     ("phase", "expected_key", "expected_label"),
-    [("thinking", "thinking", "Thinking"), ("running", "executing", "Using Shell")],
+    [("thinking", "thinking", "Thinking"), ("running", "executing", "Running a command")],
 )
 def test_current_activity_outlives_failed_run(phase, expected_key, expected_label):
     facts = _facts(
@@ -462,7 +462,7 @@ def test_live_delegation_outlives_failed_parent_run():
     assert facts.run is not None and facts.run.lifecycle == "ended"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "delegated_work"
-    assert facts.presentation.primary.label == "Background · 1 agent"
+    assert facts.presentation.primary.label == "Waiting on 1 subagent"
 
 
 def test_unanswerable_interaction_does_not_claim_a_wait():
@@ -1565,7 +1565,7 @@ def test_branch_availability_is_narrower_than_resume():
 
 @pytest.mark.parametrize(
     ("phase", "tool", "state", "label"),
-    [("running", "Bash", "executing", "Using Shell"), ("thinking", None, "thinking", "Thinking")],
+    [("running", "Bash", "executing", "Running a command"), ("thinking", None, "thinking", "Thinking")],
 )
 def test_helm_turn_phase_outlives_its_window_while_the_control_lease_is_live(phase, tool, state, label):
     """A 10-minute build or a long model reply is still what was last observed.
@@ -1627,7 +1627,7 @@ def test_helm_turn_phase_is_superseded_by_a_later_transcript(phase, tool):
     assert facts.mode == "helm"
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is not None
-    assert facts.presentation.primary.label not in {"Thinking", "Using Shell"}
+    assert facts.presentation.primary.label not in {"Thinking", "Running a command"}
 
 
 def test_helm_turn_phase_still_holds_when_the_transcript_is_the_same_moment():
@@ -1648,7 +1648,7 @@ def test_helm_turn_phase_decays_once_the_control_lease_is_gone():
     )
 
     assert facts.activity.state == "unknown"
-    assert facts.presentation.primary is None or facts.presentation.primary.label != "Using Shell"
+    assert facts.presentation.primary is None or facts.presentation.primary.label != "Running a command"
 
 
 @pytest.mark.parametrize("terminal_reason", ["provider_auth_missing", "provider_auth_invalid"])
@@ -1671,8 +1671,8 @@ def test_typed_provider_auth_failures_keep_the_sign_in_presentation(terminal_rea
 @pytest.mark.parametrize(
     ("kind", "expected_label"),
     [
-        ("shell", "Background · 1 command"),
-        ("monitor", "Background · 1 monitor"),
+        ("shell", "Waiting on 1 command"),
+        ("monitor", "Waiting on 1 monitor"),
     ],
 )
 def test_passive_shell_or_monitor_delegation_stays_open_with_idle_tone_and_quiet_signal(kind, expected_label):

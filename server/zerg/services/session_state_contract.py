@@ -34,7 +34,7 @@ from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import FAILED_RUN_END_REASONS
 from zerg.services.session_runtime import RUN_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.services.session_runtime_display import compact_runtime_tool_label
+from zerg.services.tool_presentation import tool_status_phrase
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
@@ -419,7 +419,8 @@ def _activity(runtime_view: SessionRuntimeView | None) -> SessionActivityFacts:
     return SessionActivityFacts(
         state=state,
         raw_kind=raw_kind,
-        tool=compact_runtime_tool_label(runtime_view.active_tool or runtime_view.presence_tool),
+        # Raw provider tool name, like the live projector; `_primary` words it.
+        tool=_clean(runtime_view.active_tool or runtime_view.presence_tool),
         source=source,
         observed_at=normalize_utc(runtime_view.presence_updated_at or runtime_view.phase_started_at),
         valid_until=normalize_utc(runtime_view.freshness_expires_at),
@@ -972,8 +973,8 @@ def _working_set(
 
 
 _DELEGATION_NOUNS: dict[str, str] = {
-    "subagent": "agent",
-    "shell": "shell",
+    "subagent": "subagent",
+    "shell": "command",
     "workflow": "workflow",
     "teammate": "teammate",
     "monitor": "monitor",
@@ -990,10 +991,10 @@ def _delegation_label(delegation: SessionDelegationFacts) -> str:
         if kind == "other":
             count = sum(amount for name, amount in delegation.kinds.items() if name not in _DELEGATION_NOUNS)
         if count:
-            noun = "command" if kind == "shell" else _DELEGATION_NOUNS.get(kind, "task")
+            noun = _DELEGATION_NOUNS.get(kind, "task")
             parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
-    fallback = f"{delegation.count} {'task' if delegation.count == 1 else 'tasks'}"
-    return "Background · " + (" · ".join(parts) if parts else fallback)
+    fallback = f"{delegation.count} background {'task' if delegation.count == 1 else 'tasks'}"
+    return "Waiting on " + (" · ".join(parts) if parts else fallback)
 
 
 _ACTIVE_AGENT_KINDS = frozenset({"subagent", "teammate"})
@@ -1102,7 +1103,9 @@ def _primary(
     if activity.state == "thinking":
         return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)
     if activity.state == "executing":
-        label = f"Using {activity.tool}" if activity.tool else "Running"
+        # Canonical present-tense phrase from config/tool-tiers.json ("Running a
+        # command"), never the raw provider name; no named tool reads "Working".
+        label = tool_status_phrase(activity.tool) or "Working"
         return SessionPresentationLabel(key="executing", label=label, tone="running", observed_at=activity.observed_at)
     if activity.state == "stalled":
         return SessionPresentationLabel(key="stalled", label="Stalled", tone="stalled", observed_at=activity.observed_at)

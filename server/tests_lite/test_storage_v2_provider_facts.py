@@ -1037,7 +1037,9 @@ def test_workspace_envelope_projects_claude_fidelity_fields_and_dedups_task_noti
         {
             **_event("a-tool", "assistant", t1_tool),
             "content_text": None,
-            "tool_name": "CustomTool",
+            # Claude's tool.intent fact counts only where description is the
+            # purpose (shell and subagent calls), not on an arbitrary tool.
+            "tool_name": "Bash",
             "tool_call_id": "tc-1",
             "tool_input_json": {"raw": 1},
             "raw_locator": {"source_position": 2, "event_subordinal": 0},
@@ -1156,6 +1158,7 @@ def test_workspace_envelope_projects_claude_fidelity_fields_and_dedups_task_noti
     assert by_id["n-user"]["event"]["task_notification"]["result"] == "All good"
     assert by_id["a-commentary"]["event"]["message_phase"] == "commentary"
     assert by_id["a-tool"]["event"]["tool_intent"] == "Run fast unit checks"
+    assert by_id["a-tool"]["event"]["tool_intent_source"] == "authored"
     assert by_id["a-withheld"]["event"]["reasoning_withheld"] is True
     assert by_id["n-queue-unique"]["event"]["waiting_background_agents"] == 2
     assert by_id["a-final"]["event"]["message_phase"] == "final_answer"

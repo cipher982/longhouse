@@ -11,15 +11,27 @@ describe("exact tool aliases", () => {
   });
 
   it("keeps unknown provider tools raw", () => {
-    expect(resolveToolInfo("CallDynamicTool").label).toBe("CallDynamicTool");
+    expect(resolveToolInfo("mystery_tool")).toMatchObject({ label: "mystery_tool", status: "Using mystery_tool" });
   });
 
-  it("classifies Antigravity swarm tools cleanly", () => {
-    expect(resolveToolInfo("swarm")).toMatchObject({ tier: "action", aggregate: null, label: "Swarm" });
-    expect(resolveToolInfo("post_message")).toMatchObject({ tier: "action", aggregate: null, label: "Board" });
-    expect(resolveToolInfo("read_board")).toMatchObject({ tier: "noise", aggregate: "read", label: "Board" });
+  it("matches every provider's spelling case-insensitively to one canonical label", () => {
+    for (const name of ["Bash", "bash", "Shell", "exec_command", "run_command"]) {
+      expect(resolveToolInfo(name)).toMatchObject({ label: "Shell", status: "Running a command" });
+    }
+    expect(resolveToolInfo("read_file")).toMatchObject({ label: "Read", status: "Reading files" });
+    expect(resolveToolInfo("edit_file").label).toBe("Edit");
+    expect(resolveToolInfo("mcp__trove__search_personal_memory")).toMatchObject({
+      label: "search_personal_memory",
+      status: "Using search personal memory",
+    });
+  });
+
+  it("classifies Antigravity swarm tools as Agent", () => {
+    expect(resolveToolInfo("swarm")).toMatchObject({ tier: "action", aggregate: null, label: "Agent" });
+    expect(resolveToolInfo("post_message")).toMatchObject({ tier: "action", aggregate: null, label: "Agent" });
+    expect(resolveToolInfo("read_board")).toMatchObject({ tier: "noise", aggregate: "read", label: "Agent" });
     expect(resolveToolInfo("swarm_wait")).toMatchObject({ tier: "noise", aggregate: "wait", label: "Wait" });
-    expect(resolveToolInfo("swarm_note")).toMatchObject({ tier: "action", aggregate: null, label: "Swarm" });
+    expect(resolveToolInfo("swarm_note")).toMatchObject({ tier: "action", aggregate: null, label: "Agent" });
   });
 });
 

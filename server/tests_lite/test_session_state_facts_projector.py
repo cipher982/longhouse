@@ -752,7 +752,7 @@ def test_served_projector_holds_a_helm_tool_call_on_the_control_lease():
     assert served.activity.state == "executing"
     assert served.activity.valid_until == served.control.valid_until
     assert served.presentation.primary is not None
-    assert served.presentation.primary.label == "Using Shell"
+    assert served.presentation.primary.label == "Running a command"
 
 
 def test_served_projector_keeps_a_stale_helm_idle_observation_plain_idle():

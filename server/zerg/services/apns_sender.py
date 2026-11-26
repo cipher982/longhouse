@@ -30,6 +30,7 @@ from zerg.provider_contract.session_visibility_policy import facts_from_row
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
 from zerg.services.notification_policy import user_time_sensitive_blocked
+from zerg.services.tool_presentation import tool_display_label
 from zerg.services.session_kernel_projection import project_session_control_fields
 
 logger = logging.getLogger(__name__)
@@ -851,7 +852,8 @@ def prepare_session_live_activity_pushes(
         "executing": "running",
         "quiescent": "idle",
     }.get(state_facts.activity.state, state_facts.activity.state)
-    active_tool = state_facts.activity.tool
+    # Canonical short label (Shell, Read), never the raw provider tool name.
+    active_tool = tool_display_label(state_facts.activity.tool)
     display_phase = (
         state_facts.presentation.primary.label
         if state_facts.presentation.primary is not None

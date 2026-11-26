@@ -66,6 +66,7 @@ _EVENT_DEFAULTS: dict[str, Any] = {
     "reconciled_event_id": None,
     "tool_call_state": None,
     "tool_intent": None,
+    "tool_intent_source": None,
     "message_phase": None,
     "reasoning_withheld": False,
     "task_notification": None,

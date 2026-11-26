@@ -150,7 +150,7 @@ def test_live_activity_push_uses_canonical_session_contract(tmp_path, can_respon
         assert len(pushes) == 1
         [push] = pushes
         assert push.presence_state == "running"
-        assert push.display_phase == ("Needs answer" if can_respond else "Using Shell")
+        assert push.display_phase == ("Needs answer" if can_respond else "Running a command")
         assert push.active_tool == "Shell"
         assert push.title == "Canonical state cutover"
         assert push.is_attention is expected_attention

@@ -1506,8 +1506,8 @@ async def test_ended_console_run_serves_and_clears_delegation_then_accepts_user_
     assert parked.session_state.delegation.state == "pending"
     assert parked.session_state.delegation.count == 1
     assert parked.session_state.control.actions.interrupt.state == "available"
-    assert parked.session_state.presentation.primary.label.startswith("Background ·")
-    assert parked.runtime_display.headline.startswith("Background ·")
+    assert parked.session_state.presentation.primary.label.startswith("Waiting on ")
+    assert parked.runtime_display.headline.startswith("Waiting on ")
     assert parked.capabilities.composer_enabled is True
 
     empty = delegation.model_copy(

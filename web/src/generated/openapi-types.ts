@@ -4572,9 +4572,14 @@ export interface components {
             tool_presentation?: components["schemas"]["ToolPresentationResponse"] | null;
             /**
              * Tool Intent
-             * @description Normalized human-readable summary of why this tool was called
+             * @description One-line label for this tool call: the provider-authored purpose when the agent wrote one, else text Longhouse derived from the arguments (path tail, pattern, query, first command line). tool_intent_source says which.
              */
             tool_intent?: string | null;
+            /**
+             * Tool Intent Source
+             * @description authored: the agent wrote tool_intent as the call's purpose (OMP i, Claude/Cursor/OpenCode shell description, Antigravity toolSummary). derived: Longhouse built it from the arguments. Null when tool_intent is null.
+             */
+            tool_intent_source?: ("authored" | "derived") | null;
             /**
              * Message Phase
              * @description Assistant text phase relative to tool execution vs turn completion

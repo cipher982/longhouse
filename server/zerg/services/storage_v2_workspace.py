@@ -36,7 +36,8 @@ from zerg.services.session_provider_facts import provider_facts_from_rows
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
-from zerg.services.tool_presentation import extract_tool_intent
+from zerg.services.tool_presentation import DESCRIPTION_IS_INTENT
+from zerg.services.tool_presentation import resolve_tool_intent
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.services.transcript_lite import DETAIL_FULL
 from zerg.services.transcript_lite import DETAIL_LITE
@@ -254,14 +255,21 @@ def _event_projection(
     item_facts = event.get("item") if isinstance(event.get("item"), Mapping) else {}
 
     tool_intent: str | None = None
+    tool_intent_source: str | None = None
     if event.get("tool_name"):
-        tool_intent = extract_tool_intent(event.get("tool_name"), event.get("tool_input_json"), provider=provider)
-        if tool_intent is None:
-            tool_intent = _fact_tool_intent(pos_facts, tool_call_id)
-        if tool_intent is None:
-            raw_item_intent = item_facts.get("intent")
-            if isinstance(raw_item_intent, str) and raw_item_intent.strip():
-                tool_intent = raw_item_intent.strip()
+        tool_name = str(event.get("tool_name"))
+        # Provider-authored purpose wins over anything derived from arguments.
+        # The engine's item intent is already authored (OMP block intent or
+        # `i`, Antigravity toolSummary, guarded `description`). Claude's
+        # tool.intent fact reads description/intent on any tool, so it counts
+        # only where description is the purpose.
+        raw_item_intent = item_facts.get("intent")
+        fact_intent = _fact_tool_intent(pos_facts, tool_call_id) if tool_name.lower() in DESCRIPTION_IS_INTENT else None
+        tool_intent, tool_intent_source = resolve_tool_intent(
+            tool_name,
+            event.get("tool_input_json"),
+            provider_intents=(raw_item_intent if isinstance(raw_item_intent, str) else None, fact_intent),
+        )
 
     message_phase: str | None = None
     if event.get("role") == "assistant" and not event.get("tool_name"):
@@ -332,6 +340,7 @@ def _event_projection(
                 provider=provider,
             ),
             "tool_intent": tool_intent,
+            "tool_intent_source": tool_intent_source,
             "message_phase": message_phase,
             "reasoning_withheld": reasoning_withheld,
             "task_notification": task_notification,
@@ -480,6 +489,7 @@ def _workspace_envelope(
                             "tool_call_id": None,
                             "tool_presentation": None,
                             "tool_intent": None,
+                            "tool_intent_source": None,
                             "message_phase": None,
                             "reasoning_withheld": False,
                             "task_notification": None,

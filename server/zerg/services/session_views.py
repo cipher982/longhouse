@@ -39,6 +39,7 @@ from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
+from zerg.services.tool_presentation import tool_display_label
 from zerg.services.session_launch_lifecycle import ExecutionLifetime
 from zerg.services.session_launch_lifecycle import LaunchLifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -290,7 +291,7 @@ def build_compat_runtime_display_response(
             else None
         ),
         phase_label=primary.label if primary is not None else "Inactive",
-        compact_tool_label=activity.tool,
+        compact_tool_label=tool_display_label(activity.tool),
         is_live=activity.state in STEERABLE_ACTIVITY_STATES and activity_current,
         is_executing=activity.state in STEERABLE_ACTIVITY_STATES and activity_current,
         needs_attention=session_state.has_answerable_pending_interaction,
@@ -1466,7 +1467,19 @@ class EventResponse(UTCBaseModel):
     )
     tool_intent: Optional[str] = Field(
         None,
-        description="Normalized human-readable summary of why this tool was called",
+        description=(
+            "One-line label for this tool call: the provider-authored purpose when the agent wrote one, "
+            "else text Longhouse derived from the arguments (path tail, pattern, query, first command line). "
+            "tool_intent_source says which."
+        ),
+    )
+    tool_intent_source: Optional[Literal["authored", "derived"]] = Field(
+        None,
+        description=(
+            "authored: the agent wrote tool_intent as the call's purpose (OMP i, Claude/Cursor/OpenCode shell "
+            "description, Antigravity toolSummary). derived: Longhouse built it from the arguments. "
+            "Null when tool_intent is null."
+        ),
     )
     message_phase: Optional[Literal["commentary", "final_answer"]] = Field(
         None,

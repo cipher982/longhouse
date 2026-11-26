@@ -743,6 +743,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let toolCallId: String?
     let toolPresentation: APIToolPresentationResponse?
     let toolIntent: String?
+    let toolIntentSource: String?
     let messagePhase: String?
     let reasoningWithheld: Bool?
     let taskNotification: [String: JSONValue]?

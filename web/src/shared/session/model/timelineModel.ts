@@ -149,7 +149,8 @@ export function getShellSalience(interaction: ToolInteraction): ShellSalience | 
       const input = projectedInput
         ? getToolInputRecord(projectedInput)
         : null;
-      const command = input ? (input.command ?? input.cmd) : null;
+      // Antigravity run_command carries `CommandLine`.
+      const command = input ? (input.command ?? input.cmd ?? input.CommandLine) : null;
       result = classifyShellCommand(command);
     }
   }

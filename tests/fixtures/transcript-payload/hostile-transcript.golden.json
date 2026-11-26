@@ -27,21 +27,21 @@
         "output": "PROJ-101: blocked on MR rename by Alex at 18:42."
       },
       {
-        "title": "Bash",
+        "title": "Shell",
         "subtitle": "git log --oneline",
         "status": "done",
         "input": "{\n  \"command\": \"git log --oneline\"\n}",
         "output": "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output"
       },
       {
-        "title": "Grep",
+        "title": "Search",
         "subtitle": "/repo/a.txt",
         "status": "done",
         "input": "{\n  \"pattern\": \"/repo/a.txt\"\n}",
         "output": "contents of a.txt"
       },
       {
-        "title": "Grep",
+        "title": "Search",
         "subtitle": "/repo/b.txt",
         "status": "done",
         "input": "{\n  \"pattern\": \"/repo/b.txt\"\n}",

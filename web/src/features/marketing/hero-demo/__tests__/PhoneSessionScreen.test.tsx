@@ -68,7 +68,7 @@ describe("PhoneSessionScreen", () => {
       />,
     );
 
-    expect(screen.getByText("Bash")).toBeInTheDocument();
+    expect(screen.getByText("Shell")).toBeInTheDocument();
     expect(screen.getByText("python3 test_inventory.py")).toBeInTheDocument();
     expect(screen.getByText("all tests passed")).toBeInTheDocument();
     expect(screen.getByText("Fixed it. All tests pass.")).toBeInTheDocument();
