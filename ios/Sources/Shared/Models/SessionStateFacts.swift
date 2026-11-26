@@ -120,6 +120,20 @@ struct SessionDelegationProgress: Hashable, Codable, Sendable {
     let contextTokens: Int?
     let contextWindow: Int?
     let durationMs: Int?
+    /// The task's current step as the server words it (intent, tool phrase,
+    /// or "Thinking"), so the dock and web show the same line.
+    var stepLabel: String? = nil
+}
+
+/// The turn in progress, served from the stored transcript so the dock does
+/// not derive it from whatever transcript page has loaded.
+struct SessionTurnState: Hashable, Codable, Sendable {
+    /// The newest real user input of the current turn.
+    let startedAt: String?
+    /// Running tool calls in this turn; nil is unknown, never zero.
+    let activeCallCount: Int?
+    /// What the oldest running call is for, in the transcript's own words.
+    let leadCallHeadline: String?
 }
 
 /// One named unit of provider-reported background work. The provider owns the
@@ -407,6 +421,8 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     var lastUserInputAt: String? = nil
     /// The served attention axis. Nil on an older host or cached payload.
     var signal: SessionStateSignal? = nil
+    /// The served turn axis. Nil on an older host or cached payload.
+    var turn: SessionTurnState? = nil
 
     static let unknown = SessionStateFacts(
         contractVersion: 1,

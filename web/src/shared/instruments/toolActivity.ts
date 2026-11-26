@@ -5,8 +5,8 @@
  * Sparkline.tsx, ReadoutRail.tsx, activityBuckets.ts and the matching CSS
  * blocks in styles/instruments.css in one commit.
  */
+import type { SessionStateFacts } from "@/shared/api/agents";
 import type { TimelineItem, ToolInteraction } from "@/shared/session/model";
-import { getToolSummary, isToolInteractionRunning } from "@/shared/session/model";
 import { bucketTimestamps } from "./activityBuckets";
 
 /**
@@ -37,18 +37,21 @@ export function bucketToolActivityByMinute(
 }
 
 /**
- * Turn start = the timestamp of the most recent user message in the loaded
- * thread — the one anchor the header, the composer clock, and the readout
- * rail all read now, so the three never disagree (web-restyle-signal item
- * 6). `session_state.run.started_at` is deliberately NOT this: `run` is the
- * underlying provider run's lifecycle (one continuous process, started
- * once, unchanged across every turn inside it), not a per-turn field — using
- * it as a turn anchor is the bug this replaces. The `/turns` list endpoint
- * would be the ideal source but returns empty rows under the live catalog
- * (see `lib/sessionTiming.ts`), so the loaded thread's own last user event is
- * the only fact actually available for this.
+ * Turn start: the server's `turn.started_at`, the newest real user input of
+ * the current turn. The header, the composer clock and the readout rail all
+ * read it, so they never disagree with each other or with the phone.
+ * `session_state.run.started_at` is deliberately NOT this: `run` is the
+ * provider process, started once and unchanged across every turn inside it.
+ * Only when the server does not know the turn (history from before it
+ * tracked one) does this fall back to the newest user message in the loaded
+ * thread.
  */
-export function getRunningTurnStartMs(items: TimelineItem[]): number | null {
+export function getRunningTurnStartMs(
+  state: SessionStateFacts | null | undefined,
+  items: TimelineItem[],
+): number | null {
+  const served = state?.turn?.started_at ? Date.parse(state.turn.started_at) : Number.NaN;
+  if (Number.isFinite(served)) return served;
   let lastUserMs: number | null = null;
   for (const item of items) {
     if (item.kind === "message" && item.event.role === "user") {
@@ -78,41 +81,25 @@ export function countToolCallsThisTurn(items: TimelineItem[]): number {
 export interface RunningToolInfo {
   /** The bare tool name — short enough for the rail's capsule (e.g. "hub"). */
   toolName: string;
-  /** The transcript's own summary text for the row, if any — the same label
-   * the trace shows on that row (never a fabricated one). Can run 60+
-   * characters, so callers must clamp it themselves rather than growing a
-   * capsule to fit it. */
+  /** What the call is for in the transcript's own words, else the tool's
+   * status phrase. Can run 60+ characters, so callers must clamp it
+   * themselves rather than growing a capsule to fit it. */
   label: string;
+  /** True when the label is the call's own headline rather than a phrase
+   * for its tool. */
+  hasHeadline: boolean;
 }
 
-/**
- * Tool rows running now: the running calls after the model last spoke (a
- * thought or a message). A call the model has moved past, or one left
- * "running" by a turn that was killed, is history, not current work. The
- * timeline pane's running-row claim uses the same boundary.
- */
-export function currentRunningTools(items: TimelineItem[]): ToolInteraction[] {
-  const out: ToolInteraction[] = [];
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.kind === "reasoning" || item.kind === "message") break;
-    if (item.kind === "tool" && isToolInteractionRunning(item.interaction)) {
-      out.unshift(item.interaction);
-    } else if (item.kind === "activity_group") {
-      out.unshift(...item.group.interactions.filter((interaction) => isToolInteractionRunning(interaction)));
-    }
-  }
-  return out;
+/** The lead running call of the current turn, as the server serves it. */
+export function servedRunningCall(state: SessionStateFacts | null | undefined): RunningToolInfo | null {
+  const lead = state?.turn?.lead_call;
+  if (!lead) return null;
+  const headline = lead.headline?.trim();
+  return { toolName: lead.tool, label: headline || lead.status, hasHeadline: Boolean(headline) };
 }
 
-/** The currently running tool row, if any. */
-export function findRunningTool(items: TimelineItem[]): RunningToolInfo | null {
-  const running = currentRunningTools(items)[0];
-  if (!running) return null;
-  return { toolName: running.toolName, label: getToolSummary(running) || running.toolName };
-}
-
-/** How many tool rows are running right now (parallel calls, subagents). */
-export function countRunningTools(items: TimelineItem[]): number {
-  return currentRunningTools(items).length;
+/** How many tool calls the current turn is running, as the server counts
+ * them (parallel calls, subagents); 0 when unknown. */
+export function servedRunningCallCount(state: SessionStateFacts | null | undefined): number {
+  return state?.turn?.active_call_count ?? 0;
 }

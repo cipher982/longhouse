@@ -44,7 +44,7 @@ func makeSessionStateFacts(
             let approval = pendingInteractionKind == "permission" || pendingInteractionKind == "approval" || pendingInteractionKind == "plan_approval"
             return SessionStateLabel(
                 key: approval ? "needs_approval" : "needs_answer",
-                label: approval ? "Needs approval" : "Needs answer",
+                label: approval ? "Needs approval" : "Needs your answer",
                 tone: "blocked",
                 observedAt: nil
             )

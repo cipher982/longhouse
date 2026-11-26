@@ -55,7 +55,8 @@ private extension APISessionDelegationTaskResponse {
                     tokens: $0.tokens,
                     contextTokens: $0.contextTokens,
                     contextWindow: $0.contextWindow,
-                    durationMs: $0.durationMs
+                    durationMs: $0.durationMs,
+                    stepLabel: $0.stepLabel
                 )
             },
             endedAt: endedAt,
@@ -139,7 +140,14 @@ private extension APISessionStateFacts {
             commitSeq: commitSeq,
             delegation: delegation?.sessionDelegationFacts,
             lastUserInputAt: lastUserInputAt,
-            signal: presentation.signal.map { SessionStateSignal(state: $0.state, validUntil: $0.validUntil) }
+            signal: presentation.signal.map { SessionStateSignal(state: $0.state, validUntil: $0.validUntil) },
+            turn: turn.map {
+                SessionTurnState(
+                    startedAt: $0.startedAt,
+                    activeCallCount: $0.activeCallCount,
+                    leadCallHeadline: $0.leadCall?.headline
+                )
+            }
         )
     }
 }

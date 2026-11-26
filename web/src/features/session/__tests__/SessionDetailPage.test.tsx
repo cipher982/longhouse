@@ -1895,7 +1895,7 @@ describe("SessionDetailPage — header affordances", () => {
           description: "Waiting on terminal-truth",
           started_at: "2026-03-22T22:00:00Z",
           session_id: "sess-sub-1",
-          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench" },
+          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench", step_label: "Polling bench" },
         },
         {
           id: "mon-1",

@@ -721,7 +721,7 @@ actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(
                         key: isEndedCodexHelm ? "ended" : (isAttentionDelegation ? "needs_answer" : (isTimelineDelegation ? "delegated_work" : (isClaudeFidelity ? "running_tool" : (isWorkingSession ? "thinking" : "idle")))),
-                        label: isEndedCodexHelm ? "Ended" : (isAttentionDelegation ? "Needs answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isClaudeFidelity ? "Using Bash" : (isWorkingSession ? "Thinking" : "Idle")))),
+                        label: isEndedCodexHelm ? "Ended" : (isAttentionDelegation ? "Needs your answer" : (isTimelineDelegation ? "Background · 1 agent · 1 command" : (isClaudeFidelity ? "Using Bash" : (isWorkingSession ? "Thinking" : "Idle")))),
                         tone: isEndedCodexHelm ? "quiet" : (isAttentionDelegation ? "blocked" : (isTimelineDelegation ? "active" : (isClaudeFidelity ? "running" : (isWorkingSession ? "thinking" : "idle")))),
                         observedAt: isClaudeFidelity ? Self.claudeFidelityTimestamp(secondsAgo: 2) : nil
                     ),

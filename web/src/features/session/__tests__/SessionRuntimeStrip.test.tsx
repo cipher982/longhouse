@@ -700,6 +700,7 @@ describe("SessionRuntimeStrip background registry", () => {
             observed_at: new Date(start + 2_000).toISOString(),
             status: "running",
             current_tool: "Bash",
+            step_label: "Running a command",
           },
         },
       ],

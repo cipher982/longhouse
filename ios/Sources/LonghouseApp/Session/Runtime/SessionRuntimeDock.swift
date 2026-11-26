@@ -304,12 +304,11 @@ struct SessionRuntimeDock: View {
            !desc.isEmpty {
             parts.append(desc)
         }
-        if let intent = lead.nativeProgress?.lastIntent?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !intent.isEmpty {
-            parts.append(intent)
-        } else if let tool = lead.nativeProgress?.currentTool?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !tool.isEmpty {
-            parts.append(tool)
+        // The server words the step (intent, tool phrase, or "Thinking"),
+        // the same line web's strip and roster show.
+        if let step = lead.nativeProgress?.stepLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !step.isEmpty {
+            parts.append(step)
         }
         if let tokens = lead.nativeProgress?.tokens, tokens > 0 {
             parts.append(RuntimeElapsed.compactTokens(tokens))
@@ -654,6 +653,16 @@ struct SessionRuntimeDock: View {
            !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return state == .uncertain ? "Last observed: \(tail)" : tail
         }
+        // One running call: what it is for, in the transcript's own words, as
+        // web's composer leads with. Several read as the served headline's
+        // count ("3 calls running"), so no single call is named.
+        if state == .working,
+           detail.stateFacts.activityState == "executing",
+           detail.stateFacts.turn?.activeCallCount == 1,
+           let lead = detail.stateFacts.turn?.leadCallHeadline?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !lead.isEmpty {
+            return lead
+        }
         // The server's normalized display label for the tool, not the raw
         // activity fact: one vocabulary with web's runtime strip.
         guard let tool = detail.runtimeDisplay.compactToolLabel,
@@ -694,9 +703,8 @@ struct SessionRuntimeDock: View {
             // passed and nothing has replaced it.
             return "Activity uncertain"
         case .attention:
-            if let pause = detail.activePauseRequest {
-                return pause.kind == "structured_question" ? "Needs your answer" : "Needs approval"
-            }
+            // The server words the wait ("Needs your answer" for a question,
+            // "Needs approval" for a plan or permission), one label with web.
             return detail.runtimeHeadline
         default:
             if detail.stateFacts.primary?.key == "delegated_work",

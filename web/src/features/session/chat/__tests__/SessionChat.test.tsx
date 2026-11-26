@@ -4390,6 +4390,60 @@ describe("SessionChat composer status", () => {
     expect(composerHead()).not.toHaveTextContent("Working");
   });
 
+  it("leads with the served running call and counts the turn from the served start", () => {
+    const now = Date.now();
+    const facts = makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+      activity: "executing",
+      tool: "Bash",
+      observedAt: new Date(now - 5_000).toISOString(),
+      activityValidUntil: new Date(now + 60_000).toISOString(),
+    });
+    const lead = {
+      tool_call_id: "call-1",
+      tool: "Bash",
+      status: "Running a command",
+      headline: "Run the driving unit tests",
+      started_at: new Date(now - 5_000).toISOString(),
+    };
+    const turnStartedAt = new Date(now - 125_000).toISOString();
+    const { rerender, queryClient } = renderSessionChat(
+      {
+        session: makeSession({
+          session_state: { ...facts, turn: { started_at: turnStartedAt, active_call_count: 1, lead_call: lead } },
+        }),
+        // The loaded thread knows nothing about this turn; the server does.
+        timelineItems: [],
+      },
+      { queryClient: lockedClient() },
+    );
+
+    expect(composerHead()).toHaveTextContent("Run the driving unit tests");
+    expect(screen.getByTestId("session-chat-composer-turn-clock")).toHaveTextContent(/2:0[45]/);
+
+    // Several calls: the server's label speaks for all of them.
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <SessionChat
+          session={makeSession({
+            session_state: {
+              ...facts,
+              presentation: {
+                ...facts.presentation,
+                primary: { key: "executing", label: "3 calls running", tone: "running", observed_at: null },
+              },
+              turn: { started_at: turnStartedAt, active_call_count: 3, lead_call: lead },
+            },
+          })}
+          timelineItems={[]}
+        />
+      </QueryClientProvider>,
+    );
+    expect(composerHead()).toHaveTextContent("3 calls running");
+    expect(composerHead()).not.toHaveTextContent("Run the driving unit tests");
+  });
+
   it("folds idle into the placeholder and keeps the composer to one row", () => {
     const lastResultAt = "2026-10-06T02:21:00Z";
     renderSessionChat({
@@ -4622,7 +4676,7 @@ describe("SessionChat composer status", () => {
           description: "Waiting on terminal-truth",
           started_at: new Date(now - 60_000).toISOString(),
           session_id: "sess-sub-1",
-          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench" },
+          native_progress: { status: "waiting", tokens: 194_200, last_intent: "Polling bench", step_label: "Polling bench" },
         },
         {
           id: "mon-1",

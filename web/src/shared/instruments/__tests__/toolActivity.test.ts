@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineItem, ToolInteraction } from "@/shared/session/model";
-import { countToolCallsThisTurn, findRunningTool, getRunningTurnStartMs } from "../toolActivity";
+import {
+  countToolCallsThisTurn,
+  getRunningTurnStartMs,
+  servedRunningCall,
+  servedRunningCallCount,
+} from "../toolActivity";
 import { formatElapsedClock, getSessionHeaderState } from "@/features/session/sessionHeaderState";
 import type { AgentSession } from "@/shared/api/agents";
 
@@ -72,7 +77,13 @@ describe("countToolCallsThisTurn", () => {
 });
 
 describe("getRunningTurnStartMs", () => {
-  it("returns the most recent user message's timestamp", () => {
+  it("reads the server's turn start before anything in the loaded thread", () => {
+    const items: TimelineItem[] = [userMessage(1)];
+    const state = { turn: { started_at: "2026-04-15T15:30:00Z" } } as never;
+    expect(getRunningTurnStartMs(state, items)).toBe(Date.parse("2026-04-15T15:30:00Z"));
+  });
+
+  it("falls back to the most recent loaded user message when the server has no turn", () => {
     const items: TimelineItem[] = [
       userMessage(1),
       toolItem(toolInteraction({ key: "a" })),
@@ -92,12 +103,12 @@ describe("getRunningTurnStartMs", () => {
       },
       toolItem(toolInteraction({ key: "b" })),
     ];
-    expect(getRunningTurnStartMs(items)).toBe(Date.parse("2026-04-15T16:05:00Z"));
+    expect(getRunningTurnStartMs({ turn: { started_at: null } } as never, items)).toBe(Date.parse("2026-04-15T16:05:00Z"));
   });
 
   it("returns null when no user message has loaded", () => {
     const items: TimelineItem[] = [toolItem(toolInteraction({ key: "a" }))];
-    expect(getRunningTurnStartMs(items)).toBeNull();
+    expect(getRunningTurnStartMs(null, items)).toBeNull();
   });
 });
 
@@ -118,7 +129,7 @@ describe("turn-elapsed agreement across header, composer, and rail", () => {
       toolItem(toolInteraction({ key: "b" })),
     ];
     const nowMs = Date.parse("2026-04-15T16:12:00Z");
-    const turnStartMs = getRunningTurnStartMs(items);
+    const turnStartMs = getRunningTurnStartMs(null, items);
     expect(turnStartMs).toBe(Date.parse("2026-04-15T15:59:00Z"));
 
     const session: Pick<AgentSession, "session_state"> = {
@@ -155,34 +166,22 @@ describe("turn-elapsed agreement across header, composer, and rail", () => {
   });
 });
 
-describe("findRunningTool", () => {
-  it("returns null when nothing is running", () => {
-    const items: TimelineItem[] = [toolItem(toolInteraction())];
-    expect(findRunningTool(items)).toBeNull();
+describe("servedRunningCall", () => {
+  it("returns null when the server names no running call", () => {
+    expect(servedRunningCall({ turn: { active_call_count: 0, lead_call: null } } as never)).toBeNull();
+    expect(servedRunningCallCount({ turn: { active_call_count: null } } as never)).toBe(0);
   });
 
-  it("returns the running tool's own toolName when it has no callEvent input to summarize", () => {
-    const items: TimelineItem[] = [
-      toolItem(
-        toolInteraction({
-          key: "running",
-          toolName: "exec_command",
-          resultEvent: null,
-          callEvent: {
-            id: 1,
-            role: "assistant",
-            content_text: null,
-            tool_name: "exec_command",
-            tool_input_json: null,
-            tool_output_text: null,
-            tool_call_id: "c1",
-            tool_call_state: "running",
-            timestamp: "2026-04-15T16:11:00Z",
-            in_active_context: true,
-          },
-        }),
-      ),
-    ];
-    expect(findRunningTool(items)).toEqual({ toolName: "exec_command", label: "exec_command" });
+  it("labels the lead call by its headline, else its status phrase", () => {
+    const lead = { tool_call_id: "c1", tool: "exec_command", status: "Running a command", headline: null };
+    expect(servedRunningCall({ turn: { active_call_count: 2, lead_call: lead } } as never)).toEqual({
+      toolName: "exec_command",
+      label: "Running a command",
+      hasHeadline: false,
+    });
+    expect(
+      servedRunningCall({ turn: { active_call_count: 1, lead_call: { ...lead, headline: "Run the unit tests" } } } as never),
+    ).toEqual({ toolName: "exec_command", label: "Run the unit tests", hasHeadline: true });
+    expect(servedRunningCallCount({ turn: { active_call_count: 2 } } as never)).toBe(2);
   });
 });

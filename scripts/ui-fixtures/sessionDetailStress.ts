@@ -189,6 +189,8 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
             status: "running",
             current_tool: "Read",
             last_intent: "Inspect reconnect evidence",
+            // Served: the intent, else the tool's status phrase.
+            step_label: "Inspect reconnect evidence",
             tool_count: 14,
             requests: 6,
             tokens: 4200,
@@ -242,6 +244,20 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
         resume: notApplicable,
         start_turn: notApplicable,
         branch: notApplicable,
+      },
+    },
+    // The served turn: its start (the last user message in the fixture) and
+    // the one call still running at the transcript's tail, which the composer
+    // leads with.
+    turn: {
+      started_at: "2026-04-15T15:22:00Z",
+      active_call_count: 1,
+      lead_call: {
+        tool_call_id: "tail-running-1",
+        tool: "exec_command",
+        status: "Running a command",
+        headline: "Recapturing every session-detail viewport now that the density and trace-line changes are in place",
+        started_at: "2026-04-15T16:11:35Z",
       },
     },
     pending_interaction: null,
@@ -1216,7 +1232,7 @@ export function buildSessionQuestionFixture(): SessionDetailFixture {
  * The same live session with a provider question open: the badge is the one
  * surface that has to say *what* is being asked of the user, and it must read
  * the server's copy rather than a client-fiction. Capture this frame to check
- * the header and composer wording for a question ("Needs answer") as distinct
+ * the header and composer wording for a question ("Needs your answer") as distinct
  * from a permission ("Needs approval").
  */
 export function buildSessionAttentionFixture(): SessionDetailFixture {
@@ -1240,7 +1256,7 @@ export function buildSessionAttentionFixture(): SessionDetailFixture {
       can_respond: false,
     },
     presentation: {
-      primary: { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: openedAt },
+      primary: { key: "needs_answer", label: "Needs your answer", tone: "blocked", observed_at: openedAt },
       access: { key: "live_control", label: "Live control", tone: "live", observed_at: openedAt },
       transcript: null,
     },
@@ -1389,6 +1405,7 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
                 observed_at: now,
                 status: "running",
                 current_tool: "Bash",
+                step_label: "Running a command",
               },
             },
             {

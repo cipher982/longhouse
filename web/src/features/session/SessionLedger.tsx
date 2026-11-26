@@ -47,6 +47,7 @@ export interface SessionBackgroundTask {
     context_tokens?: number | null;
     context_window?: number | null;
     duration_ms?: number | null;
+    step_label?: string | null;
   } | null;
 }
 

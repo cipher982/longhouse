@@ -48,7 +48,11 @@ import { ManagedLaunchHintCard } from "../ManagedLaunchHintCard";
 import type { OutboxEntry } from "../OutboxRow";
 import { Nixie } from "@/shared/instruments/Nixie";
 import { StatusBulb } from "@/shared/instruments/StatusLamp";
-import { countRunningTools, findRunningTool, getRunningTurnStartMs } from "@/shared/instruments/toolActivity";
+import {
+  getRunningTurnStartMs,
+  servedRunningCall,
+  servedRunningCallCount,
+} from "@/shared/instruments/toolActivity";
 import {
   formatClockTime,
   formatElapsedClock,
@@ -2811,12 +2815,11 @@ export function SessionChat({
   // panel's Nixie-style readout (Phase 4 wraps it in a capsule).
   //
   // `turnStartMs` is the same shared turn-elapsed anchor the session header
-  // and the readout rail use (getRunningTurnStartMs) — derived from the same
-  // durable timeline rows passed in as `timelineItems`, so this clock can
-  // never drift from theirs.
+  // and the readout rail use (getRunningTurnStartMs): the server's turn
+  // start, so this clock can never drift from theirs or the phone's.
   const turnStartMs = useMemo(
-    () => getRunningTurnStartMs(timelineItems ?? []),
-    [timelineItems],
+    () => getRunningTurnStartMs(session.session_state, timelineItems ?? []),
+    [session.session_state, timelineItems],
   );
   const composerState = getSessionHeaderState(
     session,
@@ -2833,16 +2836,15 @@ export function SessionChat({
   // The server's label, verbatim, exactly as the session header shows it. It
   // only renders while the header's freshness gate calls the session live.
   const composerWorkingLabel = workingStatusLabel(session.session_state);
-  const runningToolInfo = useMemo(
-    () => findRunningTool(timelineItems ?? []),
-    [timelineItems],
-  );
+  // The server counts the turn's running calls and names the lead one, so
+  // the line reads the same here as on the phone. They are transcript
+  // evidence, so they speak only while the activity axis says a tool runs.
+  const executing = session.session_state?.activity?.state === "executing";
+  const runningCall = servedRunningCall(session.session_state);
+  const runningCallCount = servedRunningCallCount(session.session_state);
   const composerForegroundDetail =
-    composerState.tone === "live" &&
-    runningToolInfo &&
-    runningToolInfo.label &&
-    runningToolInfo.label !== runningToolInfo.toolName
-      ? runningToolInfo.label
+    composerState.tone === "live" && executing && runningCallCount === 1 && runningCall?.hasHeadline
+      ? runningCall.label
       : null;
   const hasBackgroundRoster =
     (session.session_state?.delegation?.items?.length ?? 0) > 0 ||
@@ -2852,17 +2854,11 @@ export function SessionChat({
       ? delegatedWorkDetailFromFacts(session.session_state, activityNowMs)
       : null;
   // The line leads with what is happening in the transcript's own words: the
-  // running row's label when one is running ("Run the driving unit tests"),
-  // a count when several run at once, the server's state phrase otherwise.
-  // The row's label is never repeated as a second detail beside it.
-  const runningToolCount = useMemo(
-    () => countRunningTools(timelineItems ?? []),
-    [timelineItems],
-  );
-  const composerLeadLabel =
-    composerState.tone === "live" && runningToolCount > 1
-      ? `${runningToolCount} calls running`
-      : composerForegroundDetail || composerWorkingLabel;
+  // running call's headline when one is running ("Run the driving unit
+  // tests"), the server's label otherwise, which already reads "3 calls
+  // running" when several run at once. The headline is never repeated as a
+  // second detail beside it.
+  const composerLeadLabel = composerForegroundDetail || composerWorkingLabel;
   const composerHeadDetail =
     composerLeadLabel === composerWorkingLabel ? composerDelegatedDetail : null;
   const leafRef = useRef<HTMLSpanElement | null>(null);

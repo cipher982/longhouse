@@ -1,4 +1,3 @@
-import { toolStatusPhrase } from "@/shared/session/model/toolStatus";
 import { useEffect, useRef, useState } from "react";
 import type { AgentSession } from "@/shared/api/agents";
 import type { SessionInteractionCapabilities } from "@/shared/session/model";
@@ -113,9 +112,8 @@ function delegatedWorkDetail(inspector: SessionBackgroundInspector | null): stri
   if (activeTasks.length === 0) return null;
   const subagents = activeTasks.filter((task) => task.type === "subagent");
   const lead = subagents[0] ?? activeTasks[0];
-  const tool = lead.nativeProgress?.current_tool?.trim();
-  const progressStatus = lead.nativeProgress?.status?.trim().toLowerCase();
-  const step = tool ? toolStatusPhrase(tool) : progressStatus === "thinking" ? "Thinking" : null;
+  // The server words the step (intent, tool phrase, or "Thinking").
+  const step = lead.nativeProgress?.step_label?.trim() || null;
   const leadSummary = [lead.name, step].filter(Boolean).join(" · ");
   if (!leadSummary) return null;
   const totalActive = Math.max(

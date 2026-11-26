@@ -49,8 +49,8 @@ import { ReadoutRail } from "@/shared/instruments/ReadoutRail";
 import {
   bucketToolActivityByMinute,
   countToolCallsThisTurn,
-  findRunningTool,
   getRunningTurnStartMs,
+  servedRunningCall,
 } from "@/shared/instruments/toolActivity";
 import {
   isSessionClosed,
@@ -180,12 +180,18 @@ function SessionDetailWorkspaceRoute({
     const count = countToolCallsThisTurn(items);
     return count > 0 ? count : null;
   }, [items]);
-  const waitingOn = useMemo(() => findRunningTool(items), [items]);
+  // The server's lead running call; transcript evidence, so it speaks only
+  // while the activity axis says a tool runs.
+  const waitingOn =
+    session?.session_state?.activity?.state === "executing" ? servedRunningCall(session.session_state) : null;
   // The one turn-elapsed anchor shared by the header, the composer clock
-  // (SessionChat's own copy of this derivation), and the readout rail's Turn
+  // (SessionChat reads the same served value), and the readout rail's Turn
   // readout below — see getRunningTurnStartMs for why this replaces
   // activity.observed_at.
-  const turnStartMs = useMemo(() => getRunningTurnStartMs(items), [items]);
+  const turnStartMs = useMemo(
+    () => getRunningTurnStartMs(session?.session_state, items),
+    [session?.session_state, items],
+  );
   // Item 7: the turn outline column. The server's turn index covers the whole
   // session; the loaded thread covers its own window and anything newer.
   const loadedTurns = useMemo(() => deriveTurnOutline(items), [items]);

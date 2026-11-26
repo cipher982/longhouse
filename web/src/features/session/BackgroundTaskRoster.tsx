@@ -1,4 +1,3 @@
-import { toolStatusPhrase } from "@/shared/session/model/toolStatus";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link, useInRouterContext } from "react-router";
 import type { SessionStateFacts } from "@/shared/api/agents";
@@ -187,9 +186,7 @@ export function BackgroundTaskRosterList({
     const progress = task.native_progress;
     const title = task.description?.trim() || task.id;
     const stepText =
-      progress?.last_intent?.trim() ||
-      (progress?.current_tool ? toolStatusPhrase(progress.current_tool) : null) ||
-      (tone === "waiting" ? "Waiting on background work" : null);
+      progress?.step_label?.trim() || (tone === "waiting" ? "Waiting on background work" : null);
     const elapsedMs = formatTaskElapsedMs(task, nowMs, delegation);
     const isStaleWait = tone === "waiting" && elapsedMs != null && elapsedMs >= STALE_WAIT_THRESHOLD_MS;
     const tokens = progress?.tokens ?? progress?.context_tokens ?? null;

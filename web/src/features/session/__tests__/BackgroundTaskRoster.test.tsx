@@ -31,6 +31,7 @@ describe("BackgroundTaskRoster", () => {
           native_progress: {
             status: "waiting",
             last_intent: "Waiting for gate result",
+            step_label: "Waiting for gate result",
             tokens: 194_200,
           },
         },
@@ -48,6 +49,7 @@ describe("BackgroundTaskRoster", () => {
           native_progress: {
             status: "running",
             current_tool: "Grep",
+            step_label: "Searching",
             tokens: 42_500,
             tool_count: 5,
           },
