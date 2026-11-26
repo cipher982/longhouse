@@ -1624,7 +1624,6 @@ private struct ChatUITestReplayEvent: Decodable {
     let toolCallState: String?
     let timestamp: String
 }
-#endif
 
 extension SessionEvent {
     /// Fixture stand-in for the server's served call text (`resolve_call_text`
@@ -1671,3 +1670,4 @@ extension SessionEvent {
         return (try? JSONDecoder().decode(SessionEvent.self, from: patched)) ?? self
     }
 }
+#endif
