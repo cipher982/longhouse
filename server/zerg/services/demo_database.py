@@ -336,6 +336,7 @@ def _demo_raw_commit(
             "first_user_message_preview": sealed_render.first_user_message_preview,
             "last_visible_text_preview": sealed_render.last_visible_text_preview,
             "user_turns": list(sealed_render.user_turns),
+            "turn_tail": sealed_render.turn_tail,
             "semantic_projection_version": SEMANTIC_PROJECTION_VERSION,
         },
         "session_facts": {

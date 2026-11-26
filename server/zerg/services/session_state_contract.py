@@ -19,6 +19,7 @@ from typing import Any
 from typing import Literal
 
 from pydantic import Field
+from pydantic import model_validator
 
 from zerg.provider_contract.session_state_vocabulary import FrozenModel
 from zerg.provider_contract.session_state_vocabulary import SessionHostFacts  # noqa: F401  (re-exported)
@@ -38,7 +39,7 @@ from zerg.services.tool_presentation import tool_status_phrase
 from zerg.utils.time import normalize_utc
 
 STATE_CONTRACT_VERSION = 4
-PRESENTATION_POLICY_VERSION = 8
+PRESENTATION_POLICY_VERSION = 9
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -187,6 +188,25 @@ class SessionDelegationProgress(_FrozenModel):
     context_tokens: int | None = None
     context_window: int | None = None
     duration_ms: int | None = None
+    #: The task's current step in words, decided here so every client shows
+    #: the same line: the provider's own intent, else the status phrase for
+    #: its current tool ("Running a command"), else "Thinking".
+    step_label: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_step_label(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("step_label") is not None:
+            return data
+        last_intent = data.get("last_intent")
+        current_tool = data.get("current_tool")
+        status = data.get("status")
+        label = (_clean(last_intent) if isinstance(last_intent, str) else None) or (
+            tool_status_phrase(current_tool) if isinstance(current_tool, str) else None
+        )
+        if label is None and isinstance(status, str) and status.strip().lower() == "thinking":
+            label = "Thinking"
+        return {**data, "step_label": label}
 
 
 class SessionDelegationTaskResponse(_FrozenModel):
@@ -238,6 +258,40 @@ class SessionDelegationFacts(_FrozenModel):
     source: str | None = None
     observed_at: datetime | None = None
     valid_until: datetime | None = None
+
+
+class SessionTurnCall(_FrozenModel):
+    """One tool call running in the current turn."""
+
+    tool_call_id: str
+    #: Raw provider tool name.
+    tool: str
+    #: Present-tense phrase for the tool ("Running a command").
+    status: str
+    #: What the call is for, in the transcript's own words (the provider's
+    #: stated intent, else a label derived from its arguments). None when the
+    #: call says nothing beyond its tool.
+    headline: str | None = None
+    started_at: datetime | None = None
+
+
+class SessionTurnFacts(_FrozenModel):
+    """The turn in progress, read from the stored transcript.
+
+    Served so clients stop deriving it from whatever transcript page they
+    loaded. `started_at` is the newest real user input (a prompt typed in the
+    terminal or sent from Longhouse, once the transcript holds it).
+    `active_call_count` counts this turn's tool calls with no result that the
+    model has not moved past; None means unknown (history sealed before the
+    server tracked it), never zero. It is transcript evidence: it lags the
+    live activity axis by one ship, and clients read it only while the
+    activity axis says the session is working.
+    """
+
+    started_at: datetime | None = None
+    active_call_count: int | None = None
+    #: The oldest running call, when any is running.
+    lead_call: SessionTurnCall | None = None
 
 
 class SessionActionAvailability(_FrozenModel):
@@ -332,6 +386,7 @@ class SessionStateFacts(_FrozenModel):
     run: SessionRunFacts | None = None
     activity: SessionActivityFacts
     delegation: SessionDelegationFacts = Field(default_factory=SessionDelegationFacts)
+    turn: SessionTurnFacts = Field(default_factory=SessionTurnFacts)
     control: SessionControlFacts
     pending_interaction: SessionPendingInteractionFacts | None = None
     transcript: SessionTranscriptFacts
@@ -828,9 +883,11 @@ def assemble_session_state_facts(
     last_console_result_outcome: str | None = None,
     last_read_at: datetime | None = None,
     last_user_input_at: datetime | None = None,
+    turn: SessionTurnFacts | None = None,
 ) -> SessionStateFacts:
     """Assemble orthogonal axes and apply the single presentation policy."""
 
+    turn = turn or SessionTurnFacts()
     primary = _primary(
         mode=mode,
         disposition=disposition,
@@ -841,6 +898,7 @@ def assemble_session_state_facts(
         control=control,
         interaction=pending_interaction,
         transcript=transcript,
+        turn=turn,
     )
     access = _access(mode=mode, disposition=disposition, run=run, control=control, transcript=transcript)
     transcript_label = (
@@ -860,6 +918,7 @@ def assemble_session_state_facts(
         run=run,
         activity=activity,
         delegation=delegation,
+        turn=turn,
         control=control,
         pending_interaction=pending_interaction,
         transcript=transcript,
@@ -1079,6 +1138,7 @@ def _primary(
     control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
     transcript: SessionTranscriptFacts,
+    turn: SessionTurnFacts | None = None,
 ) -> SessionPresentationLabel | None:
     if disposition.state == "closed":
         return SessionPresentationLabel(key="closed", label="Closed", tone="closed", observed_at=disposition.closed_at)
@@ -1090,7 +1150,7 @@ def _primary(
         if interaction.kind == "question":
             return SessionPresentationLabel(
                 key="needs_answer",
-                label="Needs answer",
+                label="Needs your answer",
                 tone="blocked",
                 observed_at=interaction.opened_at,
             )
@@ -1103,9 +1163,12 @@ def _primary(
     if activity.state == "thinking":
         return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)
     if activity.state == "executing":
-        # Canonical present-tense phrase from config/tool-tiers.json ("Running a
-        # command"), never the raw provider name; no named tool reads "Working".
-        label = tool_status_phrase(activity.tool) or "Working"
+        # Several calls at once read as a count, so web and iOS say the same
+        # thing; otherwise the canonical present-tense phrase from
+        # config/tool-tiers.json ("Running a command"), never the raw provider
+        # name; no named tool reads "Working".
+        calls = turn.active_call_count if turn is not None else None
+        label = f"{calls} calls running" if calls is not None and calls > 1 else (tool_status_phrase(activity.tool) or "Working")
         return SessionPresentationLabel(key="executing", label=label, tone="running", observed_at=activity.observed_at)
     if activity.state == "stalled":
         return SessionPresentationLabel(key="stalled", label="Stalled", tone="stalled", observed_at=activity.observed_at)
@@ -1552,6 +1615,8 @@ __all__ = [
     "SessionRunFacts",
     "SessionStateFacts",
     "SessionTranscriptFacts",
+    "SessionTurnCall",
+    "SessionTurnFacts",
     "assemble_session_state_facts",
     "build_session_state_facts",
     "infer_context_window",

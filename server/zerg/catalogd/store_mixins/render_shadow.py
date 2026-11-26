@@ -345,6 +345,7 @@ class RenderShadowMixin:
                     "first_user_message_preview": item["first_user_message_preview"],
                     "last_visible_text_preview": item["last_visible_text_preview"],
                     "user_turns": item.get("user_turns"),
+                    "turn_tail": item.get("turn_tail"),
                     "semantic_projection_version": item.get("semantic_projection_version", 0),
                     "render_source": item["render_source"],
                     "object_parser_revision": item.get("object_parser_revision") or parser_revision,

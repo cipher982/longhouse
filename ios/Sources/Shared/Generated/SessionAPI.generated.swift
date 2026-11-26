@@ -327,6 +327,7 @@ struct APISessionDelegationProgress: Codable, Hashable, Sendable {
     let contextTokens: Int?
     let contextWindow: Int?
     let durationMs: Int?
+    let stepLabel: String?
 }
 
 struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
@@ -426,6 +427,20 @@ struct APISessionTranscriptFacts: Codable, Hashable, Sendable {
     let liveObservation: Bool?
 }
 
+struct APISessionTurnCall: Codable, Hashable, Sendable {
+    let toolCallId: String
+    let tool: String
+    let status: String
+    let headline: String?
+    let startedAt: String?
+}
+
+struct APISessionTurnFacts: Codable, Hashable, Sendable {
+    let startedAt: String?
+    let activeCallCount: Int?
+    let leadCall: APISessionTurnCall?
+}
+
 struct APISessionStateFacts: Codable, Hashable, Sendable {
     let stateContractVersion: Int?
     let presentationPolicyVersion: Int?
@@ -435,6 +450,7 @@ struct APISessionStateFacts: Codable, Hashable, Sendable {
     let run: APISessionRunFacts?
     let activity: APISessionActivityFacts
     let delegation: APISessionDelegationFacts?
+    let turn: APISessionTurnFacts?
     let control: APISessionControlFacts
     let pendingInteraction: APISessionPendingInteractionFacts?
     let transcript: APISessionTranscriptFacts

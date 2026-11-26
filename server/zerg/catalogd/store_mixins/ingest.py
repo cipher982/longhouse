@@ -77,6 +77,10 @@ from zerg.provider_contract.session_visibility_policy import evaluate_origin_vis
 from zerg.provider_contract.session_visibility_policy import primary_worker_only_clause
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
+from zerg.storage_v2.turn_state import EMPTY_TURN_STATE
+from zerg.storage_v2.turn_state import decode_turn_json
+from zerg.storage_v2.turn_state import encode_turn_json
+from zerg.storage_v2.turn_state import fold_turn_state
 
 
 def _new_epoch_admission_conflict(
@@ -1559,6 +1563,7 @@ class IngestMixin:
                         first_user_message_preview=render_manifest["first_user_message_preview"],
                         last_visible_text_preview=render_manifest["last_visible_text_preview"],
                         user_turns=render_manifest.get("user_turns"),
+                        turn_tail=render_manifest.get("turn_tail"),
                         semantic_projection_version=render_manifest.get("semantic_projection_version", 0),
                         render_source=render_manifest.get("render_source"),
                         object_parser_revision=render_manifest.get("object_parser_revision"),
@@ -1600,6 +1605,18 @@ class IngestMixin:
                         projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
                     if render_manifest["last_visible_text_preview"]:
                         projection_values["last_visible_text_preview"] = render_manifest["last_visible_text_preview"]
+                    # Fold this object's turn tail onto the session's. A session
+                    # with nothing served yet starts from a known empty turn; a
+                    # row from before turn state starts unknown. A replaced
+                    # generation is recomputed below from every object's tail.
+                    prior_turn_state = (
+                        decode_turn_json((existing_session or {}).get("turn_state"))
+                        if existing_session is not None and existing_session.get("current_render_generation") is not None
+                        else EMPTY_TURN_STATE
+                    )
+                    projection_values["turn_state"] = encode_turn_json(
+                        fold_turn_state(prior_turn_state, decode_turn_json(render_manifest.get("turn_tail")))
+                    )
                     connection.execute(
                         update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
                     )

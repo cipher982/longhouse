@@ -52,8 +52,13 @@ from zerg.services.session_state_contract import SessionPendingInteractionFacts
 from zerg.services.session_state_contract import SessionRunFacts
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_contract import SessionTurnCall
+from zerg.services.session_state_contract import SessionTurnFacts
 from zerg.services.session_state_contract import assemble_session_state_facts
 from zerg.services.session_state_contract import helm_activity_held_by_lease
+from zerg.services.tool_presentation import tool_status_phrase
+from zerg.storage_v2.turn_state import decode_turn_json
+from zerg.storage_v2.turn_state import turn_time
 
 UnsupportedFactFamily = Literal[
     "mode",
@@ -331,6 +336,35 @@ def project_served_session_state_facts(
         last_console_result_outcome=_text(catalog.get("last_console_result_outcome")),
         last_read_at=_optional_wire_datetime(catalog.get("last_read_at"), "catalog.last_read_at"),
         last_user_input_at=_optional_wire_datetime(catalog.get("last_user_input_at"), "catalog.last_user_input_at"),
+        turn=project_turn_facts(catalog.get("turn_state")),
+    )
+
+
+def project_turn_facts(turn_state: Any) -> SessionTurnFacts:
+    """The served turn axis from the session row's folded turn state."""
+
+    state = decode_turn_json(turn_state)
+    if state is None:
+        return SessionTurnFacts()
+    open_calls = state.get("open")
+    calls = [call for call in open_calls if isinstance(call, Mapping)] if isinstance(open_calls, list) else None
+    lead = calls[0] if calls else None
+    lead_tool = _text(lead.get("tool")) if lead is not None else None
+    lead_id = _text(lead.get("id")) if lead is not None else None
+    return SessionTurnFacts(
+        started_at=turn_time(state.get("turn_at_us")),
+        active_call_count=len(calls) if calls is not None else None,
+        lead_call=(
+            SessionTurnCall(
+                tool_call_id=lead_id,
+                tool=lead_tool,
+                status=tool_status_phrase(lead_tool) or "Working",
+                headline=_text(lead.get("intent")),
+                started_at=turn_time(lead.get("at_us")),
+            )
+            if lead is not None and lead_id is not None and lead_tool is not None
+            else None
+        ),
     )
 
 

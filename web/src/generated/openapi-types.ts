@@ -7660,6 +7660,8 @@ export interface components {
             context_window?: number | null;
             /** Duration Ms */
             duration_ms?: number | null;
+            /** Step Label */
+            step_label?: string | null;
         };
         /**
          * SessionDelegationTaskResponse
@@ -9059,7 +9061,7 @@ export interface components {
             state_contract_version: number;
             /**
              * Presentation Policy Version
-             * @default 8
+             * @default 9
              */
             presentation_policy_version: number;
             /**
@@ -9072,6 +9074,7 @@ export interface components {
             run?: components["schemas"]["SessionRunFacts"] | null;
             activity: components["schemas"]["SessionActivityFacts"];
             delegation?: components["schemas"]["SessionDelegationFacts"];
+            turn?: components["schemas"]["SessionTurnFacts"];
             control: components["schemas"]["SessionControlFacts"];
             pending_interaction?: components["schemas"]["SessionPendingInteractionFacts"] | null;
             transcript: components["schemas"]["SessionTranscriptFacts"];
@@ -9572,6 +9575,42 @@ export interface components {
              * @description Start of the message text (up to 500 characters, raw)
              */
             preview?: string | null;
+        };
+        /**
+         * SessionTurnCall
+         * @description One tool call running in the current turn.
+         */
+        SessionTurnCall: {
+            /** Tool Call Id */
+            tool_call_id: string;
+            /** Tool */
+            tool: string;
+            /** Status */
+            status: string;
+            /** Headline */
+            headline?: string | null;
+            /** Started At */
+            started_at?: string | null;
+        };
+        /**
+         * SessionTurnFacts
+         * @description The turn in progress, read from the stored transcript.
+         *
+         *     Served so clients stop deriving it from whatever transcript page they
+         *     loaded. `started_at` is the newest real user input (a prompt typed in the
+         *     terminal or sent from Longhouse, once the transcript holds it).
+         *     `active_call_count` counts this turn's tool calls with no result that the
+         *     model has not moved past; None means unknown (history sealed before the
+         *     server tracked it), never zero. It is transcript evidence: it lags the
+         *     live activity axis by one ship, and clients read it only while the
+         *     activity axis says the session is working.
+         */
+        SessionTurnFacts: {
+            /** Started At */
+            started_at?: string | null;
+            /** Active Call Count */
+            active_call_count?: number | null;
+            lead_call?: components["schemas"]["SessionTurnCall"] | null;
         };
         /**
          * SessionTurnIndexResponse

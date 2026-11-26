@@ -1,6 +1,6 @@
 schema_version: 1
 state_contract_version: 4
-presentation_policy_version: 8
+presentation_policy_version: 9
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
 # every product surface projects only these values.
@@ -98,7 +98,7 @@ providers:
 # projector, OpenAPI DTO, TypeScript, Swift, and Rust fixture decoder all use
 # these names; nullable fields are marked with `?`.
 fact_families:
-  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, delegation, control, 'pending_interaction?', transcript, host, working_set, unread, 'last_result_at?', 'last_result_outcome?', presentation, 'commit_seq?']
+  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, delegation, turn, control, 'pending_interaction?', transcript, host, working_set, unread, 'last_result_at?', 'last_result_outcome?', presentation, 'commit_seq?']
   disposition: [state, 'closed_at?', 'close_reason?']
   launch: [state, 'error_code?', 'error_message?']
   run: ['id?', lifecycle, 'started_at?', 'ended_at?', 'end_reason?']
@@ -106,6 +106,9 @@ fact_families:
   # Unknown is not completed. A missing item list is aggregate-only evidence.
   delegation: [state, count, kinds, 'items?', 'source?', 'observed_at?', 'valid_until?']
   delegation_task: [id, kind, status, 'description?', 'first_observed_at?', 'started_at?', 'last_activity_at?', 'session_id?']
+  # The turn in progress, from the stored transcript. A null count is unknown, not zero.
+  turn: ['started_at?', 'active_call_count?', 'lead_call?']
+  turn_call: [tool_call_id, tool, status, 'headline?', 'started_at?']
   control: [ownership, connection, 'connection_id?', 'lease_generation?', 'control_plane?', 'observed_at?', 'valid_until?', actions]
   interaction: [id, kind, 'opened_at?', 'resolved_at?', 'provider_request_id?', can_respond]
   transcript: [convergence, 'source_revision?', 'durable_revision?', 'render_revision?', 'last_append_at?', searchable, live_observation]

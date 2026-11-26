@@ -77,6 +77,7 @@ def render_manifest(spec: Any, sealed: Any) -> dict[str, Any]:
         "first_user_message_preview": sealed.first_user_message_preview,
         "last_visible_text_preview": sealed.last_visible_text_preview,
         "user_turns": list(sealed.user_turns),
+        "turn_tail": sealed.turn_tail,
         # Claude local-command evidence can arrive in a later raw envelope, so
         # Claude projections stay pending until the semantic projector replays.
         "semantic_projection_version": 0 if spec.provider.strip().lower() == "claude" else SEMANTIC_PROJECTION_VERSION,

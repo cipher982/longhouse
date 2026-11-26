@@ -339,7 +339,7 @@ def test_pending_question_outranks_quiescent_without_mutating_activity():
     assert facts.pending_interaction is not None
     assert facts.pending_interaction.kind == "question"
     assert facts.presentation.primary is not None
-    assert facts.presentation.primary.label == "Needs answer"
+    assert facts.presentation.primary.label == "Needs your answer"
 
 
 #: A primary whose whole meaning is "the user owes something".
@@ -376,7 +376,7 @@ def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
     """
 
     for kind, key, label in (
-        ("structured_question", "needs_answer", "Needs answer"),
+        ("structured_question", "needs_answer", "Needs your answer"),
         ("permission_prompt", "needs_approval", "Needs approval"),
         ("plan_approval", "needs_approval", "Needs approval"),
     ):
@@ -407,7 +407,7 @@ def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
 
 @pytest.mark.parametrize(
     ("can_respond", "expected_key", "expected_label"),
-    [(False, "ended", "Run failed"), (True, "needs_answer", "Needs answer")],
+    [(False, "ended", "Run failed"), (True, "needs_answer", "Needs your answer")],
 )
 def test_failed_run_yields_to_interaction_only_when_it_can_be_answered(can_respond, expected_key, expected_label):
     facts = _facts(
@@ -1739,3 +1739,77 @@ def test_waiting_subagent_is_idle_quiet_and_running_subagent_with_shell_is_activ
     assert mixed_facts.presentation.primary.tone == "active"
     assert mixed_facts.presentation.signal.state == "working"
     assert mixed_facts.presentation.signal.valid_until == delegation_until
+
+
+def _with_turn(facts, turn):
+    from zerg.services.session_state_contract import assemble_session_state_facts
+
+    return assemble_session_state_facts(
+        mode=facts.mode,
+        disposition=facts.disposition,
+        launch=facts.launch,
+        run=facts.run,
+        activity=facts.activity,
+        delegation=facts.delegation,
+        control=facts.control,
+        pending_interaction=facts.pending_interaction,
+        transcript=facts.transcript,
+        host=facts.host,
+        turn=turn,
+    )
+
+
+def test_parallel_running_calls_read_as_one_served_count():
+    """Web and iOS both show the served label, so the count is decided here."""
+    from zerg.services.session_state_contract import SessionTurnFacts
+
+    running = _facts(runtime=_runtime(phase="running", tool="Bash"))
+    assert running.presentation.primary.label == "Running a command"
+
+    parallel = _with_turn(running, SessionTurnFacts(started_at=NOW, active_call_count=3))
+    assert parallel.presentation.primary.key == "executing"
+    assert parallel.presentation.primary.label == "3 calls running"
+    assert parallel.turn.active_call_count == 3
+
+    single = _with_turn(running, SessionTurnFacts(started_at=NOW, active_call_count=1))
+    assert single.presentation.primary.label == "Running a command"
+
+    # Open calls never speak for a session that is not executing.
+    idle = _with_turn(_facts(runtime=_runtime(phase="idle")), SessionTurnFacts(active_call_count=3))
+    assert idle.presentation.primary.label == "Idle"
+
+
+def test_plan_approval_reads_needs_approval_not_needs_your_answer():
+    facts = _facts(
+        runtime=_runtime(phase="needs_user"),
+        pause_request={
+            "id": "pause-plan",
+            "kind": "plan_approval",
+            "status": "pending",
+            "occurred_at": NOW - timedelta(seconds=4),
+            "can_respond": True,
+        },
+    )
+    assert facts.presentation.primary.key == "needs_approval"
+    assert facts.presentation.primary.label == "Needs approval"
+
+
+@pytest.mark.parametrize(
+    ("progress", "step"),
+    [
+        ({"last_intent": "Checking the migration", "current_tool": "Bash"}, "Checking the migration"),
+        ({"current_tool": "Bash"}, "Running a command"),
+        # A command line in the tool slot reads as a command, never raw text.
+        ({"current_tool": "sleep 6"}, "Running a command"),
+        ({"current_tool": "mcp__trove__search_personal_memory"}, "Using search personal memory"),
+        ({"status": "thinking"}, "Thinking"),
+        ({"status": "running"}, None),
+    ],
+)
+def test_delegation_progress_serves_its_step_label(progress, step):
+    from zerg.services.session_state_contract import SessionDelegationProgress
+
+    assert SessionDelegationProgress(**progress).step_label == step
+    # A label the payload already carries survives a round trip unchanged.
+    dumped = SessionDelegationProgress(**progress).model_dump(mode="json")
+    assert SessionDelegationProgress.model_validate(dumped).step_label == step

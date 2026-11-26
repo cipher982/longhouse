@@ -20,6 +20,7 @@ import zstandard
 from zerg.provider_contract.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.provider_contract.provider_interaction_semantics import VALID_INTERACTION_KINDS
 from zerg.provider_contract.provider_interaction_semantics import semantic_event_included
+from zerg.storage_v2.turn_state import turn_tail
 
 # Version 3 adds parser-owned interaction facts to each render record. Keep
 # reading v2 objects so an explicit migration can replay old raw companions;
@@ -125,6 +126,7 @@ class SealedRenderObject:
     first_user_message_preview: str | None
     last_visible_text_preview: str | None
     user_turns: tuple[dict[str, object], ...]
+    turn_tail: dict[str, object]
     reused: bool
 
 
@@ -407,6 +409,7 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
         "first_user_message_preview": _preview(first_user),
         "last_visible_text_preview": _preview(last_visible),
         "user_turns": tuple(_user_turn(spec, record, turn=id(record) in shown_ids) for record in records if record.role == "user"),
+        "turn_tail": turn_tail(spec.provider, records),
     }
 
 

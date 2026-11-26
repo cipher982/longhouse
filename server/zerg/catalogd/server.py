@@ -51,6 +51,7 @@ from zerg.storage_v2.fields import bounded_text
 from zerg.storage_v2.fields import canonical_text
 from zerg.storage_v2.fields import parse_session_facts
 from zerg.storage_v2.render_objects import SEMANTIC_PROJECTION_VERSION
+from zerg.storage_v2.turn_state import validate_turn_tail
 
 logger = logging.getLogger(__name__)
 
@@ -5304,6 +5305,7 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         "semantic_projection_version",
         "abandoned_events",
         "user_turns",
+        "turn_tail",
         "render_source",
         "object_parser_revision",
         "host_generation",
@@ -5361,6 +5363,7 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         if raw is not None:
             result[field] = bounded_text(raw, f"render_manifest.{field}", 2_000)
     result["user_turns"] = _user_turns_json(result.get("user_turns"), result["user_messages"], "render_manifest")
+    result["turn_tail"] = validate_turn_tail(result.get("turn_tail"))
     if result["event_count"] == 0 and (result["first_order_key"] is not None or result["last_order_key"] is not None):
         raise ValueError("empty render object cannot have order keys")
     if result["event_count"] > 0 and (result["first_order_key"] is None or result["last_order_key"] is None):

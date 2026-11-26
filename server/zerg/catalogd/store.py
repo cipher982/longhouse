@@ -106,6 +106,9 @@ from zerg.provider_contract.session_visibility_policy import SessionVisibilityFa
 from zerg.provider_contract.session_visibility_policy import evaluate_origin_visibility
 from zerg.provider_contract.session_visibility_policy import title_origin_eligible_clause
 from zerg.storage_v2.contracts import DurableReceipt
+from zerg.storage_v2.turn_state import decode_turn_json
+from zerg.storage_v2.turn_state import encode_turn_json
+from zerg.storage_v2.turn_state import fold_turn_tails
 
 # Log a stage breakdown when one write crosses this. Matched to the hosted hot
 # API p95 budget (speed-of-light-database.md) so the log names writes that can
@@ -2560,6 +2563,7 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "last_console_result_outcome": row["last_console_result_outcome"],
         "last_read_at": row["last_read_at"],
         "last_user_input_at": row["last_user_input_at"],
+        "turn_state": row.get("turn_state"),
         "primary_thread_id": None,
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
@@ -2621,6 +2625,7 @@ _STORAGE_CATALOG_OVERLAY_FIELDS = frozenset(
         "title_last_error",
         "first_user_message_preview",
         "transcript_revision",
+        "turn_state",
     }
 )
 _STORAGE_CATALOG_FALLBACK_FIELDS = frozenset(
@@ -3169,6 +3174,8 @@ def _assemble_session_facts(
 
 
 _CATALOG_TEXT_LIMITS = {
+    # JSON (storage_v2.turn_state); bounded at the source, never cut here.
+    "turn_state": 65_536,
     "provider": 64,
     "environment": 32,
     "project": 255,
@@ -3226,6 +3233,7 @@ _CATALOG_FIELDS = frozenset(
         "last_console_result_outcome",
         "last_read_at",
         "last_user_input_at",
+        "turn_state",
         "primary_thread_id",
         "notification_muted",
         "origin_kind",
@@ -3921,6 +3929,15 @@ def _recompute_render_generation_projection(
         ),
         "first_user_message_preview": (str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
         "last_visible_text_preview": (str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
+        "turn_state": encode_turn_json(
+            fold_turn_tails(
+                decode_turn_json(row["turn_tail"])
+                for row in sorted(
+                    (row for row in rows if int(row["event_count"]) > 0 and row["first_order_key"] is not None),
+                    key=lambda row: tuple(json.loads(str(row["first_order_key"]))),
+                )
+            )
+        ),
     }
     reset_title = bool(
         reset_derived_title

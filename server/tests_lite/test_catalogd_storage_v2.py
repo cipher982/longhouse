@@ -5425,3 +5425,55 @@ async def test_antigravity_swarm_spawn_hides_worker_and_exposes_roster_metadata(
         assert child["model"] == "gemini-2.5-pro"
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_commits_fold_turn_tails_into_the_served_turn(daemon_paths):
+    """Each served render object's turn tail folds onto the session row, and the
+    facts snapshot carries it, so the served turn needs no transcript read."""
+
+    from zerg.catalogd.store import _assemble_session_facts
+    from zerg.services.session_state_facts_projector import project_turn_facts
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    turn_at_us = 1_700_000_000_000_000
+
+    def call(call_id: str, tool: str, at_us: int, intent: str | None) -> dict:
+        return {"id": call_id, "tool": tool, "at_us": at_us, "intent": intent}
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
+        first_manifest = _render_manifest(generation_id)
+        first_manifest["turn_tail"] = {
+            "turn_at_us": turn_at_us,
+            "cleared": True,
+            "open": [call("a", "Bash", turn_at_us + 1, "Run the tests"), call("b", "Read", turn_at_us + 2, None)],
+            "closed": [],
+        }
+        first.update(render_state="ready", render_manifest=first_manifest)
+        await client.call("storage.raw_object.commit.v2", first)
+
+        second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=13, records=(b"second\n",), sealed_at=now)
+        second_manifest = _render_manifest(generation_id, seed=b"second-render", position=6)
+        second_manifest["turn_tail"] = {"turn_at_us": None, "cleared": False, "open": [], "closed": ["a"]}
+        second.update(render_state="ready", render_manifest=second_manifest)
+        await client.call("storage.raw_object.commit.v2", second)
+
+        engine = create_catalog_engine(database_path)
+        with engine.connect() as connection:
+            facts = _assemble_session_facts(connection, session_ids=[str(session_id)], observed_at=now, compact=True)
+        turn = project_turn_facts(facts[0]["catalog"]["turn_state"])
+        assert turn.started_at == datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC)
+        assert turn.active_call_count == 1
+        assert turn.lead_call is not None
+        assert (turn.lead_call.tool_call_id, turn.lead_call.tool, turn.lead_call.status) == ("b", "Read", "Reading files")
+    finally:
+        await client.close()
+        await daemon.close()

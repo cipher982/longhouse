@@ -195,6 +195,9 @@ class StorageSession(CatalogBase):
     title_dependency_incident_id = Column(String(36), nullable=True, index=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
+    # JSON: the current turn's start and running calls, folded from the
+    # served render objects' turn tails (storage_v2.turn_state).
+    turn_state = Column(Text, nullable=True)
     transcript_revision = Column(BigInteger, nullable=False, server_default=text("0"))
     # 0 means the row predates parser-owned semantic interaction facts. The
     # Runtime Host can replay immutable raw history and advance it to 1.
@@ -412,6 +415,9 @@ class RenderObject(CatalogBase):
     # storage_v2.render_objects._user_turn). NULL on objects sealed before the
     # turn index existed; the turn index read decodes those objects instead.
     user_turns = Column(Text, nullable=True)
+    # JSON: what this object says about the turn in progress
+    # (storage_v2.turn_state.turn_tail). NULL on objects sealed before it.
+    turn_tail = Column(Text, nullable=True)
     semantic_projection_version = Column(Integer, nullable=False, server_default=text("0"))
     first_order_key = Column(Text, nullable=True)
     last_order_key = Column(Text, nullable=True)
