@@ -74,6 +74,10 @@ struct SessionRuntimeDock: View {
     /// The enclosing navigation stack owns routes; the dock only supplies the
     /// exact provider-linked child session id.
     var onOpenSubagent: ((String) -> Void)? = nil
+    /// When the user's last message landed. While the session works, the
+    /// dock's clock counts from here (the turn), matching web; without it the
+    /// clock falls back to when the current state began.
+    var turnStartedAt: Date? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -414,6 +418,7 @@ struct SessionRuntimeDock: View {
 
     private var elapsedStart: Date? {
         guard isOpen && detail.isSessionExecuting else { return nil }
+        if let turnStartedAt, turnStartedAt <= Date() { return turnStartedAt }
         if let anchor = elapsedAnchor, anchor.key == elapsedAnchorKey {
             return anchor.start
         }
