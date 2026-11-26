@@ -104,7 +104,26 @@ build_for_testing() {
     build-for-testing
 }
 
-run_scheme() {
+build_scheme() {
+  local scheme="$1"
+  stage "${scheme}: build-for-testing"
+  if ! build_for_testing "${scheme}"; then
+    # Derived data kept from earlier jobs (IOS_DERIVED_DATA_KEPT, the bench runner) can hold
+    # state that breaks a build no clean checkout would. Build once more from nothing; a real
+    # compile error fails again, and the clean output is what the next job starts from.
+    if [[ "${IOS_DERIVED_DATA_KEPT:-}" != "1" ]]; then
+      return 1
+    fi
+    echo "::warning::${scheme}: build failed in kept derived data; building again from nothing"
+    stage "${scheme}: build-for-testing, clean"
+    # SourcePackages stays: the packages were resolved before this script, and it builds with
+    # automatic resolution off.
+    find "${DERIVED_DATA_PATH:?}" -mindepth 1 -maxdepth 1 ! -name SourcePackages -exec rm -rf {} +
+    build_for_testing "${scheme}"
+  fi
+}
+
+test_scheme() {
   local scheme="$1"
   local result_bundle=""
   local filters=()
@@ -126,22 +145,6 @@ run_scheme() {
       filters+=("${argument}")
     fi
   done < <(parallel_arguments "${scheme}")
-
-  stage "${scheme}: build-for-testing"
-  if ! build_for_testing "${scheme}"; then
-    # Derived data kept from earlier jobs (IOS_DERIVED_DATA_KEPT, the bench runner) can hold
-    # state that breaks a build no clean checkout would. Build once more from nothing; a real
-    # compile error fails again, and the clean output is what the next job starts from.
-    if [[ "${IOS_DERIVED_DATA_KEPT:-}" != "1" ]]; then
-      return 1
-    fi
-    echo "::warning::${scheme}: build failed in kept derived data; building again from nothing"
-    stage "${scheme}: build-for-testing, clean"
-    # SourcePackages stays: the packages were resolved before this script, and it builds with
-    # automatic resolution off.
-    find "${DERIVED_DATA_PATH:?}" -mindepth 1 -maxdepth 1 ! -name SourcePackages -exec rm -rf {} +
-    build_for_testing "${scheme}"
-  fi
 
   stage "${scheme}: test-without-building ${filters[*]-}"
   if [[ -n "${result_bundle}" ]]; then
@@ -166,8 +169,28 @@ run_scheme() {
   fi
 }
 
+# Boot the destination simulator before the first scheme's tests, so it stays booted for
+# the next: xcodebuild shuts down a simulator it booted itself when its tests end, and the
+# next scheme then paid a whole boot and first launch again (about 50 s on the bench Mac,
+# run 45695623475). Only a destination named by id; a simulator xcodebuild picks by name is
+# left to it. Booting while Xcode compiled slowed the build (run 45691666834), so this runs
+# after every scheme is built.
+boot_destination() {
+  local udid
+  udid="$(sed -nE 's/.*(^|,)id=([0-9A-Fa-f-]+).*/\2/p' <<<"${DESTINATION}")"
+  if [[ -z "${udid}" ]]; then
+    return 0
+  fi
+  stage "booting simulator ${udid}"
+  xcrun simctl bootstatus "${udid}" -b >/dev/null
+}
+
 echo "Running iOS schemes: ${IOS_TEST_SCHEMES}"
 for scheme in ${IOS_TEST_SCHEMES}; do
-  run_scheme "${scheme}"
+  build_scheme "${scheme}"
+done
+boot_destination
+for scheme in ${IOS_TEST_SCHEMES}; do
+  test_scheme "${scheme}"
   stage "${scheme}: done"
 done
