@@ -674,6 +674,9 @@ impl DaemonState {
         }
         let managed_state_changes = outcome.managed_state_changes;
         if !managed_state_changes.is_empty() {
+            if let Some(helm_live) = &self.antigravity_helm_live {
+                helm_live.notify_if_state_paths_changed(&managed_state_changes);
+            }
             self.settled_scan_cache
                 .invalidate_for_managed_changes(&managed_state_changes);
             let requires_discovery = managed_state_changes_require_full_reconciliation(

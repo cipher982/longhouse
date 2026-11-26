@@ -546,10 +546,12 @@ pub struct ProjectionReport {
 /// the same rows — so a pass that fails or is missed costs nothing but the next
 /// pass, and a session never becomes degraded because a projection was late.
 pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
-    // Skip re-opening SQLite on unchanged active claims for up to 60s, while
-    // still forcing a periodic reconciliation pass so externally modified or
-    // rebuilt binding tables self-heal.
-    const CLAIM_REPROJECTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+    // Skip re-opening SQLite on unchanged active claims for up to 5 minutes.
+    // Claim-file changes already bypass this cache via `Arc::ptr_eq` on the
+    // `dir_cache` snapshot, and expired/released claims bypass via `needs_work`,
+    // so this interval only bounds self-healing if SQLite `session_binding` is
+    // modified or rebuilt externally.
+    const CLAIM_REPROJECTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
     static LAST_PROJECTED: std::sync::LazyLock<
         std::sync::Mutex<std::collections::HashMap<PathBuf, (std::time::Instant, ClaimsBySession)>>,
     > = std::sync::LazyLock::new(Default::default);

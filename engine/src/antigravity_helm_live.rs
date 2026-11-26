@@ -108,21 +108,52 @@ impl HelmLiveConfig {
     }
 }
 
+#[derive(Default)]
+struct WakeState {
+    stopped: bool,
+    rescan_requested: bool,
+}
+
 /// A running reader. Dropping it stops the thread.
 pub struct HelmLive {
-    stop: Arc<(Mutex<bool>, Condvar)>,
+    state_dir: PathBuf,
+    canonical_state_dir: Option<PathBuf>,
+    wake: Arc<(Mutex<WakeState>, Condvar)>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl HelmLive {
+    /// Wake an idle reader thread immediately when FSEvents/inotify reports a
+    /// change under this reader's `state_dir` so new sessions attach in
+    /// milliseconds instead of waiting for `SCAN_EVERY`.
+    pub fn notify_state_changed(&self) {
+        let (lock, cvar) = &*self.wake;
+        if let Ok(mut state) = lock.lock() {
+            state.rescan_requested = true;
+            cvar.notify_all();
+        }
+    }
+
+    pub fn notify_if_state_paths_changed(&self, paths: &[PathBuf]) {
+        if paths.iter().any(|path| {
+            path.starts_with(&self.state_dir)
+                || self
+                    .canonical_state_dir
+                    .as_ref()
+                    .is_some_and(|canonical| path.starts_with(canonical))
+        }) {
+            self.notify_state_changed();
+        }
+    }
+
     pub fn stop(mut self) {
         self.shutdown();
     }
 
     fn shutdown(&mut self) {
-        let (lock, cvar) = &*self.stop;
-        if let Ok(mut stopped) = lock.lock() {
-            *stopped = true;
+        let (lock, cvar) = &*self.wake;
+        if let Ok(mut state) = lock.lock() {
+            state.stopped = true;
             cvar.notify_all();
         }
         if let Some(thread) = self.thread.take() {
@@ -143,14 +174,20 @@ pub fn spawn(config: HelmLiveConfig) -> Option<HelmLive> {
     if !reader_enabled() {
         return None;
     }
-    let stop = Arc::new((Mutex::new(false), Condvar::new()));
-    let flag = stop.clone();
+    let state_dir = config.state_dir.clone();
+    let canonical_state_dir = std::fs::canonicalize(&state_dir)
+        .ok()
+        .filter(|canonical| canonical != &state_dir);
+    let wake = Arc::new((Mutex::new(WakeState::default()), Condvar::new()));
+    let wake_for_thread = wake.clone();
     let thread = std::thread::Builder::new()
         .name("antigravity-helm-live".into())
-        .spawn(move || run(config, flag))
+        .spawn(move || run(config, wake_for_thread))
         .ok()?;
     Some(HelmLive {
-        stop,
+        state_dir,
+        canonical_state_dir,
+        wake,
         thread: Some(thread),
     })
 }
@@ -606,8 +643,9 @@ fn newest_tool_step(conn: &Connection) -> rusqlite::Result<Option<(i64, i64, Vec
 
 // --- the loop -------------------------------------------------------------
 
-/// How often the hook state directory is rescanned for sessions.
-const SCAN_EVERY: Duration = Duration::from_secs(5);
+/// How often the hook state directory is rescanned for sessions as a fallback
+/// backstop when filesystem events are delayed or unavailable.
+const SCAN_EVERY: Duration = Duration::from_secs(3);
 /// A state file untouched for this long belongs to no live session.
 const STATE_FILE_RECENT: Duration = Duration::from_secs(30 * 60);
 /// A "thinking" or "running" state older than this is a crashed turn, not a
@@ -855,16 +893,20 @@ fn rescan(config: &HelmLiveConfig, sessions: &mut HashMap<String, Session>) {
     }
 }
 
-fn run(config: HelmLiveConfig, stop: Arc<(Mutex<bool>, Condvar)>) {
+fn run(config: HelmLiveConfig, wake: Arc<(Mutex<WakeState>, Condvar)>) {
     let mut sessions: HashMap<String, Session> = HashMap::new();
     let mut next_scan = Instant::now();
-    let (lock, cvar) = &*stop;
+    let (lock, cvar) = &*wake;
     loop {
-        if *lock.lock().unwrap_or_else(|e| e.into_inner()) {
-            break;
-        }
+        let rescan_now = {
+            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if state.stopped {
+                break;
+            }
+            std::mem::take(&mut state.rescan_requested)
+        };
         let now = Instant::now();
-        if now >= next_scan {
+        if rescan_now || now >= next_scan {
             rescan(&config, &mut sessions);
             next_scan = now + SCAN_EVERY;
         }
@@ -900,8 +942,8 @@ fn run(config: HelmLiveConfig, stop: Arc<(Mutex<bool>, Condvar)>) {
             POLL_INTERVAL
         } else {
             // When idle with no live Antigravity sessions, sleep until the next
-            // scan on the condvar so shutdown still wakes instantaneously while
-            // avoiding 4-40 idle wakeups/sec.
+            // scan (or an immediate `notify_state_changed` / shutdown wake) on
+            // the condvar instead of polling 4-40 times/sec.
             SCAN_EVERY
         };
         let sleep_for = next_wake
@@ -909,8 +951,11 @@ fn run(config: HelmLiveConfig, stop: Arc<(Mutex<bool>, Condvar)>) {
             .min(sleep_cap)
             .max(LOOP_SLICE);
         let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if *guard {
+        if guard.stopped {
             break;
+        }
+        if guard.rescan_requested {
+            continue;
         }
         let _ = cvar.wait_timeout(guard, sleep_for);
     }
@@ -1569,5 +1614,48 @@ mod tests {
         let config = config(dir.path());
         write_state(&config, "../../etc/passwd", "thinking");
         assert!(helm_sessions(&config).is_empty());
+    }
+
+    #[test]
+    fn notify_state_changed_wakes_idle_thread_before_scan_every() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        // Spawn while idle (no state files yet) so the thread sleeps on SCAN_EVERY.
+        let handle = spawn(config.clone()).expect("spawn");
+        std::thread::sleep(Duration::from_millis(80));
+
+        // Now create a live session + database and notify the reader.
+        let conn = make_db(&db_path(&config, "conv-wake"), 1, GOOD_COLUMNS);
+        conn.execute(
+            "INSERT INTO steps VALUES (1, 15, 8, ?1)",
+            [payload(None, None)],
+        )
+        .unwrap();
+        write_state(&config, "conv-wake", "thinking");
+        let notified_at = Instant::now();
+        handle.notify_state_changed();
+        // Give the woken reader a moment to attach, then stream text.
+        std::thread::sleep(Duration::from_millis(150));
+        conn.execute(
+            "UPDATE steps SET step_payload = ?1 WHERE idx = 1",
+            [payload(Some("woken immediately"), None)],
+        )
+        .unwrap();
+
+        let deadline = notified_at + Duration::from_millis(1200);
+        while Instant::now() < deadline {
+            if !outbox_events(&config).is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        let elapsed = notified_at.elapsed();
+        let events = outbox_events(&config);
+        handle.stop();
+        assert_eq!(events.len(), 1, "expected immediate wake to emit preview");
+        assert!(
+            elapsed < Duration::from_millis(1200),
+            "expected wake well before SCAN_EVERY (3s), took {elapsed:?}"
+        );
     }
 }

@@ -768,6 +768,7 @@ struct DaemonState {
     control_channel_task: Option<tokio::task::JoinHandle<()>>,
     control_channel_status: crate::control_channel::ControlChannelStatus,
     status_file: heartbeat::StatusFileWriter,
+    antigravity_helm_live: Option<crate::antigravity_helm_live::HelmLive>,
     outbox_idle_stamps: OutboxIdleStamps,
     agent_control_dirs: Vec<PathBuf>,
     settled_scan_cache: SettledScanCache,
@@ -1351,7 +1352,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // Reply text for Antigravity Helm sessions, read from agy's conversation
     // database while a step streams. It stops when this scope ends and never
     // touches agy beyond a read-only connection.
-    let _antigravity_helm_live = crate::antigravity_helm_live::HelmLiveConfig::for_this_machine()
+    let antigravity_helm_live = crate::antigravity_helm_live::HelmLiveConfig::for_this_machine()
         .and_then(crate::antigravity_helm_live::spawn);
     let status_path = config::get_agent_status_path()?;
     if let Some(parent) = status_path.parent() {
@@ -1390,6 +1391,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         control_channel_task,
         control_channel_status,
         status_file: heartbeat::StatusFileWriter::new(status_path),
+        antigravity_helm_live,
         outbox_idle_stamps: OutboxIdleStamps::default(),
         agent_control_dirs,
         settled_scan_cache: SettledScanCache::new(claim_generations),
