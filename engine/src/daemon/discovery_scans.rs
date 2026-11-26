@@ -270,13 +270,195 @@ pub(super) const RECONCILE_INTERVAL: Duration = Duration::from_secs(15);
 /// Maximum time a settled source's metadata stamp is trusted during periodic
 /// reconciliation scans before forcing a full re-verification pass.
 const SETTLED_FULL_VERIFY_INTERVAL: Duration = Duration::from_secs(3600);
+/// Window of recently modified sources invalidated when an active provider's
+/// observation/heartbeat state changes (e.g. Claude channel heartbeats or
+/// Antigravity hook sessions). Historical files older than this window have
+/// already been reconciled and any future resume mutates their file stamp.
+const RECENT_STATE_INVALIDATION_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_SETTLED_SCAN_ENTRIES: usize = 50_000;
+
+/// Snapshot of per-provider generation counters captured before a path job
+/// runs so a full or recent invalidation arriving mid-job prevents the
+/// completing job from recording a stale settled entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProviderClaimSnapshot {
+    full: u64,
+    recent: u64,
+}
+
+struct ProviderClaimSlot {
+    full: std::sync::atomic::AtomicU64,
+    recent: std::sync::atomic::AtomicU64,
+}
+
+impl Default for ProviderClaimSlot {
+    fn default() -> Self {
+        Self {
+            full: std::sync::atomic::AtomicU64::new(1),
+            recent: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+}
+
+/// Lock-free per-provider generation counters incremented whenever ownership
+/// claims, import scope, or watched roots change.
+///
+/// Path jobs snapshot `current(provider)` before shipping so a claim change
+/// arriving mid-job prevents that job from recording a stale settled entry
+/// without disturbing unrelated providers.
+#[derive(Default)]
+pub(super) struct ProviderClaimGenerations {
+    claude: ProviderClaimSlot,
+    codex: ProviderClaimSlot,
+    cursor: ProviderClaimSlot,
+    omp: ProviderClaimSlot,
+    pi: ProviderClaimSlot,
+    opencode: ProviderClaimSlot,
+    antigravity: ProviderClaimSlot,
+    other: ProviderClaimSlot,
+}
+
+impl ProviderClaimGenerations {
+    fn slot(&self, provider: &str) -> &ProviderClaimSlot {
+        match provider {
+            "claude" => &self.claude,
+            "codex" => &self.codex,
+            "cursor" => &self.cursor,
+            "omp" => &self.omp,
+            "pi" => &self.pi,
+            "opencode" => &self.opencode,
+            "antigravity" => &self.antigravity,
+            _ => &self.other,
+        }
+    }
+
+    pub(super) fn current(&self, provider: &str) -> ProviderClaimSnapshot {
+        let slot = self.slot(provider);
+        ProviderClaimSnapshot {
+            full: slot.full.load(std::sync::atomic::Ordering::Acquire),
+            recent: slot.recent.load(std::sync::atomic::Ordering::Acquire),
+        }
+    }
+
+    pub(super) fn bump_provider(&self, provider: &str) {
+        self.slot(provider)
+            .full
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    pub(super) fn bump_provider_recent(&self, provider: &str) {
+        self.slot(provider)
+            .recent
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    pub(super) fn bump_all(&self) {
+        for slot in [
+            &self.claude,
+            &self.codex,
+            &self.cursor,
+            &self.omp,
+            &self.pi,
+            &self.opencode,
+            &self.antigravity,
+            &self.other,
+        ] {
+            slot.full.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct SettledScanEntry {
     provider: &'static str,
     stamp: discovery::SourceScanStamp,
-    generation: u64,
+    full_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedStateInvalidation {
+    Global,
+    FullProvider(&'static str),
+    RecentProvider(&'static str),
+}
+
+fn recent_cutoff_nanos(window: Duration) -> i128 {
+    SystemTime::now()
+        .checked_sub(window)
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(0)
+}
+
+/// Classify a watched managed-state path relative to its managed root
+/// (`managed-local`, `.claude`, `agent`, or `run`) so unrelated ancestor
+/// components like `/Users/pi/...` can never misclassify an unknown directory.
+fn classify_managed_state_change(path: &Path) -> ManagedStateInvalidation {
+    let parts: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+
+    // Check `managed-local` first (handles both `~/.longhouse/managed-local/...`
+    // and `~/.claude/managed-local/opencode-server/...`).
+    if let Some(idx) = parts.iter().rposition(|&part| part == "managed-local") {
+        let sub = &parts[idx + 1..];
+        return match sub.first().copied() {
+            Some("claims") => ManagedStateInvalidation::Global,
+            Some("cursor-helm" | "cursor" | "cursor-console") => {
+                ManagedStateInvalidation::FullProvider("cursor")
+            }
+            Some("omp-helm" | "omp" | "omp-console") => {
+                ManagedStateInvalidation::FullProvider("omp")
+            }
+            Some("pi-helm" | "pi" | "pi-console") => ManagedStateInvalidation::FullProvider("pi"),
+            Some("opencode" | "opencode-server" | "opencode-console") => {
+                ManagedStateInvalidation::FullProvider("opencode")
+            }
+            Some("contracts") => match sub.get(1).copied() {
+                Some("codex") => ManagedStateInvalidation::FullProvider("codex"),
+                Some("claude") => ManagedStateInvalidation::FullProvider("claude"),
+                Some("cursor") => ManagedStateInvalidation::FullProvider("cursor"),
+                Some("omp") => ManagedStateInvalidation::FullProvider("omp"),
+                Some("pi") => ManagedStateInvalidation::FullProvider("pi"),
+                Some("opencode") => ManagedStateInvalidation::FullProvider("opencode"),
+                Some("antigravity") => ManagedStateInvalidation::FullProvider("antigravity"),
+                _ => ManagedStateInvalidation::Global,
+            },
+            Some("antigravity" | "antigravity-console") => {
+                ManagedStateInvalidation::RecentProvider("antigravity")
+            }
+            Some("codex-bridge" | "codex" | "codex-console") => {
+                ManagedStateInvalidation::RecentProvider("codex")
+            }
+            Some(
+                "claude-channel" | "claude" | "claude-console" | "claude-print" | "claude-mod",
+            ) => ManagedStateInvalidation::RecentProvider("claude"),
+            _ => ManagedStateInvalidation::Global,
+        };
+    }
+
+    if let Some(idx) = parts.iter().rposition(|&part| part == ".claude") {
+        if matches!(parts.get(idx + 1).copied(), Some("channels")) {
+            return ManagedStateInvalidation::RecentProvider("claude");
+        }
+    }
+
+    if let Some(idx) = parts.iter().rposition(|&part| part == "run") {
+        if matches!(parts.get(idx + 1).copied(), Some("claude-mcp")) {
+            return ManagedStateInvalidation::RecentProvider("claude");
+        }
+    }
+
+    if let Some(idx) = parts.iter().rposition(|&part| part == "agent") {
+        if matches!(parts.get(idx + 1).copied(), Some("turn-claims")) {
+            return ManagedStateInvalidation::Global;
+        }
+    }
+
+    // Conservative fallback: any unrecognized managed-state path invalidates
+    // all providers rather than silently skipping.
+    ManagedStateInvalidation::Global
 }
 
 /// Tracks sources already verified `reconciled_to_head` at a rested metadata
@@ -285,44 +467,27 @@ struct SettledScanEntry {
 /// files on disk.
 pub(super) struct SettledScanCache {
     entries: HashMap<PathBuf, SettledScanEntry>,
-    provider_generations: HashMap<&'static str, u64>,
-    global_generation: u64,
-    /// Shared monotonic counter incremented whenever claims/scope/roots change.
-    /// Jobs snapshot this counter BEFORE shipping so a claim change arriving
-    /// mid-job prevents the completing job from recording a stale settled entry.
-    claim_generation: Arc<std::sync::atomic::AtomicU64>,
+    claim_generations: Arc<ProviderClaimGenerations>,
     last_full_verify_at: Instant,
 }
 
 impl SettledScanCache {
-    pub(super) fn new(claim_generation: Arc<std::sync::atomic::AtomicU64>) -> Self {
+    pub(super) fn new(claim_generations: Arc<ProviderClaimGenerations>) -> Self {
         Self {
             entries: HashMap::new(),
-            provider_generations: HashMap::new(),
-            global_generation: 1,
-            claim_generation,
+            claim_generations,
             last_full_verify_at: Instant::now(),
         }
     }
 
     #[cfg(test)]
     pub(super) fn default_for_test() -> Self {
-        Self::new(Arc::new(std::sync::atomic::AtomicU64::new(1)))
+        Self::new(Arc::new(ProviderClaimGenerations::default()))
     }
 
-    fn effective_generation(&self, provider: &'static str) -> u64 {
-        self.global_generation
-            .wrapping_add(*self.provider_generations.get(provider).unwrap_or(&0))
-    }
-
-    fn bump_claim_generation(&self) {
-        self.claim_generation
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    }
-
-    pub(super) fn current_claim_generation(&self) -> u64 {
-        self.claim_generation
-            .load(std::sync::atomic::Ordering::Acquire)
+    #[cfg(test)]
+    pub(super) fn current_claim_generation(&self, provider: &str) -> ProviderClaimSnapshot {
+        self.claim_generations.current(provider)
     }
 
     pub(super) fn record_settled(
@@ -330,9 +495,10 @@ impl SettledScanCache {
         path: PathBuf,
         provider: &'static str,
         stamp: Option<discovery::SourceScanStamp>,
-        job_claim_generation: u64,
+        job_claim_generation: ProviderClaimSnapshot,
     ) {
-        if job_claim_generation != self.current_claim_generation() {
+        let current = self.claim_generations.current(provider);
+        if job_claim_generation.full != current.full {
             self.entries.remove(&path);
             return;
         }
@@ -340,16 +506,22 @@ impl SettledScanCache {
             self.entries.remove(&path);
             return;
         };
+        if job_claim_generation.recent != current.recent
+            && stamp.modified_nanos.max(stamp.wal_modified_nanos)
+                >= recent_cutoff_nanos(RECENT_STATE_INVALIDATION_WINDOW)
+        {
+            self.entries.remove(&path);
+            return;
+        }
         if self.entries.len() >= MAX_SETTLED_SCAN_ENTRIES && !self.entries.contains_key(&path) {
             self.entries.clear();
         }
-        let generation = self.effective_generation(provider);
         self.entries.insert(
             path,
             SettledScanEntry {
                 provider,
                 stamp,
-                generation,
+                full_generation: current.full,
             },
         );
     }
@@ -363,7 +535,7 @@ impl SettledScanCache {
         };
         entry.provider == file.provider
             && entry.stamp == stamp
-            && entry.generation == self.effective_generation(file.provider)
+            && entry.full_generation == self.claim_generations.current(file.provider).full
     }
 
     pub(super) fn invalidate_path(&mut self, path: &Path) {
@@ -378,15 +550,25 @@ impl SettledScanCache {
     }
 
     pub(super) fn invalidate_provider(&mut self, provider: &'static str) {
-        let entry = self.provider_generations.entry(provider).or_insert(0);
-        *entry = entry.wrapping_add(1);
-        self.bump_claim_generation();
+        self.claim_generations.bump_provider(provider);
+    }
+
+    pub(super) fn invalidate_provider_recent(&mut self, provider: &'static str, window: Duration) {
+        let cutoff_nanos = recent_cutoff_nanos(window);
+        self.claim_generations.bump_provider_recent(provider);
+        self.entries.retain(|_, entry| {
+            entry.provider != provider
+                || entry
+                    .stamp
+                    .modified_nanos
+                    .max(entry.stamp.wal_modified_nanos)
+                    < cutoff_nanos
+        });
     }
 
     pub(super) fn invalidate_all(&mut self) {
-        self.global_generation = self.global_generation.wrapping_add(1);
         self.entries.clear();
-        self.bump_claim_generation();
+        self.claim_generations.bump_all();
         self.last_full_verify_at = Instant::now();
     }
 
@@ -401,52 +583,16 @@ impl SettledScanCache {
 
     pub(super) fn invalidate_for_managed_changes(&mut self, paths: &[PathBuf]) {
         for path in paths {
-            let mut matched_provider: Option<&'static str> = None;
-            let mut global_claim_dir = false;
-            for component in path.components() {
-                let Some(part) = component.as_os_str().to_str() else {
-                    continue;
-                };
-                match part {
-                    "turn-claims" | "claims" => {
-                        global_claim_dir = true;
-                        break;
-                    }
-                    "cursor-helm" | "cursor" | "cursor-console" => {
-                        matched_provider = Some("cursor");
-                    }
-                    "omp-helm" | "omp" | "omp-console" => {
-                        matched_provider = Some("omp");
-                    }
-                    "pi-helm" | "pi" | "pi-console" => {
-                        matched_provider = Some("pi");
-                    }
-                    "antigravity" | "antigravity-console" => {
-                        matched_provider = Some("antigravity");
-                    }
-                    "codex-bridge" | "codex" | "codex-console" => {
-                        matched_provider = Some("codex");
-                    }
-                    "claude-channel" | "claude" | "claude-console" | "claude-print" => {
-                        matched_provider = Some("claude");
-                    }
-                    "opencode" | "opencode-console" => {
-                        matched_provider = Some("opencode");
-                    }
-                    _ => {}
-                }
-            }
-            if global_claim_dir {
-                self.invalidate_all();
-                return;
-            }
-            match matched_provider {
-                Some(provider) => self.invalidate_provider(provider),
-                // Conservative fallback: any unrecognized managed-state path
-                // invalidates all providers rather than silently skipping.
-                None => {
+            match classify_managed_state_change(path) {
+                ManagedStateInvalidation::Global => {
                     self.invalidate_all();
                     return;
+                }
+                ManagedStateInvalidation::FullProvider(provider) => {
+                    self.invalidate_provider(provider);
+                }
+                ManagedStateInvalidation::RecentProvider(provider) => {
+                    self.invalidate_provider_recent(provider, RECENT_STATE_INVALIDATION_WINDOW);
                 }
             }
         }
@@ -939,16 +1085,33 @@ impl DaemonState {
 mod tests {
     use super::*;
 
-    fn sample_stamp(len: u64, at_rest: bool) -> discovery::SourceScanStamp {
+    fn sample_stamp_at(
+        len: u64,
+        modified_nanos: i128,
+        at_rest: bool,
+    ) -> discovery::SourceScanStamp {
         discovery::SourceScanStamp {
             inode: 42,
             len,
-            modified_nanos: 1_000_000_000,
-            ctime_nanos: 1_000_000_000,
+            modified_nanos,
+            ctime_nanos: modified_nanos,
             wal_len: 0,
             wal_modified_nanos: -1,
             at_rest,
         }
+    }
+
+    fn sample_stamp(len: u64, at_rest: bool) -> discovery::SourceScanStamp {
+        sample_stamp_at(len, 1_000_000_000, at_rest)
+    }
+
+    fn recent_stamp(len: u64, at_rest: bool) -> discovery::SourceScanStamp {
+        let recent_nanos = SystemTime::now()
+            .checked_sub(Duration::from_secs(60))
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i128)
+            .unwrap_or(1_000_000_000);
+        sample_stamp_at(len, recent_nanos, at_rest)
     }
 
     fn discovered(
@@ -971,7 +1134,7 @@ mod tests {
         let rested = sample_stamp(1024, true);
 
         // Unrested files are never marked settled.
-        let gen0 = cache.current_claim_generation();
+        let gen0 = cache.current_claim_generation("claude");
         cache.record_settled(
             path.clone(),
             "claude",
@@ -1015,34 +1178,137 @@ mod tests {
         )));
 
         // Provider-scoped managed claim change invalidates only that provider,
-        // and rejects stale in-flight completions captured before the claim change.
+        // rejects stale in-flight completions for that provider, and leaves
+        // unrelated providers' in-flight completions and settled entries intact.
         let cursor = PathBuf::from("/tmp/cursor/store.db");
-        let gen_before_claim = cache.current_claim_generation();
-        cache.record_settled(cursor.clone(), "cursor", Some(rested), gen_before_claim);
+        let omp = PathBuf::from("/tmp/omp/session.jsonl");
+        let cursor_gen_before = cache.current_claim_generation("cursor");
+        let omp_gen_before = cache.current_claim_generation("omp");
+        cache.record_settled(cursor.clone(), "cursor", Some(rested), cursor_gen_before);
         cache.invalidate_for_managed_changes(&[PathBuf::from(
             "/Users/x/.longhouse/managed-local/cursor-helm/binding-probes/a.json",
         )]);
         assert!(!cache.is_settled(&discovered("/tmp/cursor/store.db", "cursor", Some(rested))));
-        // Completing a job started under the pre-claim generation must not re-settle it.
-        cache.record_settled(cursor.clone(), "cursor", Some(rested), gen_before_claim);
+        // Completing a cursor job started under the pre-claim generation must not re-settle it.
+        cache.record_settled(cursor.clone(), "cursor", Some(rested), cursor_gen_before);
         assert!(!cache.is_settled(&discovered("/tmp/cursor/store.db", "cursor", Some(rested))));
+        // An unrelated in-flight omp job still settles normally.
+        cache.record_settled(omp.clone(), "omp", Some(rested), omp_gen_before);
+        assert!(cache.is_settled(&discovered("/tmp/omp/session.jsonl", "omp", Some(rested))));
         assert!(cache.is_settled(&discovered(
             "/tmp/claude/session.jsonl",
             "claude",
             Some(rested)
         )));
 
-        // Codex contract path invalidates codex specifically.
-        let codex = PathBuf::from("/tmp/codex/rollout.jsonl");
-        let gen_now = cache.current_claim_generation();
-        cache.record_settled(codex.clone(), "codex", Some(rested), gen_now);
+        // Live Claude channel heartbeats invalidate recent Claude files and
+        // reject in-flight recent Claude completions without flushing
+        // historical Claude transcripts or unrelated providers.
+        let recent_claude = PathBuf::from("/tmp/claude/recent.jsonl");
+        let recent_in_flight = PathBuf::from("/tmp/claude/recent-in-flight.jsonl");
+        let old_in_flight = PathBuf::from("/tmp/claude/old-in-flight.jsonl");
+        let recent = recent_stamp(1024, true);
+        let claude_gen_before = cache.current_claim_generation("claude");
+        cache.record_settled(
+            recent_claude.clone(),
+            "claude",
+            Some(recent),
+            claude_gen_before,
+        );
+        cache.invalidate_for_managed_changes(&[PathBuf::from(
+            "/Users/x/.claude/channels/longhouse/sessions/d700844a.json",
+        )]);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/recent.jsonl",
+            "claude",
+            Some(recent)
+        )));
+        // In-flight recent Claude job captured before the heartbeat is rejected.
+        cache.record_settled(
+            recent_in_flight.clone(),
+            "claude",
+            Some(recent),
+            claude_gen_before,
+        );
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/recent-in-flight.jsonl",
+            "claude",
+            Some(recent)
+        )));
+        // In-flight historical Claude job still settles normally.
+        cache.record_settled(
+            old_in_flight.clone(),
+            "claude",
+            Some(rested),
+            claude_gen_before,
+        );
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/old-in-flight.jsonl",
+            "claude",
+            Some(rested)
+        )));
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+        assert!(cache.is_settled(&discovered("/tmp/omp/session.jsonl", "omp", Some(rested))));
+
+        // OpenCode server state under ~/.claude/managed-local/opencode-server
+        // invalidates opencode specifically (not claude or global).
+        let opencode = PathBuf::from("/tmp/opencode/opencode.db");
+        let opencode_gen = cache.current_claim_generation("opencode");
+        cache.record_settled(opencode.clone(), "opencode", Some(rested), opencode_gen);
+        cache.invalidate_for_managed_changes(&[PathBuf::from(
+            "/Users/x/.claude/managed-local/opencode-server/s1.json",
+        )]);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/opencode/opencode.db",
+            "opencode",
+            Some(rested)
+        )));
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Codex contract path performs full provider invalidation and rejects
+        // stale in-flight Codex completions while leaving other providers alone.
+        let codex_recent = PathBuf::from("/tmp/codex/rollout-recent.jsonl");
+        let codex_old = PathBuf::from("/tmp/codex/rollout-old.jsonl");
+        let codex_gen = cache.current_claim_generation("codex");
+        cache.record_settled(codex_old.clone(), "codex", Some(rested), codex_gen);
         cache.invalidate_for_managed_changes(&[PathBuf::from(
             "/Users/x/.longhouse/managed-local/contracts/codex/c.json",
         )]);
         assert!(!cache.is_settled(&discovered(
-            "/tmp/codex/rollout.jsonl",
+            "/tmp/codex/rollout-old.jsonl",
             "codex",
             Some(rested)
         )));
+        cache.record_settled(codex_recent.clone(), "codex", Some(recent), codex_gen);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/codex/rollout-recent.jsonl",
+            "codex",
+            Some(recent)
+        )));
+        assert!(cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+
+        // Unknown managed-state path under a username matching a provider name
+        // still conservatively invalidates all providers (not just `pi`).
+        cache.invalidate_for_managed_changes(&[PathBuf::from(
+            "/Users/pi/.longhouse/managed-local/future-unknown/x.json",
+        )]);
+        assert!(!cache.is_settled(&discovered(
+            "/tmp/claude/session.jsonl",
+            "claude",
+            Some(rested)
+        )));
+        assert!(!cache.is_settled(&discovered("/tmp/omp/session.jsonl", "omp", Some(rested))));
     }
 }

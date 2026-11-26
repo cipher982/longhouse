@@ -190,9 +190,9 @@ const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 /// Idle fallback interval for draining outbox/status/runtime-events lanes.
 /// Active writes wake the daemon immediately via FSEvents on the outbox/status
 /// directories and `longhouse-shipper.db-wal`; while any lane is non-empty,
-/// `OUTBOX_DRAIN_ACTIVE_INTERVAL` keeps draining at 200 ms.
+/// `OUTBOX_DRAIN_ACTIVE_INTERVAL` keeps draining at 500 ms.
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_secs(2);
-const OUTBOX_DRAIN_ACTIVE_INTERVAL: Duration = Duration::from_millis(200);
+const OUTBOX_DRAIN_ACTIVE_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a runtime-outbox sweep that removed nothing keeps the next one
 /// from starting. The sweep collapses byte-identical status repeats (the
 /// 2026-09-17 flood was 9,382 of 9,394); a flood of distinct events gives it
@@ -327,7 +327,7 @@ struct PathTaskContext {
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
     storage_v2: std::sync::Arc<StorageV2Capabilities>,
-    claim_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    claim_generations: std::sync::Arc<ProviderClaimGenerations>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -349,7 +349,7 @@ struct PathTaskResult {
     local_retry_priority: Option<WorkPriority>,
     reconciled_to_head: bool,
     settled_stamp: Option<discovery::SourceScanStamp>,
-    settled_claim_generation: u64,
+    settled_claim_generation: ProviderClaimSnapshot,
     processing_elapsed: Duration,
 }
 
@@ -1050,7 +1050,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // caches across idle periods. Spillover connections still open on demand and
     // drop immediately on return.
     let db_pool = ConnectionPool::new(config.shipper_config.db_path.as_deref(), 4)?;
-    let claim_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let claim_generations = Arc::new(ProviderClaimGenerations::default());
     let (path_shutdown, _) = watch::channel(false);
     let _path_shutdown_guard = PathWorkersShutdown(path_shutdown.clone());
     let task_context = PathTaskContext {
@@ -1060,7 +1060,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
         storage_v2,
-        claim_generation: Arc::clone(&claim_generation),
+        claim_generations: Arc::clone(&claim_generations),
         shutdown: path_shutdown.clone(),
     };
 
@@ -1392,7 +1392,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         status_file: heartbeat::StatusFileWriter::new(status_path),
         outbox_idle_stamps: OutboxIdleStamps::default(),
         agent_control_dirs,
-        settled_scan_cache: SettledScanCache::new(claim_generation),
+        settled_scan_cache: SettledScanCache::new(claim_generations),
         runtime_events_outbox_dir,
         outbox_dir,
         daily_maintenance_tasks,
@@ -1785,7 +1785,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             // Outbox drain: FSEvents wakes this immediately on writes; when
-            // idle, the fallback timer runs every 2 s (200 ms while active).
+            // idle, the fallback timer runs every 2 s (500 ms while active).
             _ = state.outbox_timer.tick() => {
                 state.on_outbox_tick(&config, phase_projection_timer.as_mut(), false);
                 let target_period = if state.outbox_idle_stamps.is_all_idle()

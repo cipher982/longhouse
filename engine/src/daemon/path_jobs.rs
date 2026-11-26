@@ -226,9 +226,7 @@ pub(super) fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> Stri
 )]
 pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
     let task_started = Instant::now();
-    let settled_claim_generation = task_context
-        .claim_generation
-        .load(std::sync::atomic::Ordering::Acquire);
+    let settled_claim_generation = task_context.claim_generations.current(job.provider);
     let settled_stamp = discovery::scan_stamp_for_path(&job.path, job.provider);
     let mut result = PathTaskResult {
         job,
