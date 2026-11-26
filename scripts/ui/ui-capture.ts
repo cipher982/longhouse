@@ -198,9 +198,9 @@ type SceneName = (typeof SCENES)[number];
 const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-search"];
 // Scenes that render the launch sheet with a machine that has run models.
 const LAUNCH_MODEL_SCENES: readonly SceneName[] = ["launch-model-picker", "launch-model-picked", "new-session"];
-// Scenes whose frames show the Hearth fires moving: the Timeline's, and the
-// session rail's beside the new-session composer.
-const HEARTH_MOTION_SCENES: readonly SceneName[] = ["timeline-hearth", "new-session"];
+// Scenes whose frames show the WebGL Hearth fires moving (the Timeline inbox;
+// the compact 16x22 session rail intentionally renders static SVG glyphs).
+const HEARTH_MOTION_SCENES: readonly SceneName[] = ["timeline-hearth"];
 // The marketing page's provider chart reads the generated contract, no fixture.
 const PROVIDER_SUPPORT_SCENE: SceneName = "provider-support";
 const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session", PROVIDER_SUPPORT_SCENE];

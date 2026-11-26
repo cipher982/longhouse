@@ -124,9 +124,6 @@ function ensureInitialized(): void {
   } else {
     currentActivity = "focused";
     syncDocumentAttribute("focused");
-    if (typeof document.hasFocus === "function" && !document.hasFocus()) {
-      armAmbientAfter(AMBIENT_BLUR_GRACE_MS);
-    }
   }
   document.addEventListener("visibilitychange", handleVisibilityChange);
   window.addEventListener("focus", handleFocus);
