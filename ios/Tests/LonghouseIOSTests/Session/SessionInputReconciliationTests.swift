@@ -174,6 +174,38 @@ struct SessionInputReconciliationTests {
     }
 
     @Test
+    func unconfirmedConsoleInputResolvesWhenLinkedEchoIsBehindLoadedWindow() {
+        let laterEvent = assistantEvent("later-1", at: "2026-10-08T04:10:00Z")
+        let linkedOffPage = served(
+            "req-1",
+            text: "from hours ago",
+            at: "2026-10-07T23:00:00Z",
+            eventId: "echo-1",
+            turnState: "active"
+        )
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [input("req-1", phase: .couldNotConfirm, turnId: "turn-1")],
+            events: [laterEvent],
+            receipts: [linkedOffPage]
+        )
+        #expect(resolved == ["req-1"])
+    }
+
+    @Test
+    func linkedEventIdOnSubmittedInputResolvesWithoutServedReceiptList() {
+        let laterEvent = assistantEvent("later-1", at: "2026-10-08T04:10:00Z")
+        var linked = input("req-1", phase: .sent, turnId: "turn-1")
+        linked.linkedEventId = "echo-1"
+        linked.linkedCreatedAt = LonghouseDateParser.parse("2026-10-07T23:00:00Z")
+        let resolved = SessionViewModel.resolvedSubmittedInputIds(
+            submittedInputs: [linked],
+            events: [laterEvent],
+            receipts: []
+        )
+        #expect(resolved == ["req-1"])
+    }
+
+    @Test
     func stampedEventResolvesSendWithoutReceipt() {
         let origin = SessionInputOrigin(authoredVia: .longhouse, sessionInputId: nil, clientRequestId: "req-1")
         let resolved = SessionViewModel.resolvedSubmittedInputIds(

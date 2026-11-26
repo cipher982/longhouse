@@ -1162,22 +1162,26 @@ final class SessionViewModel: ObservableObject {
                     )
                     continue
                 }
+                // A receipt linked to its durable transcript event is in the
+                // transcript, so it was delivered whatever its Console turn
+                // says (active, stale, failed, or cancelled). Parity with
+                // web's `inTranscript(receipt)`.
+                if let eventId = receipt.eventId,
+                   intent.isDeliveryConfirmed || receipt.disposition == .accepted {
+                    reconcileLinkedPendingInput(intent: intent, receipt: receipt, eventId: eventId)
+                    continue
+                }
                 if intent.isDeliveryConfirmed {
-                    if receipt.eventId != nil {
-                        pendingInputStore.remove(intent)
-                        submittedInputs.removeAll { $0.clientRequestId == intent.clientRequestId }
-                    } else {
-                        updateSubmittedInput(
-                            intent.clientRequestId,
-                            phase: .sent,
-                            serverInputId: receipt.inputId,
-                            liveInputId: receipt.liveInputId,
-                            turnId: receipt.turn?.turnId,
-                            runId: receipt.turn?.runId,
-                            deliveryStatus: receipt.deliveryStatus,
-                            lastError: nil
-                        )
-                    }
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: .sent,
+                        serverInputId: receipt.inputId,
+                        liveInputId: receipt.liveInputId,
+                        turnId: receipt.turn?.turnId,
+                        runId: receipt.turn?.runId,
+                        deliveryStatus: receipt.deliveryStatus,
+                        lastError: nil
+                    )
                     continue
                 }
                 switch receipt.disposition {
@@ -1195,11 +1199,6 @@ final class SessionViewModel: ObservableObject {
                         }
                         return terminalStatus == "delivered" || terminalStatus == "sent"
                     }()
-                    if terminalSuccess, receipt.eventId != nil {
-                        pendingInputStore.remove(intent)
-                        submittedInputs.removeAll { $0.clientRequestId == intent.clientRequestId }
-                        continue
-                    }
                     let ambiguousDelivery = isUncertainDeliveryError(receipt.error)
                     let cancelled = !stoppedAfterDelivery
                         && (terminalStatus == "cancelled" || turnState == "cancelled")
@@ -1220,12 +1219,8 @@ final class SessionViewModel: ObservableObject {
                         if terminalFailure { return .failed }
                         return .couldNotConfirm
                     }()
-                    if terminalSuccess {
-                        if receipt.eventId != nil {
-                            pendingInputStore.remove(intent)
-                        } else if !intent.isDeliveryConfirmed {
-                            _ = pendingInputStore.save(intent.confirmedReceiptSummary())
-                        }
+                    if terminalSuccess, !intent.isDeliveryConfirmed {
+                        _ = pendingInputStore.save(intent.confirmedReceiptSummary())
                     }
                     let lastError: String?
                     if cancelled {
@@ -3685,6 +3680,8 @@ final class SessionViewModel: ObservableObject {
         turnId: String? = nil,
         runId: String? = nil,
         deliveryStatus: String? = nil,
+        linkedEventId: String? = nil,
+        linkedCreatedAt: Date? = nil,
         lastError: String?
     ) {
         guard let index = submittedInputs.firstIndex(where: { $0.id == id }) else { return }
@@ -3694,7 +3691,60 @@ final class SessionViewModel: ObservableObject {
         if let turnId { submittedInputs[index].turnId = turnId }
         if let runId { submittedInputs[index].runId = runId }
         if let deliveryStatus { submittedInputs[index].deliveryStatus = deliveryStatus }
+        if let linkedEventId { submittedInputs[index].linkedEventId = linkedEventId }
+        if let linkedCreatedAt { submittedInputs[index].linkedCreatedAt = linkedCreatedAt }
         submittedInputs[index].lastError = lastError
+    }
+
+    private func reconcileLinkedPendingInput(
+        intent: PendingInputIntent,
+        receipt: SessionInputReceiptState,
+        eventId: String
+    ) {
+        let linkedAt = receipt.createdAt.flatMap(LonghouseDateParser.parse) ?? intent.createdAt
+        let loadedUserEventIds = Set(lastWorkspaceEvents.filter { $0.role == "user" }.map(\.id))
+        let windowStart = lastWorkspaceEvents
+            .filter(\.isHeadBranch)
+            .compactMap { LonghouseDateParser.parse($0.timestamp) }
+            .min()
+        if Self.isLinkedEventShownOrBehindWindow(
+            eventId: eventId,
+            createdAt: linkedAt,
+            loadedUserEventIds: loadedUserEventIds,
+            windowStart: windowStart
+        ) {
+            pendingInputStore.remove(intent)
+            submittedInputs.removeAll { $0.clientRequestId == intent.clientRequestId }
+            return
+        }
+        if !intent.isDeliveryConfirmed {
+            _ = pendingInputStore.save(intent.confirmedReceiptSummary())
+        }
+        updateSubmittedInput(
+            intent.clientRequestId,
+            phase: .sent,
+            serverInputId: receipt.inputId,
+            liveInputId: receipt.liveInputId,
+            turnId: receipt.turn?.turnId,
+            runId: receipt.turn?.runId,
+            deliveryStatus: receipt.deliveryStatus,
+            linkedEventId: eventId,
+            linkedCreatedAt: linkedAt,
+            lastError: nil
+        )
+    }
+
+    static func isLinkedEventShownOrBehindWindow(
+        eventId: String,
+        createdAt: Date,
+        loadedUserEventIds: Set<String>,
+        windowStart: Date?
+    ) -> Bool {
+        if loadedUserEventIds.contains(eventId) {
+            return true
+        }
+        guard let windowStart else { return false }
+        return createdAt < windowStart
     }
 
 
@@ -3748,13 +3798,16 @@ final class SessionViewModel: ObservableObject {
         events: [SessionEvent],
         receipts: [SessionInputReceipt]
     ) -> Set<String> {
+        let userEvents = events.filter { $0.role == "user" }
+        let loadedUserEventIds = Set(userEvents.map(\.id))
+        let windowStart = events
+            .filter(\.isHeadBranch)
+            .compactMap { LonghouseDateParser.parse($0.timestamp) }
+            .min()
         let linkedRequestIds = UnrecordedInputs.shownByTranscript(
             receipts: receipts,
-            userEvents: events.filter { $0.role == "user" },
-            windowStart: events
-                .filter(\.isHeadBranch)
-                .compactMap { LonghouseDateParser.parse($0.timestamp) }
-                .min()
+            userEvents: userEvents,
+            windowStart: windowStart
         )
         // Delivered and settled, with no transcript row: the served receipt now
         // stands at its send time for every client, so this phone's own row
@@ -3775,11 +3828,21 @@ final class SessionViewModel: ObservableObject {
                 || input.phase == .working
                 || input.phase == .couldNotConfirm
             else { continue }
-            // A Console turn's echo can land while the turn still runs; once
-            // the server accepted it (.working or .sent) the echo replaces the
-            // row. A queued turn has not started, so it keeps its row.
-            if input.turnId != nil && input.phase != .sent && input.phase != .working { continue }
+            // A queued Console turn has not started, so it keeps its row until
+            // it runs. Once a turn is running, sent, or unconfirmed, a linked
+            // echo in or behind the loaded transcript supersedes the row.
+            if input.turnId != nil && input.phase == .queued { continue }
             if linkedRequestIds.contains(input.clientRequestId) {
+                resolved.insert(input.id)
+                continue
+            }
+            if let linkedEventId = input.linkedEventId,
+               Self.isLinkedEventShownOrBehindWindow(
+                   eventId: linkedEventId,
+                   createdAt: input.linkedCreatedAt ?? input.createdAt,
+                   loadedUserEventIds: loadedUserEventIds,
+                   windowStart: windowStart
+               ) {
                 resolved.insert(input.id)
                 continue
             }

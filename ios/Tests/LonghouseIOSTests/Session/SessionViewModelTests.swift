@@ -1734,6 +1734,163 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func staleLinkedConsoleReceiptResolvesOffPageOnReopen() async throws {
+        // Reproduces reopening a long-running Console session hours later:
+        // the receipt is linked to its durable user event, while the Console
+        // turn still reads active with isFresh == false.
+        let laterTail = try makeWorkspace(
+            eventId: 2010,
+            content: "Hours later",
+            timestamp: "2026-11-26T04:04:00Z"
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-stale-linked-offpage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let authGeneration = SharedAuthStore.authGeneration(for: appState.serverURL)
+        let clientRequestId = "ios-linked-offpage"
+        let sentAt = try #require(LonghouseDateParser.parse("2026-11-25T22:40:53Z"))
+        let pending = PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: appState.serverURL,
+            authGeneration: authGeneration,
+            sessionId: "session-1",
+            text: "table that for later",
+            intent: "auto",
+            attachments: [],
+            createdAt: sentAt
+        )
+        #expect(store.save(pending))
+        let api = FakeSessionWorkspaceClient(workspaces: [laterTail])
+        await api.setSessionInputReceiptResponse(
+            SessionInputReceiptState(
+                clientRequestId: clientRequestId,
+                intent: "auto",
+                status: "delivered",
+                disposition: .accepted,
+                deliveryStatus: "delivered",
+                liveInputId: "live-input-offpage",
+                turn: ConsoleTurnReceipt(
+                    turnId: "stale-turn",
+                    receiptId: "live-input-offpage",
+                    runId: "stale-run",
+                    state: "active",
+                    origin: "user",
+                    isFresh: false
+                ),
+                eventId: "antigravity-step-1505-user",
+                createdAt: "2026-11-25T22:40:53Z"
+            )
+        )
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.waitForSessionInputReceiptQuery()
+        for _ in 0..<20 {
+            if model.submittedInputs.isEmpty { break }
+            await Task.yield()
+        }
+
+        #expect(model.submittedInputs.isEmpty)
+        #expect(
+            store.load(
+                serverURL: appState.serverURL,
+                sessionId: "session-1",
+                authGeneration: authGeneration
+            ).isEmpty
+        )
+    }
+
+    @Test
+    func staleLinkedConsoleReceiptKeepsSentRowUntilEchoLoads() async throws {
+        // When the server already linked the durable echo, delivery is
+        // confirmed even if the turn reads stale, but the row stays visible as
+        // `.sent` (never `.couldNotConfirm`) until the echo actually loads.
+        let earlierTail = try makeWorkspace(
+            eventId: 10,
+            content: "Before send",
+            timestamp: "2026-11-25T22:00:00Z"
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-stale-linked-unloaded-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let authGeneration = SharedAuthStore.authGeneration(for: appState.serverURL)
+        let clientRequestId = "ios-linked-unloaded"
+        let sentAt = try #require(LonghouseDateParser.parse("2026-11-25T22:40:53Z"))
+        let attachment = PendingInputIntent.Attachment(
+            id: UUID(),
+            filename: "note.png",
+            data: Data([0x01, 0x02]),
+            mimeType: "image/png"
+        )
+        let pending = PendingInputIntent(
+            clientRequestId: clientRequestId,
+            serverURL: appState.serverURL,
+            authGeneration: authGeneration,
+            sessionId: "session-1",
+            text: "echo not loaded yet",
+            intent: "auto",
+            attachments: [attachment],
+            createdAt: sentAt
+        )
+        #expect(store.save(pending))
+        let api = FakeSessionWorkspaceClient(workspaces: [earlierTail])
+        await api.setSessionInputReceiptResponse(
+            SessionInputReceiptState(
+                clientRequestId: clientRequestId,
+                intent: "auto",
+                status: "delivered",
+                disposition: .accepted,
+                deliveryStatus: "delivered",
+                liveInputId: "live-input-unloaded",
+                turn: ConsoleTurnReceipt(
+                    turnId: "stale-turn",
+                    receiptId: "live-input-unloaded",
+                    runId: "stale-run",
+                    state: "active",
+                    origin: "user",
+                    isFresh: false
+                ),
+                eventId: "antigravity-step-1505-user",
+                createdAt: "2026-11-25T22:40:53Z"
+            )
+        )
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await api.waitForSessionInputReceiptQuery()
+        for _ in 0..<20 {
+            if model.submittedInputs.first?.phase == .sent { break }
+            await Task.yield()
+        }
+
+        #expect(model.submittedInputs.first?.phase == .sent)
+        #expect(model.submittedInputs.first?.lastError == nil)
+        #expect(model.submittedInputs.first?.linkedEventId == "antigravity-step-1505-user")
+        let retained = store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: authGeneration
+        )
+        #expect(retained.count == 1)
+        #expect(retained.first?.isDeliveryConfirmed == true)
+        #expect(retained.first?.attachments.isEmpty == true)
+    }
+
+    @Test
     func acceptedUnknownSendRetainsPendingOperation() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(

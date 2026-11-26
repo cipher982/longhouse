@@ -104,6 +104,8 @@ struct SubmittedInput: Identifiable, Sendable {
     var turnId: String?
     var runId: String?
     var deliveryStatus: String?
+    var linkedEventId: String?
+    var linkedCreatedAt: Date?
     var lastError: String?
     let createdAt: Date
     /// A served receipt the transcript does not show, standing at `createdAt`
@@ -123,6 +125,8 @@ struct SubmittedInput: Identifiable, Sendable {
         turnId: String? = nil,
         runId: String? = nil,
         deliveryStatus: String? = nil,
+        linkedEventId: String? = nil,
+        linkedCreatedAt: Date? = nil,
         lastError: String?,
         createdAt: Date
     ) {
@@ -138,6 +142,8 @@ struct SubmittedInput: Identifiable, Sendable {
         self.turnId = turnId
         self.runId = runId
         self.deliveryStatus = deliveryStatus
+        self.linkedEventId = linkedEventId
+        self.linkedCreatedAt = linkedCreatedAt
         self.lastError = lastError
         self.createdAt = createdAt
     }

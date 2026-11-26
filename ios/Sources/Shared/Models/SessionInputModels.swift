@@ -306,6 +306,7 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
     let liveInputId: String?
     let turn: ConsoleTurnReceipt?
     let eventId: String?
+    let createdAt: String?
     let error: String?
 
     init(
@@ -318,6 +319,7 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
         liveInputId: String? = nil,
         turn: ConsoleTurnReceipt? = nil,
         eventId: String? = nil,
+        createdAt: String? = nil,
         error: String? = nil
     ) {
         self.clientRequestId = clientRequestId
@@ -329,6 +331,7 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
         self.liveInputId = liveInputId
         self.turn = turn
         self.eventId = eventId
+        self.createdAt = createdAt
         self.error = error
     }
     private enum CodingKeys: String, CodingKey {
@@ -341,6 +344,7 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
         case liveInputId
         case turn
         case eventId
+        case createdAt
         case error
     }
 
@@ -363,6 +367,7 @@ struct SessionInputReceiptState: Codable, Sendable, Equatable {
             liveInputId: try container.decodeIfPresent(String.self, forKey: .liveInputId),
             turn: try container.decodeIfPresent(ConsoleTurnReceipt.self, forKey: .turn),
             eventId: try container.decodeIfPresent(String.self, forKey: .eventId),
+            createdAt: try container.decodeIfPresent(String.self, forKey: .createdAt),
             error: error
         )
     }

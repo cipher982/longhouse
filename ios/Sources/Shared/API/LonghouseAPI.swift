@@ -506,6 +506,8 @@ struct LonghouseAPI: Sendable {
         }()
         let eventId = (record["event_id"] as? String)
             ?? (record["durable_event_id"] as? String)
+        let createdAt = (record["created_at"] as? String)
+            ?? (record["createdAt"] as? String)
         return SessionInputReceiptState(
             clientRequestId: clientRequestId,
             intent: intent,
@@ -516,6 +518,7 @@ struct LonghouseAPI: Sendable {
             liveInputId: liveInputId,
             turn: turn,
             eventId: eventId,
+            createdAt: createdAt,
             error: error
         )
     }
