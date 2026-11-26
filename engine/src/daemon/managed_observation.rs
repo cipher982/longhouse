@@ -1417,14 +1417,16 @@ impl DaemonState {
                 .start("full_reconciliation", chrono::Utc::now().to_rfc3339());
         } else if !self.pending_full_reconciliation && !self.pending_wake_reconciliation {
             // When no managed sessions are currently active and we have already
-            // built our initial snapshot, slow the periodic poll to 25 s (well
-            // within MANAGED_CERTIFICATE_KEEPALIVE_SECS = 45 s). Any new session
-            // launch writes to a watched managed state directory and triggers an
-            // immediate FSEvents reconciliation.
+            // built our initial snapshot, slow the periodic poll to 15 s
+            // (elapsed >= 14 s fires cleanly on every 3rd 5 s tick, staying
+            // well inside both the 20 s failed-observation convergence bound
+            // and MANAGED_CERTIFICATE_KEEPALIVE_SECS = 45 s). Any new session
+            // launch writes to a watched managed state directory and triggers
+            // an immediate FSEvents reconciliation.
             let active_managed = self.last_managed_observations.has_active_sessions();
             let idle_due = self
                 .last_certified_at
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(25));
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(14));
             if active_managed || self.last_resume_contracts.is_none() || idle_due {
                 maybe_start_managed_observation_scan(
                     self.projection_db_path.clone(),
