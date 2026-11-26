@@ -873,12 +873,16 @@ export function SessionChat({
     null,
   );
 
-  const autoResizeDockTextarea = useCallback((el: HTMLTextAreaElement) => {
+  // The composer's height follows the draft, whoever changed it: typing,
+  // a send clearing it, a failed send or queued item restoring it, or a
+  // session switch. Sizing it from onChange alone left the box at its tall
+  // typed height after a send. The CSS max-height caps it and scrolls.
+  useLayoutEffect(() => {
+    const el = composerTextareaRef.current;
+    if (!el) return;
     el.style.height = "auto";
-    if (el.scrollHeight > 0) {
-      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-    }
-  }, []);
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
 
   useEffect(() => {
     return () => {
@@ -889,12 +893,7 @@ export function SessionChat({
 
   const handleDraftChange = useCallback((nextDraft: string) => {
     setDraft(nextDraft);
-    if (!nextDraft.trim()) {
-      setBlockedKeyboardSubmit(false);
-      if (composerTextareaRef.current) {
-        composerTextareaRef.current.style.height = "auto";
-      }
-    }
+    if (!nextDraft.trim()) setBlockedKeyboardSubmit(false);
   }, []);
 
   const refreshCurrentSessionWorkspace = useCallback(async () => {
@@ -3488,10 +3487,7 @@ export function SessionChat({
                     <textarea
                       ref={composerTextareaRef}
                       value={draft}
-                      onChange={(e) => {
-                        handleDraftChange(e.target.value);
-                        autoResizeDockTextarea(e.target);
-                      }}
+                      onChange={(e) => handleDraftChange(e.target.value)}
                       onKeyDown={handleKeyDown}
                       placeholder={dockPlaceholder}
                       aria-label="Next instruction"
