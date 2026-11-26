@@ -4870,3 +4870,18 @@ button.timeline-pane__status-chip:hover {
     white-space: nowrap;
   }
 }
+
+/* Three faces, three jobs: a purpose the agent wrote is prose (the base
+   face), a target Longhouse took from the arguments (a path, a pattern, a
+   command) is literal machine text (mono). The tool's name drops on a
+   purpose row: the icon carries the kind and the sentence carries the rest. */
+.tl-action--purpose .tl-action__summary,
+.tl-trail.tl-action--purpose .tl-action__summary {
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.tl-action:not(.tl-action--purpose):not(.tl-trail) .tl-action__summary {
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
+}

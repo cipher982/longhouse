@@ -43,6 +43,7 @@ export {
   getToolExitCode,
   getToolInputRecord,
   getToolIntentLabel,
+  isToolIntentAuthored,
   getToolOutputPreview,
   getLiveToolOutputPreview,
   getToolSummary,

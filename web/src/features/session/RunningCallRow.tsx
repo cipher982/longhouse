@@ -7,6 +7,7 @@ import {
   getInteractionDisplayInfo,
   getToolInputRecord,
   getToolIntentLabel,
+  isToolIntentAuthored,
   getToolSummary,
   type ToolInteraction,
 } from "@/shared/session/model";
@@ -190,6 +191,7 @@ export function RunningCallRow({
   const run = useRunningCallState(interaction);
   const info = getInteractionDisplayInfo(interaction);
   const intent = getToolIntentLabel(interaction);
+  const purpose = intent !== null && isToolIntentAuthored(interaction);
   const summary = getToolSummary(interaction);
   const input = getToolInputRecord(interaction.callEvent?.tool_input_json);
   const command = typeof input?.command === "string" ? input.command : typeof input?.cmd === "string" ? input.cmd : null;
@@ -209,7 +211,7 @@ export function RunningCallRow({
       data-tool-tier="action"
       data-status="pending"
       data-run-state={run.state}
-      className={`tl-action tl-run${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}`}
+      className={`tl-action tl-run${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-action--purpose" : ""}`}
     >
       <button
         type="button"
@@ -225,7 +227,7 @@ export function RunningCallRow({
         <span className="tl-action__icon tl-run__glyph" aria-hidden="true">
           <span className="tl-run__dot" />
         </span>
-        {trail && intent ? null : (
+        {(trail && intent) || purpose ? null : (
           <span className="tl-action__name" {...{ elementtiming: "longhouse-session-timeline-row" }}>
             {info.displayName}
           </span>

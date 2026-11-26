@@ -40,6 +40,7 @@ import {
   getToolDuration,
   getToolExitCode,
   getToolIntentLabel,
+  isToolIntentAuthored,
   getToolOutputPreview,
   getLiveToolOutputPreview,
   countTimelineItems,
@@ -912,6 +913,9 @@ function ActionCard({
 }) {
   const info = getInteractionDisplayInfo(interaction);
   const intent = getToolIntentLabel(interaction);
+  // A purpose the agent wrote reads as prose and names the step on its own;
+  // a target built from the arguments keeps the tool's name and mono face.
+  const purpose = intent !== null && isToolIntentAuthored(interaction);
   const summary = getToolSummary(interaction);
   const exitCode = getToolExitCode(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
@@ -955,7 +959,7 @@ function ActionCard({
       data-row-kind="tool"
       data-tool-tier="action"
       data-status={statusTone}
-      className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}${trail ? " tl-trail" : ""}`}
+      className={`tl-action${statusClass}${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}${trail ? " tl-trail" : ""}${purpose ? " tl-action--purpose" : ""}`}
     >
       <button
         type="button"
@@ -969,7 +973,7 @@ function ActionCard({
         aria-controls={detailId}
       >
         <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-        {trail && intent ? null : (
+        {(trail && intent) || (purpose && !agentType) ? null : (
           <span
             className="tl-action__name"
             {...{ elementtiming: "longhouse-session-timeline-row" }}
@@ -978,7 +982,7 @@ function ActionCard({
           </span>
         )}
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary">
+        <span className="tl-action__summary" title={purpose && summary ? summary : undefined}>
           {intent ? (
             intent
           ) : editLabel ? (

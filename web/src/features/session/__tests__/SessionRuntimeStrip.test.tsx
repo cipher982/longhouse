@@ -720,11 +720,11 @@ describe("SessionRuntimeStrip background registry", () => {
     const state = buildSessionLedgerState(current, interaction, start + 10_000, true);
     expect(state.tone).toBe("working");
     expect(state.detailKind).toBe("delegated");
-    expect(state.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+1 more)");
+    expect(state.detail).toBe("Rebasing worktree and rerunning make validate · Running a command (+1 more)");
 
     current.session_state.delegation.count = 4;
     const capped = buildSessionLedgerState(current, interaction, start + 10_000, true);
-    expect(capped.detail).toBe("Rebasing worktree and rerunning make validate · Using Bash (+3 more)");
+    expect(capped.detail).toBe("Rebasing worktree and rerunning make validate · Running a command (+3 more)");
   });
 
   it("shows passive shell command detail in quiet tone without animating work", () => {

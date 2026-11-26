@@ -94,7 +94,7 @@ describe("BackgroundTaskRoster", () => {
     expect(rows[0]).toHaveTextContent("194.2k tok");
     expect(rows[1]).toHaveAttribute("data-spawn-depth", "1");
     expect(rows[1]).toHaveTextContent("fork");
-    expect(rows[1]).toHaveTextContent("Using Grep");
+    expect(rows[1]).toHaveTextContent("Searching");
     expect(rows[2]).toHaveAttribute("data-task-kind", "shell");
     expect(rows[3]).toHaveAttribute("data-task-kind", "monitor");
 

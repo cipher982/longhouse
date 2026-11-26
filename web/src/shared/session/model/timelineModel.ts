@@ -284,6 +284,20 @@ export function getToolOutputPreview(interaction: ToolInteraction): string | nul
  * other tools `description` is often the tool's own payload, so it is not
  * read there).
  */
+/**
+ * True when the row's intent text is a purpose the agent wrote ("Run the
+ * driving unit tests"), false when Longhouse built it from the arguments (a
+ * path, a pattern, the command's first line). The two read differently: a
+ * purpose is prose, a target is literal machine text.
+ */
+export function isToolIntentAuthored(interaction: ToolInteraction): boolean {
+  const callIntent = interaction.callEvent?.tool_intent;
+  if (typeof callIntent === "string" && callIntent.trim()) {
+    return interaction.callEvent?.tool_intent_source === "authored";
+  }
+  return getToolIntentLabel(interaction) !== null;
+}
+
 export function getToolIntentLabel(interaction: ToolInteraction): string | null {
   const callIntent = interaction.callEvent?.tool_intent;
   if (typeof callIntent === "string" && callIntent.trim()) return callIntent.trim();

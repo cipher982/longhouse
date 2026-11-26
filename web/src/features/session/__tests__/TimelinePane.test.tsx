@@ -1217,7 +1217,8 @@ describe("TimelinePane", () => {
     expect(row).toHaveTextContent("Listing running containers");
     expect(row).not.toHaveTextContent("docker ps -a");
 
-    fireEvent.click(screen.getByRole("button", { name: /Shell/ }));
+    expect(row.querySelector(".tl-action__name")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Listing running containers/ }));
     expect(row).toHaveTextContent("docker ps -a");
   });
 
