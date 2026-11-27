@@ -14,3 +14,4 @@
 {"type":"system","subtype":"microcompact_boundary","uuid":"sys-mc","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-11-14T10:00:30Z","microcompactMetadata":{"trigger":"auto","tokensSaved":14200}}
 {"type":"system","subtype":"stop_hook_summary","uuid":"sys-stop","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-11-14T10:00:32Z","preventedContinuation":true,"hookCount":1,"hasOutput":true,"stopReason":"hook_blocked","toolUseID":"stop-2"}
 {"type":"user","uuid":"u-int","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"2026-11-14T10:00:35Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}
+{"type":"custom-title","customTitle":"Renamed In Terminal","sessionId":"11111111-2222-3333-4444-555555555555"}

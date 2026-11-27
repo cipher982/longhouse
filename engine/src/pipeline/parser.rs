@@ -3440,8 +3440,8 @@ fn extract_claude_provider_facts(
             ),
         ) => true,
         (
-            "ai-title" | "agent-name" | "cost-state" | "permission-mode" | "worktree-state"
-            | "queue-operation",
+            "ai-title" | "agent-name" | "custom-title" | "cost-state" | "permission-mode"
+            | "worktree-state" | "queue-operation",
             _,
         ) => true,
         ("user", _) => {
@@ -3457,7 +3457,9 @@ fn extract_claude_provider_facts(
 
     let at = match obj.timestamp.as_deref().and_then(parse_timestamp) {
         Some(at) => at,
-        None if matches!(line_type, "ai-title" | "agent-name") => DateTime::<Utc>::UNIX_EPOCH,
+        None if matches!(line_type, "ai-title" | "agent-name" | "custom-title") => {
+            DateTime::<Utc>::UNIX_EPOCH
+        }
         None if matches!(
             line_type,
             "cost-state" | "permission-mode" | "worktree-state" | "queue-operation"
@@ -3695,6 +3697,27 @@ fn extract_claude_provider_facts(
                     serde_json::json!({
                         "title": bounded_text(title, 255),
                         "source": "provider",
+                    }),
+                );
+            }
+        }
+        // `/rename` (typed, or run from the Longhouse app) saves the session's
+        // custom title; it is the user's own name for the session.
+        ("custom-title", _) => {
+            if let Some(title) = value
+                .get("customTitle")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
+                push_claude_fact(
+                    facts,
+                    "session.title",
+                    at,
+                    line_offset,
+                    serde_json::json!({
+                        "title": bounded_text(title, 255),
+                        "source": "user",
                     }),
                 );
             }

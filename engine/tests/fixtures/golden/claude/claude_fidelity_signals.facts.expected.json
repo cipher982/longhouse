@@ -1,5 +1,5 @@
 {
-  "fact_count": 24,
+  "fact_count": 25,
   "facts": [
     {
       "kind": "turn.usage",
@@ -298,6 +298,15 @@
       "payload": {
         "outcome": "interrupted",
         "source": "user_interrupt"
+      }
+    },
+    {
+      "kind": "session.title",
+      "at": "1970-01-01T00:00:00Z",
+      "source_offset": 5606,
+      "payload": {
+        "source": "user",
+        "title": "Renamed In Terminal"
       }
     }
   ]
