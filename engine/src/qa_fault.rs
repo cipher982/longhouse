@@ -67,6 +67,10 @@ pub enum CodexFault {
 
 #[cfg(feature = "qa-fault-injection")]
 pub fn codex_fault() -> Option<CodexFault> {
+    // Terminal Truth's steer mutation check switches the same defect on by its own name.
+    if crate::qa_fault::mutant("codex-helm-steer-as-follow-up") {
+        return Some(CodexFault::SteerAsFollowUp);
+    }
     match std::env::var("LONGHOUSE_QA_FAULT").ok()?.as_str() {
         "codex_steer_as_follow_up" => Some(CodexFault::SteerAsFollowUp),
         "codex_interrupt_noop" => Some(CodexFault::InterruptNoop),
@@ -123,6 +127,7 @@ pub fn helm_extension_fault(_provider: &str) -> Option<HelmExtensionFault> {
 #[cfg(feature = "qa-fault-injection")]
 pub fn console_steer_noop() -> bool {
     std::env::var("LONGHOUSE_QA_FAULT").ok().as_deref() == Some("console_steer_noop")
+        || crate::qa_fault::mutant("console-steer-dropped")
 }
 
 #[cfg(not(feature = "qa-fault-injection"))]
