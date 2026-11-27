@@ -49,3 +49,13 @@ describe("MarkdownBody link targets", () => {
     expect(label?.getAttribute("title")).toBe("app/components/Todo.tsx:12-15");
   });
 });
+
+describe("MarkdownBody images", () => {
+  it("shows a local screenshot as a file ref instead of a broken image", () => {
+    const { container } = render(
+      <MarkdownBody content={"![shot](/Users/alice/shot.png) ![b](file:///Users/alice/b.png) ![r](https://x.io/r.png)"} />,
+    );
+    expect([...container.querySelectorAll(".tl-file-ref")].map((el) => el.textContent)).toEqual(["shot.png", "b.png"]);
+    expect([...container.querySelectorAll("img")].map((img) => img.getAttribute("src"))).toEqual(["https://x.io/r.png"]);
+  });
+});

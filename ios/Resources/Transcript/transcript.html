@@ -1163,6 +1163,7 @@ summary:has(> .run-dot) {
 	var PATH_LIKE_LABEL = /^(?:file:|\/|~\/|[a-z]:[\\/])/i;
 	var HOME_PREFIX = /^\/(?:Users|home)\/[^/\s]+(?=\/|$)/;
 	var LINE_FRAGMENT = /^L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i;
+	var BARE_FILE_LINE = /^[^:/?#\s]+:\d+(?:[:-]\d+)?$/;
 	var LINE_SUFFIX = /:(\d+)(?:([:-])(\d+))?$/;
 	function lineRange(start, end) {
 		return end && end !== start ? `${start}-${end}` : start;
@@ -1190,9 +1191,9 @@ summary:has(> .run-dot) {
 	/** A local file reference, or null for web URLs, anchors and other schemes. */
 	function parseFileTarget(raw) {
 		let s = raw.trim();
-		if (!s || s.startsWith("#") || s.startsWith("?")) return null;
+		if (!s || s.startsWith("#") || s.startsWith("?") || s.startsWith("//")) return null;
 		if (/^file:/i.test(s)) s = s.replace(/^file:(?:\/\/(?:localhost)?)?/i, "");
-		else if (ANY_SCHEME.test(s) && !DRIVE_PATH.test(s)) return null;
+		else if (ANY_SCHEME.test(s) && !DRIVE_PATH.test(s) && !BARE_FILE_LINE.test(s)) return null;
 		let lines = null;
 		const hash = s.indexOf("#");
 		if (hash >= 0) {
@@ -1229,7 +1230,8 @@ summary:has(> .run-dot) {
 		if (!text || text === raw || PATH_LIKE_LABEL.test(text)) display = shownPath + suffix;
 		else {
 			const startLine = file.lines?.split("-")[0];
-			display = startLine && !text.includes(startLine) ? text + suffix : text;
+			const named = startLine && new RegExp(`(?:[:#\\s]L?|L)${startLine}(?:\\D|$)`, "i").test(text);
+			display = startLine && !named ? text + suffix : text;
 		}
 		return {
 			kind: "file",
@@ -1239,7 +1241,7 @@ summary:has(> .run-dot) {
 	}
 	/** Cursor's code citation fence info string: `12:15:app/components/Todo.tsx`. */
 	function parseCodeCitation(info) {
-		const match = /^(\d+):(\d+):(\S+)$/.exec((info ?? "").trim());
+		const match = /^(\d+):(\d+):(\S+)/.exec((info ?? "").trim());
 		if (!match) return null;
 		const lines = lineRange(match[1], match[2]);
 		return {
@@ -1247,6 +1249,11 @@ summary:has(> .run-dot) {
 			display: `${basename$1(match[3])}:${lines}`,
 			title: `${shortenHome(match[3])}:${lines}`
 		};
+	}
+	/** What a link shows as plain text: a file's short name, otherwise its label. */
+	function plainLinkText(label, href) {
+		const target = classifyLinkTarget(href, label);
+		return target.kind === "file" ? target.display : label;
 	}
 	//#endregion
 	//#region src/embeds/ios-transcript/markdown.ts
@@ -1262,8 +1269,9 @@ summary:has(> .run-dot) {
 		const short = shortenHomeCodePath(text);
 		return short ? `<code title="${escapeHtml(text)}">${escapeHtml(short)}</code>` : `<code>${escapeHtml(text)}</code>`;
 	}
-	function linkHtml(label, target) {
-		const resolved = classifyLinkTarget(target, label.replace(/`/g, "").replace(/\*\*/g, ""));
+	function linkHtml(label, target, image = false) {
+		let resolved = classifyLinkTarget(target, label.replace(/[`*]|~~/g, ""));
+		if (image && resolved.kind === "file") resolved = classifyLinkTarget(target, "");
 		if (resolved.kind === "web") return `<a href="${escapeHtml(resolved.href)}" rel="noreferrer noopener">${renderInline(label, false)}</a>`;
 		if (resolved.kind === "file") return `<span class="file-ref" title="${escapeHtml(resolved.title)}">${escapeHtml(resolved.display)}</span>`;
 		return renderInline(label, false);
@@ -1275,7 +1283,13 @@ summary:has(> .run-dot) {
 		for (; i < s.length; i++) {
 			const c = s[i];
 			if (c === "\\") i++;
-			else if (c === "[") depth++;
+			else if (c === "`") {
+				let n = 1;
+				while (s[i + n] === "`") n++;
+				const close = s.indexOf(s.slice(i, i + n), i + n);
+				if (close >= 0) i = close + n - 1;
+				else i += n - 1;
+			} else if (c === "[") depth++;
 			else if (c === "]") {
 				depth--;
 				if (depth === 0) break;
@@ -1288,7 +1302,7 @@ summary:has(> .run-dot) {
 		let target;
 		if (s[j] === "<") {
 			const close = s.indexOf(">", j);
-			if (close < 0) return null;
+			if (close < 0 || s.slice(j, close).includes("\n")) return null;
 			target = s.slice(j + 1, close);
 			j = close + 1;
 		} else {
@@ -1339,7 +1353,7 @@ summary:has(> .run-dot) {
 		}
 	}
 	function emphasis(html) {
-		return html.replace(/\*\*\*([^\s*](?:[^*]*?[^\s*])?)\*\*\*/g, "<strong><em>$1</em></strong>").replace(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w])__([^\s_](?:[\s\S]*?[^\s_])?)__(?!\w)/g, "$1<strong>$2</strong>").replace(/\*([^\s*](?:[^*\n]*?[^\s*])?)\*/g, "<em>$1</em>").replace(/(^|[^\w])_([^\s_](?:[^_\n]*?[^\s_])?)_(?!\w)/g, "$1<em>$2</em>").replace(/~~([^\s~](?:[^~\n]*?[^\s~])?)~~/g, "<del>$1</del>");
+		return html.replace(/\*\*\*([^\s*](?:[^*]*?[^\s*])?)\*\*\*/g, "<strong><em>$1</em></strong>").replace(/\*\*([^\s*][^*]*?)\*([^\s*](?:[^*]*?[^\s*])?)\*\*\*/g, "<strong>$1<em>$2</em></strong>").replace(/\*\*\*([^\s*](?:[^*]*?[^\s*])?)\*([^*]*?[^\s*])\*\*/g, "<strong><em>$1</em>$2</strong>").replace(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w])__([^\s_](?:[\s\S]*?[^\s_])?)__(?!\w)/g, "$1<strong>$2</strong>").replace(/\*([^\s*](?:[^*\n]*?[^\s*])?)\*/g, "<em>$1</em>").replace(/(^|[^\w])_([^\s_](?:[^_\n]*?[^\s_])?)_(?!\w)/g, "$1<em>$2</em>").replace(/~~([^\s~](?:[^~\n]*?[^\s~])?)~~/g, "<del>$1</del>");
 	}
 	function renderInline(source, allowLinks) {
 		const s = source.replace(/\uE000/g, "�");
@@ -1399,7 +1413,7 @@ summary:has(> .run-dot) {
 				const image = c === "!";
 				const link = scanLink(s, image ? i + 1 : i);
 				if (link) {
-					emit(linkHtml(image ? link.label || "image" : link.label, link.target));
+					emit(linkHtml(image ? link.label || "image" : link.label, link.target, image));
 					i = link.end;
 					continue;
 				}
@@ -1437,12 +1451,29 @@ summary:has(> .run-dot) {
 	function isTableSeparator(line) {
 		return /^\|?[\s\-:]+(\|[\s\-:]+)*\|?$/.test(line.trim());
 	}
-	function isTableRow(line) {
-		const t = line.trim();
-		return t.startsWith("|") || /\S\|\S/.test(t) || t.endsWith("|") && t.includes("|");
-	}
 	function splitCells(line) {
-		return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+		const t = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+		const cells = [];
+		let cell = "";
+		for (let i = 0; i < t.length; i++) {
+			const c = t[i];
+			if (c === "\\" && t[i + 1] === "|") {
+				cell += "|";
+				i++;
+			} else if (c === "`") {
+				let n = 1;
+				while (t[i + n] === "`") n++;
+				const close = t.indexOf(t.slice(i, i + n), i + n);
+				const end = close < 0 ? i + n : close + n;
+				cell += t.slice(i, end).replace(/\\\|/g, "|");
+				i = end - 1;
+			} else if (c === "|") {
+				cells.push(cell.trim());
+				cell = "";
+			} else cell += c;
+		}
+		cells.push(cell.trim());
+		return cells;
 	}
 	function parseAligns(sepLine) {
 		return splitCells(sepLine).map((cell) => {
@@ -1485,8 +1516,14 @@ summary:has(> .run-dot) {
 	function listItem(line) {
 		return LIST_ITEM.exec(line);
 	}
+	/** A list item that may end a paragraph. An ordered one must start at 1, so a
+	* sentence that wraps onto "2026. That…" stays prose. */
+	function interruptingItem(line) {
+		const item = listItem(line);
+		return item && item[3] !== void 0 && (!/\d/.test(item[2]) || parseInt(item[2], 10) === 1) ? item : null;
+	}
 	function startsBlock(line) {
-		return !!(fenceOpen(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || listItem(line));
+		return !!(fenceOpen(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || interruptingItem(line));
 	}
 	function fenceHtml(body, info) {
 		const citation = parseCodeCitation(info);
@@ -1504,14 +1541,17 @@ summary:has(> .run-dot) {
 		let i = start;
 		while (i < lines.length) {
 			const line = lines[i];
-			const item = listItem(line);
-			if (item && item[1].length < baseIndent + 2) {
-				if (!(ordered ? /\d/.test(item[2]) && item[2].slice(-1) === delimiter : item[2] === delimiter)) break;
+			if (RULE.test(line) && line.length - line.trimStart().length < baseIndent + 2) break;
+			const marker = listItem(line);
+			const sibling = marker && marker[1].length < baseIndent + 2 ? marker : null;
+			const sameKind = !!sibling && (ordered ? /\d/.test(sibling[2]) && sibling[2].slice(-1) === delimiter : sibling[2] === delimiter);
+			if (sibling && !sameKind && (sawBlank || interruptingItem(line))) break;
+			if (sibling && sameKind) {
 				if (sawBlank && items.length) loose = true;
-				const gap = item[3] ?? "";
-				const offset = item[1].length + item[2].length + (gap.length >= 1 && gap.length <= 4 ? gap.length : 1);
+				const gap = sibling[3] ?? "";
+				const offset = sibling[1].length + sibling[2].length + (gap.length >= 1 && gap.length <= 4 ? gap.length : 1);
 				items.push({
-					lines: [item[4] ?? ""],
+					lines: [sibling[4] ?? ""],
 					offset
 				});
 				sawBlank = false;
@@ -1528,6 +1568,7 @@ summary:has(> .run-dot) {
 			const indent = line.length - line.trimStart().length;
 			if (indent >= Math.min(current.offset, baseIndent + 2)) {
 				current.lines.push(line.slice(Math.min(indent, current.offset)));
+				if (sawBlank) loose = true;
 				sawBlank = false;
 				i++;
 				continue;
@@ -1625,19 +1666,19 @@ summary:has(> .run-dot) {
 				html += "<blockquote>" + renderBlocks(quoted) + "</blockquote>";
 				continue;
 			}
-			const item = listItem(line);
-			if (item && item[3] !== void 0 && (!paragraph.length || !/\d/.test(item[2]) || parseInt(item[2], 10) === 1)) {
+			const item = paragraph.length ? interruptingItem(line) : listItem(line);
+			if (item && item[3] !== void 0) {
 				flushParagraph();
 				const list = renderList(lines, i);
 				html += list.html;
 				i = list.next;
 				continue;
 			}
-			if (isTableRow(line) && i + 1 < lines.length && isTableRow(lines[i + 1]) && isTableSeparator(lines[i + 1])) {
+			if (line.includes("|") && i + 1 < lines.length && lines[i + 1].includes("|") && isTableSeparator(lines[i + 1])) {
 				flushParagraph();
 				const rows = [line, lines[i + 1]];
 				i += 2;
-				while (i < lines.length && isTableRow(lines[i])) rows.push(lines[i++]);
+				while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(lines[i++]);
 				html += tableToHtml(rows);
 				continue;
 			}
@@ -1678,7 +1719,7 @@ summary:has(> .run-dot) {
 	* the common inline markers (links first, so their visible text survives).
 	*/
 	function stripMarkdown(text) {
-		return text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1$2");
+		return text.replace(/\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)\)/g, (_, label, href) => plainLinkText(label, href)).replace(/<((?:https?|file):[^\s<>]+)>/gi, (_, href) => plainLinkText(href, href)).replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/(^|[^\w])_([^_]+)_(?!\w)/g, "$1$2");
 	}
 	/**
 	* The thought as it reads collapsed: the whole text, markdown stripped, with

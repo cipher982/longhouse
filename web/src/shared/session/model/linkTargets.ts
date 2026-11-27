@@ -30,6 +30,8 @@ const ABSOLUTE_PATH = /^(?:\/|~\/|[a-z]:[\\/])/i;
 const PATH_LIKE_LABEL = /^(?:file:|\/|~\/|[a-z]:[\\/])/i;
 const HOME_PREFIX = /^\/(?:Users|home)\/[^/\s]+(?=\/|$)/;
 const LINE_FRAGMENT = /^L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i;
+// `app.py:12` or `Makefile:42-50` looks like a scheme to ANY_SCHEME; it is a file and a line.
+const BARE_FILE_LINE = /^[^:/?#\s]+:\d+(?:[:-]\d+)?$/;
 const LINE_SUFFIX = /:(\d+)(?:([:-])(\d+))?$/;
 
 function lineRange(start: string, end: string | undefined): string {
@@ -63,9 +65,10 @@ export function shortenHomeCodePath(text: string): string | null {
 /** A local file reference, or null for web URLs, anchors and other schemes. */
 export function parseFileTarget(raw: string): FileTarget | null {
   let s = raw.trim();
-  if (!s || s.startsWith("#") || s.startsWith("?")) return null;
+  // Protocol-relative `//host/x` is a web address with no scheme, not a path.
+  if (!s || s.startsWith("#") || s.startsWith("?") || s.startsWith("//")) return null;
   if (/^file:/i.test(s)) s = s.replace(/^file:(?:\/\/(?:localhost)?)?/i, "");
-  else if (ANY_SCHEME.test(s) && !DRIVE_PATH.test(s)) return null;
+  else if (ANY_SCHEME.test(s) && !DRIVE_PATH.test(s) && !BARE_FILE_LINE.test(s)) return null;
 
   let lines: string | null = null;
   const hash = s.indexOf("#");
@@ -100,8 +103,10 @@ export function classifyLinkTarget(href: string | null | undefined, label: strin
   if (!text || text === raw || PATH_LIKE_LABEL.test(text)) {
     display = shownPath + suffix;
   } else {
+    // The label already names the line when it ends in `:59`, `#L59` or ` L59`.
     const startLine = file.lines?.split("-")[0];
-    display = startLine && !text.includes(startLine) ? text + suffix : text;
+    const named = startLine && new RegExp(`(?:[:#\\s]L?|L)${startLine}(?:\\D|$)`, "i").test(text);
+    display = startLine && !named ? text + suffix : text;
   }
   return { kind: "file", display, title: shortenHome(file.path) + suffix };
 }
@@ -114,7 +119,8 @@ export interface CodeCitation {
 
 /** Cursor's code citation fence info string: `12:15:app/components/Todo.tsx`. */
 export function parseCodeCitation(info: string | null | undefined): CodeCitation | null {
-  const match = /^(\d+):(\d+):(\S+)$/.exec((info ?? "").trim());
+  // remark keeps only the info string's first word; the iOS parser sees all of it.
+  const match = /^(\d+):(\d+):(\S+)/.exec((info ?? "").trim());
   if (!match) return null;
   const lines = lineRange(match[1], match[2]);
   return {
@@ -122,4 +128,10 @@ export function parseCodeCitation(info: string | null | undefined): CodeCitation
     display: `${basename(match[3])}:${lines}`,
     title: `${shortenHome(match[3])}:${lines}`,
   };
+}
+
+/** What a link shows as plain text: a file's short name, otherwise its label. */
+export function plainLinkText(label: string, href: string): string {
+  const target = classifyLinkTarget(href, label);
+  return target.kind === "file" ? target.display : label;
 }

@@ -33,8 +33,10 @@ function codeSpanHtml(body: string): string {
     : `<code>${escapeHtml(text)}</code>`;
 }
 
-function linkHtml(label: string, target: string): string {
-  const resolved = classifyLinkTarget(target, label.replace(/`/g, "").replace(/\*\*/g, ""));
+function linkHtml(label: string, target: string, image = false): string {
+  let resolved = classifyLinkTarget(target, label.replace(/[`*]|~~/g, ""));
+  // An image the viewer cannot load is named by its file, not its caption.
+  if (image && resolved.kind === "file") resolved = classifyLinkTarget(target, "");
   if (resolved.kind === "web") {
     return `<a href="${escapeHtml(resolved.href)}" rel="noreferrer noopener">${renderInline(label, false)}</a>`;
   }
@@ -58,6 +60,13 @@ function scanLink(s: string, start: number): LinkMatch | null {
     const c = s[i];
     if (c === "\\") {
       i++;
+    } else if (c === "`") {
+      // A code span in the label hides its brackets: [`arr[0]`](x).
+      let n = 1;
+      while (s[i + n] === "`") n++;
+      const close = s.indexOf(s.slice(i, i + n), i + n);
+      if (close >= 0) i = close + n - 1;
+      else i += n - 1;
     } else if (c === "[") {
       depth++;
     } else if (c === "]") {
@@ -74,7 +83,7 @@ function scanLink(s: string, start: number): LinkMatch | null {
   let target: string;
   if (s[j] === "<") {
     const close = s.indexOf(">", j);
-    if (close < 0) return null;
+    if (close < 0 || s.slice(j, close).includes("\n")) return null;
     target = s.slice(j + 1, close);
     j = close + 1;
   } else {
@@ -127,6 +136,9 @@ function trimBareUrl(url: string): string {
 function emphasis(html: string): string {
   return html
     .replace(/\*\*\*([^\s*](?:[^*]*?[^\s*])?)\*\*\*/g, "<strong><em>$1</em></strong>")
+    // Bold ending or starting in italic: **foo *bar*** and ***bar* foo**.
+    .replace(/\*\*([^\s*][^*]*?)\*([^\s*](?:[^*]*?[^\s*])?)\*\*\*/g, "<strong>$1<em>$2</em></strong>")
+    .replace(/\*\*\*([^\s*](?:[^*]*?[^\s*])?)\*([^*]*?[^\s*])\*\*/g, "<strong><em>$1</em>$2</strong>")
     .replace(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^\w])__([^\s_](?:[\s\S]*?[^\s_])?)__(?!\w)/g, "$1<strong>$2</strong>")
     .replace(/\*([^\s*](?:[^*\n]*?[^\s*])?)\*/g, "<em>$1</em>")
@@ -193,7 +205,7 @@ function renderInline(source: string, allowLinks: boolean): string {
       const image = c === "!";
       const link = scanLink(s, image ? i + 1 : i);
       if (link) {
-        emit(linkHtml(image ? link.label || "image" : link.label, link.target));
+        emit(linkHtml(image ? link.label || "image" : link.label, link.target, image));
         i = link.end;
         continue;
       }
@@ -246,8 +258,31 @@ export function isTableRow(line: string): boolean {
 
 // Split a pipe-delimited row into trimmed cell strings.
 export function splitCells(line: string): string[] {
-  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return t.split("|").map((c) => c.trim());
+  const t = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+  // Split on pipes that are neither escaped (\|) nor inside a code span.
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === "\\" && t[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (c === "`") {
+      let n = 1;
+      while (t[i + n] === "`") n++;
+      const close = t.indexOf(t.slice(i, i + n), i + n);
+      const end = close < 0 ? i + n : close + n;
+      cell += t.slice(i, end).replace(/\\\|/g, "|");
+      i = end - 1;
+    } else if (c === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += c;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
 }
 
 // Parse alignment hints from a separator row.
@@ -313,8 +348,15 @@ function listItem(line: string): RegExpExecArray | null {
   return LIST_ITEM.exec(line);
 }
 
+/** A list item that may end a paragraph. An ordered one must start at 1, so a
+ * sentence that wraps onto "2026. That…" stays prose. */
+function interruptingItem(line: string): RegExpExecArray | null {
+  const item = listItem(line);
+  return item && item[3] !== undefined && (!/\d/.test(item[2]) || parseInt(item[2], 10) === 1) ? item : null;
+}
+
 function startsBlock(line: string): boolean {
-  return !!(fenceOpen(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || listItem(line));
+  return !!(fenceOpen(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || interruptingItem(line));
 }
 
 function fenceHtml(body: string, info: string): string {
@@ -343,14 +385,19 @@ function renderList(lines: string[], start: number): { html: string; next: numbe
 
   while (i < lines.length) {
     const line = lines[i];
-    const item = listItem(line);
-    if (item && item[1].length < baseIndent + 2) {
-      const sameKind = ordered ? /\d/.test(item[2]) && item[2].slice(-1) === delimiter : item[2] === delimiter;
-      if (!sameKind) break;
+    if (RULE.test(line) && line.length - line.trimStart().length < baseIndent + 2) break;
+    const marker = listItem(line);
+    const sibling = marker && marker[1].length < baseIndent + 2 ? marker : null;
+    const sameKind =
+      !!sibling && (ordered ? /\d/.test(sibling[2]) && sibling[2].slice(-1) === delimiter : sibling[2] === delimiter);
+    // Another kind of list ends this one, unless it is "2026. That…" wrapped
+    // straight onto the item, which stays the item's text.
+    if (sibling && !sameKind && (sawBlank || interruptingItem(line))) break;
+    if (sibling && sameKind) {
       if (sawBlank && items.length) loose = true;
-      const gap = item[3] ?? "";
-      const offset = item[1].length + item[2].length + (gap.length >= 1 && gap.length <= 4 ? gap.length : 1);
-      items.push({ lines: [item[4] ?? ""], offset });
+      const gap = sibling[3] ?? "";
+      const offset = sibling[1].length + sibling[2].length + (gap.length >= 1 && gap.length <= 4 ? gap.length : 1);
+      items.push({ lines: [sibling[4] ?? ""], offset });
       sawBlank = false;
       i++;
       continue;
@@ -365,6 +412,8 @@ function renderList(lines: string[], start: number): { html: string; next: numbe
     const indent = line.length - line.trimStart().length;
     if (indent >= Math.min(current.offset, baseIndent + 2)) {
       current.lines.push(line.slice(Math.min(indent, current.offset)));
+      // A second paragraph inside an item makes the list loose.
+      if (sawBlank) loose = true;
       sawBlank = false;
       i++;
       continue;
@@ -468,10 +517,8 @@ function renderBlocks(lines: string[]): string {
       continue;
     }
 
-    const item = listItem(line);
-    // An ordered list interrupts a paragraph only when it starts at 1, so a
-    // sentence that wraps onto "2026. That…" stays prose.
-    if (item && item[3] !== undefined && (!paragraph.length || !/\d/.test(item[2]) || parseInt(item[2], 10) === 1)) {
+    const item = paragraph.length ? interruptingItem(line) : listItem(line);
+    if (item && item[3] !== undefined) {
       flushParagraph();
       const list = renderList(lines, i);
       html += list.html;
@@ -479,11 +526,13 @@ function renderBlocks(lines: string[]): string {
       continue;
     }
 
-    if (isTableRow(line) && i + 1 < lines.length && isTableRow(lines[i + 1]) && isTableSeparator(lines[i + 1])) {
+    // A separator row confirms a table, so the header and body only need a
+    // pipe; that admits tables written without outer pipes (`a | b`).
+    if (line.includes("|") && i + 1 < lines.length && lines[i + 1].includes("|") && isTableSeparator(lines[i + 1])) {
       flushParagraph();
       const rows = [line, lines[i + 1]];
       i += 2;
-      while (i < lines.length && isTableRow(lines[i])) rows.push(lines[i++]);
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(lines[i++]);
       html += tableToHtml(rows);
       continue;
     }

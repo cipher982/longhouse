@@ -132,11 +132,21 @@ function MarkdownTable({ children }: { children?: ReactNode }) {
 export const MARKDOWN_PLUGINS = [remarkGfm];
 
 /**
- * Hrefs reach the `a` component untouched so it can tell a local file from a
- * web link (the default transform blanks `file:` to an empty href). The
- * component never emits an href that is not http(s) or mailto.
+ * Link and image targets reach their components untouched so they can tell a
+ * local file from a web address (the default transform blanks `file:` and
+ * leaves `/abs/shot.png` to 404 against this host). The components never emit
+ * a target that is not http(s) (or mailto for links).
  */
-export const markdownUrlTransform: UrlTransform = (url, key) => (key === "href" ? url : defaultUrlTransform(url));
+export const markdownUrlTransform: UrlTransform = (url, key) =>
+  key === "href" || key === "src" ? url : defaultUrlTransform(url);
+
+function FileRef({ display, title }: { display: string; title: string }) {
+  return (
+    <span className="tl-file-ref" title={title}>
+      {display}
+    </span>
+  );
+}
 
 /** Links and inline code, shared by every markdown surface in the timeline. */
 export const MARKDOWN_INLINE_COMPONENTS: Components = {
@@ -150,14 +160,18 @@ export const MARKDOWN_INLINE_COMPONENTS: Components = {
       );
     }
     // A file on the agent's machine opens from nowhere a viewer is; show its name.
-    if (target.kind === "file") {
-      return (
-        <span className="tl-file-ref" title={target.title}>
-          {target.display}
-        </span>
-      );
-    }
+    if (target.kind === "file") return <FileRef display={target.display} title={target.title} />;
     return <>{children}</>;
+  },
+  img: ({ node: _node, src, alt }) => {
+    const source = typeof src === "string" ? src : "";
+    // An image the viewer cannot load is named by its file, not its caption.
+    const target = classifyLinkTarget(source, "");
+    if (target.kind === "web" && /^https?:/i.test(target.href)) {
+      return <img src={target.href} alt={alt ?? ""} loading="lazy" />;
+    }
+    if (target.kind === "file") return <FileRef display={target.display} title={target.title} />;
+    return <>{alt}</>;
   },
   code: ({ node: _node, className, children, ...props }) => {
     const short = !className && typeof children === "string" ? shortenHomeCodePath(children) : null;

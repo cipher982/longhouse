@@ -155,3 +155,76 @@ describe("block markdown", () => {
     expect(markdownToHtml("use ```x``` here")).toBe("<p>use <code>x</code> here</p>");
   });
 });
+
+// Review findings (Gemini Neon on c0b8655b7), one failing input each.
+describe("review regressions", () => {
+  it("reads app.py:12 and Makefile:42 as files, not URL schemes", () => {
+    expect(inlineMarkdown("[app.py](app.py:12)")).toBe('<span class="file-ref" title="app.py:12">app.py:12</span>');
+    expect(inlineMarkdown("[Makefile:42](Makefile:42)")).toBe('<span class="file-ref" title="Makefile:42">Makefile:42</span>');
+  });
+
+  it("keeps the line when the file name contains its digits", () => {
+    expect(inlineMarkdown("[v2_migration.sql](file:///repo/v2_migration.sql#L2)")).toBe(
+      '<span class="file-ref" title="/repo/v2_migration.sql:2">v2_migration.sql:2</span>',
+    );
+    expect(inlineMarkdown("[2026-audit.md](file:///repo/2026-audit.md#L20-L40)")).toBe(
+      '<span class="file-ref" title="/repo/2026-audit.md:20-40">2026-audit.md:20-40</span>',
+    );
+  });
+
+  it("names a local image by its file", () => {
+    expect(inlineMarkdown("![screenshot](/Users/alice/shot.png)")).toBe('<span class="file-ref" title="~/shot.png">shot.png</span>');
+  });
+
+  it("does not treat a protocol-relative URL as a file", () => {
+    expect(inlineMarkdown("[example](//example.com/foo)")).toBe("example");
+  });
+
+  it("strips single emphasis from a file label", () => {
+    expect(inlineMarkdown("[the *auth* module](file:///repo/auth.ts#L10)")).toBe(
+      '<span class="file-ref" title="/repo/auth.ts:10">the auth module:10</span>',
+    );
+  });
+
+  it("finds a link whose label holds brackets in a code span", () => {
+    expect(inlineMarkdown("[`arr[0]` and `]`](https://example.com)")).toBe(
+      '<a href="https://example.com" rel="noreferrer noopener"><code>arr[0]</code> and <code>]</code></a>',
+    );
+  });
+
+  it("rejects a newline inside an angle-bracket link target", () => {
+    expect(markdownToHtml("[click](<https://example.com/\nfoo>)")).not.toContain('<br>foo"');
+  });
+
+  it("nests bold that ends or starts in italic", () => {
+    expect(inlineMarkdown("**foo *bar***")).toBe("<strong>foo <em>bar</em></strong>");
+    expect(inlineMarkdown("***bar* foo**")).toBe("<strong><em>bar</em> foo</strong>");
+  });
+
+  it("ends a list at a spaced rule", () => {
+    expect(markdownToHtml("- item 1\n- - -")).toBe("<ul><li>item 1</li></ul><hr>");
+  });
+
+  it("keeps a wrapped year inside a list item", () => {
+    expect(markdownToHtml("- Shipped in\n2026. That worked")).toBe("<ul><li>Shipped in<br>2026. That worked</li></ul>");
+  });
+
+  it("makes a list with a two-paragraph item loose", () => {
+    expect(markdownToHtml("- first para\n\n  second para")).toBe("<ul><li><p>first para</p><p>second para</p></li></ul>");
+  });
+
+  it("splits table cells only on unescaped pipes outside code", () => {
+    const html = markdownToHtml("| Type | Cmd |\n|---|---|\n| `a \\| b` | `ls \\| wc` |");
+    expect(html).toContain("<td><code>a | b</code></td><td><code>ls | wc</code></td>");
+  });
+
+  it("renders a table without outer pipes", () => {
+    expect(markdownToHtml("Col A | Col B\n--- | ---\n1 | 2")).toBe(
+      '<div class="table-wrap"><table><thead><tr><th>Col A</th><th>Col B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div>',
+    );
+  });
+
+  it("captions a Cursor citation with a trailing language word", () => {
+    expect(markdownToHtml("```12:15:app/Todo.tsx tsx\nx\n```")).toContain(">Todo.tsx:12-15</div>");
+  });
+});

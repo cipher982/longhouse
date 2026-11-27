@@ -50,3 +50,12 @@ describe("helpers", () => {
     expect(parseCodeCitation("typescript")).toBeNull();
   });
 });
+
+describe("stripMarkdown links", () => {
+  it("shows a file link's short name and keeps parens in URLs", async () => {
+    const { stripMarkdown } = await import("../thoughtProse");
+    expect(stripMarkdown("see [/Users/a/.gemini/brain/x/plan.md](file:///Users/a/.gemini/brain/x/plan.md)")).toBe("see plan.md");
+    expect(stripMarkdown("[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) done")).toBe("Foo done");
+    expect(stripMarkdown("<file:///Users/a/r/notes.md>")).toBe("notes.md");
+  });
+});

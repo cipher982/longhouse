@@ -1,3 +1,5 @@
+import { plainLinkText } from "./linkTargets";
+
 /**
  * The collapsed thought is plain text, not a markdown renderer — a raw
  * "**Updating job commits**" reads as a formatting bug, not emphasis. Strip
@@ -5,7 +7,8 @@
  */
 export function stripMarkdown(text: string): string {
   return text
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)\)/g, (_, label: string, href: string) => plainLinkText(label, href))
+    .replace(/<((?:https?|file):[^\s<>]+)>/gi, (_, href: string) => plainLinkText(href, href))
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
