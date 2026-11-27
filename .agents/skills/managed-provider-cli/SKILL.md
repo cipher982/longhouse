@@ -62,7 +62,7 @@ lands, never whether it survives. Full contract:
   = chosen path and why; `ledger.jsonl` = claimed, submitted, delivered). Peer
   envelopes and steers never use this path. Without the mod, sends
   use the channel; every send result names the path (`owner_input_path`,
-  `owner_input_reason`). A leading `/` is refused (`owner_input_leading_slash`).
+  `owner_input_reason`). A slash command runs through the mod's `$.command.run`; see "Slash commands from the app" below.
 - Claude's AskUserQuestion is answerable from the app only through the mod. Its
   `tool.call` hook writes `question.json` in the same directory, then races the
   terminal dialog against an `answer` input; the first to answer wins, and an app
@@ -140,7 +140,8 @@ lands, never whether it survives. Full contract:
   distinct. Quiescence is `agent_settled`, never `agent_end`.
 - Cold resume verifies the retained native file/header and refuses a second owner.
   There is no live TUI attach.
-- Console is `pi -p --mode json` with `provider_local` approvals. Native JSONL is
+- Console is one `pi --mode rpc` process per turn (the prompt is an RPC `prompt`
+  frame) with `provider_local` approvals. Native JSONL is
   durable history; live previews never create archive rows.
 
 ### OMP (`longhouse omp`)
@@ -152,7 +153,8 @@ lands, never whether it survives. Full contract:
 - Helm is the stock TUI plus a launch-scoped extension and authenticated Unix
   channel. OMP's `agent_end` without `isTerminal`/`willContinue` is terminal;
   `willContinue: true` is continuation. Do not copy Pi's `agent_settled` semantics.
-- Console is one `omp -p --mode json` process per turn, `provider_local`; no remote
+- Console is one `omp --mode rpc` process per turn (the prompt is an RPC `prompt`
+  frame), `provider_local`; no remote
   approval or auto-approval fallbacks.
 - Console RPC stdin: write nothing until OMP prints its `ready` frame. Stock OMP's
   stdin reader wedges permanently if a byte is pending at startup and a large frame
@@ -272,3 +274,21 @@ repo's CI instead:
 No hidden fallbacks. A necessary one is explicit in logs or UI, or behind a named
 operator path, and never silently swaps a user-owned provider CLI for a
 Longhouse-owned runtime.
+
+## Slash commands from the app
+
+A message from the Longhouse app that is a slash command (`/name args`) runs in the
+provider exactly as if typed in its terminal. `engine/src/slash_input.rs` decides
+for every provider: the contract's `slash_commands.pickers` sent bare are refused
+(a picker nobody can answer), a mode marked `refuse` is refused with its reason, and
+`//text` is a message that starts with a slash. Each adapter then runs it its own
+way: Claude through the mod's `$.command.run`, Pi and OMP through the editor's own
+submit handler (a swapped-in `CustomEditor`), OpenCode through `POST
+/session/{id}/command` or the TUI command bus, Codex through the app-server request
+the TUI sends (`engine/src/codex_slash.rs`), Antigravity and Cursor by typing into
+the terminal. A command that opens no model turn is marked `turn_started: false`
+(or left unknown, which the server resolves after a short idle grace), so the
+session is freed at once. A slash command sent as a steer is queued for idle. Proof:
+the Terminal Truth `slash_command` scenario (`make prove
+CELLS="claude/helm:slash_command"`), cases in each provider's
+`slash_commands.cases`.

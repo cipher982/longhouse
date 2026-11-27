@@ -67,7 +67,7 @@ PROOF_BASE = ".cache/longhouse-prove"  # relative to the proof host user's home
 LOCAL_OUT = Path("/tmp/agents/prove")
 ORIGIN_URL = "https://github.com/cipher982/longhouse.git"
 
-TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent", "question", "question_steer")
+TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent", "question", "question_steer", "slash_command")
 KIND_SCENARIOS = ("thinking", "tool", "subagent")
 TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity")
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")
@@ -336,7 +336,10 @@ class ProofRun:
         self.out = self.run_dir / "out"
         self.tree = self.base / "trees" / f"run-{run_id}"
         self.venv = self.run_dir / "venv"
-        self.scratch = Path("/dev/shm") / f"prove-{secrets.token_hex(3)}"
+        # Short on purpose: Codex binds <home>/.longhouse/managed-local/codex-bridge/<uuid>.sock, and a Linux socket path
+        # holds 107 bytes. With TT's <root>/tt/<pass>/h home this name leaves exactly that ("/dev/shm/prove-xxxxxx" was 4
+        # over, so every Codex Helm cell failed with "path must be shorter than SUN_LEN").
+        self.scratch = Path("/dev/shm") / f"lp{secrets.token_hex(3)}"
         self.cell_timeout = cell_timeout
         self.started = time.monotonic()
         self.deadline_at = self.started + deadline - 60  # leave time to tear down before `timeout` fires
@@ -799,7 +802,7 @@ def sweep_old_runs(base: Path, keep_id: str) -> None:
             if rid != keep_id and time.time() - tree.stat().st_mtime > 6 * 3600:
                 subprocess.run(["git", "-C", str(base / "repo.git"), "worktree", "remove", "--force", str(tree)], capture_output=True, check=False)
                 shutil.rmtree(tree, ignore_errors=True)
-    for scratch in Path("/dev/shm").glob("prove-*"):
+    for scratch in [*Path("/dev/shm").glob("prove-*"), *Path("/dev/shm").glob("lp" + "[0-9a-f]" * 6)]:
         with contextlib.suppress(OSError):
             if time.time() - scratch.stat().st_mtime > 6 * 3600:
                 shutil.rmtree(scratch, ignore_errors=True)

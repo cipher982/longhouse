@@ -22,7 +22,7 @@ Object.assign(process.env, {
   LONGHOUSE_MANAGED_SESSION_ID: "pi-helm-test-session",
 });
 // Dynamic import is intentional: the extension validates launch-scoped identity at module load.
-const { default: registerExtension, toolArgumentsOf, toolOutputTextOf } = await import("./longhouse-pi-helm");
+const { default: registerExtension, toolArgumentsOf, toolOutputTextOf, submitAsTyped } = await import("./longhouse-pi-helm");
 
 const register = () => {
   const tools = new Map<string, RegisteredTool>();
@@ -127,5 +127,32 @@ describe("tool frames for the live preview", () => {
     const bounded = toolOutputTextOf({ partialResult: { content: [{ type: "text", text: "a".repeat(5000) + "END" }] } });
     expect(bounded?.length).toBe(4096);
     expect(bounded?.endsWith("END")).toBe(true);
+  });
+});
+
+describe("slash commands from the app", () => {
+  it("submit through Pi's own editor submit handler and restore the editor", async () => {
+    const submitted: string[] = [];
+    const factories: unknown[] = [];
+    class FakeEditor {
+      onSubmit?: (text: string) => unknown;
+    }
+    const ctx = {
+      ui: {
+        // What Pi's interactive mode does: build the editor, then wire its submit callback.
+        setEditorComponent(factory: ((...args: unknown[]) => FakeEditor) | undefined) {
+          factories.push(factory);
+          if (factory) factory("tui", "theme", "keys").onSubmit = (text: string) => submitted.push(text);
+        },
+      },
+    };
+    expect(await submitAsTyped(ctx, "/name proof run", async () => FakeEditor as never)).toBe(false);
+    expect(submitted).toEqual(["/name proof run"]);
+    expect(factories.length).toBe(2);
+    expect(factories[1]).toBeUndefined();
+  });
+
+  it("refuses when Pi has no editor", async () => {
+    await expect(submitAsTyped({}, "/name x", async () => class {} as never)).rejects.toThrow("no editor");
   });
 });

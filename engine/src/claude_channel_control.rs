@@ -85,6 +85,8 @@ pub struct OwnerInputDelivery {
     pub reason: Option<String>,
     /// The mod reported the turn it opened as started.
     pub delivered: bool,
+    /// A slash command the mod ran that started no model turn.
+    pub command_ran: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,8 +206,10 @@ pub async fn send_text(
     // Runtime Host command, which always carries its command id) answers;
     // peer envelopes and the engine's own steers (the disk guard) never do.
     let intent = meta.get("intent").and_then(serde_json::Value::as_str);
+    let slash = crate::slash_input::classify(&config.text);
     let owner_from_app = config.input_id.is_some()
         && matches!(intent, None | Some("steer"))
+        && !matches!(slash, crate::slash_input::OwnerText::Command(_))
         && !config.text.starts_with(PEER_ENVELOPE_PREFIX);
     if owner_from_app {
         if let Some(open) = open_question(&config.session_id, config.state_root.as_deref())? {
@@ -229,6 +233,7 @@ pub async fn send_text(
                             path: claude_owner_input::PATH_MOD,
                             reason: Some("answered_open_question".to_string()),
                             delivered: true,
+                            command_ran: false,
                         }),
                     });
                 }
@@ -290,7 +295,23 @@ pub async fn send_text(
     let owner_message =
         !meta.contains_key("intent") && !config.text.starts_with(PEER_ENVELOPE_PREFIX);
     let mut owner_input = None;
+    let mut text = config.text.clone();
     if owner_message {
+        if let crate::slash_input::OwnerText::Literal(literal) = &slash {
+            // `//text`: a message that starts with a slash. Claude Code would
+            // run it as a command from the mod, so the channel carries it.
+            text = literal.clone();
+        }
+    }
+    let literal = matches!(slash, crate::slash_input::OwnerText::Literal(_));
+    if owner_message && literal {
+        owner_input = Some(OwnerInputDelivery {
+            path: claude_owner_input::PATH_CHANNEL,
+            reason: Some("literal_slash_text".to_string()),
+            delivered: false,
+            command_ran: false,
+        });
+    } else if owner_message {
         match route_owner_message(
             &config.session_id,
             config.state_root.as_deref(),
@@ -307,16 +328,28 @@ pub async fn send_text(
                 });
             }
             OwnerRoute::Channel(reason) => {
+                if let crate::slash_input::OwnerText::Command(command) = &slash {
+                    // The channel puts text in front of the model; it cannot
+                    // run a command, and the model must not get it as text.
+                    return Err(ClaudeChannelControlError::Coded {
+                        code: crate::slash_input::REFUSED_CODE,
+                        message: format!(
+                            "/{} was not sent: this Claude session takes messages from the app through its channel ({reason}), which cannot run commands. Update Claude Code and restart the session with `longhouse claude`, or run the command in the terminal.",
+                            command.name
+                        ),
+                    });
+                }
                 owner_input = Some(OwnerInputDelivery {
                     path: claude_owner_input::PATH_CHANNEL,
                     reason: Some(reason),
                     delivered: false,
+                    command_ran: false,
                 });
             }
         }
     }
 
-    inject(port, &auth_token, &config.text, meta).await?;
+    inject(port, &auth_token, &text, meta).await?;
     Ok(ClaudeChannelSendSummary {
         provider_session_id: state.provider_session_id,
         owner_input,
@@ -434,17 +467,6 @@ async fn route_owner_message(
         );
         return Ok(OwnerRoute::Channel("qa_fault".to_string()));
     }
-    if text.trim_start().starts_with('/') {
-        // Claude Code refuses a mod prompt that starts with a slash, since it
-        // would run as a command; the channel would label the owner's words.
-        return Err(ClaudeChannelControlError::Coded {
-            code: "owner_input_leading_slash",
-            message: "Claude Helm cannot take a message that starts with / from the Longhouse app: \
-                      Claude Code reads it as a slash command. Run slash commands in the terminal, or \
-                      start the message with a word."
-                .to_string(),
-        });
-    }
     let id = input_id
         .map(claude_owner_input::input_id_for_command)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -463,8 +485,9 @@ async fn route_owner_message(
     match outcome {
         Ok(receipt) => Ok(OwnerRoute::Mod(OwnerInputDelivery {
             path: claude_owner_input::PATH_MOD,
-            reason: None,
+            reason: receipt.command_ran.then(|| "command_ran".to_string()),
             delivered: receipt.delivered,
+            command_ran: receipt.command_ran,
         })),
         // Withdrawn before anything took it: it can never arrive twice.
         Err(DeliveryError::NotPickedUp(reason)) => Ok(OwnerRoute::Channel(reason.to_string())),
@@ -1375,6 +1398,7 @@ mod tests {
                 path: "claude_mod",
                 reason: None,
                 delivered: false,
+                command_ran: false,
             })
         );
         let states: Vec<String> = claude_owner_input::ledger(&owner_dir(temp.path()))
@@ -1456,6 +1480,7 @@ mod tests {
                 path: "claude_mod",
                 reason: None,
                 delivered: false,
+                command_ran: false,
             })
         );
         let states = ledger_states(temp.path());
@@ -1556,6 +1581,7 @@ mod tests {
                 path: "channel",
                 reason: Some("mod_not_attached".to_string()),
                 delivered: false,
+                command_ran: false,
             })
         );
         assert_eq!(rx.await.unwrap().body["meta"]["from"], "session-owner");
@@ -1584,20 +1610,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_text_starting_with_a_slash_is_refused_on_the_mod_path() {
+    async fn owner_slash_command_runs_through_the_mod_and_reports_no_turn() {
         let temp = tempfile::tempdir().unwrap();
         ready_state(temp.path(), 1);
-        mod_route(temp.path(), "2.1.296 (Claude Code)");
-        let error = send_text(send_config(temp.path(), "  /compact", vec![]))
+        mod_route(temp.path(), "2.1.332 (Claude Code)");
+        let _mod = claude_owner_input::spawn_fake_mod(owner_dir(temp.path()), "command_ran")
+            .attached(&owner_dir(temp.path()));
+
+        let summary = send_text(send_config(temp.path(), "  /rename proof", vec![]))
+            .await
+            .unwrap();
+
+        let delivery = summary.owner_input.unwrap();
+        assert_eq!(delivery.path, "claude_mod");
+        assert!(delivery.command_ran);
+        let states: Vec<String> = claude_owner_input::ledger(&owner_dir(temp.path()))
+            .into_iter()
+            .map(|entry| format!("{}:{}", entry.id, entry.state))
+            .collect();
+        assert_eq!(states, ["cmd-1:claimed", "cmd-1:command_ran"]);
+    }
+
+    #[tokio::test]
+    async fn owner_slash_command_without_the_mod_is_refused_never_sent_as_text() {
+        let temp = tempfile::tempdir().unwrap();
+        // Port 1 refuses connections: a channel injection would fail differently.
+        ready_state(temp.path(), 1);
+        let error = send_text(send_config(temp.path(), "/goal ship it", vec![]))
             .await
             .unwrap_err();
-        assert!(matches!(
-            error,
-            ClaudeChannelControlError::Coded {
-                code: "owner_input_leading_slash",
-                ..
+        match error {
+            ClaudeChannelControlError::Coded { code, message } => {
+                assert_eq!(code, crate::slash_input::REFUSED_CODE);
+                assert!(message.contains("/goal was not sent"), "{message}");
             }
-        ));
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_double_slash_text_goes_through_the_channel_as_a_message() {
+        let temp = tempfile::tempdir().unwrap();
+        // Port 1 refuses connections: the channel is attempted, the mod is not.
+        ready_state(temp.path(), 1);
+        mod_route(temp.path(), "2.1.332 (Claude Code)");
+        let error = send_text(send_config(temp.path(), "//etc/hosts is wrong", vec![]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ClaudeChannelControlError::CommandFailed(_)),
+            "{error:?}"
+        );
         assert!(claude_owner_input::ledger(&owner_dir(temp.path())).is_empty());
     }
 

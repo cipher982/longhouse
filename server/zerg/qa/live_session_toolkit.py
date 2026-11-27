@@ -1049,6 +1049,14 @@ def start_transcript_shipper(
     engine_environment["HOME"] = str(home)
     engine_environment["LONGHOUSE_HOME"] = str(engine_longhouse_home)
     engine_environment.setdefault("RUST_LOG", "longhouse_engine=info")
+    longhouse_cli = getattr(args, "longhouse_cli", None)
+    if longhouse_cli:
+        # As on an installed machine, the Machine Agent finds `longhouse` on its PATH. Pi's contract requires it
+        # (requires_longhouse_cli): without it the engine advertises no pi.* control, and every input the app sends to a
+        # Pi session stays queued with "does not advertise this capability".
+        engine_environment["PATH"] = os.pathsep.join(
+            [str(Path(longhouse_cli).absolute().parent), engine_environment.get("PATH") or os.environ.get("PATH", "")]
+        )
     environment["LONGHOUSE_HOME"] = str(engine_longhouse_home)
     if provider != "claude":
         # A Codex/OpenCode/Cursor qualification may inherit the factory's

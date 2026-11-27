@@ -2,6 +2,58 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { resolve, sep } from "node:path";
 
+// A slash command as engine/src/slash_input.rs reads one; `//text` is a
+// message that starts with a slash (one slash is dropped).
+const SLASH_COMMAND = /^\s*\/(?!\/)[A-Za-z0-9_\-:.]+(?:\s|$)/;
+const literalMessage = <T>(content: T): T =>
+  typeof content === "string" && /^\s*\/\//.test(content) ? (content.replace("//", "/") as unknown as T) : content;
+
+type EditorLike = { onSubmit?: (text: string) => unknown };
+type EditorClass = new (...args: unknown[]) => EditorLike;
+const loadCustomEditor = async (): Promise<EditorClass> =>
+  ((await import("@oh-my-pi/pi-tui/prompt/custom-editor")) as unknown as { CustomEditor: EditorClass }).CustomEditor;
+
+/**
+ * Run `/name args` exactly as Enter in OMP's editor would (built-in commands,
+ * extension and file commands, skills, templates). OMP's extension API submits
+ * text only as a user message, so the text goes through the editor's own
+ * submit handler: OMP wires it to any editor set with `setEditorComponent`
+ * (interactive-mode `setEditorComponent` -> `setupEditorSubmitHandler`), which
+ * is swapped in for the call and back out. Resolves when OMP has taken the
+ * command: it finished, or the model turn it opened began (`started`).
+ */
+const TURN_START_GRACE_MS = 300;
+
+export const submitAsTyped = async (
+  ctx: unknown,
+  text: string,
+  started: Promise<void> = new Promise(() => undefined),
+  editorClass: () => Promise<EditorClass> = loadCustomEditor,
+) => {
+  const ui = (ctx as { ui?: { setEditorComponent?: (factory: unknown) => void } }).ui;
+  if (typeof ui?.setEditorComponent !== "function") {
+    throw new Error("this OMP has no editor to run a command in");
+  }
+  const CustomEditor = await editorClass();
+  let editor: EditorLike | undefined;
+  ui.setEditorComponent((_tui: unknown, theme: unknown) => {
+    editor = new CustomEditor(theme);
+    return editor;
+  });
+  try {
+    if (typeof editor?.onSubmit !== "function") throw new Error("OMP did not wire its submit handler to the editor");
+    const ran = Promise.resolve(editor.onSubmit(text));
+    void ran.catch(() => undefined);
+    const turn = started.then(() => true);
+    if (await Promise.race([ran.then(() => false), turn])) return true;
+    // The command finished. One that expands to a prompt (a template) starts
+    // its turn just after; give that a moment before saying none began.
+    return await Promise.race([turn, new Promise<boolean>((done) => setTimeout(() => done(false), TURN_START_GRACE_MS))]);
+  } finally {
+    ui.setEditorComponent(undefined);
+  }
+};
+
 type ImageContent = { type: "image"; data: string; mimeType: string };
 type TextContent = { type: "text"; text: string };
 
@@ -1699,6 +1751,7 @@ export default function (pi: any) {
     ownGeneration: number,
   ) => {
     if (!ctx) return;
+    let commandTurnStarted: boolean | undefined;
     const current = session(ctx);
     const authorityFields = [
       "auth_token",
@@ -1734,7 +1787,18 @@ export default function (pi: any) {
         // it, so accepting into it is not delivery. Refuse; the Runtime Host
         // keeps the durable receipt, images included, queued for the
         // turn-boundary drain.
-        if (providerIsIdle(ctx)) await deliverIdleSend(content);
+        if (providerIsIdle(ctx) && SLASH_COMMAND.test(text) && typeof content === "string") {
+          let wake: () => void = () => undefined;
+          const started = new Promise<void>((resolveStarted) => {
+            wake = resolveStarted;
+            turnStartWaiters.add(wake);
+          });
+          try {
+            commandTurnStarted = await submitAsTyped(ctx, text, started);
+          } finally {
+            turnStartWaiters.delete(wake);
+          }
+        } else if (providerIsIdle(ctx)) await deliverIdleSend(literalMessage(content));
         else
           throw Object.assign(
             new Error("OMP provider is mid-turn; send waits for the turn boundary"),
@@ -1757,6 +1821,7 @@ export default function (pi: any) {
         ...reply,
         ok: true,
         status: providerIsIdle(ctx) ? "idle" : "active",
+        ...(commandTurnStarted === undefined ? {} : { turn_started: commandTurnStarted }),
       };
     } catch (error) {
       reply.error = {

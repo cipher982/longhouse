@@ -412,6 +412,13 @@ pub struct BridgeSendSummary {
     pub thread_id: String,
     pub turn_id: String,
     pub turn_status: String,
+    /// The owner's slash command, when the send was one (see
+    /// [`crate::codex_slash`]); `turn_id` is then empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// For a command: whether a model turn follows (None: it may).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_turn_started: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -2483,6 +2490,26 @@ async fn handle_ipc_turn_start(
     thread_id: &str,
     attachments: &[crate::codex_attachments::AttachmentRef],
 ) -> Result<BridgeSendSummary> {
+    if let Some(command) = crate::slash_input::command(text) {
+        if let crate::codex_slash::CodexSlash::Request {
+            method,
+            params,
+            turn,
+        } = crate::codex_slash::route(thread_id, &command)
+        {
+            // The request the Codex TUI sends for this command (the engine
+            // refused the ones it cannot run before they got here).
+            send_request_with_runtime(client, method, params, config, context).await?;
+            return Ok(BridgeSendSummary {
+                session_id: context.state.session_id.clone(),
+                thread_id: thread_id.to_string(),
+                turn_id: String::new(),
+                turn_status: "command".to_string(),
+                command: Some(command.name),
+                command_turn_started: turn,
+            });
+        }
+    }
     let fetched = crate::codex_attachments::fetch_all(
         &context.runtime.http,
         &config.api_url,
@@ -2537,6 +2564,8 @@ async fn handle_ipc_turn_start(
         thread_id: thread_id.to_string(),
         turn_id,
         turn_status,
+        command: None,
+        command_turn_started: None,
     })
 }
 
@@ -2561,6 +2590,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
             thread_id,
             turn_id,
             turn_status: "inProgress".to_string(),
+            command: None,
+            command_turn_started: None,
         });
     }
 
@@ -2651,6 +2682,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         thread_id,
         turn_id,
         turn_status,
+        command: None,
+        command_turn_started: None,
     })
 }
 
@@ -2726,13 +2759,20 @@ async fn send_via_ipc_inner(
         turn_id: response
             .get("turn_id")
             .and_then(Value::as_str)
-            .context("IPC response missing turn_id")?
+            .unwrap_or_default()
             .to_string(),
         turn_status: response
             .get("turn_status")
             .and_then(Value::as_str)
             .unwrap_or("inProgress")
             .to_string(),
+        command: response
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        command_turn_started: response
+            .get("command_turn_started")
+            .and_then(Value::as_bool),
     })
 }
 

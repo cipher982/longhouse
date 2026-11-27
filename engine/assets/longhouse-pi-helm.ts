@@ -3,6 +3,58 @@ import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { resolve, sep } from "node:path";
 
+// A slash command as engine/src/slash_input.rs reads one; `//text` is a
+// message that starts with a slash (one slash is dropped).
+const SLASH_COMMAND = /^\s*\/(?!\/)[A-Za-z0-9_\-:.]+(?:\s|$)/;
+const literalMessage = <T>(content: T): T =>
+  typeof content === "string" && /^\s*\/\//.test(content) ? (content.replace("//", "/") as unknown as T) : content;
+
+type EditorLike = { onSubmit?: (text: string) => unknown };
+type EditorClass = new (...args: unknown[]) => EditorLike;
+const loadCustomEditor = async (): Promise<EditorClass> =>
+  ((await import("@earendil-works/pi-coding-agent")) as unknown as { CustomEditor: EditorClass }).CustomEditor;
+
+/**
+ * Run `/name args` exactly as Enter in Pi's editor would (built-in commands,
+ * extension commands, skills, templates). Pi's extension API submits text only
+ * as a user message, so the text goes through the editor's own submit handler:
+ * Pi wires its submit callback to a custom editor component, which is swapped
+ * in for the call and out again.
+ */
+const TURN_START_GRACE_MS = 300;
+
+export const submitAsTyped = async (
+  ctx: unknown,
+  text: string,
+  editorClass: () => Promise<EditorClass> = loadCustomEditor,
+  started: Promise<void> = new Promise(() => undefined),
+) => {
+  const ui = (ctx as { ui?: { setEditorComponent?: (factory: unknown) => void } }).ui;
+  if (typeof ui?.setEditorComponent !== "function") {
+    throw new Error("this Pi has no editor to run a command in");
+  }
+  const CustomEditor = await editorClass();
+  let editor: EditorLike | undefined;
+  ui.setEditorComponent((tui: unknown, theme: unknown, keybindings: unknown) => {
+    editor = new CustomEditor(tui, theme, keybindings);
+    return editor;
+  });
+  try {
+    if (typeof editor?.onSubmit !== "function") throw new Error("Pi did not wire its submit handler to the editor");
+    // A command that opens a model turn resolves only when the turn is over;
+    // Pi has taken it once the turn begins.
+    const ran = Promise.resolve(editor.onSubmit(text));
+    void ran.catch(() => undefined);
+    const turn = started.then(() => true);
+    if (await Promise.race([ran.then(() => false), turn])) return true;
+    // The command finished. One that expands to a prompt (a template) starts
+    // its turn just after; give that a moment before saying none began.
+    return await Promise.race([turn, new Promise<boolean>((done) => setTimeout(() => done(false), TURN_START_GRACE_MS))]);
+  } finally {
+    ui.setEditorComponent(undefined);
+  }
+};
+
 // BEGIN GENERATED COORDINATION CONTRACT (scripts/generate/generate_coordination_contract.py)
 // Do not edit: run the generator. Source: schemas/coordination_contract.yml
 const COORDINATION_CONTRACT = {
@@ -1138,10 +1190,14 @@ export default function (pi: ExtensionAPI) {
   const isTurnActive = (error: unknown) =>
     typeof error === "object" && error !== null && (error as { code?: unknown }).code === "turn_active";
 
+  // Sends waiting for the model turn their command opened to begin.
+  const turnStartWaiters = new Set<() => void>();
+
   const handleCommand = async (command: Frame, ctx: ExtensionContext) => {
     const requestId = typeof command.request_id === "string" ? command.request_id : "";
     const kind = command.kind;
     let reply: Frame = { kind: "command_result", request_id: requestId, ok: false };
+    let commandTurnStarted: boolean | undefined;
     try {
       const text = typeof command.text === "string" ? command.text : "";
       const content = userContent(text, command.attachments);
@@ -1153,10 +1209,20 @@ export default function (pi: ExtensionAPI) {
         // it, so accepting into it is not delivery. Refuse; the Runtime Host
         // keeps the durable receipt, images included, queued for the
         // turn-boundary drain.
-        if (ctx.isIdle()) {
-          await Promise.resolve(pi.sendUserMessage(content, { expandPromptTemplates: false }));
+        if (!ctx.isIdle()) throw turnActive("Pi");
+        if (SLASH_COMMAND.test(text) && typeof content === "string") {
+          let wake: () => void = () => undefined;
+          const started = new Promise<void>((resolveStarted) => {
+            wake = resolveStarted;
+            turnStartWaiters.add(wake);
+          });
+          try {
+            commandTurnStarted = await submitAsTyped(ctx, text, undefined, started);
+          } finally {
+            turnStartWaiters.delete(wake);
+          }
         } else {
-          throw turnActive("Pi");
+          await Promise.resolve(pi.sendUserMessage(literalMessage(content), { expandPromptTemplates: false }));
         }
       } else if (kind === "steer") {
         if (ctx.isIdle()) throw new Error("Pi provider has no active turn to steer");
@@ -1173,6 +1239,7 @@ export default function (pi: ExtensionAPI) {
         ok: true,
         provider_session_id: ctx.sessionManager.getSessionId(),
         status: ctx.isIdle() ? "idle" : "active",
+        ...(commandTurnStarted === undefined ? {} : { turn_started: commandTurnStarted }),
       };
     } catch (error) {
       reply.error = {
@@ -1206,7 +1273,10 @@ export default function (pi: ExtensionAPI) {
     closeChannel();
   });
 
-  pi.on("agent_start", async (_event, ctx) => emitActivity("running", undefined, ctx));
+  pi.on("agent_start", async (_event, ctx) => {
+    for (const wake of turnStartWaiters) wake();
+    emitActivity("running", undefined, ctx);
+  });
   // The tool call itself, for the live preview: its name, id, arguments and output so far.
   const emitToolCall = (phase: string, event: unknown, ctx: ExtensionContext) => {
     if (isChildSession(ctx)) return;

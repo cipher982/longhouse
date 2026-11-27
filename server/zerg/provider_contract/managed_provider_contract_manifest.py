@@ -838,6 +838,51 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
         if value not in _PROOF_PROFILE_VALUES:
             raise ValueError(f"managed provider contract {provider}: proof_profiles.{name} must be one of {sorted(_PROOF_PROFILE_VALUES)}")
     _validate_interaction_probes(item)
+    _validate_slash_commands(item)
+
+
+_SLASH_MODE_VALUES = frozenset({"run", "refuse"})
+_SLASH_CASE_KEYS = frozenset({"command", "args", "expect", "note"})
+_SLASH_CASE_EXPECTS = frozenset({"ran", "refused"})
+
+
+def _validate_slash_commands(item: dict[str, Any]) -> None:
+    """``slash_commands``: how app-sent slash commands reach the provider.
+
+    ``helm`` / ``console`` are ``run`` (the command runs as if typed) or
+    ``refuse`` (the app is told why, from ``refuse_reason``). ``pickers`` are
+    commands refused when sent with no argument. ``cases`` is the list the
+    Terminal Truth ``slash_command`` scenario sends through the app route.
+    """
+
+    provider = str(item.get("provider") or "<unknown>")
+    prefix = f"managed provider contract {provider}: slash_commands"
+    section = item.get("slash_commands")
+    if not isinstance(section, dict):
+        raise ValueError(f"{prefix} must be an object")
+    unknown = set(section) - {"helm", "console", "refuse_reason", "pickers", "cases"}
+    if unknown:
+        raise ValueError(f"{prefix} has unknown keys {', '.join(sorted(unknown))}")
+    for mode in ("helm", "console"):
+        if section.get(mode) not in _SLASH_MODE_VALUES:
+            raise ValueError(f"{prefix}.{mode} must be one of {sorted(_SLASH_MODE_VALUES)}")
+    if "refuse" in (section.get("helm"), section.get("console")):
+        reason = section.get("refuse_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"{prefix} refuses a mode but names no refuse_reason")
+    pickers = section.get("pickers")
+    if not isinstance(pickers, list) or not all(isinstance(p, str) and p and not p.startswith("/") for p in pickers):
+        raise ValueError(f"{prefix}.pickers must be a list of command names without the slash")
+    cases = section.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError(f"{prefix}.cases must be a non-empty list")
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict) or set(case) - _SLASH_CASE_KEYS:
+            raise ValueError(f"{prefix}.cases[{index}] must be an object with keys from {sorted(_SLASH_CASE_KEYS)}")
+        if not isinstance(case.get("command"), str) or not case["command"] or case["command"].startswith("/"):
+            raise ValueError(f"{prefix}.cases[{index}].command must be a command name without the slash")
+        if case.get("expect") not in _SLASH_CASE_EXPECTS:
+            raise ValueError(f"{prefix}.cases[{index}].expect must be one of {sorted(_SLASH_CASE_EXPECTS)}")
 
 
 def _validate_interaction_probes(item: dict[str, Any]) -> None:

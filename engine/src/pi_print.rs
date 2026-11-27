@@ -1019,6 +1019,14 @@ impl PiStreamProjection {
                         "Pi RPC session id {observed} does not match reserved provider thread {expected_provider_thread_id}"
                     );
                     self.identity_confirmed = true;
+                } else if command == Some("prompt")
+                    && ok
+                    && event.pointer("/data/disposition").and_then(Value::as_str) == Some("handled")
+                {
+                    // A command Pi ran without the model (an extension command,
+                    // a built-in): no run started, so no agent_settled follows
+                    // (Pi docs/rpc.md "Run lifecycle"). The turn is over.
+                    self.agent_settled = true;
                 } else if command == Some("prompt") && !ok {
                     self.rpc_rejected = true;
                     self.native_error = Some(
@@ -1565,6 +1573,26 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_pi_handled_without_the_model_settles_the_turn() {
+        let mut projection = PiStreamProjection::default();
+        projection
+            .apply(
+                "thread-1",
+                &serde_json::json!({"type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}),
+            )
+            .unwrap();
+        assert!(projection.agent_settled);
+        let mut started = PiStreamProjection::default();
+        started
+            .apply(
+                "thread-1",
+                &serde_json::json!({"type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}),
+            )
+            .unwrap();
+        assert!(!started.agent_settled);
+    }
 
     fn golden_pi_sink(home: &crate::console_sink_golden::GoldenHome) -> PiPrintSink {
         use crate::console_sink_golden::*;

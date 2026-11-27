@@ -64,6 +64,7 @@ from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_INTENT_QUEUE
 from zerg.services.session_inputs import INPUT_INTENT_STEER
 from zerg.services.session_preferences import stamp_owner_input_soon
+from zerg.services.slash_input import is_slash_command
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,8 @@ async def _create_session_input_with_attachments(
             _record_outcome("rejected_signature")
             raise HTTPException(status_code=exc.status_code, detail=_rejected_detail(exc.detail)) from exc
         files.append(InputUpload(filename=upload.filename, mime_type=str(upload.content_type), data=data))
+    if intent == INPUT_INTENT_STEER and is_slash_command(text):
+        intent = INPUT_INTENT_QUEUE  # as SessionInputRequest does: a command waits for the session to be idle
     uploads = InputUploads.build(text=text, intent=intent, files=files)
 
     try:

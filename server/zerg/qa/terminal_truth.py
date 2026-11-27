@@ -14,6 +14,7 @@ The code is split by responsibility; this module is the command line and re-expo
 - ``terminal_truth_scenarios``: one cell, a pass of cells sharing a host and engine, a suite (one cell cold, the rest shared);
 - ``terminal_truth_verdicts``: stages, the verdict rule, the ledger expectations, results and tables;
 - ``terminal_truth_question``: Claude's AskUserQuestion answered from Longhouse (the question and question_steer scenarios);
+- ``terminal_truth_command``: slash commands sent from Longhouse run as typed (the slash_command scenario);
 - ``terminal_truth_mutations``: the five 2026-11-11 defects put back, each of which must fail its cell.
 
 Expectations (live reply text expected, known-bad with a reason, not measurable) come from ``live_stream_signals`` in
@@ -31,6 +32,9 @@ import sys
 from pathlib import Path
 
 from zerg.qa.scripted_model_server import parse_pacing
+from zerg.qa.terminal_truth_command import SCENARIOS as COMMAND_SCENARIOS
+from zerg.qa.terminal_truth_command import render_command
+from zerg.qa.terminal_truth_command import run_command_suite
 from zerg.qa.terminal_truth_kinds import SCENARIOS
 from zerg.qa.terminal_truth_kinds import kinds_expectation
 from zerg.qa.terminal_truth_kinds import render_expectations
@@ -192,7 +196,9 @@ def main(argv: list[str] | None = None) -> int:
         "--reasoning-tokens", type=int, default=5, help="reasoning words streamed before the reply, on every protocol (0 turns it off)"
     )
     run.add_argument(
-        "--scenario", choices=["long_reply", "two_message", "thinking", "tool", "subagent", *QUESTION_SCENARIOS], default="long_reply"
+        "--scenario",
+        choices=["long_reply", "two_message", "thinking", "tool", "subagent", *QUESTION_SCENARIOS, *COMMAND_SCENARIOS],
+        default="long_reply",
     )
     run.add_argument(
         "--kinds-mutation",
@@ -323,6 +329,24 @@ def main(argv: list[str] | None = None) -> int:
     for item in args.ready_text:
         provider, _, text = item.partition("=")
         drivers[provider] = dataclasses.replace(drivers[provider], ready_text=text)
+    if args.scenario in COMMAND_SCENARIOS:  # slash commands sent from Longhouse: pass or fail per cell, no timing
+        command_results = run_command_suite(
+            declared,
+            engine=args.engine,
+            longhouse_cli=args.longhouse_cli,
+            keep=args.keep,
+            ready_timeout=args.ready_timeout,
+            drivers=drivers,
+            host_environment=host_environment,
+            engine_environment=engine_environment,
+            log=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+        print(render_command(command_results))
+        if args.out:
+            args.out.write_text(json.dumps(command_results, indent=2) + "\n")
+        code = 1 if any(r["outcome"] == "fail" for r in command_results) or all(r["outcome"] != "pass" for r in command_results) else 0
+        print(f"\nterminal truth {args.scenario}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
+        return code
     if args.scenario in QUESTION_SCENARIOS:  # a question answered from Longhouse: pass or fail per cell, no timing
         question_results = run_question_suite(
             declared,

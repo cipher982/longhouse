@@ -1955,6 +1955,7 @@ async fn monitor_omp_print(
             if (event.get("type").and_then(Value::as_str) == Some("agent_end")
                 && is_terminal_agent_end(&event))
                 || terminal_prompt_error
+                || is_local_command_result(&event)
             {
                 let cancelled = crate::turn_claims::default_registry()
                     .and_then(|claims| claims.read(&invocation.latest_turn().run_id))
@@ -3172,6 +3173,15 @@ fn is_terminal_agent_end(event: &Value) -> bool {
 /// bad prompt) as `prompt_result` with `status: "error"` and either
 /// `agentInvoked: false` or `sessionSettled: true`, without emitting
 /// `agent_end` or exiting the persistent RPC process.
+/// A prompt OMP answered without the model: a command with a text-mode
+/// handler (`/rename x`) reports `prompt_result` with `agentInvoked: false`
+/// and no error, and no `agent_end` follows. The turn is over.
+fn is_local_command_result(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("prompt_result")
+        && event.get("agentInvoked").and_then(Value::as_bool) == Some(false)
+        && event.get("status").and_then(Value::as_str) != Some("error")
+}
+
 fn is_terminal_prompt_result_error(event: &Value) -> bool {
     event.get("type").and_then(Value::as_str) == Some("prompt_result")
         && event.get("status").and_then(Value::as_str) == Some("error")
@@ -3386,6 +3396,7 @@ async fn publish_stdout_growth(
             if (event.get("type").and_then(Value::as_str) == Some("agent_end")
                 && is_terminal_agent_end(&event))
                 || is_terminal_prompt_result_error(&event)
+                || is_local_command_result(&event)
             {
                 let binding = invocation.latest_turn();
                 let cancel_requested = crate::turn_claims::default_registry()
@@ -4418,6 +4429,19 @@ mod tests {
         assert!(omp_supports_no_ui(&new_path));
         assert!(!omp_supports_no_ui(&old_path));
         assert!(omp_supports_no_ui(&new_path));
+    }
+
+    #[test]
+    fn a_local_command_result_ends_the_turn_and_an_error_still_fails() {
+        assert!(is_local_command_result(
+            &json!({"type":"prompt_result","id":"1","agentInvoked":false})
+        ));
+        assert!(!is_local_command_result(
+            &json!({"type":"prompt_result","agentInvoked":true})
+        ));
+        assert!(!is_local_command_result(
+            &json!({"type":"prompt_result","agentInvoked":false,"status":"error"})
+        ));
     }
 
     #[test]

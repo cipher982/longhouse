@@ -128,6 +128,53 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "model",
+          "permissions",
+          "approvals",
+          "review",
+          "resume",
+          "theme",
+          "pets",
+          "keymap",
+          "title",
+          "statusline",
+          "config",
+          "experimental",
+          "approve",
+          "skills",
+          "hooks",
+          "agents",
+          "subagents",
+          "tui",
+          "presets",
+          "daybreak",
+          "setup-default-sandbox",
+          "personality",
+          "fast"
+        ],
+        "cases": [
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "goal",
+            "args": "clear",
+            "expect": "ran",
+            "note": "setting a goal starts Codex working it turn after turn; clear takes the same app-server route without that"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "codex_model_picker",
@@ -1033,6 +1080,69 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "model",
+          "config",
+          "settings",
+          "permissions",
+          "allowed-tools",
+          "mcp",
+          "hooks",
+          "memory",
+          "plugin",
+          "plugins",
+          "skills",
+          "resume",
+          "continue",
+          "rewind",
+          "checkpoint",
+          "theme",
+          "status",
+          "export",
+          "diff",
+          "tasks",
+          "bashes",
+          "help",
+          "doctor",
+          "sandbox",
+          "ide",
+          "terminal-setup",
+          "keybindings",
+          "workflows",
+          "tui",
+          "agents",
+          "login",
+          "output-style",
+          "privacy-settings",
+          "usage",
+          "upgrade"
+        ],
+        "cases": [
+          {
+            "command": "ttcheck",
+            "expect": "ran",
+            "note": "a custom command the harness writes"
+          },
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "effort",
+            "args": "high",
+            "expect": "ran"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "claude_effort_command",
@@ -2134,6 +2244,49 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "sessions",
+          "resume",
+          "continue",
+          "models",
+          "agents",
+          "mcps",
+          "connect",
+          "themes",
+          "editor",
+          "skills",
+          "variants",
+          "move",
+          "org",
+          "orgs",
+          "switch-org",
+          "timeline",
+          "status",
+          "help",
+          "rename",
+          "export"
+        ],
+        "cases": [
+          {
+            "command": "ttcheck",
+            "expect": "ran",
+            "note": "a custom command the harness writes"
+          },
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "models",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "opencode_new_boundary",
@@ -2930,6 +3083,44 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "model",
+          "config",
+          "settings",
+          "resume",
+          "permissions",
+          "mcp",
+          "plugin",
+          "agents",
+          "artifact",
+          "diff",
+          "tasks",
+          "keybindings",
+          "statusline",
+          "feedback",
+          "voice"
+        ],
+        "cases": [
+          {
+            "command": "ttcheck",
+            "expect": "ran",
+            "note": "a custom command the harness writes"
+          },
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "antigravity_shadow_control_absence",
@@ -3681,6 +3872,35 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "refuse",
+        "refuse_reason": "Cursor's headless mode (cursor-agent --print), which Longhouse Console sessions run, has no slash commands",
+        "pickers": [
+          "model",
+          "resume",
+          "config",
+          "rewind",
+          "copy",
+          "sandbox",
+          "mcp",
+          "plugin",
+          "help",
+          "feedback"
+        ],
+        "cases": [
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "cursor_model_launch_option",
@@ -4433,6 +4653,38 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "settings",
+          "scoped-models",
+          "model",
+          "thinking",
+          "resume",
+          "tree",
+          "fork",
+          "trust",
+          "login"
+        ],
+        "cases": [
+          {
+            "command": "ttcheck",
+            "expect": "ran",
+            "note": "a custom command the harness writes"
+          },
+          {
+            "command": "name",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "pi_shadow_archive",
@@ -4465,7 +4717,8 @@
           "probe_id": "pi_print_model",
           "surface": "console",
           "input_sequence": [
-            "pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>"
+            "pi --mode rpc --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>",
+            "rpc prompt <prompt>"
           ],
           "acknowledgement_oracle": "pi_print_model_metadata",
           "native_sources": [
@@ -5309,6 +5562,48 @@
         "continuous": "privacy_safe_live_replay"
       },
       "support_tier": "launch",
+      "slash_commands": {
+        "helm": "run",
+        "console": "run",
+        "pickers": [
+          "settings",
+          "resume",
+          "model",
+          "tree",
+          "hub",
+          "agents",
+          "extensions",
+          "debug",
+          "copy",
+          "open",
+          "git",
+          "local",
+          "hotkeys",
+          "plan-review",
+          "guided-goal",
+          "stats",
+          "trace",
+          "context",
+          "record"
+        ],
+        "cases": [
+          {
+            "command": "ttcheck",
+            "expect": "ran",
+            "note": "a custom command the harness writes"
+          },
+          {
+            "command": "rename",
+            "args": "TTNAME",
+            "expect": "ran"
+          },
+          {
+            "command": "model",
+            "expect": "refused",
+            "note": "bare picker"
+          }
+        ]
+      },
       "interaction_probes": [
         {
           "probe_id": "omp_shadow_archive",
@@ -5341,7 +5636,8 @@
           "probe_id": "omp_console_turn",
           "surface": "console",
           "input_sequence": [
-            "omp --mode json --session-dir <session-dir> --resume <exact-session-file> -p <prompt>"
+            "omp --mode rpc --session-dir <session-dir> --resume <exact-session-file>",
+            "rpc prompt <prompt>"
           ],
           "acknowledgement_oracle": "omp_console_turn_settled_and_bound",
           "native_sources": [

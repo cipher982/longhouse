@@ -21,6 +21,10 @@ async function loadMod(
     sessionUsage?: unknown | (() => Promise<unknown>);
     /** The watcher streams nothing until this settles. */
     gate?: Promise<void>;
+    /** Slash commands this Claude Code knows; undefined: no $.command at all. */
+    commands?: string[];
+    /** $.command.run: what running a command does before it returns. */
+    runCommand?: (command: { command: string; args: string }) => Promise<unknown>;
   } = {},
 ) {
   loads += 1;
@@ -37,6 +41,7 @@ async function loadMod(
   const runs: string[][] = [];
   const submits: Array<{ text: string; asUser: boolean }> = [];
   const aborts: string[] = [];
+  const commandRuns: Array<{ command: string; args: string }> = [];
   const appended: unknown[] = [];
   let resolveTurn: () => void = () => undefined;
   let streamEnded: () => void = () => undefined;
@@ -95,6 +100,17 @@ async function loadMod(
         });
       },
     },
+    command:
+      options.commands === undefined
+        ? undefined
+        : {
+            list: async () => options.commands!.map((name) => ({ name, description: "", source: "builtin" })),
+            run: async (command: { command: string; args: string }) => {
+              commandRuns.push(command);
+              if (!options.commands!.includes(command.command)) throw new Error(`unknown command ${command.command}`);
+              return options.runCommand ? options.runCommand(command) : { text: "" };
+            },
+          },
     turn: {
       abort: async ({ turnId }: { turnId: string }) => {
         aborts.push(turnId);
@@ -151,7 +167,7 @@ async function loadMod(
     return yielded;
   };
   const sent = () => fetches.flatMap((call) => JSON.parse(call.body) as Array<Record<string, unknown>>);
-  return { $, fire, settle, runs, submits, aborts, appended, acks, step, fetches, sent, hooks, resolveTurn: () => resolveTurn() };
+  return { $, fire, settle, runs, submits, aborts, commandRuns, appended, acks, step, fetches, sent, hooks, resolveTurn: () => resolveTurn() };
 }
 
 const line = (value: object) => JSON.stringify(value) + "\n";
@@ -260,12 +276,52 @@ describe("Longhouse Claude mod", () => {
     expect(mod.acks()).toEqual(["ack --id old --state delivered --turn-id turn-2 --session session-1"]);
   });
 
-  it("refuses text Claude Code would run as a command", async () => {
-    const mod = await loadMod([line({ id: "cmd-1", kind: "send", text: " /compact", state: "pending" })]);
+  it("runs an owner slash command as typed and reports a command that started no turn", async () => {
+    const mod = await loadMod([line({ id: "cmd-1", kind: "send", text: " /rename my session", state: "pending" })], {
+      commands: ["rename", "init"],
+    });
     await mod.fire("session.start");
     await mod.settle();
     expect(mod.submits).toEqual([]);
-    expect(mod.acks()[1]).toContain("ack --id cmd-1 --state failed");
+    expect(mod.commandRuns).toEqual([{ command: "rename", args: "my session" }]);
+    expect(mod.acks()).toEqual([
+      "claim --id cmd-1 --session session-1",
+      "ack --id cmd-1 --state command_ran --detail rename --session session-1",
+    ]);
+  });
+
+  it("delivers a slash command that opens a model turn when that turn starts", async () => {
+    let fire: (event: string, e?: Record<string, unknown>) => Promise<unknown> = async () => undefined;
+    const mod = await loadMod([line({ id: "cmd-2", kind: "send", text: "/init", state: "pending" })], {
+      commands: ["init"],
+      runCommand: async () => {
+        await fire("turn.start", { turnId: "turn-7", text: "Please analyze this codebase" });
+        return {};
+      },
+    });
+    fire = mod.fire;
+    await mod.fire("session.start");
+    await mod.settle();
+    expect(mod.acks()).toEqual([
+      "claim --id cmd-2 --session session-1",
+      "ack --id cmd-2 --state delivered --turn-id turn-7 --session session-1",
+    ]);
+  });
+
+  it("refuses a command this Claude Code does not have, and one with no command API", async () => {
+    const unknown = await loadMod([line({ id: "cmd-3", kind: "send", text: "/nope", state: "pending" })], {
+      commands: ["rename"],
+    });
+    await unknown.fire("session.start");
+    await unknown.settle();
+    expect(unknown.commandRuns).toEqual([]);
+    expect(unknown.acks()[1]).toContain("--state failed --detail Claude Code has no /nope command");
+
+    const old = await loadMod([line({ id: "cmd-4", kind: "send", text: "/rename x", state: "pending" })]);
+    await old.fire("session.start");
+    await old.settle();
+    expect(old.submits).toEqual([]);
+    expect(old.acks()[1]).toContain("--state failed --detail this Claude Code cannot run a command");
   });
 
   it("ends the running turn on abort and says when there was none", async () => {

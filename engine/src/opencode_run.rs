@@ -1244,13 +1244,7 @@ async fn begin_turn(
     // Subscribe before submitting, so the first step's progress is not missed.
     *pump = Some(tokio::spawn(pump_events(server.clone(), frames.clone())));
 
-    server
-        .post(
-            &format!("/session/{provider_session_id}/prompt_async"),
-            Some(prompt_body(config)?),
-        )
-        .await
-        .context("OpenCode did not accept the prompt")?;
+    submit_console_prompt(&server, &provider_session_id, config).await?;
     let posted_at = Instant::now();
     // OpenCode assigns the user message id; the session has one execution owner,
     // so the first user message that was not there before is this turn's.
@@ -1271,6 +1265,71 @@ async fn begin_turn(
     state.message_ids.push(message_id);
     state.save(run_dir)?;
     Ok((provider_session_id, posted_at))
+}
+
+/// Submit the turn's prompt. A slash command OpenCode's server serves (a
+/// built-in template, a custom command, an MCP prompt, a skill) runs through
+/// `POST /session/{id}/command`, as the TUI runs it on Enter; a command only
+/// the TUI has cannot run here, since a Console session has no TUI. Anything
+/// else is the prompt (a `//` literal with one slash dropped).
+async fn submit_console_prompt(
+    server: &OpenCodeServer,
+    provider_session_id: &str,
+    config: &OpenCodeRunConfig,
+) -> Result<()> {
+    if let Some(command) = crate::slash_input::command(&config.prompt) {
+        let listed = server.get("/command").await?;
+        let served = listed
+            .as_array()
+            .map(|items| {
+                items.iter().any(|item| {
+                    item.get("name").and_then(Value::as_str) == Some(command.name.as_str())
+                })
+            })
+            .unwrap_or(false);
+        if served {
+            let mut body = json!({"command": command.name, "arguments": command.args});
+            // The command route takes the model as "provider/model".
+            if let Some(model) =
+                normalized_optional(&config.model).filter(|m| model_ref(m).is_some())
+            {
+                body["model"] = json!(model);
+            }
+            // The route answers once the turn is over; the turn is observed
+            // like any other, so the request runs in the background.
+            let server = server.clone();
+            let path = format!("/session/{provider_session_id}/command");
+            let request = tokio::spawn(async move { server.post(&path, Some(body)).await });
+            match tokio::time::timeout(Duration::from_millis(1500), request).await {
+                Ok(Ok(Err(error))) => return Err(error.context("OpenCode refused the command")),
+                Ok(Err(join)) => anyhow::bail!("OpenCode command request failed: {join}"),
+                _ => {}
+            }
+            return Ok(());
+        }
+        if crate::opencode_control::is_tui_command(&command.name) {
+            anyhow::bail!(
+                "/{} is a command of OpenCode's terminal, which a Console session does not have; run it in an OpenCode Helm session",
+                command.name
+            );
+        }
+    }
+    let mut body = prompt_body(config)?;
+    if let Some(parts) = body.get_mut("parts").and_then(Value::as_array_mut) {
+        for part in parts {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                part["text"] = json!(crate::slash_input::message_text(text));
+            }
+        }
+    }
+    server
+        .post(
+            &format!("/session/{provider_session_id}/prompt_async"),
+            Some(body),
+        )
+        .await
+        .context("OpenCode did not accept the prompt")?;
+    Ok(())
 }
 
 fn http_status(error: &anyhow::Error) -> Option<u16> {

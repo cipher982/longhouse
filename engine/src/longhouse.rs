@@ -57,6 +57,9 @@ mod process_identity;
 mod pty_relay;
 #[path = "remote_session.rs"]
 mod remote_session;
+#[path = "slash_input.rs"]
+#[allow(dead_code)]
+mod slash_input;
 #[allow(dead_code)]
 #[path = "warp_cli_agent.rs"]
 mod warp_cli_agent;

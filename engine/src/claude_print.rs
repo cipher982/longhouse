@@ -222,11 +222,19 @@ impl ConsoleInput for ClaudeInput {
         _images: &'a [PathBuf],
     ) -> crate::console_lifecycle::InputFuture<'a> {
         Box::pin(async move {
+            // A slash command goes as the plain-string prompt, the form Claude
+            // Code's headless mode reads as a typed command; anything else is a
+            // text block (a `//` literal with one slash dropped).
+            let content = if crate::slash_input::command(text).is_some() {
+                json!(text)
+            } else {
+                json!([{"type": "text", "text": crate::slash_input::message_text(text)}])
+            };
             let message = json!({
                 "type": "user",
                 "message": {
                     "role": "user",
-                    "content": [{"type": "text", "text": text}]
+                    "content": content
                 }
             });
             crate::console_rpc::write_command(&self.fifo, &message).await

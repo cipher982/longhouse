@@ -148,6 +148,16 @@ pub(super) async fn execute_command(
                         code: "invalid_command".to_string(),
                         message: error.to_string(),
                     })?;
+            if let Some(command) = crate::slash_input::command(&text) {
+                return Err(CommandError {
+                    code: "turn_active".to_string(),
+                    message: format!(
+                        "/{} runs when the current turn ends; it was not sent into the running turn",
+                        command.name
+                    ),
+                });
+            }
+            let text = crate::slash_input::message_text(&text);
             let delivery = crate::input_attachments::attachment_delivery(&provider, "console");
             if !attachments.is_empty() && delivery.is_none() {
                 return Err(CommandError {
@@ -490,6 +500,9 @@ pub(super) async fn execute_command(
                         code: "invalid_command".to_string(),
                         message: error.to_string(),
                     })?;
+            // A slash command runs as if typed; a bare picker, or a mode that
+            // cannot run commands, is refused before any provider sees it.
+            let text = admit_owner_text(&provider, "helm", &text)?;
             let staged = stage_helm_attachments(
                 config,
                 &session_id,
@@ -515,6 +528,13 @@ pub(super) async fn execute_command(
                     result["owner_input_path"] = json!(owner_input.path);
                     result["owner_input_reason"] = json!(owner_input.reason);
                     result["owner_input_turn_started"] = json!(owner_input.delivered);
+                    if let Some(command) = crate::slash_input::command(&text) {
+                        crate::slash_input::mark_result(
+                            &mut result,
+                            &command,
+                            !owner_input.command_ran,
+                        );
+                    }
                 }
                 return Ok(result);
             }
@@ -522,14 +542,21 @@ pub(super) async fn execute_command(
                 let summary = crate::opencode_control::send_text(&session_id, &text, &staged)
                     .await
                     .map_err(CommandError::command_failed)?;
-                return Ok(json!({
+                let mut result = json!({
                     "exit_code": 0,
                     "stdout": "",
                     "stderr": "",
                     "provider": "opencode",
                     "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
                     "provider_session_id": summary.provider_session_id,
-                }));
+                });
+                if let (Some(command), Some(turn_started)) = (
+                    crate::slash_input::command(&text),
+                    summary.command_turn_started,
+                ) {
+                    crate::slash_input::mark_result(&mut result, &command, turn_started);
+                }
+                return Ok(result);
             }
             if provider == "antigravity" {
                 // Images arrive as staged file paths inside the injected
@@ -545,7 +572,7 @@ pub(super) async fn execute_command(
                     code: error.code().to_string(),
                     message: error.message(),
                 })?;
-                return Ok(json!({
+                let mut result = json!({
                     "exit_code": 0,
                     "stdout": "",
                     "stderr": "",
@@ -553,22 +580,42 @@ pub(super) async fn execute_command(
                     "transport": crate::antigravity_channel_control::ANTIGRAVITY_HOOK_INBOX_TRANSPORT,
                     "message_id": outcome.message_id,
                     "claimed_at": outcome.claimed_at,
-                }));
+                });
+                if let Some(command) = crate::slash_input::command(&text) {
+                    crate::slash_input::mark_command(&mut result, &command);
+                }
+                return Ok(result);
             }
             if provider == "cursor" {
+                // Cursor's terminal closes the session on a bare `quit` or
+                // `exit` typed as a message; from the app that would end the
+                // session on words meant for the model.
+                if matches!(text.trim().to_ascii_lowercase().as_str(), "quit" | "exit") {
+                    return Err(CommandError {
+                        code: crate::slash_input::REFUSED_CODE.to_string(),
+                        message: format!(
+                            "\"{}\" was not sent: Cursor's terminal reads it as closing the session. Send /exit to end the session, or add more words.",
+                            text.trim()
+                        ),
+                    });
+                }
                 let summary = crate::cursor_helm_control::send_text(&session_id, &path_text, None)
                     .await
                     .map_err(|err| CommandError {
                         code: err.code().to_string(),
                         message: err.message().to_string(),
                     })?;
-                return Ok(json!({
+                let mut result = json!({
                     "exit_code": summary.exit_code,
                     "stdout": summary.stdout,
                     "stderr": summary.stderr,
                     "provider": "cursor",
                     "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
-                }));
+                });
+                if let Some(command) = crate::slash_input::command(&text) {
+                    crate::slash_input::mark_command(&mut result, &command);
+                }
+                return Ok(result);
             }
             if provider == "pi" {
                 let summary = crate::pi_helm_control::dispatch_with_attachments(
@@ -588,7 +635,7 @@ pub(super) async fn execute_command(
                     code: error.code().to_string(),
                     message: error.message().to_string(),
                 })?;
-                return Ok(json!({
+                let mut result = json!({
                     "exit_code": 0,
                     "stdout": "",
                     "stderr": "",
@@ -596,7 +643,11 @@ pub(super) async fn execute_command(
                     "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
                     "provider_session_id": summary.provider_session_id,
                     "status": summary.status,
-                }));
+                });
+                if let Some(command) = crate::slash_input::command(&text) {
+                    mark_helm_command(&mut result, &command, summary.turn_started);
+                }
+                return Ok(result);
             }
             if provider == "omp" {
                 let summary = crate::omp_helm_control::dispatch_with_attachments(
@@ -617,12 +668,29 @@ pub(super) async fn execute_command(
                     code: error.code().to_string(),
                     message: error.message().to_string(),
                 })?;
-                return Ok(
-                    json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status}),
-                );
+                let mut result = json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status});
+                if let Some(command) = crate::slash_input::command(&text) {
+                    mark_helm_command(&mut result, &command, summary.turn_started);
+                }
+                return Ok(result);
             }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
+            // Codex runs slash commands only in its TUI: the ones with an
+            // app-server request go to the bridge, the rest are refused here.
+            let command = crate::slash_input::command(&text);
+            let text = match &command {
+                Some(command) => match crate::codex_slash::route("", command) {
+                    crate::codex_slash::CodexSlash::Refuse(reason) => {
+                        return Err(CommandError {
+                            code: crate::slash_input::REFUSED_CODE.to_string(),
+                            message: format!("/{} was not sent: {reason}.", command.name),
+                        })
+                    }
+                    _ => text,
+                },
+                None => crate::slash_input::message_text(&text),
+            };
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
                 session_id: session_id.clone(),
                 text,
@@ -632,7 +700,7 @@ pub(super) async fn execute_command(
             })
             .await
             .map_err(|err| CommandError::command_failed(err))?;
-            Ok(json!({
+            let mut result = json!({
                 "exit_code": 0,
                 "stdout": "",
                 "stderr": "",
@@ -641,7 +709,15 @@ pub(super) async fn execute_command(
                 "thread_id": summary.thread_id,
                 "turn_id": summary.turn_id,
                 "turn_status": summary.turn_status,
-            }))
+            });
+            if let (Some(name), Some(command)) = (summary.command.as_ref(), command.as_ref()) {
+                debug_assert_eq!(name, &command.name);
+                match summary.command_turn_started {
+                    Some(turn) => crate::slash_input::mark_result(&mut result, command, turn),
+                    None => crate::slash_input::mark_command(&mut result, command),
+                }
+            }
+            Ok(result)
         }
         COMMAND_INTERRUPT => {
             let provider = payload_optional_string(&payload, "provider")
@@ -889,6 +965,18 @@ pub(super) async fn execute_command(
                         code: "invalid_command".to_string(),
                         message: error.to_string(),
                     })?;
+            // A command never enters a running turn: the server holds it until
+            // the session is idle and sends it then.
+            if let Some(command) = crate::slash_input::command(&text) {
+                return Err(CommandError {
+                    code: "turn_active".to_string(),
+                    message: format!(
+                        "/{} runs when the current turn ends; it was not sent into the running turn",
+                        command.name
+                    ),
+                });
+            }
+            let text = crate::slash_input::message_text(&text);
             let staged = stage_helm_attachments(
                 config,
                 &session_id,
@@ -1491,6 +1579,34 @@ pub(super) fn claude_channel_control_result(provider_session_id: Option<String>)
     result
 }
 
+/// Mark a Pi or OMP Helm send of a slash command. Their extension submits
+/// the command through the editor and says whether a model turn began; an
+/// older extension says nothing, and the turn is left unknown.
+fn mark_helm_command(
+    result: &mut Value,
+    command: &crate::slash_input::SlashCommand,
+    turn_started: Option<bool>,
+) {
+    match turn_started {
+        Some(started) => crate::slash_input::mark_result(result, command, started),
+        None => crate::slash_input::mark_command(result, command),
+    }
+}
+
+/// The owner's text as the provider should receive it in `mode`, or the
+/// refusal the app shows (see [`crate::slash_input`]).
+pub(super) fn admit_owner_text(
+    provider: &str,
+    mode: &str,
+    text: &str,
+) -> Result<String, CommandError> {
+    let policy = super::capabilities::slash_policy(provider);
+    crate::slash_input::admit(provider, mode, &policy, text).map_err(|refusal| CommandError {
+        code: refusal.code.to_string(),
+        message: refusal.message,
+    })
+}
+
 pub(super) fn claude_channel_error_to_command_error(
     err: ClaudeChannelControlError,
 ) -> CommandError {
@@ -1667,5 +1783,25 @@ mod steer_input_tests {
             fired.contains("console_steer_noop") && fired.contains("antigravity"),
             "{fired}"
         );
+    }
+}
+
+#[cfg(test)]
+mod helm_command_tests {
+    use super::*;
+
+    #[test]
+    fn a_helm_command_reports_the_turn_the_extension_saw() {
+        let command = crate::slash_input::command("/name proof").unwrap();
+        let mut ran = json!({});
+        mark_helm_command(&mut ran, &command, Some(false));
+        assert_eq!(ran["turn_started"], false);
+        let mut turn = json!({});
+        mark_helm_command(&mut turn, &command, Some(true));
+        assert_eq!(turn["turn_started"], true);
+        let mut unknown = json!({});
+        mark_helm_command(&mut unknown, &command, None);
+        assert_eq!(unknown["command"], "name");
+        assert!(unknown.get("turn_started").is_none());
     }
 }

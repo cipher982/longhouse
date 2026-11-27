@@ -118,6 +118,9 @@ pub(super) async fn execute_turn_start(
             },
         )?
     };
+    // Slash commands: refused where the provider's headless mode cannot run
+    // them, a bare picker refused everywhere, `//` sent as literal text.
+    let message = super::dispatch::admit_owner_text(&provider, "console", &message)?;
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     // A branch's first turn carries the parent thread to fork from. Only the
     // first: once the child owns a thread of its own, later turns resume it

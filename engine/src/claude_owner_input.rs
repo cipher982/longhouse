@@ -63,6 +63,7 @@ const CLAIMED_DIR: &str = "claimed";
 /// Ledger states that end an input. A claimed file is removed once one lands.
 const TERMINAL_STATES: &[&str] = &[
     "delivered",
+    "command_ran",
     "failed",
     "aborted",
     "no_turn",
@@ -73,6 +74,7 @@ const TERMINAL_STATES: &[&str] = &[
 pub const ACK_STATES: &[&str] = &[
     "submitted",
     "delivered",
+    "command_ran",
     "failed",
     "aborted",
     "no_turn",
@@ -555,6 +557,8 @@ impl From<io::Error> for DeliveryError {
 pub struct SendReceipt {
     /// The turn it opened had already started when the engine answered.
     pub delivered: bool,
+    /// A slash command ran and started no model turn.
+    pub command_ran: bool,
 }
 
 /// Hand an owner message to the mod and wait until Claude Code has queued it
@@ -580,7 +584,7 @@ pub fn deliver_send(
         id,
         &pending,
         budget,
-        &["submitted", "delivered", "failed"],
+        &["submitted", "delivered", "command_ran", "failed"],
     )?;
     if let Some(failed) = entries.iter().find(|entry| entry.state == "failed") {
         return Err(DeliveryError::Failed(
@@ -592,6 +596,7 @@ pub fn deliver_send(
     }
     Ok(SendReceipt {
         delivered: entries.iter().any(|entry| entry.state == "delivered"),
+        command_ran: entries.iter().any(|entry| entry.state == "command_ran"),
     })
 }
 
@@ -1209,7 +1214,13 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         let receipt = deliver_send(&dir, "cmd-1", "hello", Duration::from_secs(5)).unwrap();
-        assert_eq!(receipt, SendReceipt { delivered: false });
+        assert_eq!(
+            receipt,
+            SendReceipt {
+                delivered: false,
+                command_ran: false
+            }
+        );
         mod_thread.join().unwrap();
     }
 
@@ -1374,7 +1385,13 @@ mod tests {
         append_ledger(&dir, "cmd-1", "submitted", None, None).unwrap();
 
         let receipt = deliver_send(&dir, "cmd-1", "hello", Duration::from_secs(1)).unwrap();
-        assert_eq!(receipt, SendReceipt { delivered: false });
+        assert_eq!(
+            receipt,
+            SendReceipt {
+                delivered: false,
+                command_ran: false
+            }
+        );
         assert!(items_in(&dir, PENDING_DIR).is_empty());
 
         // Withdrawn once: the replay is not offered to the mod either.

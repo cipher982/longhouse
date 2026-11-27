@@ -95,3 +95,18 @@ def test_session_start_records_idle_state_for_fresh_helm_session(tmp_path: Path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["state"] == "idle"
     assert state["last_hook_event"] == "SessionStart"
+
+
+@pytest.mark.parametrize("event", ["PreInvocation", "PostInvocation"])
+def test_a_slash_command_is_left_for_the_launcher_to_type_at_idle(tmp_path: Path, event: str) -> None:
+    # Injected as a step it would reach the model as text; typed at idle it runs as agy's command.
+    response, receipt = _run_hook(tmp_path, event, "send", text="/title proof")
+    assert response.get("injectSteps", []) == []
+    assert receipt is None
+    assert (tmp_path / "antigravity" / "inbox" / SESSION_ID / "msg-msg1.json").exists() or receipt is None
+
+
+def test_a_double_slash_message_is_injected_as_text(tmp_path: Path) -> None:
+    response, receipt = _run_hook(tmp_path, "PreInvocation", "send", text="//etc/hosts is wrong")
+    assert response == {"injectSteps": [{"userMessage": "//etc/hosts is wrong"}]}
+    assert receipt is not None

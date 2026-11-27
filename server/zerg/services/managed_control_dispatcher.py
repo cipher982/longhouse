@@ -96,11 +96,21 @@ def _session_uses_engine_control(
     device_id = _session_device_id(session)
     if capability is None or device_id is None:
         return False
-    return get_machine_control_channel_registry().supports(
-        owner_id=owner_id,
-        device_id=device_id,
-        capability=capability,
+    registry = get_machine_control_channel_registry()
+    if registry.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        return True
+    info = registry.info(owner_id=owner_id, device_id=device_id)
+    advertised = sorted(item for item in (info.supports if info else ()) if item.startswith(f"{provider}."))
+    logger.info(
+        "Managed control %s unavailable for session %s: machine %s %s %s (it advertises %s)",
+        command_type,
+        getattr(session, "id", None),
+        device_id,
+        "is not connected" if info is None else "does not advertise",
+        capability,
+        advertised,
     )
+    return False
 
 
 def select_managed_control_transport(
@@ -193,7 +203,9 @@ async def _prepare_catalog_managed_control_operation(
     grant = _normalize_catalog_control_grant(result.get("grant"))
     prepared_operation_id = result.get("operation_id")
     if result.get("allowed") is not True or grant is None or not prepared_operation_id:
-        return None, str(result.get("reason") or "control_unavailable")
+        reason = str(result.get("reason") or "control_unavailable")
+        logger.info("Managed control %s refused for session %s: %s", command_type, getattr(session, "id", None), reason)
+        return None, reason
     return (str(prepared_operation_id), grant), None
 
 

@@ -73,6 +73,15 @@ pub(super) fn managed_provider_contract_items() -> &'static Vec<Value> {
         .expect("managed provider contract manifest must contain providers[]")
 }
 
+/// What the provider contract says about slash commands sent from the app.
+pub(crate) fn slash_policy(provider: &str) -> crate::slash_input::SlashPolicy {
+    managed_provider_contract_items()
+        .iter()
+        .find(|contract| contract.get("provider").and_then(Value::as_str) == Some(provider))
+        .map(crate::slash_input::SlashPolicy::from_contract)
+        .unwrap_or_default()
+}
+
 pub(crate) fn granted_control_operations(provider: &str, attached: bool) -> Vec<String> {
     if !attached {
         return Vec::new();

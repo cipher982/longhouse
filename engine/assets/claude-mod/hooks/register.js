@@ -43,6 +43,9 @@ let abortedByOwner
 // Inputs an earlier copy of this module submitted whose turn has not started:
 // this copy records the delivery when it does.
 const awaitingTurn = new Map()
+// The owner's slash command this copy is running, until it either starts a
+// model turn (a prompt command such as /init, a skill) or finishes without one.
+let runningCommand
 
 async function engineRun($, args, options) {
   try {
@@ -65,6 +68,10 @@ async function claim($, id) {
   return result.exitCode === 0
 }
 
+// `/name args`, as Claude Code reads a typed command. `//text` never gets here:
+// the engine sends a message that starts with a slash through the channel.
+const COMMAND = /^\s*\/([A-Za-z0-9_\-:.]+)(?:\s+([\s\S]*))?$/
+
 async function send($, input) {
   const text = typeof input.text === 'string' ? input.text : ''
   if (input.state === 'claimed') {
@@ -72,10 +79,18 @@ async function send($, input) {
     return
   }
   if (!(await claim($, input.id))) return
-  // $.prompt.submit refuses an empty text and one that starts with a slash
-  // (it would run a command); the engine refuses both before they get here.
-  if (text.trim() === '' || text.trimStart().startsWith('/')) {
-    await ack($, input.id, 'failed', { detail: 'text is empty or starts with a slash' })
+  if (text.trim() === '') {
+    await ack($, input.id, 'failed', { detail: 'text is empty' })
+    return
+  }
+  const command = COMMAND.exec(text)
+  if (command) {
+    await runCommand($, input.id, command[1], (command[2] || '').trim())
+    return
+  }
+  if (text.trimStart().startsWith('/')) {
+    // A slash the engine did not read as a command ($.prompt.submit refuses it).
+    await ack($, input.id, 'failed', { detail: 'text that starts with / is not a command Claude Code knows' })
     return
   }
   let started
@@ -106,6 +121,45 @@ async function send($, input) {
       ? ack($, input.id, 'delivered', { turnId })
       : ack($, input.id, 'failed', { detail: String(refused) }),
   )
+}
+
+// Runs the owner's slash command as if they typed it ($.command.run, queued
+// until the session is idle). A command that opens a model turn (a prompt
+// command, a skill) is delivered when that turn starts; one that does its work
+// without the model (/model x, /rename) is `command_ran` when it returns, so
+// Longhouse frees the session at once instead of waiting for a turn end.
+async function runCommand($, id, name, args) {
+  let known
+  try {
+    const listed = await $.command.list()
+    if (Array.isArray(listed)) known = listed.some((c) => c && c.name === name)
+  } catch (error) {
+    await ack($, id, 'failed', {
+      detail: 'this Claude Code cannot run a command for the Longhouse app (' + String(error) + '); update Claude Code',
+    })
+    return
+  }
+  if (known === false) {
+    await ack($, id, 'failed', { detail: 'Claude Code has no /' + name + ' command in this session' })
+    return
+  }
+  const running = { id, settled: false }
+  runningCommand = running
+  try {
+    await $.command.run({ command: name, args })
+  } catch (error) {
+    if (runningCommand === running) runningCommand = undefined
+    if (!running.settled) {
+      running.settled = true
+      await ack($, id, 'failed', { detail: 'Claude Code could not run /' + name + ': ' + String(error) })
+    }
+    return
+  }
+  if (runningCommand === running) runningCommand = undefined
+  if (!running.settled) {
+    running.settled = true
+    await ack($, id, 'command_ran', { detail: name })
+  }
 }
 
 async function abort($, input) {
@@ -526,6 +580,13 @@ export function register(on) {
       return next(e)
     }
     turnId = e.turnId
+    const command = runningCommand
+    if (command && !command.settled) {
+      // The owner's command opened this turn.
+      command.settled = true
+      runningCommand = undefined
+      void ack($, command.id, 'delivered', { turnId: e.turnId })
+    }
     for (const [id, text] of awaitingTurn) {
       if (text === e.text) {
         awaitingTurn.delete(id)

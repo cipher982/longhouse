@@ -47,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
+# A slash command whose provider cannot say whether it opened a model turn
+# (typed into a terminal): once the session has stayed idle this long after the
+# command, it did its work without the model and the session is free.
+SLASH_COMMAND_IDLE_GRACE_SECS = 6.0
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
 MANAGED_LOCAL_TURN_ARCHIVE_ACK_TIMEOUT_SECS = 0.25
@@ -872,8 +876,13 @@ async def _release_catalog_lock_after_terminal(
     lock_scope_id: str,
     request_id: str,
     dispatched_at: datetime,
+    idle_grace_secs: float | None = None,
 ) -> None:
-    """Release a hot control lock from live runtime truth, never cold rows."""
+    """Release a hot control lock from live runtime truth, never cold rows.
+
+    ``idle_grace_secs``: for a slash command that may or may not open a turn,
+    also release once the session has shown no active phase for that long.
+    """
 
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
@@ -881,7 +890,9 @@ async def _release_catalog_lock_after_terminal(
     if catalogd is None:
         await session_lock_manager.release(lock_scope_id, request_id)
         return
-    deadline = asyncio.get_running_loop().time() + MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS
+    loop_start = asyncio.get_running_loop().time()
+    deadline = loop_start + MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS
+    went_active = False
     while asyncio.get_running_loop().time() < deadline:
         try:
             snapshot = await catalogd.call(
@@ -908,7 +919,17 @@ async def _release_catalog_lock_after_terminal(
             )
             phase = str(state.get("phase") or "").strip()
             terminal = str(state.get("terminal_state") or "").strip()
-            if observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal):
+            if phase in _MANAGED_LOCAL_ACTIVE_PHASES and observed_at is not None and observed_at >= dispatched_at:
+                went_active = True
+            quiet_command = (
+                idle_grace_secs is not None
+                and not went_active
+                and phase in _MANAGED_LOCAL_TERMINAL_PHASES
+                and asyncio.get_running_loop().time() - loop_start >= idle_grace_secs
+            )
+            if quiet_command or (
+                observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal)
+            ):
                 released = await session_lock_manager.release(lock_scope_id, request_id)
                 if released:
                     from zerg.services.live_control_catalog import wake_next_live_catalog_input
@@ -923,21 +944,96 @@ async def _release_catalog_lock_after_terminal(
         await wake_next_live_catalog_input(session_id)
 
 
-def _schedule_catalog_lock_release(
+def dispatch_command_turn(data: dict | None) -> bool | None:
+    """For a slash command's send result: True/False when the provider said
+    whether it opened a model turn, None when it could not tell or the input
+    was not a command."""
+
+    if not isinstance(data, dict) or not data.get("command"):
+        return None
+    value = data.get("turn_started")
+    return value if isinstance(value, bool) else None
+
+
+def dispatch_is_command(data: dict | None) -> bool:
+    return isinstance(data, dict) and bool(data.get("command"))
+
+
+def dispatch_started_no_turn(data: dict | None) -> bool:
+    """True when the provider ran a slash command that started no model turn.
+
+    The engine marks a command's send result with ``command`` and
+    ``turn_started`` (engine/src/slash_input.rs). Such a command (``/model x``,
+    ``/rename``) never reaches a turn end, so waiting for one would hold the
+    session's SEND lock for its whole TTL and park every later input.
+    """
+
+    return isinstance(data, dict) and bool(data.get("command")) and data.get("turn_started") is False
+
+
+async def _release_catalog_lock_now(*, session_id: UUID, lock_scope_id: str, request_id: str) -> None:
+    released = await session_lock_manager.release(lock_scope_id, request_id)
+    if released:
+        from zerg.services.live_control_catalog import wake_next_live_catalog_input
+
+        await wake_next_live_catalog_input(session_id)
+
+
+def schedule_release_after_send(
+    data: dict | None,
     *,
     session_id: UUID,
     lock_scope_id: str,
     request_id: str,
     dispatched_at: datetime,
 ) -> None:
-    task = asyncio.create_task(
-        _release_catalog_lock_after_terminal(
+    """Free the session's SEND lock after a delivered send, by what it started.
+
+    A message opens a turn: the lock is released when that turn ends. A slash
+    command says whether it opened one (``turn_started``); one that did not is
+    released now, and one that could not tell is released once the session
+    stays idle for a short grace. Every send path ends here, so a command never
+    holds the lock waiting for a turn end that will not come.
+    """
+
+    if dispatch_is_command(data):
+        logger.info(
+            "[%s] slash command /%s sent to %s: turn_started=%s",
+            request_id,
+            (data or {}).get("command"),
+            session_id,
+            (data or {}).get("turn_started", "unknown"),
+        )
+    _schedule_catalog_lock_release(
+        session_id=session_id,
+        lock_scope_id=lock_scope_id,
+        request_id=request_id,
+        dispatched_at=dispatched_at,
+        turn_started=not dispatch_started_no_turn(data),
+        command=dispatch_command_turn(data) is None and dispatch_is_command(data),
+    )
+
+
+def _schedule_catalog_lock_release(
+    *,
+    session_id: UUID,
+    lock_scope_id: str,
+    request_id: str,
+    dispatched_at: datetime,
+    turn_started: bool = True,
+    command: bool = False,
+) -> None:
+    if turn_started:
+        coroutine = _release_catalog_lock_after_terminal(
             session_id=session_id,
             lock_scope_id=lock_scope_id,
             request_id=request_id,
             dispatched_at=dispatched_at,
+            idle_grace_secs=SLASH_COMMAND_IDLE_GRACE_SECS if command else None,
         )
-    )
+    else:
+        coroutine = _release_catalog_lock_now(session_id=session_id, lock_scope_id=lock_scope_id, request_id=request_id)
+    task = asyncio.create_task(coroutine)
 
     def _log_failure(done: asyncio.Task[None]) -> None:
         try:
@@ -1021,20 +1117,23 @@ async def _dispatch_catalog_managed_text(
                 "request_id": request_id,
             },
         )
-    _schedule_catalog_lock_release(
+    schedule_release_after_send(
+        data,
         session_id=source_session.id,
         lock_scope_id=lock_scope_id,
         request_id=request_id,
         dispatched_at=dispatched_at,
     )
-    return JSONResponse(
-        content={
-            "accepted": True,
-            "session_id": str(source_session.id),
-            "request_id": request_id,
-            "verification": "live_control_ack",
-        }
-    )
+    content: dict[str, object] = {
+        "accepted": True,
+        "session_id": str(source_session.id),
+        "request_id": request_id,
+        "verification": "live_control_ack",
+    }
+    if data.get("command"):
+        content["command"] = str(data["command"])
+        content["turn_started"] = dispatch_command_turn(data)
+    return JSONResponse(content=content)
 
 
 async def _dispatch_managed_local_text(

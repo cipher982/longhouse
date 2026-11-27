@@ -7,6 +7,7 @@ authority for injection; the in-memory lock is only the local provider guard.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from dataclasses import dataclass
@@ -657,11 +658,17 @@ async def _dispatch_claimed_input(
     mark_delivered(db, int(claimed.id))
     if attempt_id is not None:
         now = datetime.now(timezone.utc)
+        # A slash command that started no model turn has no turn end to wait
+        # for: its lease ends now, so the next queued input is not parked.
+        no_turn = False
+        with contextlib.suppress(Exception):
+            accepted_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
+            no_turn = isinstance(accepted_body, dict) and accepted_body.get("turn_started") is False
         mark_delivery_attempt_accepted(
             db,
             attempt_id,
             accepted_at=now,
-            lease_expires_at=now + timedelta(seconds=TURN_LEASE_SECS),
+            lease_expires_at=now if no_turn else now + timedelta(seconds=TURN_LEASE_SECS),
         )
     return QueueWakeResult(dispatched=True, input_id=int(claimed.id), reason="dispatched")
 

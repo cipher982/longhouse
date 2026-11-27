@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 349,
+  "file_count": 351,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2126,6 +2126,18 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_slash_commands_from_the_app.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_sqlite_migration_guard.py",
       "providers": [
         "codex",
@@ -2579,6 +2591,18 @@
         "antigravity",
         "claude",
         "codex",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/terminal_truth_command.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
         "omp",
         "opencode",
         "pi"

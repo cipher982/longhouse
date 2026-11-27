@@ -210,6 +210,15 @@ def inbox_has_pending(inbox_dir: str) -> bool:
     return bool(pending_message_paths(inbox_dir))
 
 
+def _is_slash_command(text: str) -> bool:
+    # `/name args` as engine/src/slash_input.rs reads it; `//text` is a message.
+    stripped = text.lstrip()
+    if not stripped.startswith("/") or stripped.startswith("//"):
+        return False
+    name = stripped[1:].split(None, 1)[0] if stripped[1:].strip() else ""
+    return bool(name) and all(c.isalnum() or c in "_-:." for c in name)
+
+
 def claim_inbox_messages(
     *,
     inbox_dir: str,
@@ -236,6 +245,11 @@ def claim_inbox_messages(
             continue
         text = str(payload.get("text") or "")
         if not text.strip():
+            continue
+        if _is_slash_command(text):
+            # A command is typed into agy's terminal by the launcher when agy is
+            # idle, as the owner would type it; injected here it would reach
+            # the model as text.
             continue
         message_id = str(payload.get("id") or path.stem.replace("msg-", ""))
         claim_path = claimed_dir / f"claimed-{path.name}"

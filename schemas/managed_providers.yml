@@ -125,6 +125,18 @@ providers:
     release_candidate: staged_release
     continuous: privacy_safe_live_replay
   support_tier: launch
+  slash_commands:
+    # Codex parses slash commands only in its terminal UI, and Longhouse sends
+    # through codex app-server, so the engine maps each command to the
+    # app-server method the TUI itself calls (engine/src/codex_slash.rs).
+    # Commands that only draw the TUI have no such method and are refused.
+    helm: run
+    console: run
+    pickers: [model, permissions, approvals, review, resume, theme, pets, keymap, title, statusline, config, experimental, approve, skills, hooks, agents, subagents, tui, presets, daybreak, setup-default-sandbox, personality, fast]
+    cases:
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: goal, args: clear, expect: ran, note: "setting a goal starts Codex working it turn after turn; clear takes the same app-server route without that"}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: codex_model_picker
     surface: helm_tui
@@ -745,6 +757,18 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  slash_commands:
+    # Helm: the Longhouse Claude Code mod runs the command with
+    # $.command.run, as if the owner typed it. Console: the command is the
+    # stream-json prompt, which Claude Code's headless mode runs.
+    helm: run
+    console: run
+    pickers: [model, config, settings, permissions, allowed-tools, mcp, hooks, memory, plugin, plugins, skills, resume, continue, rewind, checkpoint, theme, status, export, diff, tasks, bashes, help, doctor, sandbox, ide, terminal-setup, keybindings, workflows, tui, agents, login, output-style, privacy-settings, usage, upgrade]
+    cases:
+    - {command: ttcheck, expect: ran, note: a custom command the harness writes}
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: effort, args: high, expect: ran}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: claude_effort_command
     surface: helm_tui
@@ -1374,6 +1398,17 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  slash_commands:
+    # Server commands (GET /command: init, review, custom commands, MCP
+    # prompts, skills) run through POST /session/{id}/command; the TUI's own
+    # commands through its command bus (engine/src/opencode_control.rs).
+    helm: run
+    console: run
+    pickers: [sessions, resume, continue, models, agents, mcps, connect, themes, editor, skills, variants, move, org, orgs, switch-org, timeline, status, help, rename, export]
+    cases:
+    - {command: ttcheck, expect: ran, note: a custom command the harness writes}
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: models, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: opencode_new_boundary
     surface: helm_tui
@@ -1805,6 +1840,16 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  slash_commands:
+    # Helm: the launcher types the command into agy's terminal at idle, as a
+    # person would. Console: the command is the ACP prompt text.
+    helm: run
+    console: run
+    pickers: [model, config, settings, resume, permissions, mcp, plugin, agents, artifact, diff, tasks, keybindings, statusline, feedback, voice]
+    cases:
+    - {command: ttcheck, expect: ran, note: a custom command the harness writes}
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: antigravity_shadow_control_absence
     surface: shadow
@@ -2348,6 +2393,16 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  slash_commands:
+    # Helm: the launcher types the command into the Cursor TUI. Console runs
+    # cursor-agent --print, whose headless mode has no slash commands.
+    helm: run
+    console: refuse
+    refuse_reason: Cursor's headless mode (cursor-agent --print), which Longhouse Console sessions run, has no slash commands
+    pickers: [model, resume, config, rewind, copy, sandbox, mcp, plugin, help, feedback]
+    cases:
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: cursor_model_launch_option
     surface: console
@@ -2787,6 +2842,17 @@ providers:
   presentation_ruleset: shared_tool_presentation
   proof_profiles: *factory_proof_profiles
   support_tier: launch
+  slash_commands:
+    # Helm: the Longhouse Pi extension submits the text through Pi's own
+    # editor submit path, as Enter does. Console: Pi's RPC prompt runs
+    # extension, skill and template commands; built-ins map to RPC commands.
+    helm: run
+    console: run
+    pickers: [settings, scoped-models, model, thinking, resume, tree, fork, trust, login]
+    cases:
+    - {command: ttcheck, expect: ran, note: a custom command the harness writes}
+    - {command: name, args: TTNAME, expect: ran}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: pi_shadow_archive
     surface: shadow
@@ -2806,7 +2872,7 @@ providers:
     canary: engine/tests/fixtures/golden/pi/native.jsonl
   - probe_id: pi_print_model
     surface: console
-    input_sequence: ["pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>"]
+    input_sequence: ["pi --mode rpc --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>", "rpc prompt <prompt>"]
     acknowledgement_oracle: pi_print_model_metadata
     native_sources: [native_archive, managed_bridge]
     # Pi's transcript JSONL is the native qualification record: the session
@@ -3264,6 +3330,17 @@ providers:
     release_candidate: staged_release
     continuous: privacy_safe_live_replay
   support_tier: launch
+  slash_commands:
+    # Helm: the Longhouse OMP extension submits the text through OMP's own
+    # editor submit path, as Enter does. Console: OMP's RPC prompt runs
+    # commands with a text-mode handler.
+    helm: run
+    console: run
+    pickers: [settings, resume, model, tree, hub, agents, extensions, debug, copy, open, git, local, hotkeys, plan-review, guided-goal, stats, trace, context, record]
+    cases:
+    - {command: ttcheck, expect: ran, note: a custom command the harness writes}
+    - {command: rename, args: TTNAME, expect: ran}
+    - {command: model, expect: refused, note: bare picker}
   interaction_probes:
   - probe_id: omp_shadow_archive
     surface: shadow
@@ -3283,7 +3360,7 @@ providers:
     canary: engine/tests/fixtures/golden/omp/native.jsonl
   - probe_id: omp_console_turn
     surface: console
-    input_sequence: ["omp --mode json --session-dir <session-dir> --resume <exact-session-file> -p <prompt>"]
+    input_sequence: ["omp --mode rpc --session-dir <session-dir> --resume <exact-session-file>", "rpc prompt <prompt>"]
     acknowledgement_oracle: omp_console_turn_settled_and_bound
     native_sources: [native_archive]
     raw_markers: ["type", "session", "stopReason", "isTerminal", "willContinue", "toolCall", "toolResult", "toolCallId"]

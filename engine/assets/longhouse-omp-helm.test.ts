@@ -32,6 +32,7 @@ const {
   compactAsyncJobEvidence,
   ompProviderIsIdle,
   peerLine,
+  submitAsTyped,
 } = await import("./longhouse-omp-helm");
 
 describe("ompProviderIsIdle", () => {
@@ -904,5 +905,50 @@ describe("tool frames for the live preview", () => {
     const bounded = toolOutputTextOf({ partialResult: { content: [{ type: "text", text: long }] } });
     expect(bounded?.length).toBe(4096);
     expect(bounded?.endsWith("END")).toBe(true);
+  });
+});
+
+describe("slash commands from the app", () => {
+  it("submit through OMP's own editor submit handler and restore the editor", async () => {
+    const submitted: string[] = [];
+    const factories: unknown[] = [];
+    class FakeEditor {
+      onSubmit?: (text: string) => unknown;
+      constructor(readonly theme: unknown) {}
+    }
+    const ctx = {
+      ui: {
+        // What OMP's interactive mode does: build the editor, then wire its submit handler.
+        setEditorComponent(factory: ((...args: unknown[]) => FakeEditor) | undefined) {
+          factories.push(factory);
+          if (factory) {
+            const editor = factory("tui", "theme", "keys");
+            expect(editor.theme).toBe("theme");
+            editor.onSubmit = async (text: string) => {
+              submitted.push(text);
+            };
+          }
+        },
+      },
+    };
+    await submitAsTyped(ctx, "/rename proof", undefined, async () => FakeEditor as never);
+    expect(submitted).toEqual(["/rename proof"]);
+    expect(factories.length).toBe(2);
+    expect(factories[1]).toBeUndefined();
+  });
+
+  it("returns once a command's model turn starts, without waiting for it to end", async () => {
+    let started: () => void = () => undefined;
+    const turn = new Promise<void>((resolve) => (started = resolve));
+    const ctx = {
+      ui: {
+        setEditorComponent(factory: ((...args: unknown[]) => { onSubmit?: (t: string) => unknown }) | undefined) {
+          if (factory) factory("tui", "theme", "keys").onSubmit = () => new Promise(() => undefined);
+        },
+      },
+    };
+    const done = submitAsTyped(ctx, "/goal x", turn, async () => class { onSubmit?: unknown } as never);
+    started();
+    expect(await done).toBe(true);
   });
 });

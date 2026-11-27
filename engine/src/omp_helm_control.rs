@@ -59,6 +59,9 @@ struct OmpHelmState {
 
 #[derive(Debug, Clone)]
 pub struct OmpHelmCommandSummary {
+    /// For a slash command: whether it opened a model turn (the extension saw
+    /// the turn start before or just after the command finished).
+    pub turn_started: Option<bool>,
     pub native_session_id: Option<String>,
     pub status: Option<String>,
 }
@@ -240,6 +243,7 @@ async fn terminate_owned(
     Ok(OmpHelmCommandSummary {
         native_session_id: state.native_session_id,
         status: Some(outcome.as_str().into()),
+        turn_started: None,
     })
 }
 
@@ -316,6 +320,7 @@ pub async fn dispatch_with_attachments(
             .get("status")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        turn_started: value.get("turn_started").and_then(Value::as_bool),
     })
 }
 

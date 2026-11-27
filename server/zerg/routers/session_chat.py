@@ -28,6 +28,7 @@ from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -422,6 +423,16 @@ class SessionInputRequest(BaseModel):
         description="Optional immutable bug report to stage before a Console turn",
     )
     model: str | None = None
+
+    @model_validator(mode="after")
+    def _commands_wait_for_idle(self) -> "SessionInputRequest":
+        # A slash command never enters a running turn: sent as a steer it is
+        # queued and runs when the session is idle (services/slash_input.py).
+        from zerg.services.slash_input import is_slash_command
+
+        if self.intent == INPUT_INTENT_STEER and is_slash_command(self.text):
+            self.intent = INPUT_INTENT_QUEUE
+        return self
 
 
 class SessionInputAttachmentSummary(BaseModel):
@@ -2268,7 +2279,7 @@ async def _dispatch_provider_native_send(
 
     from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
     from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
-    from zerg.services.session_chat_impl import _schedule_catalog_lock_release
+    from zerg.services.session_chat_impl import schedule_release_after_send
 
     dispatched_at = datetime.now(timezone.utc)
     receipt_id, attachments = await _record_input_receipt(
@@ -2356,7 +2367,8 @@ async def _dispatch_provider_native_send(
         receipt_id=receipt_id,
         delivery_request_id=delivery_request_id,
     )
-    _schedule_catalog_lock_release(
+    schedule_release_after_send(
+        dict(result.data or {}),
         session_id=source_session.id,
         lock_scope_id=lock_scope_id,
         request_id=delivery_request_id,

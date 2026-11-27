@@ -23,6 +23,7 @@ mod codex_exec;
 mod codex_live_kinds;
 #[cfg(test)]
 mod codex_rpc_golden;
+mod codex_slash;
 mod codex_source;
 mod codex_teardown;
 mod codex_ws_relay;
@@ -117,6 +118,7 @@ mod scheduler;
 mod shipping;
 mod shipping_stats;
 mod sign_in;
+mod slash_input;
 mod state;
 mod status_slot;
 mod storage_v2_contract;

@@ -18,6 +18,9 @@ pub const OPENCODE_SERVER_BRIDGE_TRANSPORT: &str = "opencode_server_bridge";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeControlResult {
     pub provider_session_id: String,
+    /// Set when the owner's text was a slash command: whether it started a
+    /// model turn (see [`crate::slash_input::mark_result`]).
+    pub command_turn_started: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,12 +101,227 @@ pub async fn send_text(
         qa_fault::record("opencode_send_noop", &state)?;
         return Ok(OpenCodeControlResult {
             provider_session_id: state.provider_session_id,
+            command_turn_started: None,
         });
     }
-    post_prompt_async(&state, text, images).await?;
+    if let Some(command) = crate::slash_input::command(text) {
+        let turn_started = run_slash_command(&state, text, &command, images).await?;
+        return Ok(OpenCodeControlResult {
+            provider_session_id: state.provider_session_id,
+            command_turn_started: Some(turn_started),
+        });
+    }
+    post_prompt_async(&state, &crate::slash_input::message_text(text), images).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
+        command_turn_started: None,
     })
+}
+
+/// The TUI's own slash commands (not served by `GET /command`), by the
+/// command-palette id OpenCode's TUI dispatches for them (opencode 1.18/1.19
+/// bundle). Commands that open a dialog are the contract's `pickers` and never
+/// get here bare; `rename` and friends open a dialog whatever follows them.
+const TUI_COMMANDS: &[(&str, &str)] = &[
+    ("new", "session.new"),
+    ("clear", "session.new"),
+    ("exit", "app.exit"),
+    ("quit", "app.exit"),
+    ("q", "app.exit"),
+    ("compact", "session.compact"),
+    ("summarize", "session.compact"),
+    ("undo", "session.undo"),
+    ("redo", "session.redo"),
+    ("fork", "session.fork"),
+    ("share", "session.share"),
+    ("unshare", "session.unshare"),
+    ("copy", "session.copy"),
+    ("export", "session.export"),
+    ("thinking", "session.toggle.thinking"),
+    ("toggle-thinking", "session.toggle.thinking"),
+    ("timestamps", "session.toggle.timestamps"),
+    ("toggle-timestamps", "session.toggle.timestamps"),
+    ("timeline", "session.timeline"),
+    ("rename", "session.rename"),
+    ("debug", "opencode.debug"),
+    ("diff", "diff.open"),
+];
+
+/// Is `name` one of the TUI's own commands (as opposed to a server command)?
+pub(crate) fn is_tui_command(name: &str) -> bool {
+    TUI_COMMANDS.iter().any(|(slash, _)| *slash == name)
+}
+
+/// Commands whose TUI action asks the model for something (a summary).
+const TUI_COMMANDS_WITH_A_TURN: &[&str] = &["session.compact"];
+
+/// Run the owner's slash command as OpenCode's TUI would on Enter: a server
+/// command (built-in templates, custom commands, MCP prompts, skills) through
+/// `POST /session/{id}/command`, a TUI command through the TUI's command bus.
+/// An unknown name is sent as a prompt, as the TUI sends it. Returns whether
+/// a model turn started.
+async fn run_slash_command(
+    state: &OpenCodeControlState,
+    text: &str,
+    command: &crate::slash_input::SlashCommand,
+    images: &[crate::input_attachments::StagedAttachment],
+) -> Result<bool> {
+    let listed = request_opencode_value(state, Method::GET, &["command"], None).await?;
+    let server_command = listed
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .any(|item| item.get("name").and_then(Value::as_str) == Some(command.name.as_str()))
+        })
+        .unwrap_or(false);
+    if server_command {
+        let mut body = json!({"command": command.name, "arguments": command.args});
+        let files: Vec<Value> = prompt_parts("", images)?
+            .into_iter()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("file"))
+            .collect();
+        if !files.is_empty() {
+            body["parts"] = Value::Array(files);
+        }
+        // The route answers with the reply once the turn is over, so it runs
+        // in the background; a refusal (unknown command, bad session) comes
+        // back at once and is the owner's to see.
+        let state = state.clone();
+        let session = state.provider_session_id.clone();
+        let request = tokio::spawn(async move {
+            request_opencode_value_with_timeout(
+                &state,
+                Method::POST,
+                &["session", &session, "command"],
+                Some(body),
+                COMMAND_TURN_TIMEOUT,
+            )
+            .await
+        });
+        match tokio::time::timeout(COMMAND_REFUSAL_WINDOW, request).await {
+            Ok(Ok(Err(error))) => return Err(error),
+            Ok(Err(join)) => bail!("OpenCode command request failed: {join}"),
+            _ => {}
+        }
+        return Ok(true);
+    }
+    let Some((_, palette)) = TUI_COMMANDS.iter().find(|(name, _)| *name == command.name) else {
+        // The TUI sends a slash it does not know to the model as text.
+        post_prompt_async(state, text, images).await?;
+        return Ok(true);
+    };
+    if *palette == "session.rename" {
+        // The TUI's /rename opens a dialog for the new title; the title typed
+        // after the command is what that dialog would take.
+        request_opencode_value(
+            state,
+            Method::PATCH,
+            &["session", &state.provider_session_id],
+            Some(json!({"title": command.args})),
+        )
+        .await?;
+        return Ok(false);
+    }
+    if *palette == "session.new" {
+        // The TUI's own /new only clears its screen: no session exists until
+        // the next prompt typed there, so a message from the app would still
+        // go to the old one. Create the session and show it, which the bridge
+        // follows like a session the TUI created.
+        let created =
+            request_opencode_value(state, Method::POST, &["session"], Some(json!({}))).await?;
+        let id = created
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("OpenCode did not return the new session's id"))?;
+        request_opencode_value(
+            state,
+            Method::POST,
+            &["tui", "select-session"],
+            Some(json!({"sessionID": id})),
+        )
+        .await?;
+        return Ok(false);
+    }
+    request_opencode_value(
+        state,
+        Method::POST,
+        &["tui", "publish"],
+        Some(json!({"type": "tui.command.execute", "properties": {"command": palette}})),
+    )
+    .await?;
+    Ok(TUI_COMMANDS_WITH_A_TURN.contains(palette))
+}
+
+/// How long a server command's request may run (it answers when the turn is over).
+const COMMAND_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// How long a refused server command takes to say so.
+const COMMAND_REFUSAL_WINDOW: Duration = Duration::from_millis(1500);
+
+async fn request_opencode_value(
+    state: &OpenCodeControlState,
+    method: Method,
+    path: &[&str],
+    payload: Option<Value>,
+) -> Result<Value> {
+    request_opencode_value_with_timeout(state, method, path, payload, REQUEST_TIMEOUT).await
+}
+
+/// A request to the session's `opencode serve` at `path` (not session-scoped),
+/// answering its JSON body (`null` when empty).
+async fn request_opencode_value_with_timeout(
+    state: &OpenCodeControlState,
+    method: Method,
+    path: &[&str],
+    payload: Option<Value>,
+    timeout: Duration,
+) -> Result<Value> {
+    let mut url = Url::parse(state.server_url.trim())
+        .with_context(|| format!("OpenCode server URL is invalid: {}", state.server_url))?;
+    validate_local_server_url(&url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| anyhow!("OpenCode server URL cannot be used as a base URL"))?;
+        segments.clear();
+        for segment in path {
+            segments.push(segment);
+        }
+    }
+    url.set_fragment(None);
+    url.set_query(None);
+    if let Some(cwd) = state.cwd.as_deref() {
+        url.query_pairs_mut().append_pair("directory", cwd);
+    }
+    let client = Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("failed to build OpenCode control HTTP client")?;
+    let mut request = client
+        .request(method, url)
+        .basic_auth(&state.username, Some(&state.password))
+        .header("Accept", "application/json");
+    if let Some(payload) = payload {
+        request = request.json(&payload);
+    }
+    let response = request.send().await.with_context(|| {
+        format!(
+            "OpenCode server request failed for session {}",
+            state.session_id
+        )
+    })?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("OpenCode server response body could not be read")?;
+    if !status.is_success() {
+        bail!("OpenCode server request failed: HTTP {status}; body={body}");
+    }
+    if body.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str::<Value>(&body).context("OpenCode server returned invalid JSON")
 }
 
 /// Active-turn steer. The delivery is the same request as `send_text`; it is a
@@ -123,6 +341,7 @@ pub async fn steer_text(
     post_prompt_async(&state, text, images).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
+        command_turn_started: None,
     })
 }
 
@@ -133,11 +352,13 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
         qa_fault::record("opencode_abort_noop", &state)?;
         return Ok(OpenCodeControlResult {
             provider_session_id: state.provider_session_id,
+            command_turn_started: None,
         });
     }
     post_abort(&state).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
+        command_turn_started: None,
     })
 }
 
@@ -238,6 +459,7 @@ pub async fn permission_reply(
     request_opencode_permission_reply(&state, request_id, payload).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
+        command_turn_started: None,
     })
 }
 
@@ -1116,6 +1338,7 @@ mod tests {
         post_prompt_async(&state, text, &[]).await?;
         Ok(OpenCodeControlResult {
             provider_session_id: state.provider_session_id,
+            command_turn_started: None,
         })
     }
 
@@ -1127,6 +1350,7 @@ mod tests {
         post_abort(&state).await?;
         Ok(OpenCodeControlResult {
             provider_session_id: state.provider_session_id,
+            command_turn_started: None,
         })
     }
 

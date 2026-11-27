@@ -252,7 +252,7 @@ def build_pass(
         proxy = TeeProxy(host.url)
         proxy.start()
         t0 = time.monotonic()
-        args = argparse.Namespace(api_url=proxy.url, agents_token=host.token, engine=engine, repo_root=REPO_ROOT)
+        args = argparse.Namespace(api_url=proxy.url, agents_token=host.token, engine=engine, repo_root=REPO_ROOT, longhouse_cli=cli)
         shipper = toolkit.start_transcript_shipper(
             "claude" if "claude" in providers else providers[0], args, home=home, environment=environment, evidence_root=root / "evidence"
         )

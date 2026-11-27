@@ -698,9 +698,10 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
             },
             timeout_seconds=1.0,
         )
-        from zerg.services.session_chat_impl import _schedule_catalog_lock_release
+        from zerg.services.session_chat_impl import schedule_release_after_send
 
-        _schedule_catalog_lock_release(
+        schedule_release_after_send(
+            data,
             session_id=session.id,
             lock_scope_id=lock_scope_id,
             request_id=request_id,

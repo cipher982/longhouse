@@ -49,6 +49,9 @@ const FRESH_LAUNCH_SETTLE: Duration = Duration::from_millis(1500);
 /// After typing a message the launcher waits for the hook to report the turn
 /// starting (any new hook event) before it types another, up to this long.
 const TURN_START_PATIENCE: Duration = Duration::from_secs(20);
+/// After a typed slash command: most finish without the model, so the next
+/// message waits only for the command's own screen to settle.
+const COMMAND_PATIENCE: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Pause between the typed text and the submit key, so the TUI has taken the text.
 const SUBMIT_DELAY: Duration = Duration::from_millis(250);
@@ -87,7 +90,7 @@ pub struct Typed {
 /// State carried between polls: the hook mark seen when a message was last typed.
 #[derive(Default)]
 pub struct WakeGate {
-    typed_at: Option<(Instant, String)>,
+    typed_at: Option<(Instant, String, Duration)>,
 }
 
 /// Tracks turn boundaries observed from Antigravity's session state file so
@@ -209,9 +212,9 @@ fn reserve_oldest_send(inbox: &Path, now: DateTime<Utc>) -> Option<ReservedSend>
             continue;
         }
         let text = payload.get("text").and_then(Value::as_str).unwrap_or("");
-        // A leading slash would run an agy command rather than say something to
-        // the model, and the owner's words must reach the model as typed.
-        if text.trim().is_empty() || text.trim_start().starts_with('/') {
+        // Typed as the owner would type it: a slash command runs as agy's
+        // command (the hook never claims one, so it waits for idle here).
+        if text.trim().is_empty() {
             continue;
         }
         let text = text.to_string();
@@ -240,6 +243,14 @@ fn reserve_oldest_send(inbox: &Path, now: DateTime<Utc>) -> Option<ReservedSend>
         });
     }
     None
+}
+
+fn patience_after(text: &str) -> Duration {
+    if crate::slash_input::command(text).is_some() {
+        COMMAND_PATIENCE
+    } else {
+        TURN_START_PATIENCE
+    }
 }
 
 enum TypeError {
@@ -292,8 +303,8 @@ fn wake_once_with_state(
     now: DateTime<Utc>,
 ) -> Option<Typed> {
     let mark = idle_mark(state, now)?;
-    if let Some((typed, seen_mark)) = &gate.typed_at {
-        if *seen_mark == mark && typed.elapsed() < TURN_START_PATIENCE {
+    if let Some((typed, seen_mark, patience)) = &gate.typed_at {
+        if *seen_mark == mark && typed.elapsed() < *patience {
             return None;
         }
     }
@@ -314,7 +325,7 @@ fn wake_once_with_state(
                 object.insert("hook_event".into(), json!("IdleWake"));
             }
             let _ = crate::write_private_json(&reserved.claim_path, &reserved.payload);
-            gate.typed_at = Some((Instant::now(), mark));
+            gate.typed_at = Some((Instant::now(), mark, patience_after(&reserved.text)));
             Some(Typed {
                 message_id: reserved.message_id,
                 claimed_at,
@@ -327,7 +338,7 @@ fn wake_once_with_state(
         }
         Err(TypeError::PartialWrite(error)) => {
             tracing::warn!(session_id, %error, "partial PTY write on Antigravity send; leaving claim unfinalized");
-            gate.typed_at = Some((Instant::now(), mark));
+            gate.typed_at = Some((Instant::now(), mark, patience_after(&reserved.text)));
             None
         }
     }
@@ -637,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn steers_interrupts_expired_and_slash_messages_are_left_alone() {
+    fn steers_and_interrupts_are_left_alone_and_a_slash_command_is_typed() {
         let _guard = HOME_LOCK
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -652,13 +663,17 @@ mod tests {
                 "Longhouse interrupt",
                 "interrupt",
             );
-            let slash = write_message(temp.path(), "s3", "c-slash", "/quit", "send");
+            let slash = write_message(temp.path(), "s3", "c-slash", "/title proof", "send");
             let (read, write) = pipe();
             let writer = PtyWriter::new(write);
             let mut gate = WakeGate::default();
-            assert!(wake_once(&mut gate, &writer, "s3", Utc::now()).is_none());
-            assert!(steer.exists() && interrupt.exists() && slash.exists());
-            assert!(read_available(read).is_empty());
+            let typed = wake_once(&mut gate, &writer, "s3", Utc::now()).unwrap();
+            assert_eq!(typed.message_id, "c-slash");
+            assert!(steer.exists() && interrupt.exists() && !slash.exists());
+            assert_eq!(read_available(read), b"/title proof\r");
+            // A command's screen settles fast: the next send waits seconds, not
+            // the turn-start patience.
+            assert_eq!(gate.typed_at.as_ref().unwrap().2, COMMAND_PATIENCE);
             unsafe {
                 libc::close(read);
                 libc::close(write);
