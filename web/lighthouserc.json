@@ -1,10 +1,11 @@
 {
   "ci": {
     "collect": {
-      "staticDistDir": "./dist",
+      "startServerCommand": "node scripts/lighthouse-serve.mjs",
+      "startServerReadyPattern": "ready on",
       "numberOfRuns": 3,
       "url": [
-        "http://localhost/index.html"
+        "http://127.0.0.1:4319/index.html"
       ]
     },
     "assert": {

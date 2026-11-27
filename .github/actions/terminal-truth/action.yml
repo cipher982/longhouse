@@ -97,6 +97,9 @@ runs:
         {
           echo "TT_PROVIDERS=codex,claude,opencode,pi,omp,antigravity"
           echo "TT_CANDIDATE=${candidate}"
+          # A candidate run keeps every shard's scratch so the census step below can read the provider transcripts;
+          # terminal_truth_parallel deletes a clean shard's scratch unless this is set.
+          echo "TT_KEEP_TRANSCRIPTS=${candidate}"
           echo "TT_NIGHTLY=$([[ "$IN_NIGHTLY" == true ]] && echo 1 || echo 0)"
           echo "TT_MUTATIONS=${mutations}"
           echo "TT_PUBLISH=${publish}"
@@ -280,6 +283,7 @@ runs:
         for p in ${TT_PROVIDERS//,/ }; do
           mapfile -t roots < <(find "$TT_SCRATCH_ROOT" -type d -path "*/h/${home[$p]}" 2>/dev/null)
           echo "census $p: ${#roots[@]} provider homes"
+          if [[ "${#roots[@]}" == 0 ]]; then echo "::error::census $p: no provider home under $TT_SCRATCH_ROOT (was the shard scratch deleted?)"; rc=1; continue; fi
           python3 scripts/qa/transcript_census.py check --provider "$p" "${roots[@]}" || { echo "::error::transcript census failed for $p"; rc=1; }
         done
         exit $rc
