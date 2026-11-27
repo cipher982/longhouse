@@ -13,6 +13,8 @@
 #                 updates itself in the background, so the lane never runs the installer.
 #
 # `reports` is the exact first line of `<binary> --version`.
+# `hold` (optional) keeps the nightly bump (scripts/ci/provider_latest.py) off this provider and says
+# why. Delete the line once the reason is gone.
 
 [codex]
 kind = "npm"
@@ -45,6 +47,7 @@ reports = "1.6.0"
 [omp]
 kind = "omp"
 version = "19.1.0"
+hold = "OMP 19.2 removed ctx.ui.setEditorComponent; its composer hooks cannot submit, so Helm cannot run a slash command sent from the app"
 binary = "omp"
 reports = "omp/19.1.0"
 

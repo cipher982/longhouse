@@ -5,6 +5,7 @@
 
 npm providers: `npm view <package> version`. omp: newest GitHub release whose tag is exactly vX.Y.Z.
 antigravity is left at its pin: its vendor bucket publishes no release listing or checksum to read.
+A pin with `hold = "<reason>"` is left as it is and the reason printed.
 """
 
 import json
@@ -34,6 +35,9 @@ def latest(pin: dict[str, str]) -> str | None:
 def main() -> int:
     text, changes = PINS.read_text(), []
     for name, pin in load_pins().items():
+        if pin.get("hold"):
+            print(f"{name} {pin['version']} (held: {pin['hold']})")
+            continue
         new = latest(pin)
         if new is None:
             print(f"{name} {pin['version']} (not checked)")
