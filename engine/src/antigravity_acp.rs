@@ -938,12 +938,16 @@ impl AcpStream {
                     completed,
                 });
             }
-            // One assistant message is one unbroken run of message chunks: agy
-            // ends every model step with a `usage_update`, and thinking or a tool
-            // call starts the next. The transcript keeps each step's reply as its
-            // own row, so the live item must end where the run does; otherwise a
-            // turn of several replies is one preview that matches none of them.
-            _ => self.close_message(signals),
+            // agy ends every model step with a `usage_update`, and thinking, a
+            // tool call or a user prompt starts the next. The transcript keeps
+            // each step's reply as its own row, so the live item ends there too;
+            // otherwise a turn of several replies is one preview that matches none
+            // of them. Session metadata (`session_info_update` carries the
+            // generated title, mid-reply) is not a step and must not split one.
+            Some("usage_update") | Some("agent_thought_chunk") | Some("user_message_chunk") => {
+                self.close_message(signals)
+            }
+            _ => {}
         }
     }
 
@@ -2611,7 +2615,13 @@ mod tests {
         let signals = stream.apply_lines(&[
             update(
                 "agent_message_chunk",
-                json!({"content": {"type": "text", "text": "Launched 4"}}),
+                json!({"content": {"type": "text", "text": "Launched"}}),
+            ),
+            // The generated title arrives mid-reply and does not end it.
+            update("session_info_update", json!({"title": "Launched"})),
+            update(
+                "agent_message_chunk",
+                json!({"content": {"type": "text", "text": " 4"}}),
             ),
             update("usage_update", json!({"used": 10})),
             update(
