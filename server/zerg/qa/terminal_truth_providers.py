@@ -342,7 +342,9 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
     if provider == "omp":
         environment["OMP_SKIP_SETUP"] = "1"  # a fresh HOME otherwise shows a setup wizard that swallows input
     environment[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
-    if provider not in FAKE_PROVIDERS:  # a fake CLI has no model to point at the scripted endpoint
+    if provider in FAKE_PROVIDERS:  # no model to point at the scripted endpoint; the profile would also set HOME
+        environment["HOME"] = str(home)
+    else:
         profiles.configure_scripted_model_profile(provider, home, environment)
     if provider == "opencode":
         # Fail closed: only the scripted provider is enabled, so no built-in provider (OpenRouter and the like) can be chosen.
