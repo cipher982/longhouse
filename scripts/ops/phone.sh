@@ -54,9 +54,15 @@ resolve_device() {
     printf '%s\n' "$PHONE_DEVICE"
     return
   fi
-  xcrun devicectl list devices --json-output - 2>/dev/null | python3 -c '
+  # devicectl can print progress lines (for example a CoreDevice package
+  # install prompt) to stdout ahead of the JSON, so read it from a file.
+  local json
+  json="$(mktemp)"
+  xcrun devicectl list devices --json-output "$json" >/dev/null 2>&1 || true
+  python3 - "$json" <<'PY_DEVICES'
 import json, sys
-devices = json.load(sys.stdin)["result"]["devices"]
+with open(sys.argv[1]) as fh:
+    devices = json.load(fh)["result"]["devices"]
 phones = [
     dev for dev in devices
     if dev.get("hardwareProperties", {}).get("reality") == "physical"
@@ -67,7 +73,8 @@ phones = [
 phones.sort(key=lambda dev: dev.get("connectionProperties", {}).get("tunnelState") != "connected")
 if phones:
     print(phones[0]["identifier"])
-'
+PY_DEVICES
+  rm -f "$json"
 }
 
 require_device() {
