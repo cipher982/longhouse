@@ -140,6 +140,11 @@ lands, never whether it survives. Full contract:
   distinct. Quiescence is `agent_settled`, never `agent_end`.
 - Cold resume verifies the retained native file/header and refuses a second owner.
   There is no live TUI attach.
+- Pi's contract sets `requires_longhouse_cli`: the Machine Agent advertises no
+  `pi.*` control unless `longhouse` is on its own PATH, and every input the app
+  sends to a Pi session then stays queued with "does not advertise this
+  capability". A harness that starts its own engine must put the CLI there
+  (`start_transcript_shipper` does, from `args.longhouse_cli`).
 - Console is one `pi --mode rpc` process per turn (the prompt is an RPC `prompt`
   frame) with `provider_local` approvals. Native JSONL is
   durable history; live previews never create archive rows.
