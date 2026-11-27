@@ -1295,6 +1295,23 @@
         "type"
       ]
     },
+    "custom-title": {
+      "classification": "signal:session.title",
+      "first_seen_version": "2.1.332",
+      "last_seen_version": "2.1.332",
+      "entrypoints": [
+        "cli"
+      ],
+      "keys": [
+        "customTitle",
+        "sessionId",
+        "type"
+      ],
+      "required_keys": [
+        "customTitle"
+      ],
+      "evidence": "/rename (typed, or run by the Longhouse app through the Claude mod) saves the user's own session title; parser.rs reads customTitle as session.title with source user, like agent-name"
+    },
     "data-flow-incomplete": {
       "classification": "state:data flow incomplete",
       "first_seen_version": "2.1.327",
@@ -2253,6 +2270,90 @@
       ],
       "evidence": "claude_native_meta_record: a system row; the receiving side of delegation.peer_message, which is not_implemented; origin.handback and origin.handbackReportText (2.1.3xx subagent hand-backs) are not read: the report is the message content's own body inside the hand-back envelope (both real rows checked 2026-11-16 contain it, whitespace-normalized)"
     },
+    "user/meta+origin_plugin+string": {
+      "classification": "transcript",
+      "first_seen_version": "2.1.332",
+      "last_seen_version": "2.1.332",
+      "entrypoints": [
+        "cli"
+      ],
+      "keys": [
+        "agentId",
+        "cwd",
+        "dataFlowOn",
+        "entrypoint",
+        "gitBranch",
+        "isMeta",
+        "isSidechain",
+        "message",
+        "origin",
+        "origin.kind",
+        "origin.name",
+        "parentUuid",
+        "permissionMode",
+        "promptId",
+        "promptSource",
+        "queuePriority",
+        "queueSkipAttachments",
+        "queueSkipSlashCommands",
+        "refusedMessageId",
+        "rowSource",
+        "scheduledFireId",
+        "scheduledTaskId",
+        "sessionId",
+        "sessionKind",
+        "session_id",
+        "slug",
+        "sourceToolUseID",
+        "timestamp",
+        "turnCompanion",
+        "turnOrigin",
+        "turnPosition",
+        "type",
+        "userType",
+        "uuid",
+        "version",
+        "wakeupSource"
+      ],
+      "evidence": "the meta rows of a slash command the Longhouse app ran through the Claude mod ($.command.run): the same rows a typed command writes (user/meta+string, user/meta+text) with origin.kind plugin; claude_native_local_command_meta_record shows the command, other meta text is provider_system"
+    },
+    "user/meta+origin_plugin+text": {
+      "classification": "transcript",
+      "first_seen_version": "2.1.332",
+      "last_seen_version": "2.1.332",
+      "entrypoints": [
+        "cli"
+      ],
+      "keys": [
+        "agentId",
+        "cwd",
+        "dataFlowOn",
+        "entrypoint",
+        "gitBranch",
+        "isMeta",
+        "isSidechain",
+        "message",
+        "origin",
+        "origin.kind",
+        "origin.name",
+        "parentUuid",
+        "promptId",
+        "queuePriority",
+        "rowSource",
+        "sessionId",
+        "sessionKind",
+        "session_id",
+        "slug",
+        "sourceToolUseID",
+        "timestamp",
+        "turnCompanion",
+        "type",
+        "userType",
+        "uuid",
+        "version"
+      ],
+      "evidence": "the meta rows of a slash command the Longhouse app ran through the Claude mod ($.command.run): the same rows a typed command writes (user/meta+string, user/meta+text) with origin.kind plugin; claude_native_local_command_meta_record shows the command, other meta text is provider_system"
+    },
     "user/meta+origin_task_notification+string": {
       "classification": "provider_notification:task_notification",
       "first_seen_version": "2.1.198",
@@ -2456,6 +2557,7 @@
         "promptId",
         "promptSource",
         "queuePriority",
+        "rowSource",
         "sentAtMs",
         "sessionId",
         "slug",
