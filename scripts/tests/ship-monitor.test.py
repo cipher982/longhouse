@@ -207,9 +207,11 @@ def test_runs_on_a_topic_branch_do_not_speak_for_the_ship() -> None:
 def test_release_runs_are_found_by_title_among_the_workflow_runs() -> None:
     ci = {"id": 1, "name": "CI", "status": "completed", "conclusion": "success", "html_url": "", "head_sha": SHA,
           "created_at": "", "event": "push", "head_branch": "main"}
-    mine = {"id": 5, "name": "Release", "status": "in_progress", "conclusion": None, "html_url": "", "head_sha": "e" * 40,
-            "display_title": f"Release {SHA}", "created_at": "", "event": "workflow_run", "head_branch": "main"}
-    theirs = {**mine, "id": 6, "display_title": "Release " + "f" * 40}
+    # The shape GitHub serves: a run's `name` is its run-name, not the workflow's (release.yml run-name).
+    mine = {"id": 5, "name": f"Release {SHA}", "status": "in_progress", "conclusion": None, "html_url": "",
+            "head_sha": "e" * 40, "display_title": f"Release {SHA}", "path": ".github/workflows/release.yml",
+            "created_at": "", "event": "workflow_run", "head_branch": "main"}
+    theirs = {**mine, "id": 6, "name": "Release " + "f" * 40, "display_title": "Release " + "f" * 40}
     ship_monitor._ETAG_CACHE.clear()
 
     def fake_run(cmd, cwd=None, check=True, env=None):  # noqa: ANN001

@@ -151,13 +151,12 @@ interface TimelinePaneProps {
   subagents?: readonly SubagentChild[];
 }
 
-const isWithheldReasoningEvent = isBareWithheldReasoning;
 
 function tier3ItemLabel(item: TimelineItem): string | null {
   if (item.kind === "compaction") {
     return /microcompact/i.test(item.event.content_text ?? "") ? "Microcompacted" : "Compacted";
   }
-  if (item.kind === "reasoning" && isWithheldReasoningEvent(item.event)) {
+  if (item.kind === "reasoning" && isBareWithheldReasoning(item.event)) {
     return "Reasoning withheld";
   }
   if (item.kind === "provider_notification") {
@@ -175,7 +174,7 @@ function isTier3MechanicalItem(item: TimelineItem, index: number, lastProgressIn
   if (item.kind === "compaction") {
     return summarizeCompactionNotice(item.event.content_text).title === "Context microcompacted";
   }
-  if (item.kind === "reasoning") return isWithheldReasoningEvent(item.event);
+  if (item.kind === "reasoning") return isBareWithheldReasoning(item.event);
   if (item.kind === "provider_notification") {
     if (item.event.waiting_background_agents != null && item.event.waiting_background_agents > 0) {
       return true;
@@ -2123,7 +2122,6 @@ export const TimelinePane = memo(function TimelinePane({
   function renderDurableRows(): ReactNode[] {
     const rows: ReactNode[] = [];
     let next = 0;
-    let sawWithheldInTurn = false;
     let tier3Run: Array<{ item: TimelineItem; index: number }> = [];
 
     const flushTier3Run = () => {
@@ -2164,17 +2162,6 @@ export const TimelinePane = memo(function TimelinePane({
         while (next < placedOutbox.length && outboxTimeMs(placedOutbox[next]) < itemMs) {
           rows.push(renderOutboxEntry(placedOutbox[next++]));
         }
-      }
-      if (item.kind === "seam" || (item.kind === "message" && item.event.role === "user")) {
-        sawWithheldInTurn = false;
-      }
-      if (item.kind === "reasoning" && isWithheldReasoningEvent(item.event)) {
-        const itemKey = `event:${item.event.id}`;
-        const isExplicitlySelected = selectedKey === itemKey;
-        if (sawWithheldInTurn && !isExplicitlySelected) {
-          continue;
-        }
-        sawWithheldInTurn = true;
       }
       if (isTier3MechanicalItem(item, idx, lastProgressIndex)) {
         tier3Run.push({ item, index: idx });

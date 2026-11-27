@@ -1195,7 +1195,8 @@ export function buildTimelineModel(
   // The turn's one visible "Reasoning withheld" marker, when it first shows
   // up inside a run, waits here and lands right after that run.
   let deferredMarker: TimelineItem | null = null;
-  let keptWithheldInTurn = false;
+  // Selection key of the turn's one visible marker; null until one is kept.
+  let keptMarkerKey: string | null = null;
 
   const flush = () => {
     if (buffer.length === 0) return;
@@ -1230,23 +1231,25 @@ export function buildTimelineModel(
       continue;
     }
     if ((item.kind === "message" && item.event.role === "user") || item.kind === "seam") {
-      keptWithheldInTurn = false;
+      keptMarkerKey = null;
     }
     // Some providers (Claude Opus) write an empty, withheld thought before
-    // nearly every call. The pane shows one "Reasoning withheld" per turn and
-    // hides the rest, so letting the hidden ones split a run left every call
-    // as its own row with nothing visible between them. Inside a run, the
-    // turn's first marker moves to the run's end; later ones fold into the
-    // run, and a link to one opens the run.
+    // nearly every call. A turn shows one "Reasoning withheld" marker, on web
+    // and iOS alike; the rest fold away so they neither repeat nor split a run
+    // of calls into a row each. Inside a run, the turn's first marker moves to
+    // the run's end. A link to a folded one opens the run it sat in, or the
+    // turn's marker.
     if (item.kind === "reasoning" && isBareWithheldReasoning(item.event)) {
-      const firstInTurn = !keptWithheldInTurn;
-      keptWithheldInTurn = true;
+      if (keptMarkerKey !== null) {
+        eventIdToSelectionKey.set(
+          item.event.id,
+          buffer.length > 0 ? `tool:${buffer[buffer.length - 1].key}` : keptMarkerKey,
+        );
+        continue;
+      }
+      keptMarkerKey = `reasoning:${item.event.id}`;
       if (buffer.length > 0) {
-        if (firstInTurn) {
-          deferredMarker = item;
-        } else {
-          eventIdToSelectionKey.set(item.event.id, `tool:${buffer[buffer.length - 1].key}`);
-        }
+        deferredMarker = item;
         continue;
       }
     }

@@ -4845,7 +4845,7 @@ summary:has(> .run-dot) {
 		const groupByInteractionKey = /* @__PURE__ */ new Map();
 		let buffer = [];
 		let deferredMarker = null;
-		let keptWithheldInTurn = false;
+		let keptMarkerKey = null;
 		const flush = () => {
 			if (buffer.length === 0) return;
 			const marker = deferredMarker;
@@ -4879,13 +4879,15 @@ summary:has(> .run-dot) {
 				buffer.push(item.interaction);
 				continue;
 			}
-			if (item.kind === "message" && item.event.role === "user" || item.kind === "seam") keptWithheldInTurn = false;
+			if (item.kind === "message" && item.event.role === "user" || item.kind === "seam") keptMarkerKey = null;
 			if (item.kind === "reasoning" && isBareWithheldReasoning(item.event)) {
-				const firstInTurn = !keptWithheldInTurn;
-				keptWithheldInTurn = true;
+				if (keptMarkerKey !== null) {
+					eventIdToSelectionKey.set(item.event.id, buffer.length > 0 ? `tool:${buffer[buffer.length - 1].key}` : keptMarkerKey);
+					continue;
+				}
+				keptMarkerKey = `reasoning:${item.event.id}`;
 				if (buffer.length > 0) {
-					if (firstInTurn) deferredMarker = item;
-					else eventIdToSelectionKey.set(item.event.id, `tool:${buffer[buffer.length - 1].key}`);
+					deferredMarker = item;
 					continue;
 				}
 			}

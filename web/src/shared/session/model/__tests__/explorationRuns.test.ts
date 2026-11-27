@@ -519,6 +519,32 @@ describe("withheld thoughts between calls", () => {
     expect(model.eventIdToRowId.get(7)).toBe(model.eventIdToRowId.get(5));
   });
 
+  it("keeps one marker per turn even when running calls sit between them", () => {
+    // A running call never joins a run, so before the model owned this rule
+    // iOS (which renders every model item) drew a marker before each one.
+    const withheld = (id: number) =>
+      event({ id, role: "assistant", content_text: "", reasoning_withheld: true, item: { kind: "reasoning", visibility: "withheld" }, timestamp: `2026-01-01T00:00:${String(id).padStart(2, "0")}Z` } as Partial<AgentEvent> & Pick<AgentEvent, "id" | "role" | "timestamp">);
+    const running = (id: number) =>
+      event({ id, role: "assistant", tool_name: "Bash", tool_call_id: `r${id}`, tool_input_json: { command: "sleep 9" }, timestamp: `2026-01-01T00:00:${String(id).padStart(2, "0")}Z` });
+    const events: AgentEvent[] = [
+      event({ id: 1, role: "user", content_text: "go", timestamp: "2026-01-01T00:00:01Z" }),
+      withheld(2),
+      running(3),
+      withheld(4),
+      running(5),
+      event({ id: 6, role: "user", content_text: "again", timestamp: "2026-01-01T00:00:06Z" }),
+      withheld(7),
+    ];
+
+    const model = buildTimelineModel(projection(events));
+    const markers = model.items.filter((item) => item.kind === "reasoning").map((item) => item.kind === "reasoning" && item.event.id);
+
+    // One per turn: the first turn keeps 2, the next keeps 7.
+    expect(markers).toEqual([2, 7]);
+    // A link to the folded one lands on the turn's marker.
+    expect(model.eventIdToRowId.get(4)).toBe(model.eventIdToRowId.get(2));
+  });
+
   it("keeps a thought with text as a break between calls", () => {
     const events: AgentEvent[] = [
       event({ id: 1, role: "assistant", tool_name: "Bash", tool_call_id: "a", tool_input_json: { command: "ls" }, timestamp: "2026-01-01T00:00:01Z" }),

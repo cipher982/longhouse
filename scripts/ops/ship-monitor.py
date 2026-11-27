@@ -172,16 +172,23 @@ def fetch_runs_for_sha(repo: str, sha: str) -> list[RunInfo]:
     for item in data.get("workflow_runs") or []:
         if item.get("head_sha") != sha or item.get("event") not in ("push", "workflow_dispatch"):
             continue
-        if item.get("name") == RELEASE_WORKFLOW:
+        if is_release_run(item):
             continue  # read below, by title
         runs.append(run_from_api(item))
     # Release starts from CI completing (workflow_run), so its own head_sha can be main's head rather than
     # this commit; its title is `Release <sha>`.
     released = gh_api_cached(f"repos/{repo}/actions/workflows/{RELEASE_WORKFLOW_FILE}/runs?branch=main&per_page=30")
     for item in released.get("workflow_runs") or []:
-        if item.get("name") == RELEASE_WORKFLOW and release_sha(item) == sha:
+        if is_release_run(item) and release_sha(item) == sha:
             runs.append(run_from_api(item))
     return runs
+
+
+def is_release_run(item: dict) -> bool:
+    """A Release run. Its API ``name`` is its run-name, ``Release <sha>`` (since 2026-11-22), not the
+    workflow's name, so match the workflow file instead; a bare ``Release`` covers older runs."""
+    path = str(item.get("path") or "")
+    return path.endswith(f"/{RELEASE_WORKFLOW_FILE}") or item.get("name") == RELEASE_WORKFLOW
 
 
 def release_sha(item: dict) -> str:
@@ -193,7 +200,8 @@ def release_sha(item: dict) -> str:
 def run_from_api(item: dict) -> RunInfo:
     return RunInfo(
         databaseId=int(item["id"]),
-        workflowName=item.get("name") or f"run-{item['id']}",
+        # Every Release run reads as the workflow, whatever its run-name says.
+        workflowName=RELEASE_WORKFLOW if is_release_run(item) else (item.get("name") or f"run-{item['id']}"),
         status=item.get("status") or "",
         conclusion=item.get("conclusion"),
         url=item.get("html_url") or "",
