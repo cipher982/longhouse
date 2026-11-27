@@ -20,7 +20,10 @@ finally one more message. For each case:
 "Never reached the model as text": the scripted model dumps every request; no user message may contain the exact text
 the harness sent.
 
-Cursor has no scripted model (its CLI talks only to Cursor's servers), so its cell is ``not_measured`` with the reason.
+Cursor has no scripted model (its CLI talks only to Cursor's servers), so its cell runs a fake cursor-agent
+(fake_cursor_agent.py) that records the keystrokes Longhouse typed and acts on them as Cursor's prompt does; "the model
+received" is its prompt log. That proves Longhouse's half (the exact command typed at an idle prompt, the session freed
+after), not Cursor's own handling of the command.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.terminal_truth_lanes import RuntimeApi
 from zerg.qa.terminal_truth_providers import ANTIGRAVITY_HELM_USER_ARGS
 from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
+from zerg.qa.terminal_truth_providers import FAKE_PROVIDERS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import _version
@@ -57,10 +61,13 @@ from zerg.qa.terminal_truth_verdicts import CellSpec
 
 SCENARIOS = ("slash_command",)
 CONTRACTS = Path(__file__).resolve().parents[1] / "config" / "managed_provider_contracts.json"
+# Providers with no scripted model. Other input scenarios (steer) read this; slash_command runs Cursor against a fake.
 NOT_MEASURABLE = {
-    "cursor": "Cursor's CLI talks only to Cursor's own servers, so no scripted model can stand in for it; "
-    "the Cursor Helm path is the engine's typed-keystroke relay, covered by cursor_helm_launcher tests",
+    "cursor": "Cursor's CLI talks only to Cursor's own servers, so no scripted model can stand in for it",
 }
+# Cursor's CLI talks only to Cursor's servers, so no scripted model can stand in for its model. Its cell runs a fake
+# cursor-agent (fake_cursor_agent.py) that records the keystrokes it was typed; "the model received" is its prompt log.
+FAKE_MODEL_PROVIDERS = frozenset({"cursor"})
 CONTROL_WAIT_S = 90.0  # launch to the Runtime Host offering send_input
 REPLY_WAIT_S = 60.0  # a message to its scripted reply in the model receipt
 CASE_WAIT_S = 45.0  # a command to a delivered or failed receipt
@@ -103,7 +110,7 @@ def contract_cases(provider: str) -> list[dict[str, Any]]:
 
 def plan_command_cell(spec: CellSpec) -> CommandPlan:
     nonce = secrets.token_hex(3)
-    if spec.provider in NOT_MEASURABLE:
+    if spec.provider in NOT_MEASURABLE and spec.provider not in FAKE_MODEL_PROVIDERS:
         return CommandPlan(spec, nonce, not_measured=NOT_MEASURABLE[spec.provider])
     if spec.mode != "helm":
         return CommandPlan(spec, nonce, not_measured="the slash_command scenario runs Helm cells (the terminal a command is typed in)")
@@ -302,6 +309,26 @@ def run_command_cell_in(
     checks: list[tuple[str, bool, str]] = []
     started = time.monotonic()
     sends: list[dict[str, Any]] = []
+    fake_model = provider in FAKE_MODEL_PROVIDERS
+    model_log = pas.root / f"{provider}-model.jsonl"
+    if fake_model:
+        out["provider_note"] = "fake cursor-agent: proves the keystrokes Longhouse types, not Cursor's own command handling"
+        pas.provider_environments[provider]["FAKE_CURSOR_MODEL_LOG"] = str(model_log)
+        pas.provider_environments[provider]["FAKE_CURSOR_INPUT_LOG"] = str(pas.root / f"{provider}-input.jsonl")
+
+    def fake_prompts() -> list[str]:
+        if not model_log.exists():
+            return []
+        return [str(json.loads(row).get("prompt") or "") for row in model_log.read_text().splitlines() if row.strip()]
+
+    def model_got(turn: str, marker: str) -> bool:
+        if fake_model:
+            return any(marker in prompt for prompt in fake_prompts())
+        return pas.model.served_requests([f"{spec.key}:{turn}"]) >= 1
+
+    def user_texts() -> list[str]:
+        return fake_prompts() if fake_model else _request_user_texts(dump_dir)
+
     try:
         driver = drivers[provider]
         session = ProviderPtySession.start(
@@ -332,11 +359,9 @@ def run_command_cell_in(
         warm = send_input(api, sid, plan.warm)
         sends.append(warm)
         deadline = time.monotonic() + REPLY_WAIT_S
-        while time.monotonic() < deadline and pas.model.served_requests([f"{spec.key}:warm"]) < 1:
+        while time.monotonic() < deadline and not model_got("warm", f"TTRUTH{plan.nonce}"):
             time.sleep(0.5)
-        checks.append(
-            ("a message from the app reaches the model", pas.model.served_requests([f"{spec.key}:warm"]) >= 1, warm.get("status", ""))
-        )
+        checks.append(("a message from the app reaches the model", model_got("warm", f"TTRUTH{plan.nonce}"), warm.get("status", "")))
         time.sleep(3)  # let the warm turn end so every command starts at an idle session
 
         for case in plan.cases:
@@ -348,7 +373,7 @@ def run_command_cell_in(
                 deadline = time.monotonic() + EFFECT_WAIT_S
                 while time.monotonic() < deadline:
                     if case.get("command") == CUSTOM_COMMAND:
-                        effect = "custom command expanded for the model" if pas.model.served_requests([f"{spec.key}:cmd"]) >= 1 else None
+                        effect = "custom command expanded for the model" if model_got("cmd", plan.custom_marker) else None
                     elif "TTNAME" in str(case.get("args") or ""):
                         effect = name_recorded(pas.home, f"TTNAME{plan.nonce}", skip=(dump_dir, pas.root / "w"))
                     else:
@@ -357,23 +382,23 @@ def run_command_cell_in(
                         break
                     time.sleep(1)
             sent["effect"] = effect
-            ok, detail = judge_case(plan, case, sent, effect, _request_user_texts(dump_dir))
+            ok, detail = judge_case(plan, case, sent, effect, user_texts())
             checks.append((f"{text} ({case.get('expect')})", ok, detail))
             time.sleep(2)
 
         end = send_input(api, sid, plan.end)
         sends.append(end)
         deadline = time.monotonic() + REPLY_WAIT_S
-        while time.monotonic() < deadline and pas.model.served_requests([f"{spec.key}:end"]) < 1:
+        while time.monotonic() < deadline and not model_got("end", f"TTEND{plan.nonce}"):
             time.sleep(0.5)
         checks.append(
             (
                 "a message after the commands still reaches the model (the session was freed)",
-                pas.model.served_requests([f"{spec.key}:end"]) >= 1,
+                model_got("end", f"TTEND{plan.nonce}"),
                 end.get("status", ""),
             )
         )
-        texts = _request_user_texts(dump_dir)
+        texts = user_texts()
         leaked = [plan.text_for(c) for c in plan.cases if leaked_as_text(c, plan.text_for(c), texts)]
         checks.append(
             ("no command reached the model as text", not leaked, f"leaked: {leaked}" if leaked else f"{len(texts)} user texts checked")
@@ -410,7 +435,7 @@ def run_command_suite(
 ) -> list[dict[str, Any]]:
     """Run each slash_command cell in a pass of its own (one host, engine, HOME and scripted model per cell)."""
 
-    drivers = drivers or PROVIDERS
+    drivers = {**FAKE_PROVIDERS, **(drivers or PROVIDERS)}
     cli = longhouse_cli or (Path(shutil.which("longhouse")) if shutil.which("longhouse") else None)
     results: list[dict[str, Any]] = []
     for spec in specs:

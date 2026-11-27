@@ -38,6 +38,7 @@ from zerg.qa.terminal_truth_lanes import lane_stats
 from zerg.qa.terminal_truth_lanes import pacing_error
 from zerg.qa.terminal_truth_providers import ANTIGRAVITY_HELM_USER_ARGS
 from zerg.qa.terminal_truth_providers import CODEX_HELM_FLAGS
+from zerg.qa.terminal_truth_providers import FAKE_PROVIDERS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import AttachedRuntimeHost
 from zerg.qa.terminal_truth_providers import ProviderDriver
@@ -208,14 +209,19 @@ def build_pass(
         prepared: dict[str, float] = {}
         for provider in providers:
             t0 = time.monotonic()
-            binary = shutil.which(PROVIDERS[provider].binary)
+            driver = PROVIDERS.get(provider) or FAKE_PROVIDERS[provider]
+            binary = shutil.which(driver.binary)
             if binary is None:
-                raise RuntimeError(f"{PROVIDERS[provider].binary} is not installed on this machine")
+                raise RuntimeError(f"{driver.binary} is not installed on this machine")
             binaries[provider] = binary
             penv = provider_environment(provider, model.endpoint, model.script, home)
             if provider == "antigravity":
                 # An absolute path: an ambient wrapper that resolves "$HOME/.local/bin/agy" finds nothing under this HOME.
                 penv["LONGHOUSE_ANTIGRAVITY_BIN"] = binary
+            if provider == "cursor":
+                # The fake cursor-agent is not on PATH: the Machine Agent advertises cursor.* controls only when it finds
+                # the binary, and the Helm launcher is given it by --cursor-bin.
+                penv["LONGHOUSE_CURSOR_BIN"] = binary
             workspace_root = root / "w" / provider
             workspace_root.mkdir(parents=True)
             modes = {s.mode for s in specs if s.provider == provider}

@@ -70,7 +70,10 @@ ORIGIN_URL = "https://github.com/cipher982/longhouse.git"
 
 TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent", "question", "question_steer", "slash_command", "steer")
 KIND_SCENARIOS = ("thinking", "tool", "subagent")
-TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity")
+TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity", "cursor")
+# Providers whose cells run a fake CLI from the repo (nothing to install), and the scenarios that have such a cell.
+# Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for it (fake_cursor_agent.py).
+TT_FAKE_PROVIDERS = {"cursor": ("slash_command",)}
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")
 ASSERTION_CELL = re.compile(r"^[a-z][a-z0-9_]+$")
 
@@ -116,6 +119,9 @@ def classify(cell: str) -> tuple[str, dict]:
             return "bad", {"reason": f"unknown provider {provider!r} (Terminal Truth providers: {', '.join(TT_PROVIDERS)})"}
         if scenario not in TT_SCENARIOS:
             return "bad", {"reason": f"unknown scenario {scenario!r} (scenarios: {', '.join(TT_SCENARIOS)})"}
+        if provider in TT_FAKE_PROVIDERS and scenario not in TT_FAKE_PROVIDERS[provider]:
+            allowed = ", ".join(TT_FAKE_PROVIDERS[provider])
+            return "bad", {"reason": f"{provider} has no scripted model; only {allowed} runs it (against a fake CLI)"}
         return "tt", {"provider": provider, "mode": mode, "scenario": scenario, "key": f"{provider}/{mode}"}
     if ASSERTION_CELL.match(cell):
         return "producer", {"assertion": cell}
@@ -852,7 +858,9 @@ def on_host(args: argparse.Namespace) -> int:
                 else:
                     runnable_producers.setdefault(info["producer_id"], []).append({**cell, **info})
             if tt or runnable_producers:
-                providers = {c["provider"] for c in tt} | {PROOF_PRODUCERS[p][0] for p in runnable_producers}
+                providers = {c["provider"] for c in tt if c["provider"] not in TT_FAKE_PROVIDERS} | {
+                    PROOF_PRODUCERS[p][0] for p in runnable_producers
+                }
                 with run.phase("providers"):
                     pins = run.provider_bins(providers)
                 with run.phase("engine"):

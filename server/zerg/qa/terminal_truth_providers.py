@@ -261,6 +261,8 @@ CODEX_HELM_FLAGS: tuple[str, ...] = () if CODEX_SANDBOX_WORKS else ("--dangerous
 # as the user would type it after `--`.
 ANTIGRAVITY_HELM_USER_ARGS: tuple[str, ...] = ("--", "--dangerously-skip-permissions")
 
+FAKE_CURSOR_AGENT = Path(__file__).resolve().parent / "fake_cursor_agent.py"
+
 PROVIDERS: dict[str, ProviderDriver] = {
     "claude": ProviderDriver(
         "claude",
@@ -301,6 +303,13 @@ PROVIDERS: dict[str, ProviderDriver] = {
     ),
 }
 
+# Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for its model. The slash_command scenario
+# runs a fake cursor-agent that records what it was typed (fake_cursor_agent.py). Kept out of PROVIDERS: every other
+# scenario reads "not in PROVIDERS" as "no scripted model", which is still true.
+FAKE_PROVIDERS: dict[str, ProviderDriver] = {
+    "cursor": ProviderDriver("cursor", str(FAKE_CURSOR_AGENT), "Fake Cursor ready", lambda b, w: [str(b), "--resume", "fake"]),
+}
+
 
 def provider_environment(provider: str, endpoint: str, script: Path, home: Path) -> dict[str, str]:
     """A credential-free environment for ``provider`` whose only reachable model is the scripted endpoint at ``endpoint``."""
@@ -331,7 +340,8 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
     if provider == "omp":
         environment["OMP_SKIP_SETUP"] = "1"  # a fresh HOME otherwise shows a setup wizard that swallows input
     environment[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
-    profiles.configure_scripted_model_profile(provider, home, environment)
+    if provider not in FAKE_PROVIDERS:  # a fake CLI has no model to point at the scripted endpoint
+        profiles.configure_scripted_model_profile(provider, home, environment)
     if provider == "opencode":
         # Fail closed: only the scripted provider is enabled, so no built-in provider (OpenRouter and the like) can be chosen.
         config = home / ".config" / "opencode" / "opencode.json"

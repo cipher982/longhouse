@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""A stand-in for `cursor-agent`, for the Terminal Truth slash_command scenario.
+
+Cursor's CLI talks only to Cursor's own servers (and Longhouse's Cursor account is a work account), so no scripted model
+can stand in for its model. What Longhouse owns for Cursor Helm is the terminal: an input sent from the app must arrive
+at Cursor's prompt as exactly the keystrokes a person would type, at an idle prompt, and the session must be free again
+afterwards. This fake is a terminal that records what it was typed and acts on it the way Cursor's prompt does:
+
+- `cursor-agent create-chat` prints a new conversation id (the launcher's first call).
+- `cursor-agent --resume <id> ...` draws a prompt and reads keystrokes in raw mode. ESC closes a popup (nothing to do
+  here), Enter submits the line.
+- A submitted `/rename <name>` renames the chat (written to ``~/.cursor/fake-chats/<id>.json`` as ``"name"``), `/exit`
+  and `/quit` end the session. Any other line is a prompt: the lifecycle hooks fire as Cursor's do
+  (beforeSubmitPrompt, afterAgentResponse, stop) and the line is appended to ``$FAKE_CURSOR_MODEL_LOG`` as what the model
+  received.
+- Every submitted line is appended to ``$FAKE_CURSOR_INPUT_LOG``.
+
+Lifecycle hooks are read from the workspace's ``.cursor/hooks.json`` (where the Longhouse launcher writes them) and run
+with the hook payload on stdin, as Cursor runs them. What this cannot show is Cursor's own handling of a command once
+typed; that is the vendor's, and a person typing it gets the same.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import termios
+import tty
+import uuid
+from pathlib import Path
+
+READY = "Fake Cursor ready"
+
+
+def _append(env_name: str, row: dict) -> None:
+    target = os.environ.get(env_name)
+    if target:
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+
+
+def _hooks(event: str) -> list[str]:
+    try:
+        config = json.loads((Path.cwd() / ".cursor" / "hooks.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [str(e.get("command")) for e in (config.get("hooks") or {}).get(event) or [] if isinstance(e, dict) and e.get("command")]
+
+
+def fire(event: str, conversation: str, **fields: object) -> None:
+    payload = {
+        "hook_event_name": event,
+        "conversation_id": conversation,
+        "workspace_roots": [str(Path.cwd())],
+        "cwd": str(Path.cwd()),
+        **fields,
+    }
+    for command in _hooks(event):
+        subprocess.run(command, shell=True, input=json.dumps(payload), text=True, capture_output=True, timeout=10, check=False)
+
+
+def say(text: str) -> None:
+    sys.stdout.write(text.replace("\n", "\r\n") + "\r\n")
+    sys.stdout.flush()
+
+
+def submit(line: str, conversation: str) -> bool:
+    """Act on one submitted line; False ends the session."""
+
+    _append("FAKE_CURSOR_INPUT_LOG", {"conversation_id": conversation, "line": line})
+    name, _, args = line.strip().partition(" ")
+    if name in ("/exit", "/quit"):
+        return False
+    if name == "/rename" and args.strip():
+        chats = Path.home() / ".cursor" / "fake-chats"
+        chats.mkdir(parents=True, exist_ok=True)
+        (chats / f"{conversation}.json").write_text(json.dumps({"conversation_id": conversation, "name": args.strip()}))
+        say(f"Chat renamed to {args.strip()}")
+        return True
+    generation = str(uuid.uuid4())
+    fire("beforeSubmitPrompt", conversation, generation_id=generation, prompt=line)
+    _append("FAKE_CURSOR_MODEL_LOG", {"conversation_id": conversation, "prompt": line})
+    reply = f"Received: {line}"
+    say(reply)
+    fire("afterAgentResponse", conversation, generation_id=generation, text=reply)
+    fire("stop", conversation, generation_id=generation, status="completed")
+    return True
+
+
+def tui(conversation: str) -> int:
+    fire("sessionStart", conversation)
+    say(READY)
+    sys.stdout.write("> ")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd) if os.isatty(fd) else None
+    if saved is not None:
+        tty.setraw(fd)
+    line = ""
+    try:
+        while True:
+            chunk = os.read(fd, 1024)
+            if not chunk:
+                return 0
+            for ch in chunk.decode("utf-8", errors="replace"):
+                if ch == "\x1b":  # closes a popup in Cursor; the typed text stays
+                    continue
+                if ch == "\x03":
+                    return 130
+                if ch in ("\r", "\n"):
+                    if line.strip():
+                        sys.stdout.write("\r\n")
+                        if not submit(line, conversation):
+                            fire("sessionEnd", conversation)
+                            return 0
+                    line = ""
+                    sys.stdout.write("> ")
+                    sys.stdout.flush()
+                elif ch == "\x7f":
+                    line = line[:-1]
+                else:
+                    line += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
+    finally:
+        if saved is not None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def main(argv: list[str]) -> int:
+    if "--version" in argv or "-v" in argv:
+        print("fake-cursor-agent 0.0.0")
+        return 0
+    if argv and argv[0] == "create-chat":
+        print(uuid.uuid4())
+        return 0
+    conversation = argv[argv.index("--resume") + 1] if "--resume" in argv else str(uuid.uuid4())
+    return tui(conversation)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
