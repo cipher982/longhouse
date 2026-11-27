@@ -901,7 +901,6 @@ impl AcpStream {
                 });
             }
             Some("tool_call") | Some("tool_call_update") => {
-                // A tool call ends the reply text that preceded it.
                 self.close_message(signals);
                 let Some(call_id) = update.get("toolCallId").and_then(Value::as_str) else {
                     return;
@@ -937,7 +936,12 @@ impl AcpStream {
                     completed,
                 });
             }
-            _ => {}
+            // One assistant message is one unbroken run of message chunks: agy
+            // ends every model step with a `usage_update`, and thinking or a tool
+            // call starts the next. The transcript keeps each step's reply as its
+            // own row, so the live item must end where the run does; otherwise a
+            // turn of several replies is one preview that matches none of them.
+            _ => self.close_message(signals),
         }
     }
 
@@ -2593,6 +2597,55 @@ mod tests {
             Verdict::Failed("agy stopped the turn: max_tokens".to_string())
         );
         assert_eq!(stream.verdict(&[], false), Verdict::Pending);
+    }
+
+    #[test]
+    fn each_model_step_reply_is_its_own_message() {
+        // Shape of a real agy turn (2026-11-27): replies between subagent waits
+        // are split only by usage and thought updates, never by a tool call.
+        let mut stream = AcpStream::new("run");
+        let signals = stream.apply_lines(&[
+            update(
+                "agent_message_chunk",
+                json!({"content": {"type": "text", "text": "Launched 4"}}),
+            ),
+            update("usage_update", json!({"used": 10})),
+            update(
+                "agent_thought_chunk",
+                json!({"content": {"type": "text", "text": "waiting"}}),
+            ),
+            update(
+                "agent_message_chunk",
+                json!({"content": {"type": "text", "text": "\n\n1 of 4"}}),
+            ),
+            update("usage_update", json!({"used": 20})),
+            update(
+                "agent_message_chunk",
+                json!({"content": {"type": "text", "text": "\n\n2 of 4"}}),
+            ),
+            update("usage_update", json!({"used": 30})),
+            reply(4, "end_turn", true),
+        ]);
+        let texts: Vec<_> = signals
+            .iter()
+            .filter_map(|signal| match signal {
+                LiveSignal::Text {
+                    item_id,
+                    text,
+                    completed,
+                    ..
+                } => Some((item_id.clone(), text.clone(), *completed)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("run:message:0".to_string(), "Launched 4".to_string(), true),
+                ("run:message:1".to_string(), "\n\n1 of 4".to_string(), true),
+                ("run:message:2".to_string(), "\n\n2 of 4".to_string(), true),
+            ]
+        );
     }
 
     #[test]
