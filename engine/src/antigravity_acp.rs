@@ -781,9 +781,12 @@ enum LiveSignal {
         completed: bool,
     },
     /// A tool call: in progress carries the call, completed adds the output.
+    /// `name` is agy's own tool name (`run_command`, `read_file`); `command`
+    /// is the one-line summary of its arguments a person reads.
     Tool {
         item_id: String,
         seq: u64,
+        name: String,
         command: String,
         output: String,
         completed: bool,
@@ -907,14 +910,12 @@ impl AcpStream {
                 };
                 let name = update.get("name").and_then(Value::as_str).unwrap_or("tool");
                 let args = update.get("args").or_else(|| update.get("rawInput"));
-                let command = args
-                    .and_then(|args| args.get("CommandLine"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| match args {
-                        Some(args) if !args.is_null() => format!("{name} {args}"),
-                        _ => name.to_string(),
-                    });
+                let command = match args {
+                    Some(args) if args.is_object() => {
+                        crate::status_slot::tool_arguments_summary(name, args)
+                    }
+                    _ => name.to_string(),
+                };
                 let status = update.get("status").and_then(Value::as_str).unwrap_or("");
                 let completed = matches!(status, "completed" | "failed");
                 let output = update
@@ -931,6 +932,7 @@ impl AcpStream {
                 signals.push(LiveSignal::Tool {
                     item_id: format!("{}:tool:{call_id}", self.run_id),
                     seq: self.seq,
+                    name: name.to_string(),
                     command,
                     output,
                     completed,
@@ -1069,14 +1071,14 @@ async fn monitor_acp_turn(
                 for signal in signals {
                     match &signal {
                         LiveSignal::Tool {
-                            command, completed, ..
+                            name, completed, ..
                         } => {
                             if *completed {
                                 current_phase = "thinking";
                                 current_tool = None;
                             } else {
                                 current_phase = "running";
-                                current_tool = Some(command.clone());
+                                current_tool = Some(name.clone());
                             }
                             sink.post_phase(current_phase, current_tool.clone()).await;
                             last_phase_at = Instant::now();
@@ -1795,6 +1797,7 @@ impl AntigravityAcpSink {
             LiveSignal::Tool {
                 item_id,
                 seq,
+                name,
                 command,
                 output,
                 completed,
@@ -1803,6 +1806,7 @@ impl AntigravityAcpSink {
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
                 "item_id": item_id,
+                "tool_name": name,
                 "command": command,
                 "output": output,
                 "status": if *completed { "completed" } else { "running" },
@@ -2707,6 +2711,42 @@ mod tests {
         );
     }
 
+    /// agy names the tool and passes its arguments separately (observed on a
+    /// real `agy acp` run). The tool name is what the status slot carries, so it
+    /// stays the bare name: a name with the JSON arguments appended overflowed
+    /// the Runtime Host's 128-character `tool_name` and was refused with a 422.
+    #[test]
+    fn a_tool_call_keeps_its_bare_name_and_summarizes_its_arguments() {
+        let mut stream = AcpStream::new("run");
+        let long_command = format!("search-hub sources \"{}\"\necho done", "x".repeat(200));
+        let signals = stream.apply_lines(&[
+            update(
+                "tool_call",
+                json!({"toolCallId": "c1", "name": "read_file", "args": {"EndLine": 120, "Path": "/repo/AGENTS.md", "StartLine": 1}, "status": "in_progress", "kind": "read", "title": "File ../repo/AGENTS.md"}),
+            ),
+            update(
+                "tool_call",
+                json!({"toolCallId": "c2", "name": "run_command", "args": {"CommandLine": long_command}, "status": "in_progress"}),
+            ),
+            update("tool_call", json!({"toolCallId": "c3", "name": "list_dir", "status": "in_progress"})),
+        ]);
+        let tools: Vec<_> = signals
+            .iter()
+            .filter_map(|signal| match signal {
+                LiveSignal::Tool { name, command, .. } => Some((name.clone(), command.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tools,
+            vec![
+                ("read_file".to_string(), "/repo/AGENTS.md".to_string()),
+                ("run_command".to_string(), long_command.clone()),
+                ("list_dir".to_string(), "list_dir".to_string()),
+            ]
+        );
+    }
+
     #[test]
     fn the_growth_reader_waits_for_a_whole_line_and_tolerates_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -3468,11 +3508,13 @@ while True:
         let tool = sink.live_event(&LiveSignal::Tool {
             item_id: "run:step:2".to_string(),
             seq: 8,
+            name: "run_command".to_string(),
             command: "ls".to_string(),
             output: "out".to_string(),
             completed: true,
         });
         assert_eq!(tool["payload"]["progress_kind"], "console_live_tool_item");
+        assert_eq!(tool["payload"]["tool_name"], "run_command");
         assert_eq!(tool["payload"]["status"], "completed");
         assert_eq!(tool["payload"]["output"], "out");
     }

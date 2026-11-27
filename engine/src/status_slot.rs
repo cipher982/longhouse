@@ -104,6 +104,7 @@ pub fn tool_arguments_summary(name: &str, input: &Value) -> String {
             "description",
             "file_path",
             "path",
+            "Path",
             "AbsolutePath",
             "TargetFile",
             "pattern",
