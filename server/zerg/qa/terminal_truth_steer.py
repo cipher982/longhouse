@@ -165,6 +165,31 @@ def send_steer(api: RuntimeApi, sid: str, text: str) -> dict[str, Any]:
         time.sleep(0.3)
 
 
+def host_view(api: RuntimeApi, sid: str) -> dict[str, Any]:
+    """What the host believed when a send stayed queued: its served activity and every input receipt.
+
+    A CI failure keeps no host log, so this is the only record of whether the host still saw the turn running (the
+    send is parked until a turn boundary) or saw it end and never drained the queue.
+    """
+
+    view: dict[str, Any] = {}
+    status, body = api.get(f"/api/agents/sessions/{sid}")
+    with contextlib.suppress(ValueError):
+        detail = json.loads(body) if status == 200 else {}
+        view["session"] = {
+            k: v for k, v in detail.items() if any(w in k for w in ("activity", "presentation", "phase", "status", "pending"))
+        }
+    status, body = api.get(f"/api/sessions/{sid}/inputs", browser=True)
+    with contextlib.suppress(ValueError):
+        rows = json.loads(body) if status == 200 else []
+        view["inputs"] = [
+            {k: r.get(k) for k in ("text", "intent", "status", "delivery_status", "last_error", "created_at", "updated_at")}
+            for r in rows
+            if isinstance(r, dict)
+        ]
+    return view
+
+
 def served_rows(api: RuntimeApi, sid: str) -> list[dict[str, Any]]:
     status, body = api.get(f"/api/agents/sessions/{sid}/events?limit=1000")
     if status != 200:
@@ -306,6 +331,8 @@ def run_steer_cell_in(pas: Any, plan: SteerPlan, *, ready_timeout: float, driver
         sends.append(end)
         ended = _wait(lambda: served([plan.turn_id("end")]) >= 1, REPLY_WAIT_S)
         checks.append(("freed", "a message after the steer still reaches the model (the session was freed)", ended, end.get("status", "")))
+        if not ended:
+            out["freed_diagnosis"] = host_view(api, sid)
     except Exception as exc:  # noqa: BLE001 - becomes the cell's failure reason
         out["error"] = f"{type(exc).__name__}: {exc}"
     finally:
