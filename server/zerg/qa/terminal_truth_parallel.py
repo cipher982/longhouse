@@ -1,4 +1,4 @@
-"""Terminal truth, every check in one run: all cells of all five scenarios side by side, then the mutation tests.
+"""Terminal truth, every check in one run: every cell of every scenario side by side, then the mutation tests.
 
 A cell is 20 to 40 seconds of wall time and almost all of it is waiting: for a scripted stream paced in real time, for a
 provider to start, for a host to boot. Run one after another, the 58 unmutated cell runs and the 43 mutation checks are an
@@ -68,6 +68,8 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import terminal_truth_mutations as mutations
+from zerg.qa.terminal_truth_command import SCENARIOS as COMMAND_SCENARIOS
+from zerg.qa.terminal_truth_command import plan_command_cell
 from zerg.qa.terminal_truth_kinds import KIND_EXPECTATIONS
 from zerg.qa.terminal_truth_kinds import KNOWN_LATE_STATE
 from zerg.qa.terminal_truth_kinds import SCENARIOS as KIND_SCENARIOS
@@ -76,13 +78,26 @@ from zerg.qa.terminal_truth_providers import PROFILE_CACHE_ENV
 from zerg.qa.terminal_truth_providers import ScratchRuntimeHost
 from zerg.qa.terminal_truth_pty import REPO_ROOT
 from zerg.qa.terminal_truth_pty import SCRATCH_ROOT
+from zerg.qa.terminal_truth_question import SCENARIOS as QUESTION_SCENARIOS
+from zerg.qa.terminal_truth_question import plan_question_cell
 from zerg.qa.terminal_truth_scenarios import leaked_processes
+from zerg.qa.terminal_truth_steer import SCENARIOS as STEER_SCENARIOS
+from zerg.qa.terminal_truth_steer import plan_steer_cell
+from zerg.qa.terminal_truth_verdicts import CellSpec
 from zerg.qa.terminal_truth_verdicts import declared_cells
 from zerg.qa.terminal_truth_verdicts import load_expectations
 
 SERVER_ROOT = REPO_ROOT / "server"
 REPLY_SCENARIOS = ("long_reply", "two_message")
-ALL_SCENARIOS = REPLY_SCENARIOS + tuple(KIND_SCENARIOS)
+# Input sent from a Longhouse client: pass or fail per cell, judged inside the cell, no timing budget. Each scenario's
+# own planner says which cells it can measure (a cell it cannot is left out, not run as a row that proves nothing).
+INPUT_PLANNERS: dict[str, Callable[[CellSpec], Any]] = {
+    **dict.fromkeys(STEER_SCENARIOS, plan_steer_cell),
+    **dict.fromkeys(COMMAND_SCENARIOS, plan_command_cell),
+    **dict.fromkeys(QUESTION_SCENARIOS, plan_question_cell),
+}
+INPUT_SCENARIOS = tuple(INPUT_PLANNERS)
+ALL_SCENARIOS = REPLY_SCENARIOS + tuple(KIND_SCENARIOS) + INPUT_SCENARIOS
 GOOD = {"pass", "known_bad", "not_measurable"}
 # Shards are cut along this order. OMP and Pi are far apart: in one HOME each breaks the other's launch, so a shard that
 # holds both runs them as two passes one after the other (run_suite, run_kinds_suite) and takes twice as long.
@@ -175,7 +190,7 @@ class Shard:
     def weight(self) -> float:
         """A rough length, for starting the long ones first (the shortest makespan with a fixed number of workers)."""
 
-        per_cell = {"long_reply": 22, "two_message": 30, "thinking": 30, "tool": 30, "subagent": 45}[self.scenario]
+        per_cell = {"long_reply": 22, "two_message": 30, "thinking": 30, "tool": 30, "subagent": 45}.get(self.scenario, 60)
         return 20 + per_cell * len(self.units) + (15 if any(u.cell.startswith("claude/") for u in self.units) else 0)
 
 
@@ -207,6 +222,11 @@ def make_plan(
     for scenario in scenarios:
         if scenario in REPLY_SCENARIOS:
             cells = [spec.key for spec in declared_cells(expectations)]
+        elif scenario in INPUT_PLANNERS:
+            measures = INPUT_PLANNERS[scenario]
+            cells = [
+                spec.key for spec in declared_cells(expectations) if not measures(CellSpec(spec.provider, spec.mode, scenario)).not_measured
+            ]
         else:
             # Only cells with a published-kind expectation: the others are measurements with nothing to pass or fail.
             cells = sorted(cell for (cell, sc) in KIND_EXPECTATIONS if sc == scenario)
@@ -1130,7 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
         help="shards that use one shared Runtime Host at a time; 0: every pass starts a host of its own",
     )
     parser.add_argument("--providers-per-shard", type=int, default=2, help="providers whose unmutated cells share one host, per scenario")
-    parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS, help="repeatable; default all five")
+    parser.add_argument("--scenario", action="append", choices=ALL_SCENARIOS, help="repeatable; default every scenario")
     parser.add_argument("--provider", action="append", help="repeatable; default every declared provider")
     parser.add_argument("--mode", action="append", choices=["console", "helm"], help="repeatable; default both")
     parser.add_argument("--no-mutations", dest="mutations", action="store_false", help="unmutated cells only")

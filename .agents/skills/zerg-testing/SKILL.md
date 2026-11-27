@@ -56,7 +56,9 @@ nightly workflow.
 
 - Cells: a Terminal Truth cell `provider/mode[:scenario]` (`claude/helm`,
   `codex/console:thinking`; scenarios `long_reply` (default), `two_message`,
-  `thinking`, `tool`, `subagent`), or a factory producer assertion id
+  `thinking`, `tool`, `subagent`, and the input-from-Longhouse scenarios `steer`
+  (Helm and Console), `slash_command` (Helm), `question` and `question_steer`
+  (Claude Helm)), or a factory producer assertion id
   (`pi_helm_steer_active`, `omp_helm_send_idle`). A producer runs its whole
   lifecycle once; all named cells of it share that run. Producers are
   allow-listed in `PROOF_PRODUCERS` (`scripts/ops/prove.py`) after a real run.

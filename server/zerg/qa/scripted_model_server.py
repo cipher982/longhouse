@@ -689,9 +689,14 @@ def _scripted_plan(payload: dict, turns: list[dict]) -> GenerationPlan | None:
     any_user = "\n".join(_user_text(payload))
     for turn in turns:
         # "any_user" matches the marker anywhere in the user messages, for a provider whose last user message is
-        # context it appended after the person's prompt (Antigravity).
+        # context it appended after the person's prompt (Antigravity). "any_text" matches any text the request carries
+        # but the tool definitions, the model's own earlier turns and system-role messages included: Claude gives a
+        # mid-turn steer to the model as a system message (its PostToolUse hook context).
         scope = turn.get("match_scope")
-        haystack = any_user if scope == "any_user" else _all_input_text(payload) if scope == "any_input" else latest
+        if scope == "any_text":
+            haystack = "\n".join(_string_leaves({key: value for key, value in payload.items() if key != "tools"}))
+        else:
+            haystack = any_user if scope == "any_user" else _all_input_text(payload) if scope == "any_input" else latest
         if turn["match"] not in haystack:
             continue
         # A marker that is not the cell's own (a provider's tool result, the same for every cell in the script) names

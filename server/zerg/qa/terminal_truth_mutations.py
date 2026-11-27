@@ -580,6 +580,28 @@ MUTATIONS: tuple[Mutation, ...] = (
         text_before_tool=True,
         engine_delay_ms=150,
     ),
+    Mutation(
+        "console-steer-dropped",
+        "the Machine Agent acknowledges a Console steer and never gives it to the provider (the person is told it landed)",
+        "engine",
+        "engine/src/control_channel/dispatch.rs",
+        "            if crate::qa_fault::console_steer_noop() {",
+        "            if true {",
+        "codex/console",
+        ("steer_received",),
+        scenario="steer",
+    ),
+    Mutation(
+        "codex-helm-steer-as-follow-up",
+        "the Codex Helm bridge holds a steer until the running turn ends and sends it as a new turn",
+        "engine",
+        "engine/src/codex_bridge.rs",
+        "    if crate::qa_fault::codex_fault() == Some(crate::qa_fault::CodexFault::SteerAsFollowUp) {",
+        "    if true {",
+        "codex/helm",
+        ("in_turn", "steer_received"),
+        scenario="steer",
+    ),
 )
 
 
@@ -766,6 +788,19 @@ def run_mutations(args: argparse.Namespace) -> int:
             return "fail", "preflight", "the cell has no published-kind expectation"
         return outcome, stage, reason
 
+    def steer_cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tuple[str, str | None, str]:
+        from zerg.qa.terminal_truth_steer import run_steer_suite
+
+        for live_kinds_only in ("warm_session", "text_before_tool", "engine_delay_ms"):
+            extra.pop(live_kinds_only, None)
+        row = run_steer_suite([spec], engine=engine, longhouse_cli=cli, **extra)[0]
+        return str(row.get("outcome") or "fail"), row.get("first_failed_stage"), str(row.get("reason") or "")
+
+    def scenario_cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tuple[str, str | None, str]:
+        if spec.scenario == "steer":
+            return steer_cell(spec, engine, cli, **extra)
+        return kinds_cell(spec, engine, cli, **extra)
+
     def cell(spec: tt.CellSpec, engine: Path, cli: Path, **extra: Any) -> tt.CellResult:
         result = tt.run_suite([spec], pace=extra.pop("pace", pace), engine=engine, longhouse_cli=cli, expectations=expectations, **extra)[0]
         last_reply.clear()
@@ -779,7 +814,7 @@ def run_mutations(args: argparse.Namespace) -> int:
 
             def unmutated() -> tuple[str, str | None, str]:
                 return (
-                    kinds_cell(spec, base_engine, base_cli, **m.run_options)
+                    scenario_cell(spec, base_engine, base_cli, **m.run_options)
                     if m.scenario
                     else _verdict([cell(spec, base_engine, base_cli)])
                 )
@@ -817,13 +852,13 @@ def run_mutations(args: argparse.Namespace) -> int:
             if m.side == "server":
                 shadow = {"PYTHONPATH": str(prepare_server_copy(m, SCRATCH / f"server-{m.name}"))}
                 if m.scenario:
-                    mutated_kinds = kinds_cell(spec, base_engine, base_cli, host_environment=shadow, **m.run_options)
+                    mutated_kinds = scenario_cell(spec, base_engine, base_cli, host_environment=shadow, **m.run_options)
                 else:
                     mutated = cell(spec, base_engine, base_cli, host_environment=shadow)
             else:
                 switched = engine_environment(m)
                 if m.scenario:
-                    mutated_kinds = kinds_cell(spec, fault_engine, fault_cli, engine_environment=switched, **m.run_options)
+                    mutated_kinds = scenario_cell(spec, fault_engine, fault_cli, engine_environment=switched, **m.run_options)
                 else:
                     mutated = cell(spec, fault_engine, fault_cli, engine_environment=switched)
             outcome, stage, reason = mutated_kinds if m.scenario else _verdict([mutated])

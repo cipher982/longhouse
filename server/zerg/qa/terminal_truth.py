@@ -15,6 +15,7 @@ The code is split by responsibility; this module is the command line and re-expo
 - ``terminal_truth_verdicts``: stages, the verdict rule, the ledger expectations, results and tables;
 - ``terminal_truth_question``: Claude's AskUserQuestion answered from Longhouse (the question and question_steer scenarios);
 - ``terminal_truth_command``: slash commands sent from Longhouse run as typed (the slash_command scenario);
+- ``terminal_truth_steer``: a steer sent from Longhouse enters the running turn, Helm and Console (the steer scenario);
 - ``terminal_truth_mutations``: the five 2026-11-11 defects put back, each of which must fail its cell.
 
 Expectations (live reply text expected, known-bad with a reason, not measurable) come from ``live_stream_signals`` in
@@ -125,6 +126,9 @@ from zerg.qa.terminal_truth_scenarios import (  # noqa: F401 - re-exported: this
 from zerg.qa.terminal_truth_scenarios import run_cell_in  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_scenarios import run_suite  # noqa: F401 - re-exported: this module is the entry point and the public surface
 from zerg.qa.terminal_truth_scenarios import stop_pass  # noqa: F401 - re-exported: this module is the entry point and the public surface
+from zerg.qa.terminal_truth_steer import SCENARIOS as STEER_SCENARIOS
+from zerg.qa.terminal_truth_steer import render_steer
+from zerg.qa.terminal_truth_steer import run_steer_suite
 from zerg.qa.terminal_truth_verdicts import (  # noqa: F401 - re-exported: this module is the entry point and the public surface
     EARLY_FRACTION_MIN,
 )
@@ -197,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument(
         "--scenario",
-        choices=["long_reply", "two_message", "thinking", "tool", "subagent", *QUESTION_SCENARIOS, *COMMAND_SCENARIOS],
+        choices=["long_reply", "two_message", "thinking", "tool", "subagent", *QUESTION_SCENARIOS, *COMMAND_SCENARIOS, *STEER_SCENARIOS],
         default="long_reply",
     )
     run.add_argument(
@@ -329,6 +333,24 @@ def main(argv: list[str] | None = None) -> int:
     for item in args.ready_text:
         provider, _, text = item.partition("=")
         drivers[provider] = dataclasses.replace(drivers[provider], ready_text=text)
+    if args.scenario in STEER_SCENARIOS:  # a steer sent from Longhouse: pass or fail per cell, no timing
+        steer_results = run_steer_suite(
+            declared,
+            engine=args.engine,
+            longhouse_cli=args.longhouse_cli,
+            keep=args.keep,
+            ready_timeout=args.ready_timeout,
+            drivers=drivers,
+            host_environment=host_environment,
+            engine_environment=engine_environment,
+            log=lambda message: print(message, file=sys.stderr, flush=True),
+        )
+        print(render_steer(steer_results))
+        if args.out:
+            args.out.write_text(json.dumps(steer_results, indent=2) + "\n")
+        code = 1 if any(r["outcome"] == "fail" for r in steer_results) or all(r["outcome"] != "pass" for r in steer_results) else 0
+        print(f"\nterminal truth {args.scenario}: {'PASS' if code == 0 else 'FAIL'} (exit {code})")
+        return code
     if args.scenario in COMMAND_SCENARIOS:  # slash commands sent from Longhouse: pass or fail per cell, no timing
         command_results = run_command_suite(
             declared,

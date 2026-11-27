@@ -255,7 +255,15 @@ The private provider factory was retired. Provider CLIs are checked in this
 repo's CI instead:
 
 - Terminal Truth (`.github/actions/terminal-truth`, a job of CI) runs the real CLIs
-  against the scripted model server on every push.
+  against the scripted model server on every push, including the `steer` cells
+  (a steer from the app must enter the running turn, Helm and Console) and the
+  other input-from-Longhouse scenarios.
+- A check needs a real model only for what lives on the provider's side of the
+  wire: its auth and endpoint, and what its real responses write (the census).
+  Everything Longhouse does with a provider (launch, send, steer, interrupt,
+  ship, serve) is proven against the scripted model. The rule and the plan to
+  retire the factory-era proof ledger in `managed_providers.yml`:
+  `control-plane/docs/specs/provider-proof-distill.md`.
 - `.github/workflows/provider-nightly.yml` detects new CLI versions, runs
   Terminal Truth on them, runs one real cheap-model turn per provider and the
   transcript census (`scripts/qa/transcript_census.py`), and commits pin bumps

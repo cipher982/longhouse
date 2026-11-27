@@ -28,6 +28,8 @@ def test_every_defect_of_2026_11_11_has_a_mutation_and_a_named_stage() -> None:
     assert {m.name for m in MUTATIONS} == {
         "pi-helm-text-forward",
         "claude-helm-text-forward",
+        "console-steer-dropped",
+        "codex-helm-steer-as-follow-up",
         "opencode-host-publish",
         "omp-session-dir-rule",
         "antigravity-message-chunk-arm",

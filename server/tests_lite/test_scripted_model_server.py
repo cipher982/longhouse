@@ -472,6 +472,33 @@ def test_scripted_reply_template_uses_the_latest_user_marker_after_a_tool_result
     assert plan is not None and plan.text == marker
 
 
+def test_any_text_scope_finds_a_steer_claude_hands_the_model_as_a_system_message_and_any_input_does_not() -> None:
+    """Claude passes a mid-turn steer as PostToolUse hook context in a system-role message after the tool result."""
+
+    payload = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "TTRUTHabc run it"}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "TTSLEPTabc"}]},
+            {"role": "system", "content": [{"type": "text", "text": 'The user sent this steer: "TTSTEERabc also say steered"'}]},
+        ],
+        "tools": [{"name": "Bash", "description": "never matched: TTSTEERabc"}],
+    }
+    turns = [
+        {"id": "steered", "match": "TTSTEERabc", "match_scope": "any_text", "reply": "TTSTEEROKabc"},
+        {"id": "closed", "match": "TTSLEPTabc", "match_scope": "any_input", "reply": "TTCLOSEDabc"},
+    ]
+
+    plan = scripted_model_server._scripted_plan(payload, turns)
+    assert plan is not None and plan.turn_id == "steered"
+    narrow = [{**turns[0], "match_scope": "any_input"}, turns[1]]
+    plan = scripted_model_server._scripted_plan(payload, narrow)
+    assert plan is not None and plan.turn_id == "closed"
+    # The tool definitions are never matched.
+    del payload["messages"][2]
+    plan = scripted_model_server._scripted_plan(payload, turns)
+    assert plan is not None and plan.turn_id == "closed"
+
+
 def test_scripted_responses_tool_only_continuation_uses_fixture_and_counts_only_success(tmp_path: Path) -> None:
     script = tmp_path / "responses-continuation.json"
     script.write_text(
