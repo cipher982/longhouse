@@ -12,6 +12,46 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
+    Ok(
+        match ship_next_envelope_or_hold(
+            conn,
+            client,
+            capabilities,
+            path,
+            provider,
+            session_id_override,
+            lane,
+            request_timeout,
+        )
+        .await?
+        {
+            FileShipNext::Shipped(outcome) => Some(outcome),
+            FileShipNext::Current | FileShipNext::Held(_) => None,
+        },
+    )
+}
+
+/// What one ship attempt of a file source did.
+pub(crate) enum FileShipNext {
+    Shipped(StorageV2ShipOutcome),
+    /// Nothing new to send.
+    Current,
+    /// Held back for a bounded claim window that closes after this long.
+    /// Not current: the bytes are still unshipped, and nothing but a retry
+    /// will look at them again if the file goes quiet.
+    Held(Duration),
+}
+
+pub(crate) async fn ship_next_envelope_or_hold(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    provider: &str,
+    session_id_override: Option<&str>,
+    lane: &str,
+    request_timeout: Duration,
+) -> Result<FileShipNext> {
     // A source this machine never shipped may already be on the host (reinstall,
     // migration, wiped state): continue its epoch instead of replaying the file.
     adopt_host_epoch_if_unshipped(conn, client, capabilities, path, provider, request_timeout)
@@ -21,20 +61,22 @@ pub(crate) async fn ship_next_envelope(
     } else {
         BACKLOG_TARGET_BATCH_BYTES
     };
-    let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
+    let mut hold = None;
+    let Some(prepared) = preparation_result(prepare_next_envelope_or_hold(
         conn,
         capabilities,
         path,
         provider,
         session_id_override,
         maximum_batch_bytes,
+        &mut hold,
     ))?
     else {
-        return Ok(None);
+        return Ok(hold.map_or(FileShipNext::Current, FileShipNext::Held));
     };
     ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
         .await
-        .map(Some)
+        .map(FileShipNext::Shipped)
 }
 
 pub(crate) async fn ship_prepared_envelope(

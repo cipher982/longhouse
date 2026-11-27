@@ -159,12 +159,22 @@ export function flattenSubagentTree(
   return flat;
 }
 
+/**
+ * One worker's state, the one reading both the summary count and the row dot
+ * use, so the two can never disagree.
+ */
+export function subagentLiveTone(child: SubagentChild): "running" | "waiting" | "done" {
+  if (child.live_status === "waiting") return "waiting";
+  if (child.live_status === "running" || (child.finished === false && !child.ended_at)) return "running";
+  return "done";
+}
+
 /** "22 agents · 4m12s" — the shape of the work, before anyone expands it. */
 export function summarizeSubagents(children: readonly SubagentChild[]): string {
   if (children.length === 0) return "";
   const label = children.length === 1 ? "1 agent" : `${children.length} agents`;
-  const runningCount = children.filter((child) => child.live_status === "running").length;
-  const waitingCount = children.filter((child) => child.live_status === "waiting").length;
+  const runningCount = children.filter((child) => subagentLiveTone(child) === "running").length;
+  const waitingCount = children.filter((child) => subagentLiveTone(child) === "waiting").length;
   const liveParts: string[] = [];
   if (runningCount > 0) liveParts.push(`${runningCount} running`);
   if (waitingCount > 0) liveParts.push(`${waitingCount} waiting`);
@@ -172,7 +182,9 @@ export function summarizeSubagents(children: readonly SubagentChild[]): string {
   const starts = children.map((child) => child.started_at).filter(Boolean) as string[];
   const ends = children.map((child) => child.ended_at).filter(Boolean) as string[];
   let durationPart: string | null = null;
-  if (starts.length > 0 && ends.length === children.length) {
+  // A span is the work's length only once all of it is over; a worker that is
+  // still running has a last-activity time, not an end.
+  if (starts.length > 0 && ends.length === children.length && runningCount === 0 && waitingCount === 0) {
     const spanMs = Math.max(...ends.map((value) => Date.parse(value))) - Math.min(...starts.map((value) => Date.parse(value)));
     if (Number.isFinite(spanMs) && spanMs > 0) {
       const seconds = Math.round(spanMs / 1000);

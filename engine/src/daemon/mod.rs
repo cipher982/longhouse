@@ -357,6 +357,8 @@ enum PathStorageV2ShipResult {
     Shipped(crate::storage_v2_shipper::StorageV2ShipOutcome),
     Current,
     WaitingOnClaim,
+    /// Held for a bounded claim window; retry after this long.
+    Held(Duration),
     Continue,
 }
 

@@ -252,7 +252,15 @@ pub trait Witness {
     fn blob(&self, reference: &str, mime_type: &str) -> Option<Vec<u8>>;
     /// Time for a record that carries no clock of its own.
     fn fallback_time(&self) -> DateTime<Utc>;
+    /// The parent an Antigravity conversation was spawned by, from the
+    /// parent's `subagents/<child>.json` record. Only the laptop's disk and a
+    /// captured witness can answer; everything else knows no parent.
+    fn antigravity_child(&self) -> Option<AntigravityChild> {
+        None
+    }
 }
+
+pub use crate::antigravity_subagents::AntigravityChild;
 
 /// Answers every witness question from this machine's disk, as the parser
 /// always has.
@@ -324,6 +332,10 @@ impl Witness for FileWitness<'_> {
             .and_then(|meta| meta.modified())
             .map(DateTime::<Utc>::from)
             .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+    }
+
+    fn antigravity_child(&self) -> Option<AntigravityChild> {
+        crate::antigravity_subagents::child_of(self.path)
     }
 }
 
@@ -408,6 +420,11 @@ impl<W: Witness> Witness for RecordingWitness<W> {
         // the test attributes to it.
         self.inner.fallback_time()
     }
+    fn antigravity_child(&self) -> Option<AntigravityChild> {
+        let value = self.inner.antigravity_child();
+        self.note("antigravity_child", value.is_some());
+        value
+    }
 }
 
 /// Git resolution for one working directory, as the laptop saw it.
@@ -433,6 +450,9 @@ pub struct CapturedWitness {
     pub fallback_time: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_meta: Option<String>,
+    /// The Antigravity parent's record of spawning this conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_child: Option<AntigravityChild>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_transcript_timestamps: Option<(DateTime<Utc>, DateTime<Utc>)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -491,6 +511,9 @@ impl Witness for CapturedWitness {
     fn fallback_time(&self) -> DateTime<Utc> {
         self.fallback_time
     }
+    fn antigravity_child(&self) -> Option<AntigravityChild> {
+        self.antigravity_child.clone()
+    }
 }
 
 /// The laptop witness, with a fixed clock, recording every answer it gives so
@@ -499,6 +522,7 @@ pub struct CapturingWitness<'a> {
     inner: FileWitness<'a>,
     fallback_time: DateTime<Utc>,
     subagent_meta: RefCell<Option<String>>,
+    antigravity_child: RefCell<Option<AntigravityChild>>,
     cursor_transcript_timestamps: RefCell<Option<(DateTime<Utc>, DateTime<Utc>)>>,
     workspace: RefCell<Option<WorkspaceWitness>>,
     git: RefCell<Vec<GitWitness>>,
@@ -514,6 +538,7 @@ impl<'a> CapturingWitness<'a> {
             inner: FileWitness::new(path),
             fallback_time,
             subagent_meta: RefCell::new(None),
+            antigravity_child: RefCell::new(None),
             cursor_transcript_timestamps: RefCell::new(None),
             workspace: RefCell::new(None),
             git: RefCell::new(Vec::new()),
@@ -526,6 +551,7 @@ impl<'a> CapturingWitness<'a> {
             identity,
             fallback_time: self.fallback_time,
             subagent_meta: self.subagent_meta.into_inner(),
+            antigravity_child: self.antigravity_child.into_inner(),
             cursor_transcript_timestamps: self.cursor_transcript_timestamps.into_inner(),
             workspace: self.workspace.into_inner(),
             git: self.git.into_inner(),
@@ -583,6 +609,11 @@ impl Witness for CapturingWitness<'_> {
     }
     fn fallback_time(&self) -> DateTime<Utc> {
         self.fallback_time
+    }
+    fn antigravity_child(&self) -> Option<AntigravityChild> {
+        let value = self.inner.antigravity_child();
+        *self.antigravity_child.borrow_mut() = value.clone();
+        value
     }
 }
 

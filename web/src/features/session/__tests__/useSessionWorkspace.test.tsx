@@ -595,6 +595,46 @@ describe("useSessionWorkspace", () => {
     );
   });
 
+  it("reads the subagent list when a spawned worker commits", () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+    queryClientMocks.invalidateQueries.mockClear();
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "ingest_dependency",
+        latest_event_id: 0,
+        thread_session_count: 1,
+      });
+    });
+
+    // The parent's transcript is silent while it waits on its workers, so the
+    // worker's own commit is the only signal that the accordion is stale.
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith(
+      { queryKey: ["session-subagents", baseSession.id] },
+      { cancelRefetch: false },
+    );
+    expect(queryClientMocks.invalidateQueries).not.toHaveBeenCalledWith(
+      { queryKey: ["agent-session-projection-infinite", baseSession.id] },
+      { cancelRefetch: false },
+    );
+  });
+
 
   describe("transcript revision sync", () => {
     type Handlers = {

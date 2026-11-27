@@ -358,6 +358,7 @@ struct APISessionDelegationFacts: Codable, Hashable, Sendable {
     let kinds: [String: Int]?
     let items: [APISessionDelegationTaskResponse]?
     let recentItems: [APISessionDelegationTaskResponse]?
+    let blocksParent: Bool?
     let source: String?
     let observedAt: String?
     let validUntil: String?

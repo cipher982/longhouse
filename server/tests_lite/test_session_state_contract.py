@@ -465,6 +465,35 @@ def test_live_delegation_outlives_failed_parent_run():
     assert facts.presentation.primary.label == "Waiting on 1 subagent"
 
 
+@pytest.mark.parametrize(
+    ("blocks_parent", "expected_key", "expected_label"),
+    [
+        # An open Antigravity prompt whose model went quiet to wait on its
+        # workers says so; that is not thinking.
+        (True, "delegated_work", "Waiting on 3 subagents"),
+        # Work merely running beside a busy loop (a Claude background agent)
+        # never outranks the loop's own thinking.
+        (False, "thinking", "Thinking"),
+    ],
+)
+def test_a_loop_blocked_on_its_workers_reads_as_waiting_not_thinking(blocks_parent, expected_key, expected_label):
+    delegation = SessionDelegationFacts(
+        state="pending",
+        count=3,
+        kinds={"subagent": 3},
+        blocks_parent=blocks_parent,
+        observed_at=NOW - timedelta(seconds=5),
+        valid_until=NOW + timedelta(minutes=2),
+    )
+    facts = _facts(runtime=_runtime(phase="thinking"), delegation=delegation)
+
+    assert facts.activity.state == "thinking"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == expected_key
+    assert facts.presentation.primary.label == expected_label
+    assert facts.presentation.signal is not None and facts.presentation.signal.state == "working"
+
+
 def test_unanswerable_interaction_does_not_claim_a_wait():
     facts = _facts(
         runtime=_runtime(phase="idle"),

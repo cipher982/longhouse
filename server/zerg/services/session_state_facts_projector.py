@@ -1236,6 +1236,7 @@ def _project_delegation(
         kinds=kinds,
         items=items,
         recent_items=recent_items,
+        blocks_parent=count > 0 and value.get("blocks_parent") is True,
         source=source,
         observed_at=observed_at,
         valid_until=effective_valid_until,

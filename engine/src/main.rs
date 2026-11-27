@@ -1,6 +1,7 @@
 mod antigravity_acp;
 mod antigravity_channel_control;
 mod antigravity_helm_live;
+mod antigravity_subagents;
 mod antigravity_workspace;
 mod bench;
 mod build_identity;

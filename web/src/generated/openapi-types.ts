@@ -7628,6 +7628,11 @@ export interface components {
             items?: components["schemas"]["SessionDelegationTaskResponse"][] | null;
             /** Recent Items */
             recent_items?: components["schemas"]["SessionDelegationTaskResponse"][] | null;
+            /**
+             * Blocks Parent
+             * @default false
+             */
+            blocks_parent: boolean;
             /** Source */
             source?: string | null;
             /** Observed At */

@@ -67,6 +67,7 @@ import {
   summarizeCompactionNotice,
   timelineItemContainsSelection,
   subagentLabel,
+  subagentLiveTone,
   summarizeSubagents,
 } from "@/shared/session/model";
 import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
@@ -1038,12 +1039,6 @@ function ActionCard({
  * sessions in the timeline, and not spliced into this transcript. A 22-agent
  * fan-out inlined would bury the session it belongs to.
  */
-function subagentLiveTone(child: SubagentChild): "running" | "waiting" | "done" {
-  if (child.live_status === "waiting") return "waiting";
-  if (child.live_status === "running" || (child.finished === false && !child.ended_at)) return "running";
-  return "done";
-}
-
 function SubagentNode({ interaction }: { interaction: ToolInteraction }) {
   const children = interaction.children ?? [];
   if (children.length === 0) return null;

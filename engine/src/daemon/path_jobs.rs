@@ -352,7 +352,7 @@ pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) ->
             )
         })
     } else {
-        crate::storage_v2_shipper::ship_next_envelope(
+        crate::storage_v2_shipper::ship_next_envelope_or_hold(
             &mut conn,
             &task_context.client,
             capabilities,
@@ -363,11 +363,14 @@ pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) ->
             timeout,
         )
         .await
-        .map(|outcome| {
-            outcome.map_or(
-                PathStorageV2ShipResult::Current,
-                PathStorageV2ShipResult::Shipped,
-            )
+        .map(|outcome| match outcome {
+            crate::storage_v2_shipper::FileShipNext::Shipped(outcome) => {
+                PathStorageV2ShipResult::Shipped(outcome)
+            }
+            crate::storage_v2_shipper::FileShipNext::Current => PathStorageV2ShipResult::Current,
+            crate::storage_v2_shipper::FileShipNext::Held(delay) => {
+                PathStorageV2ShipResult::Held(delay)
+            }
         })
     };
     match ship_result {
@@ -417,6 +420,14 @@ pub(super) async fn run_path_job(job: PathJob, task_context: PathTaskContext) ->
             result.reconciled_to_head = true;
         }
         Ok(PathStorageV2ShipResult::WaitingOnClaim) => {
+            return finish_path_task(result, task_started);
+        }
+        Ok(PathStorageV2ShipResult::Held(delay)) => {
+            // Come back when the claim window closes. The deferred retry is
+            // one per path, so a burst of writes inside the window costs one
+            // retry, not one per write.
+            result.local_retry_priority = Some(result.job.priority);
+            result.local_retry_after = Some(delay);
             return finish_path_task(result, task_started);
         }
         Ok(PathStorageV2ShipResult::Continue) => {

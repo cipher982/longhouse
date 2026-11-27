@@ -87,6 +87,7 @@ export {
   flattenSubagentTree,
   runIdsInToolOutput,
   subagentLabel,
+  subagentLiveTone,
   summarizeSubagents,
   type SubagentTreeNode,
 } from "./subagents";

@@ -4865,6 +4865,10 @@ def _runtime_activity_facts(
 #: outlives turns, and a snapshot that vanished while the work continued is the
 #: defect this axis exists to fix. The producer may narrow it per observation.
 _DELEGATION_DEFAULT_FRESHNESS_MS = 30 * 60 * 1000
+#: How long an unfinished worker with no live signal of its own keeps reading
+#: as running after its transcript last moved. Long enough for a slow tool
+#: call; short enough that a worker that died mid-step stops claiming work.
+_UNFINISHED_SUBAGENT_RUNNING_WINDOW = timedelta(minutes=15)
 _DELEGATION_KIND_LIMIT = 8
 _DELEGATION_COUNT_LIMIT = 256
 
@@ -5017,6 +5021,22 @@ def _enrich_subagent_child_stats(
             entry["live_status"] = "running"
         elif raw_state in {"waiting", "idle"}:
             entry["live_status"] = raw_state
+
+    # A worker with no live runtime signal of its own (an Antigravity worker
+    # runs inside its parent's process) still says in its transcript whether
+    # it has finished. Unfinished is running only while its transcript is
+    # still moving: `finished` has no clock of its own, so a worker that died
+    # mid-step would otherwise read as running forever.
+    unfinished = [sid for sid, entry in stats.items() if "live_status" not in entry and entry.get("finished") is False]
+    if unfinished:
+        storage = StorageSession.__table__
+        horizon = now - _UNFINISHED_SUBAGENT_RUNNING_WINDOW
+        for sid, last_activity_at in connection.execute(
+            select(storage.c.session_id, storage.c.last_activity_at).where(storage.c.session_id.in_(unfinished))
+        ).all():
+            last_activity = _as_aware_utc(last_activity_at) if last_activity_at is not None else None
+            if last_activity is not None and last_activity > horizon:
+                stats[str(sid)]["live_status"] = "running"
 
     out: dict[str, dict[str, Any]] = {}
     for sid, entry in stats.items():
@@ -6352,6 +6372,11 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             "observed_at": occurred_at.isoformat(),
             "valid_until": valid_until.isoformat(),
         }
+        # The producer's statement that its own loop is blocked on this work
+        # (an open Antigravity prompt waits for every worker to report back),
+        # not merely running beside it.
+        if snapshot.get("blocks_parent") is True and count > 0:
+            value["blocks_parent"] = True
         # An invalid registry must not poison the enclosing parent activity
         # batch or renew the previous observation. Never truncate it to fit.
         if len(canonical_value_json(value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:

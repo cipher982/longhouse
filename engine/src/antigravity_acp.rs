@@ -1050,6 +1050,147 @@ fn cancel_request(run_id: &str) -> Option<String> {
         .and_then(|claim| claim.cancel_requested_at)
 }
 
+/// How long the model must be silent, with no tool running, before an open
+/// turn reads as waiting on its workers rather than thinking.
+const WORKER_WAIT_QUIET: Duration = Duration::from_secs(3);
+/// How often the parent's worker records are re-read while it waits.
+const WORKER_SCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// A worker whose transcript has not moved for this long is not waited on.
+const WORKER_STALE_AFTER: Duration = Duration::from_secs(15 * 60);
+/// A posted wait is restated this often, and lapses after twice that if the
+/// monitor stops restating it.
+const WORKER_RESTATE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// What an open Console turn is waiting on.
+///
+/// `agy` keeps a prompt open until every worker it spawned has reported back,
+/// and says nothing on the wire meanwhile: no tool runs, no text streams. The
+/// workers' own records say who is still at work. While the model is silent
+/// and workers are at work, the turn is waiting on them, not thinking, and
+/// the delegation snapshot says so (`blocks_parent`). Model output ends that.
+struct ParentWait {
+    last_model_at: Instant,
+    scanned_at: Option<Instant>,
+    posted_at: Option<Instant>,
+    /// The workers last posted, and whether that post said the parent waits.
+    posted: Option<(Vec<String>, bool)>,
+}
+
+impl Default for ParentWait {
+    fn default() -> Self {
+        Self {
+            last_model_at: Instant::now(),
+            scanned_at: None,
+            posted_at: None,
+            posted: None,
+        }
+    }
+}
+
+impl ParentWait {
+    /// The model produced output. A posted wait is withdrawn; the workers stay.
+    fn model_spoke(&mut self) -> Option<Value> {
+        self.last_model_at = Instant::now();
+        self.scanned_at = None;
+        let (ids, true) = self.posted.clone()? else {
+            return None;
+        };
+        self.posted = Some((ids.clone(), false));
+        self.posted_at = Some(Instant::now());
+        Some(workers_snapshot(&ids, &[], false))
+    }
+
+    /// A tick with no tool running. Posts when the set of waited-on workers
+    /// changes, and restates a standing wait so it does not lapse.
+    fn observe(&mut self, parent: Option<&str>) -> Option<Value> {
+        if self.last_model_at.elapsed() < WORKER_WAIT_QUIET
+            || self
+                .scanned_at
+                .is_some_and(|at| at.elapsed() < WORKER_SCAN_INTERVAL)
+        {
+            return None;
+        }
+        self.scanned_at = Some(Instant::now());
+        let brain = antigravity_brain_root()?;
+        let working = crate::antigravity_subagents::working_children(
+            &brain,
+            parent?,
+            std::time::SystemTime::now(),
+            WORKER_STALE_AFTER,
+        );
+        self.record(working)
+    }
+
+    /// Fold one scan's working set into what has been posted.
+    fn record(
+        &mut self,
+        working: Vec<crate::antigravity_subagents::WorkingChild>,
+    ) -> Option<Value> {
+        let ids: Vec<String> = working
+            .iter()
+            .map(|child| child.conversation_id.clone())
+            .collect();
+        let waiting = !ids.is_empty();
+        let unchanged = self.posted.as_ref() == Some(&(ids.clone(), waiting))
+            || (self.posted.is_none() && !waiting);
+        let due = waiting
+            && self
+                .posted_at
+                .is_none_or(|at| at.elapsed() >= WORKER_RESTATE_INTERVAL);
+        if unchanged && !due {
+            return None;
+        }
+        self.posted = Some((ids.clone(), waiting));
+        self.posted_at = Some(Instant::now());
+        Some(workers_snapshot(&ids, &working, waiting))
+    }
+
+    /// The turn ended: clear anything posted.
+    fn turn_ended(&mut self) -> Option<Value> {
+        let (ids, _) = self.posted.take()?;
+        (!ids.is_empty()).then(|| workers_snapshot(&[], &[], false))
+    }
+}
+
+/// A delegation snapshot naming the workers at work. `working` carries their
+/// records when known; a withdrawal restates only their ids.
+fn workers_snapshot(
+    ids: &[String],
+    working: &[crate::antigravity_subagents::WorkingChild],
+    blocks_parent: bool,
+) -> Value {
+    let items: Vec<Value> = ids
+        .iter()
+        .map(|id| {
+            let record = working
+                .iter()
+                .find(|child| &child.conversation_id == id)
+                .map(|child| &child.record);
+            let mut item = json!({
+                "id": id,
+                "kind": "subagent",
+                "status": "running",
+                "native_child_id": id,
+            });
+            if let Some(role) = record.and_then(|record| record.role.as_deref()) {
+                item["description"] = Value::from(role);
+            }
+            if let Some(agent_type) = record.and_then(|record| record.agent_type()) {
+                item["agent_type"] = Value::from(agent_type);
+            }
+            item
+        })
+        .collect();
+    json!({
+        "count": items.len(),
+        "kinds": if items.is_empty() { json!({}) } else { json!({"subagent": items.len()}) },
+        "items": items,
+        "blocks_parent": blocks_parent,
+        "freshness_ms": (2 * WORKER_RESTATE_INTERVAL).as_millis() as u64,
+        "observed_at": chrono::Utc::now().to_rfc3339(),
+    })
+}
+
 async fn monitor_acp_turn(
     mut process: MonitorProcess<'_>,
     stderr_path: &Path,
@@ -1069,10 +1210,16 @@ async fn monitor_acp_turn(
     let mut tick = 0_u64;
     let mut cancel_at: Option<String> = None;
     const PHASE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+    let mut workers = ParentWait::default();
     loop {
         match stream.poll(&sink.stdout_path) {
             Ok(signals) if !replaying => {
                 for signal in signals {
+                    // The model is producing again: whatever it was waiting on,
+                    // it is no longer only waiting.
+                    if let Some(snapshot) = workers.model_spoke() {
+                        sink.post_workers(snapshot);
+                    }
                     match &signal {
                         LiveSignal::Tool {
                             name, completed, ..
@@ -1180,8 +1327,18 @@ async fn monitor_acp_turn(
                 sink.post_phase(current_phase, current_tool.clone()).await;
                 last_phase_at = Instant::now();
             }
+            if current_tool.is_none() {
+                let parent = stream.session_id.clone();
+                if let Some(snapshot) = workers.observe(parent.as_deref()) {
+                    sink.post_workers(snapshot);
+                }
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
+        }
+        // The turn is over, and nothing waits on its workers any more.
+        if let Some(snapshot) = workers.turn_ended() {
+            sink.post_workers(snapshot);
         }
         // Decide under the sidecar lock so a steer is either seen here or
         // refused: close the turn only if nothing new was issued meanwhile.
@@ -1778,6 +1935,14 @@ impl AntigravityAcpSink {
         self.publish_phase(phase, tool_name.as_deref(), None);
     }
 
+    fn post_workers(&self, snapshot: Value) {
+        self.post_event(&self.delegation_event(
+            ANTIGRAVITY_ACP_ADAPTER,
+            "antigravity-acp",
+            snapshot,
+        ));
+    }
+
     fn live_event(&self, signal: &LiveSignal) -> Value {
         let payload = match signal {
             LiveSignal::Text {
@@ -1934,6 +2099,62 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn worker(id: &str, role: &str) -> crate::antigravity_subagents::WorkingChild {
+        crate::antigravity_subagents::WorkingChild {
+            conversation_id: id.to_string(),
+            record: serde_json::from_value(json!({
+                "parent_conversation_id": "p",
+                "type_name": "worker",
+                "role": role,
+            }))
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_quiet_turn_with_workers_at_work_says_it_waits_and_model_output_withdraws_it() {
+        let mut wait = ParentWait::default();
+        // Nothing at work: nothing to say.
+        assert_eq!(wait.record(Vec::new()), None);
+
+        let waiting = wait
+            .record(vec![
+                worker("w1", "Doc auditor"),
+                worker("w2", "Nav auditor"),
+            ])
+            .expect("a new wait is posted");
+        assert_eq!(waiting["blocks_parent"], true);
+        assert_eq!(waiting["count"], 2);
+        assert_eq!(waiting["kinds"], json!({"subagent": 2}));
+        assert_eq!(waiting["items"][0]["description"], "Doc auditor");
+        assert_eq!(waiting["items"][0]["agent_type"], "swarm");
+        assert_eq!(waiting["items"][0]["native_child_id"], "w1");
+        // The same set inside the restate interval is not reposted.
+        assert_eq!(
+            wait.record(vec![
+                worker("w1", "Doc auditor"),
+                worker("w2", "Nav auditor")
+            ]),
+            None
+        );
+        // One worker finished: the set changed.
+        let fewer = wait.record(vec![worker("w2", "Nav auditor")]).unwrap();
+        assert_eq!(fewer["count"], 1);
+        assert_eq!(fewer["blocks_parent"], true);
+
+        // The model spoke: still one worker, no longer a wait.
+        let spoke = wait.model_spoke().expect("a standing wait is withdrawn");
+        assert_eq!(spoke["blocks_parent"], false);
+        assert_eq!(spoke["count"], 1);
+        assert_eq!(wait.model_spoke(), None, "withdrawn once");
+
+        // The turn ended: an empty registry clears it.
+        let ended = wait.turn_ended().unwrap();
+        assert_eq!(ended["count"], 0);
+        assert_eq!(ended["items"], json!([]));
+        assert_eq!(wait.turn_ended(), None);
+    }
 
     fn golden_antigravity_sink(
         home: &crate::console_sink_golden::GoldenHome,

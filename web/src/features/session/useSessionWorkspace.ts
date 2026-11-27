@@ -317,6 +317,15 @@ export function useSessionWorkspace(
       lastStartedAt: Number.NEGATIVE_INFINITY,
       timer: null,
     };
+    // Workers this session spawned, read when one of them commits. Its own
+    // lane, coalesced like the base one: a fan-out of busy workers wakes this
+    // page once per worker write.
+    const workers: { inFlight: boolean; queued: boolean; lastStartedAt: number; timer: number | null } = {
+      inFlight: false,
+      queued: false,
+      lastStartedAt: Number.NEGATIVE_INFINITY,
+      timer: null,
+    };
     const transcript = {
       inFlight: false,
       queued: false,
@@ -400,6 +409,33 @@ export function useSessionWorkspace(
         if (disposed || !base.queued) return;
         base.queued = false;
         runBase();
+      });
+    };
+
+    const runWorkers = () => {
+      if (workers.inFlight || workers.timer !== null) {
+        workers.queued = workers.queued || workers.inFlight;
+        return;
+      }
+      const wait = workers.lastStartedAt + BASE_REFRESH_MIN_INTERVAL_MS - Date.now();
+      if (wait > 0) {
+        workers.timer = window.setTimeout(() => {
+          workers.timer = null;
+          if (!disposed) runWorkers();
+        }, wait);
+        return;
+      }
+      workers.inFlight = true;
+      workers.lastStartedAt = Date.now();
+      void Promise.all(
+        transcriptRefreshQueryKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }),
+        ),
+      ).finally(() => {
+        workers.inFlight = false;
+        if (disposed || !workers.queued) return;
+        workers.queued = false;
+        runWorkers();
       });
     };
 
@@ -525,8 +561,10 @@ export function useSessionWorkspace(
         },
         onReplayGap: () => {
           // Frames were lost: the snapshot is re-read, and the transcript
-          // follows the revision the next frame reports.
+          // follows the revision the next frame reports. A lost frame may
+          // have been a worker's commit, which no later frame repeats.
           runBase();
+          runWorkers();
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
@@ -604,6 +642,10 @@ export function useSessionWorkspace(
           // says nothing about the transcript, so it neither reads it nor
           // re-reads the snapshot.
           if (isFreshTranscriptPreview) return;
+          // A worker this session spawned committed. The parent's own
+          // transcript is often silent while it waits on its workers, so the
+          // transcript lane never reads the subagent list again; read it here.
+          if (data.change_kind === "ingest_dependency") runWorkers();
           runBase();
           // The attach frame and every wake after a catalog read carry the
           // revision. An ingest frame without one could not read the catalog,
@@ -665,6 +707,7 @@ export function useSessionWorkspace(
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
       if (retryTimer !== null) window.clearTimeout(retryTimer);
       if (base.timer !== null) window.clearTimeout(base.timer);
+      if (workers.timer !== null) window.clearTimeout(workers.timer);
       stopWaitingForDelta();
       cleanup();
     };

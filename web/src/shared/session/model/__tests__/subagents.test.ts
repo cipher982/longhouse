@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { childrenForToolCall, flattenSubagentTree, runIdsInToolOutput, subagentLabel, summarizeSubagents } from "../subagents";
+import {
+  childrenForToolCall,
+  flattenSubagentTree,
+  runIdsInToolOutput,
+  subagentLabel,
+  subagentLiveTone,
+  summarizeSubagents,
+} from "../subagents";
 import type { SubagentChild } from "../types";
 
 function child(overrides: Partial<SubagentChild> = {}): SubagentChild {
@@ -145,5 +152,18 @@ describe("nested subagents and live summary", () => {
       child({ session_id: "w1", live_status: "waiting", ended_at: null }),
     ];
     expect(summarizeSubagents(workers)).toBe("2 agents · 1 running, 1 waiting");
+  });
+
+  it("counts a worker as running exactly when its row says so", () => {
+    // An Antigravity worker always carries a last-activity end; the server
+    // says it is running. One not yet reported finished with no end is
+    // running too, and both readings come from the same rule.
+    const workers = [
+      child({ session_id: "agy", provider: "antigravity", live_status: "running" }),
+      child({ session_id: "unended", finished: false, ended_at: null }),
+      child({ session_id: "done", finished: true }),
+    ];
+    expect(workers.map(subagentLiveTone)).toEqual(["running", "running", "done"]);
+    expect(summarizeSubagents(workers)).toBe("3 agents · 2 running");
   });
 });

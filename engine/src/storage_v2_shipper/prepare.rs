@@ -66,6 +66,34 @@ pub(super) fn prepare_next_envelope_with_limit(
     session_id_override: Option<&str>,
     maximum_batch_bytes: usize,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    prepare_next_envelope_or_hold(
+        conn,
+        capabilities,
+        path,
+        provider,
+        session_id_override,
+        maximum_batch_bytes,
+        &mut None,
+    )
+}
+
+/// How long a brand-new, unbound Antigravity transcript is held so its
+/// launcher's binding can claim it first (see the hold below).
+const ANTIGRAVITY_CLAIM_WINDOW: Duration = Duration::from_secs(5);
+
+/// [`prepare_next_envelope_with_limit`], also saying when it held the source
+/// back for a bounded claim window rather than finding nothing to ship. A held
+/// source sets `hold` to how long until the window closes, so the caller can
+/// come back then: nothing else is due to wake it if the file goes quiet.
+pub(super) fn prepare_next_envelope_or_hold(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    provider: &str,
+    session_id_override: Option<&str>,
+    maximum_batch_bytes: usize,
+    hold: &mut Option<Duration>,
+) -> Result<Option<PreparedStorageV2Envelope>> {
     if provider.eq_ignore_ascii_case("codex") {
         if crate::compressed_source::is_compressed_transcript(path) {
             return prepare_compressed_codex_envelope(
@@ -97,6 +125,7 @@ pub(super) fn prepare_next_envelope_with_limit(
         provider,
         session_id_override,
         maximum_batch_bytes,
+        hold,
     )
 }
 
@@ -205,6 +234,7 @@ fn prepare_compressed_codex_envelope(
         "codex",
         session_id_override,
         maximum_batch_bytes,
+        &mut None,
     )
 }
 
@@ -243,6 +273,7 @@ fn prepare_file_envelope(
     provider: &str,
     session_id_override: Option<&str>,
     maximum_batch_bytes: usize,
+    hold: &mut Option<Duration>,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let path = view.read_path;
     let canonical_path = stable_source_path(view.identity_path);
@@ -423,7 +454,14 @@ fn prepare_file_envelope(
             }
         }
     }
-    if provider.eq_ignore_ascii_case("antigravity") && durable_session_id.is_none() {
+    // A conversation another Antigravity conversation recorded spawning is a
+    // worker, never the conversation a Longhouse launch is waiting to bind, so
+    // neither the Console claim nor the claim window below applies to it. The
+    // parent's record lands before the child's transcript exists.
+    let antigravity_unclaimed_root = provider.eq_ignore_ascii_case("antigravity")
+        && durable_session_id.is_none()
+        && crate::antigravity_subagents::child_of(&canonical_path).is_none();
+    if antigravity_unclaimed_root {
         match crate::antigravity_acp::bind_discovered_source(
             conn,
             &canonical_path,
@@ -437,21 +475,27 @@ fn prepare_file_envelope(
             crate::antigravity_acp::SourceOwnership::Unclaimed => {}
         }
     }
-    if provider.eq_ignore_ascii_case("antigravity")
-        && durable_session_id.is_none()
-        && path
+    if antigravity_unclaimed_root && durable_session_id.is_none() {
+        // Antigravity creates the transcript immediately before its first
+        // synchronous hook records the managed binding. Avoid freezing a new
+        // unmanaged envelope in that short discovery race. Only a source that
+        // has never shipped can be in that race: once its first envelope is
+        // out, its identity is settled, and holding every later write back
+        // only delayed live work until the file went quiet (when no watcher
+        // event is left to wake it). The caller retries when the window
+        // closes. Exact pending retries above remain authoritative.
+        let never_shipped =
+            source_epoch::active_source_epoch(conn, provider, &opaque_source_id)?.is_none();
+        let remaining = path
             .metadata()
             .and_then(|metadata| metadata.modified())
             .ok()
             .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age <= Duration::from_secs(5))
-    {
-        // Antigravity creates the transcript immediately before its first
-        // synchronous hook records the managed binding. Avoid freezing a new
-        // unmanaged envelope in that short discovery race. Exact pending
-        // retries above remain authoritative, and historical sources fall
-        // through once their ordinary freshness window has elapsed.
-        return Ok(None);
+            .and_then(|age| ANTIGRAVITY_CLAIM_WINDOW.checked_sub(age));
+        if let (true, Some(remaining)) = (never_shipped, remaining) {
+            *hold = Some(remaining + Duration::from_millis(250));
+            return Ok(None);
+        }
     }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = legacy_offset_for_adoption(
@@ -534,6 +578,7 @@ fn prepare_file_envelope(
             provider,
             session_id_override,
             maximum_batch_bytes,
+            hold,
         );
     }
     let source_len = std::fs::metadata(path)?.len();
@@ -820,6 +865,7 @@ fn prepare_file_envelope(
                 provider,
                 session_id_override,
                 maximum_batch_bytes,
+                hold,
             );
         }
         return Ok(None);

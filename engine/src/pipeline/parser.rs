@@ -996,6 +996,75 @@ fn build_claude_delegation_metadata_fact(
     })
 }
 
+/// An Antigravity conversation its parent recorded spawning is a worker: it
+/// belongs behind the parent, under its own native id, with the parent named
+/// natively so the host can bind it on its first commit whichever side ships
+/// first. The tool call that spawned it still comes from the parent's
+/// `delegation.spawn` facts.
+///
+/// `delegation.metadata` goes out with every batch, not only the first: an
+/// `invoke_subagent` child's sidecar stays `ALIVE` after it answers, so the
+/// only statement that it finished is a later batch ending in its answer. The
+/// host reads these facts oldest first, so the newest batch speaks.
+fn apply_antigravity_child(
+    result: &mut ParseResult,
+    child: &crate::antigravity_subagents::AntigravityChild,
+) {
+    let child_id = result.metadata.session_id.clone();
+    let parent_id = child.parent_conversation_id.trim();
+    if child_id.is_empty() || parent_id.is_empty() || parent_id == child_id {
+        return;
+    }
+    let metadata = &mut result.metadata;
+    metadata.is_sidechain = true;
+    metadata.subagent_id.get_or_insert_with(|| child_id.clone());
+    metadata
+        .provider_session_id
+        .get_or_insert_with(|| child_id.clone());
+    metadata
+        .parent_provider_session_id
+        .get_or_insert_with(|| parent_id.to_string());
+    if metadata.subagent_name.is_none() {
+        metadata.subagent_name = child.role.clone();
+    }
+
+    let (Some(first), Some(last)) = (
+        result.source_lines.first().map(|line| line.source_offset),
+        result.events.iter().max_by_key(|event| event.source_offset),
+    ) else {
+        return;
+    };
+    // The batch ends in the child's answer: a planner step that called no
+    // tool. A batch ending in a call, a result or a swarm wait is work still
+    // under way, as far as this batch can say.
+    let answered = last.role == Role::Assistant
+        && last.tool_call_id.is_none()
+        && last.item.phase == Some(Phase::Final);
+    let mut fields = serde_json::Map::new();
+    if let Some(agent_type) = child.agent_type() {
+        fields.insert("agent_type".to_string(), Value::from(agent_type));
+    }
+    if let Some(role) = child.role.as_deref() {
+        fields.insert("description".to_string(), Value::from(role));
+    }
+    fields.insert(
+        "finished".to_string(),
+        Value::from(child.killed() || answered),
+    );
+    let at = last.timestamp;
+    push_bounded_provider_fact(
+        &mut result.provider_facts,
+        "delegation.metadata",
+        at,
+        first,
+        json!({
+            "provider_session_id": child_id,
+            "parent_provider_session_id": parent_id,
+            "metadata": Value::Object(fields),
+        }),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -1254,6 +1323,10 @@ fn parse_source_clocked(
             }
             result.provider_facts.insert(0, fact);
         }
+    }
+
+    if let Some(child) = witness.antigravity_child() {
+        apply_antigravity_child(&mut result, &child);
     }
 
     let canonical_session_id = result.metadata.session_id.clone();

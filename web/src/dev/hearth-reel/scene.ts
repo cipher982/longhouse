@@ -236,7 +236,7 @@ export function cardsAt(t: number, wallAt: (sceneS: number) => number, gen: numb
     });
     if (activity === "executing" && tool && state.presentation.primary) state.presentation.primary.label = `Using ${tool}`;
     if (!closed && (activity === "thinking" || activity === "executing") && s.subagents > 0) {
-      state.delegation = { state: "pending", count: s.subagents, kinds: { subagent: s.subagents } };
+      state.delegation = { state: "pending", count: s.subagents, kinds: { subagent: s.subagents }, blocks_parent: false };
     }
     const id = `${s.id}-${gen}`;
     const head = {

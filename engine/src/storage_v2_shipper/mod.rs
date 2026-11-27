@@ -3883,6 +3883,191 @@ mod tests {
         );
     }
 
+    const AGY_PARENT: &str = "0b7e6a3c-1d2f-4e5a-9b8c-7d6e5f4a3b2c";
+    const AGY_CHILD: &str = "1c8f7b4d-2e3a-4f6b-8c9d-0e1f2a3b4c5d";
+
+    /// A brain store with a parent that recorded spawning `AGY_CHILD`, and the
+    /// child's transcript (always freshly written, as a running worker's is).
+    fn antigravity_child_store(dir: &Path, child_lines: &str, state: &str) -> PathBuf {
+        let brain = dir.join("brain");
+        let sidecars = brain.join(AGY_PARENT).join(".system_generated/subagents");
+        fs::create_dir_all(&sidecars).unwrap();
+        fs::write(
+            sidecars.join(format!("{AGY_CHILD}.json")),
+            format!(
+                r#"{{"conversationId":"{AGY_CHILD}","subagentDescriptor":{{"typeName":"self","role":"Compute Doc Auditor"}},"state":"{state}","spawnStepIndex":6211}}"#
+            ),
+        )
+        .unwrap();
+        let path = brain
+            .join(AGY_CHILD)
+            .join(".system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, child_lines).unwrap();
+        path
+    }
+
+    const AGY_CHILD_WORKING: &str = concat!(
+        r#"{"step_index":0,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-11-27T20:48:47Z","content":"[Message] sender=0b7e6a3c-1d2f-4e5a-9b8c-7d6e5f4a3b2c content=audit the docs"}"#,
+        "\n",
+        r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-27T20:48:50Z","tool_calls":[{"name":"read_file","args":{"Path":"/tmp/x"}}]}"#,
+        "\n"
+    );
+
+    const AGY_CHILD_ANSWER: &str = concat!(
+        r#"{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-11-27T20:48:51Z","content":"file text"}"#,
+        "\n",
+        r#"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-27T20:51:29Z","content":"Audit done: 4 stale claims."}"#,
+        "\n"
+    );
+
+    fn delegation_metadata(prepared: &PreparedStorageV2Envelope) -> serde_json::Value {
+        prepared
+            .envelope
+            .facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .map(|fact| fact.payload.clone())
+            .expect("the child batch carries delegation.metadata")
+    }
+
+    #[test]
+    fn a_running_antigravity_worker_ships_at_once_as_its_parents_hidden_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_ALIVE");
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        // Freshly written and bound to nothing: a root conversation would be
+        // held for its launcher's claim. A recorded worker is not held.
+        let mut hold = None;
+        let prepared = prepare_next_envelope_or_hold(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            None,
+            MAX_RAW_BATCH_BYTES,
+            &mut hold,
+        )
+        .unwrap()
+        .expect("a worker's transcript ships while it is still being written");
+        assert_eq!(hold, None);
+
+        let session = &prepared.envelope.session;
+        assert_eq!(prepared.envelope.session_id, AGY_CHILD);
+        assert!(session.is_subagent);
+        assert!(session.hidden_from_default_timeline);
+        assert_eq!(session.provider_session_id.as_deref(), Some(AGY_CHILD));
+        assert_eq!(
+            session.parent_provider_session_id.as_deref(),
+            Some(AGY_PARENT)
+        );
+        assert_eq!(
+            delegation_metadata(&prepared),
+            serde_json::json!({
+                "provider_session_id": AGY_CHILD,
+                "parent_provider_session_id": AGY_PARENT,
+                "metadata": {"description": "Compute Doc Auditor", "finished": false},
+            })
+        );
+        acknowledge_prepared(&mut conn, &prepared);
+
+        // Its answer arrives in a later batch, which says it finished.
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, AGY_CHILD_ANSWER.as_bytes()).unwrap();
+        let answered =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .expect("the answer ships");
+        assert_eq!(delegation_metadata(&answered)["metadata"]["finished"], true);
+    }
+
+    #[test]
+    fn a_killed_swarm_worker_reads_finished_whatever_its_last_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_KILLED");
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(delegation_metadata(&prepared)["metadata"]["finished"], true);
+    }
+
+    #[test]
+    fn an_unbound_antigravity_root_is_held_only_until_its_first_envelope_and_says_for_how_long() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("brain")
+            .join(AGY_PARENT)
+            .join(".system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            concat!(
+                r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-12T12:00:00Z","content":"hello"}"#,
+                "\n",
+                r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-12T12:00:01Z","content":"hi"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let mut hold = None;
+        assert!(prepare_next_envelope_or_hold(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            None,
+            MAX_RAW_BATCH_BYTES,
+            &mut hold,
+        )
+        .unwrap()
+        .is_none());
+        let held = hold.expect("a held source says when its claim window closes");
+        assert!(held > Duration::from_millis(250) && held <= Duration::from_millis(5250));
+
+        // Nobody claimed it; once it has shipped, its identity is settled and
+        // a fresh write is not held again.
+        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+            .unwrap()
+            .expect("an unclaimed root ships after its window");
+        acknowledge_prepared(&mut conn, &first);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            concat!(
+                r#"{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-12T12:01:00Z","content":"again"}"#,
+                "\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let mut hold = None;
+        let next = prepare_next_envelope_or_hold(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            None,
+            MAX_RAW_BATCH_BYTES,
+            &mut hold,
+        )
+        .unwrap();
+        assert!(next.is_some(), "a shipped root's fresh write ships at once");
+        assert_eq!(hold, None);
+    }
+
     #[test]
     fn antigravity_mirror_hint_cannot_duplicate_a_snapshot_or_erase_later_steps() {
         let dir = tempfile::tempdir().unwrap();

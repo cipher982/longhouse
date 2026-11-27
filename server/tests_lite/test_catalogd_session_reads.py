@@ -2811,6 +2811,90 @@ async def test_nested_subagent_bfs_and_child_token_duration_enrichment(daemon_pa
 
 
 @pytest.mark.asyncio
+async def test_an_unfinished_worker_without_live_signals_runs_only_while_its_transcript_moves(daemon_paths, monkeypatch):
+    """An Antigravity worker has no runtime signal of its own: its transcript says unfinished,
+    and that reads as running while the transcript is recent, never once it has gone stale."""
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id, working_id, stale_id, done_id = (str(uuid4()) for _ in range(4))
+
+    def _row(sid: str, *, is_subagent: int, last_activity_at: datetime, tool_call: str | None = None) -> dict:
+        return {
+            "session_id": sid,
+            "tenant_id": "default",
+            "owner_id": "42",
+            "provider": "antigravity",
+            "provider_session_id": sid,
+            "environment": "prod",
+            "machine_id": "cube-ws",
+            "started_at": now - timedelta(hours=2),
+            "last_activity_at": last_activity_at,
+            "ended_at": last_activity_at,
+            "raw_state": "durable",
+            "render_state": "ready",
+            "media_state": "complete",
+            "is_subagent": is_subagent,
+            "subagent_parent_session_id": parent_id if is_subagent else None,
+            "subagent_parent_tool_call_id": tool_call,
+            "commit_seq": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def _metadata(sid: str, finished: bool) -> dict:
+        return {
+            "session_id": sid,
+            "kind": "delegation.metadata",
+            "at": now,
+            "source_epoch": "e1",
+            "source_position": 0,
+            "payload_json": json.dumps({"provider_session_id": sid, "metadata": {"description": "Doc auditor", "finished": finished}}),
+            "commit_seq": 1,
+            "created_at": now,
+        }
+
+    with engine.begin() as connection:
+        connection.execute(
+            StorageSession.__table__.insert(),
+            [
+                _row(parent_id, is_subagent=0, last_activity_at=now),
+                _row(working_id, is_subagent=1, last_activity_at=now - timedelta(seconds=20), tool_call="antigravity-6208-0"),
+                _row(stale_id, is_subagent=1, last_activity_at=now - timedelta(hours=1), tool_call="antigravity-6208-1"),
+                _row(done_id, is_subagent=1, last_activity_at=now - timedelta(seconds=5), tool_call="antigravity-6208-2"),
+            ],
+        )
+        connection.execute(
+            SessionProviderFact.__table__.insert(),
+            [_metadata(working_id, False), _metadata(stale_id, False), _metadata(done_id, True)],
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    monkeypatch.setattr(agents_sessions, "get_catalogd_client", lambda: client)
+    try:
+        served = await agents_sessions.list_session_subagents(
+            session_id=UUID(parent_id),
+            _auth=None,
+            _single=None,
+            owner_id=42,
+        )
+        children = {str(item.session_id): item for item in served.children}
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert children[working_id].live_status == "running"
+    assert children[working_id].finished is False
+    assert children[stale_id].live_status is None
+    assert children[done_id].live_status is None
+    assert children[done_id].finished is True
+
+
+@pytest.mark.asyncio
 async def test_timeline_subagent_read_gets_the_session_detail_deadline(monkeypatch):
     """A 1 s default deadline ran out behind a busy read lane and 503'd."""
     from zerg.routers import timeline

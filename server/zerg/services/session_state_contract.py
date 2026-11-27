@@ -257,6 +257,10 @@ class SessionDelegationFacts(_FrozenModel):
     items: list[SessionDelegationTaskResponse] | None = None
     #: Provider-reported terminal jobs; never contributes to active count/kinds.
     recent_items: list[SessionDelegationTaskResponse] | None = None
+    #: The producer says the session's own loop is blocked until this work
+    #: reports back (an open Antigravity prompt waiting on its workers), rather
+    #: than the work running beside a loop that is still busy.
+    blocks_parent: bool = False
     source: str | None = None
     observed_at: datetime | None = None
     valid_until: datetime | None = None
@@ -1161,6 +1165,22 @@ def _primary(
             label="Needs approval",
             tone="blocked",
             observed_at=interaction.opened_at,
+        )
+    # An open turn whose model has gone quiet because it is waiting on its
+    # workers is not thinking. Only a producer that says its loop is blocked
+    # may claim this, and never over a tool call that is running.
+    if (
+        activity.state == "thinking"
+        and delegation.state == "pending"
+        and delegation.count > 0
+        and delegation.blocks_parent
+        and not (turn is not None and turn.active_call_count)
+    ):
+        return SessionPresentationLabel(
+            key="delegated_work",
+            label=_delegation_label(delegation),
+            tone="active",
+            observed_at=delegation.observed_at,
         )
     if activity.state == "thinking":
         return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)

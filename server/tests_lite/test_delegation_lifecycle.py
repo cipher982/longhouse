@@ -1948,3 +1948,46 @@ def test_claude_mod_state_sync_agents_retires_subagent_while_preserving_shell(li
     assert after_clear["delegation"]["items"][0]["id"] == "sh-1"
     assert after_clear["delegation"]["recent_items"][0]["id"] == "ag-1"
     assert after_clear["delegation"]["recent_items"][0]["status"] == "completed"
+
+
+def test_a_snapshot_that_says_the_loop_is_blocked_is_served_as_blocking_until_withdrawn(live_catalog, live_catalog_client):
+    """An Antigravity Console turn waits for its workers; its snapshot says so, and model output withdraws it."""
+    email = "delegation-blocks-parent@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=10)
+    workers = [
+        {"id": "worker-1", "kind": "subagent", "status": "running", "description": "Doc auditor"},
+        {"id": "worker-2", "kind": "subagent", "status": "running", "description": "Nav auditor"},
+    ]
+    waiting = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed,
+        dedupe_key="blocked-on-workers",
+        items=workers,
+    )
+    waiting.update(kind="delegation_signal", phase=None)
+    waiting["payload"]["delegation"]["blocks_parent"] = True
+    _post_event(live_catalog_client, token=token, event=waiting)
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["delegation"]["state"] == "pending"
+    assert served["delegation"]["count"] == 2
+    assert served["delegation"]["blocks_parent"] is True
+
+    spoke = _event(
+        session_id=session_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        occurred_at=observed + timedelta(seconds=1),
+        dedupe_key="model-spoke",
+        items=workers,
+    )
+    spoke.update(kind="delegation_signal", phase=None)
+    spoke["payload"]["delegation"]["blocks_parent"] = False
+    _post_event(live_catalog_client, token=token, event=spoke)
+    served = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert served["delegation"]["count"] == 2
+    assert served["delegation"]["blocks_parent"] is False

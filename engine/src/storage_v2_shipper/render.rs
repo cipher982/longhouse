@@ -280,13 +280,15 @@ pub(super) fn session_facts(
         .max()
         .or(metadata.ended_at)
         .unwrap_or(started_at);
-    // Codex and OMP publish an explicit native child identity that the host
-    // must alias before it can resolve a later child-of-child edge. Keep that
-    // identity on the wire even when the transcript is not the provider head.
+    // Codex, OMP and Antigravity publish an explicit native child identity
+    // that the host must alias before it can bind the child to the parent's
+    // spawn facts or resolve a later child-of-child edge. Keep that identity
+    // on the wire even when the transcript is not the provider head.
     // Claude's sidechain suppression is intentionally unchanged: its native
     // child identity is not established by this path.
-    let preserve_native_identity =
-        provider.eq_ignore_ascii_case("codex") || provider.eq_ignore_ascii_case("omp");
+    let preserve_native_identity = provider.eq_ignore_ascii_case("codex")
+        || provider.eq_ignore_ascii_case("omp")
+        || provider.eq_ignore_ascii_case("antigravity");
     let provider_session_id = if preserve_native_identity {
         metadata
             .provider_session_id
