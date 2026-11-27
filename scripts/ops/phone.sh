@@ -24,6 +24,12 @@
 #                          dylib, the way it ships; 0 for a plain -Onone build
 #   PHONE_LOG_SSH_TARGET   ssh alias of the host running the tenant (default: zerg)
 #   PHONE_LOG_CONTAINER    tenant container name (default: longhouse-david010)
+#   PHONE_MAC_HOST         off a Mac: ssh alias of the Mac the phone is paired with (default: cinder)
+#   PHONE_SHA              off a Mac: the commit deploy builds (default: origin/main)
+#
+# Off a Mac (cube-ws), deploy and launch run on PHONE_MAC_HOST; deploy builds
+# the exact commit in a throwaway worktree there. Over SSH the login keychain
+# is locked, so the build runs as a one-shot launchd job in the GUI session.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -109,8 +115,52 @@ cmd_record() {
   printf '%s\n' "$dest"
 }
 
+# Over SSH the login keychain belongs to another security session and
+# codesign fails with errSecInternalComponent. A launchd job in the user's GUI
+# session signs with the keychain the logged-in user already unlocked.
+keychain_usable() {
+  security show-keychain-info "$HOME/Library/Keychains/login.keychain-db" >/dev/null 2>&1
+}
+
+build_in_gui_session() {
+  local dir label rc
+  dir="$(mktemp -d /tmp/phone-build.XXXXXX)"
+  label="ai.longhouse.phone-build.$$"
+  cat > "$dir/run.sh" <<EOF
+#!/bin/zsh -l
+export PHONE_GUI_SESSION=1 PHONE_DEVICE=$(printf %q "$DEVICE") PHONE_OUT_DIR=$(printf %q "$OUT_DIR")
+export PHONE_OPTIMIZED=$(printf %q "${PHONE_OPTIMIZED:-1}") PHONE_DERIVED_DATA=$(printf %q "$DERIVED")
+${PHONE_TEAM_ID:+export PHONE_TEAM_ID=$(printf %q "$PHONE_TEAM_ID")}
+cd $(printf %q "$ROOT_DIR") && scripts/ops/phone.sh build > $(printf %q "$dir/out.log") 2>&1
+echo \$? > $(printf %q "$dir/exit")
+EOF
+  chmod +x "$dir/run.sh"
+  cat > "$dir/job.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$label</string>
+<key>ProgramArguments</key><array><string>$dir/run.sh</string></array>
+<key>RunAtLoad</key><true/>
+</dict></plist>
+EOF
+  echo "phone: login keychain is locked in this session; building in the GUI session ($label)" >&2
+  launchctl bootstrap "gui/$(id -u)" "$dir/job.plist" || { rm -rf "$dir"; die "could not start the GUI-session build; is a user logged in?"; }
+  local waited=0
+  while [[ ! -f "$dir/exit" && $waited -lt 1800 ]]; do sleep 2; waited=$((waited + 2)); done
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  cat "$dir/out.log" 2>/dev/null || true
+  rc="$(cat "$dir/exit" 2>/dev/null || echo 124)"
+  rm -rf "$dir"
+  [[ "$rc" == 0 ]] || die "GUI-session build failed (exit $rc)"
+}
+
 cmd_build() {
   require_device
+  if [[ -z "${PHONE_GUI_SESSION:-}" ]] && ! keychain_usable; then
+    build_in_gui_session
+    return
+  fi
   local team
   team="$(team_id)"
   [[ -n "$team" ]] || die "no Apple team id; set PHONE_TEAM_ID"
@@ -157,8 +207,10 @@ cmd_launch() {
   fi
   local output
   if ! output="$(xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "${payload[@]}" "$BUNDLE_ID" 2>&1)"; then
-    [[ "$output" == *"BSErrorCodeDescription = Locked"* ]] \
-      && die "phone is locked: the installed build runs the next time the app is opened; unlock to launch, shot, console, or profile"
+    if [[ "$output" == *"BSErrorCodeDescription = Locked"* ]]; then
+      echo "phone: phone is locked: the installed build runs the next time the app is opened; unlock to launch, shot, console, or profile" >&2
+      return 3
+    fi
     printf '%s\n' "$output" | tail -8 >&2
     die "launch failed"
   fi
@@ -224,7 +276,10 @@ cmd_install() {
   test -d "$app" || die "no build at $app; run build first"
   xcrun devicectl device install app --device "$DEVICE" "$app" >/dev/null
   echo "installed $app"
-  cmd_launch
+  local rc=0
+  cmd_launch || rc=$?
+  # A locked phone has the new build; it runs when the app is next opened.
+  [[ $rc == 0 || $rc == 3 ]] || return "$rc"
 }
 
 cmd_deploy() {
@@ -258,9 +313,44 @@ cmd_logs() {
     | cut -c1-320
 }
 
+# Off a Mac the phone is reached through the Mac it is paired with. deploy
+# builds an exact commit in a throwaway worktree there, so the Mac's shared
+# checkout and anyone's uncommitted edits never reach the phone.
+run_on_mac() {
+  local cmd="$1"
+  shift
+  local host="${PHONE_MAC_HOST:-cinder}"
+  case "$cmd" in
+    launch)
+      # shellcheck disable=SC2029
+      ssh "$host" "zsh -lc 'cd ~/git/zerg/longhouse && scripts/ops/phone.sh launch ${1:-}'"
+      ;;
+    deploy)
+      ssh "$host" zsh -l -s -- "${PHONE_SHA:-origin/main}" <<'EOF'
+set -euo pipefail
+repo=~/git/zerg/longhouse
+git -C "$repo" fetch -q origin
+sha="$(git -C "$repo" rev-parse --verify "$1^{commit}")"
+wt=~/git/_wt/longhouse-phone-${sha[1,12]}
+trap 'git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 || true' EXIT
+git -C "$repo" worktree add -q --detach "$wt" "$sha"
+echo "phone: deploying $sha from $(hostname -s)" >&2
+cd "$wt"
+PHONE_OUT_DIR=/tmp/agents/phone scripts/ops/phone.sh deploy </dev/null
+EOF
+      ;;
+    *) die "$cmd needs the Mac the phone is paired with: ssh ${host} and run it there" ;;
+  esac
+}
+
 main() {
   local cmd="${1:-}"
   shift || true
+  if [[ "$(uname)" != Darwin ]]; then
+    case "$cmd" in
+      shot|record|build|install|deploy|launch|console|profile) run_on_mac "$cmd" "$@"; return ;;
+    esac
+  fi
   case "$cmd" in
     shot) cmd_shot "$@" ;;
     record) cmd_record "$@" ;;

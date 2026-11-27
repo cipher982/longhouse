@@ -289,8 +289,8 @@ ios-marketing: ## @internal Capture iOS marketing screenshots to /tmp/lh-shots/ 
 phone-shot: ## Screenshot the paired iPhone into artifacts/phone/ (LABEL=name)
 	@scripts/ops/phone.sh shot $(or $(LABEL),screen)
 
-phone-deploy: ## Debug-build the iOS app and install+relaunch it on the paired iPhone
-	@scripts/ops/phone.sh deploy
+phone-deploy: ## Build the iOS app and install it on David's iPhone (off a Mac: via cinder, SHA=<rev> default origin/main)
+	@PHONE_SHA=$(SHA) scripts/ops/phone.sh deploy
 
 phone-logs: ## The phone's own diagnostics from the hosted tenant log (SINCE=30m SESSION=<id>)
 	@scripts/ops/phone.sh logs --since $(or $(SINCE),30m) $(if $(SESSION),--session $(SESSION),)

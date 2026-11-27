@@ -75,7 +75,7 @@ David and several agents work in `~/git/zerg/longhouse` at once.
 |---|---|---|
 | `server/`, `web/`, `engine/`, `config/`, runtime Dockerfile | Hosted runtime | Green CI on `main` starts Release: image, canary, QA when sensitive, then dogfood, by itself. |
 | `longhouse` CLI, hooks, installer, `longhouse machine repair`, engine, Desktop App | CLI/package release | `make release VERSION=vX.Y.Z` ([RELEASE.md](../../../RELEASE.md)). A hosted deploy does not reach users' machines. Say so; do not report "deployed". |
-| `ios/` | TestFlight | `make testflight` (below). Never a hosted deploy. |
+| `ios/` (including the generated `ios/Resources/Transcript/transcript.html`) | David's phone | `make phone-deploy` (below). Never a hosted deploy. |
 | The separately installed runner | Runner release | `runner-release.yml`; its own path. |
 | Control plane | Not this repo | `~/git/zerg/control-plane`, its README ("Production activation and rollback"). |
 
@@ -188,6 +188,26 @@ hosted and release lanes ran: it also compares the latest release and PyPI build
 identity. It requires the demo to serve the SHA unless `ARGS=--skip-demo`; the
 demo is retired, so pass that flag (`release.sh` always does).
 
+## iOS: David's phone
+
+The iOS app ships to David's own iPhone. "Fixed" means the bug is gone on his
+phone, so every `ios/` change ends with:
+
+```bash
+make phone-deploy SHA=<full sha on origin/main>   # default origin/main
+```
+
+From any host. Off a Mac it runs on `cinder` (the phone is paired there),
+builds that commit in a throwaway worktree, installs and relaunches. Over SSH
+the login keychain is locked, so the build runs as a one-shot launchd job in
+David's GUI session. A locked phone takes the install and opens the new build
+next time; that counts as deployed. Report the SHA and whether it launched. If
+cinder is asleep or the phone is unreachable, say so; that is the one case to
+hand back.
+
+TestFlight has no users yet. Keep it roughly current (a build after a batch of
+iOS work, or when David asks), not on every change.
+
 ## TestFlight
 
 `make testflight [SHA=<sha on origin/main>] [WHATS_NEW="note"] [INTERNAL_ONLY=1] [DRY_RUN=1]`
@@ -198,9 +218,7 @@ public link, https://testflight.apple.com/join/CmEd5kY7 (needs `ASC_API_*` in
 the environment, and the iOS 26 SDK to build; spec
 `control-plane/docs/specs/ios-testflight-distribution.md`). Public publishing fails when
 the group's link differs from the one in
-`web/src/features/marketing/landing/links.ts`. If `ios/` changed: build, look at a
-rendered simulator frame (`zerg-ui`), then `make phone-deploy` as the last step. Do
-not ask David to build in Xcode.
+`web/src/features/marketing/landing/links.ts`. Do not ask David to build in Xcode.
 
 ## Local dogfood refresh
 
