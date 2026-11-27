@@ -19,16 +19,16 @@
 [codex]
 kind = "npm"
 package = "@openai/codex"
-version = "0.171.0"
+version = "0.172.0"
 binary = "codex"
-reports = "codex-cli 0.171.0"
+reports = "codex-cli 0.172.0"
 
 [claude]
 kind = "npm"
 package = "@anthropic-ai/claude-code"
-version = "2.1.330"
+version = "2.1.332"
 binary = "claude"
-reports = "2.1.330 (Claude Code)"
+reports = "2.1.332 (Claude Code)"
 
 [opencode]
 kind = "npm"
@@ -40,9 +40,9 @@ reports = "1.19.6"
 [pi]
 kind = "npm"
 package = "@earendil-works/pi-coding-agent"
-version = "1.6.0"
+version = "1.7.0"
 binary = "pi"
-reports = "1.6.0"
+reports = "1.7.0"
 
 [omp]
 kind = "omp"
