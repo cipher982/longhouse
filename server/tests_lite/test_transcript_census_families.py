@@ -474,6 +474,35 @@ def test_seed_records_a_family_shape_as_seen_without_declassifying_it():
     assert tool.widened(catalog, _observed("message/user/image", "type", "content[].data", "later")) == {"message/user/image": ["later"]}
 
 
+def test_seed_records_a_new_line_key_on_the_family_so_every_combination_knows_it():
+    tool = _tool()
+    catalog = json.loads(json.dumps(FAMILY_CATALOG))
+    seen = {
+        "message/assistant/text": {
+            "count": 1,
+            "first_seen_version": "1.0.0",
+            "last_seen_version": "1.0.0",
+            "entrypoints": [],
+            "keys": ["type", "content[].text", "sentAt"],
+        },
+        # Its family has no baseline (`image` was never observed), so the family is left alone.
+        "message/user/image": {
+            "count": 1,
+            "first_seen_version": "1.0.0",
+            "last_seen_version": "1.0.0",
+            "entrypoints": [],
+            "keys": ["type", "content[].data"],
+        },
+    }
+    tool.seed(catalog, seen)
+    assert catalog["families"][0]["keys"] == ["id", "sentAt", "type"]
+    for shape in ("message/assistant/toolCall", "message/user/text+toolCall"):
+        assert tool.widened(catalog, _observed(shape, "type", "sentAt")) == {}
+    # The (Claude) catalog's rule: every combination of one family's names knows the same keys.
+    keys = {tuple(tool.catalog_row(catalog, s)["keys"]) for s in ("message/assistant/text", "message/assistant/text+toolCall")}
+    assert len({k for k in keys if "sentAt" in k}) == len(keys)
+
+
 def test_a_key_two_blocks_of_one_line_carry_does_not_hide_a_line_without_it(tmp_path: Path):
     session = tmp_path / "session.jsonl"
     lines = [

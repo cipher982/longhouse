@@ -854,13 +854,10 @@ def save_catalog(provider: str, catalog: dict[str, Any]) -> None:
     )
 
 
-def _family_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
-    """The row a family gives a shape, or None when no family holds it.
-
-    `baseline` is False when one of the names the shape uses has no recorded
-    keys: `keys` is then only what the others are known to carry, and not
-    something to compare the shape's keys against.
-    """
+def _family_parts(
+    catalog: dict[str, Any], shape: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """(the family that holds a shape, the family and each name entry the shape uses), or None."""
     segments = shape.split("/")
     for family in catalog.get("families") or []:
         pattern = family.get("segments") or []
@@ -877,22 +874,34 @@ def _family_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
                 break
             parts.extend(allowed[name] for name in names)
         else:
-            classifications = dict.fromkeys(
-                str(part["classification"])
-                for part in parts
-                if str(part.get("classification") or "").strip()
-            )
-            return {
-                "classification": " + ".join(classifications),
-                "keys": sorted(
-                    {key for part in parts for key in part.get("keys") or []}
-                ),
-                "baseline": all(part.get("keys") is not None for part in parts),
-                "required_keys": sorted(
-                    {key for part in parts for key in part.get("required_keys") or []}
-                ),
-            }
+            return family, parts
     return None
+
+
+def _family_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
+    """The row a family gives a shape, or None when no family holds it.
+
+    `baseline` is False when one of the names the shape uses has no recorded
+    keys: `keys` is then only what the others are known to carry, and not
+    something to compare the shape's keys against.
+    """
+    match = _family_parts(catalog, shape)
+    if match is None:
+        return None
+    parts = match[1]
+    classifications = dict.fromkeys(
+        str(part["classification"])
+        for part in parts
+        if str(part.get("classification") or "").strip()
+    )
+    return {
+        "classification": " + ".join(classifications),
+        "keys": sorted({key for part in parts for key in part.get("keys") or []}),
+        "baseline": all(part.get("keys") is not None for part in parts),
+        "required_keys": sorted(
+            {key for part in parts for key in part.get("required_keys") or []}
+        ),
+    }
 
 
 def catalog_row(catalog: dict[str, Any], shape: str) -> dict[str, Any] | None:
@@ -993,10 +1002,22 @@ def seed(
 
     An unseen shape is `unclassified` unless a family already classifies it;
     then its row records only that it was seen, and with which keys.
+
+    A key new to a family's shape is added to the family's own `keys` as well
+    as the shape's row: the family states the line's keys once, so every
+    combination of blocks knows it (a seed cannot tell a line key from a block
+    key). A shape whose family has no baseline yet widens only its own row.
     """
     rows = catalog.setdefault("shapes", {})
     added = widened_rows = 0
     for shape, record in observed.items():
+        match = _family_parts(catalog, shape)
+        family_row = _family_row(catalog, shape)
+        if match is not None and family_row is not None and family_row["baseline"]:
+            new_keys = set(record.get("keys") or []) - set(family_row["keys"])
+            if new_keys:
+                family = match[0]
+                family["keys"] = sorted(set(family.get("keys") or []) | new_keys)
         row = rows.get(shape)
         if row is None:
             family = _family_row(catalog, shape)
