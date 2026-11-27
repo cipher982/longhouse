@@ -1,9 +1,8 @@
 import { useLayoutEffect, useState } from "react";
 import { RelativeTime } from "@/shared/ui/RelativeTime";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { AgentEvent } from "@/shared/api/agents";
 
+import { MarkdownBody } from "./MarkdownBody";
 import { useLiveThinkingExpanded, useLiveThinkingHotkey, LIVE_THINKING_TOGGLE_KEY } from "./liveThinkingPreference";
 import { stripLegacyReasoningPrefix, stripMarkdown, thoughtProse } from "@/shared/session/model/thoughtProse";
 
@@ -57,7 +56,7 @@ function LiveThinkingRow({ event, isSelected }: { event: AgentEvent; isSelected:
       </button>
       {expanded ? (
         <div id={bodyId} className="tl-thought__body tl-msg__body" data-testid="session-timeline-reasoning-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          <MarkdownBody content={text} />
         </div>
       ) : null}
     </div>
@@ -142,16 +141,7 @@ function StoredReasoningRow({
       {expanded ? (
         <>
           <div id={bodyId} className="tl-thought__body tl-msg__body" data-testid="session-timeline-reasoning-body">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: ({ node: _node, ...props }) => (
-                  <a {...props} target="_blank" rel="noreferrer noopener" />
-                ),
-              }}
-            >
-              {text}
-            </ReactMarkdown>
+            <MarkdownBody content={text} />
           </div>
           <button
             type="button"

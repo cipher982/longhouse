@@ -2075,6 +2075,26 @@ button.timeline-pane__status-chip:hover {
 .tl-msg__body a:hover {
   color: var(--color-brand-primary);
 }
+/* A file on the agent's machine (file:// links, Codex :line paths, relative
+   paths). It cannot open from a browser, so it reads as a file name, not a
+   link; the full path is its title. */
+.tl-file-ref {
+  font-family: var(--font-family-mono);
+  font-size: 0.86em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(158, 124, 90, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 253, 248, 0.92);
+  cursor: help;
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  line-height: 1.35;
+}
 /* Fenced code blocks in markdown prose */
 .tl-md-fence {
   margin: 0.6em 0;
@@ -2098,6 +2118,12 @@ button.timeline-pane__status-chip:hover {
 .tl-md-fence__lang {
   text-transform: lowercase;
   letter-spacing: 0.02em;
+}
+.tl-md-fence__lang--file {
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tl-md-fence__copy {
   appearance: none;

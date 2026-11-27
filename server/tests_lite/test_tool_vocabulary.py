@@ -301,6 +301,15 @@ def test_provider_spellings_of_paths_all_derive():
         assert text["tool_target"] == "/a/b/c.ts", name
 
 
+def test_a_path_under_an_opaque_id_directory_shows_just_the_file():
+    from zerg.services.tool_presentation import call_text_for
+
+    brain = "/Users/a/.gemini/antigravity-cli/brain/0f1e2d3c-4b5a-4968-8778-a6b5c4d3e2f1/zero_to_one_audit.md"
+    assert call_text_for("edit_file", {"TargetFile": brain, "path": brain})["tool_intent"] == "zero_to_one_audit.md"
+    assert call_text_for("Read", {"file_path": "/cache/3f9a1c0b7d2e4f6a8b9c/out.txt"})["tool_intent"] == "out.txt"
+    assert call_text_for("Read", {"file_path": "file:///repo/src/app.py"})["tool_intent"] == "src/app.py"
+
+
 def test_swarm_tools_summarize_the_action():
     from zerg.services.tool_presentation import call_text_for
 

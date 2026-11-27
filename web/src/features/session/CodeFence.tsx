@@ -45,6 +45,9 @@ export interface CodeFenceProps {
   wrapLongLines?: boolean;
   /** Render SGR ANSI color codes when falling back to plain pre (e.g. tool output). */
   colorizeAnsi?: boolean;
+  /** Header text in place of the language, such as a cited file and its lines. */
+  label?: string | null;
+  labelTitle?: string;
 }
 
 /**
@@ -60,6 +63,8 @@ export const CodeFence = memo(function CodeFence({
   maxHeight,
   wrapLongLines = false,
   colorizeAnsi = false,
+  label = null,
+  labelTitle,
 }: CodeFenceProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const timerRef = useRef<number | null>(null);
@@ -109,7 +114,13 @@ export const CodeFence = memo(function CodeFence({
   return (
     <div className={`tl-md-fence${isTool ? " tl-md-fence--tool" : ""}`}>
       <div className="tl-md-fence__header">
-        <span className="tl-md-fence__lang">{language || (variant === "output" ? "output" : "text")}</span>
+        {label ? (
+          <span className="tl-md-fence__lang tl-md-fence__lang--file" title={labelTitle}>
+            {label}
+          </span>
+        ) : (
+          <span className="tl-md-fence__lang">{language || (variant === "output" ? "output" : "text")}</span>
+        )}
         <button
           type="button"
           className="tl-md-fence__copy"

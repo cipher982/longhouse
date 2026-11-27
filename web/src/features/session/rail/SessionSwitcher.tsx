@@ -14,7 +14,7 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MARKDOWN_INLINE_COMPONENTS, MARKDOWN_PLUGINS, markdownUrlTransform } from "../MarkdownBody";
 import type { AgentSessionWorkspaceResponse } from "@/shared/api/agents";
 import { agentSessionWorkspaceQueryOptions } from "@/shared/api/useAgentSessions";
 import { useDebouncedValue } from "@/shared/hooks/useDebouncedValue";
@@ -52,10 +52,9 @@ export function trimPreviewMarkdown(text: string, max = PREVIEW_CHARS): string {
 function PreviewMarkdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
-      }}
+      remarkPlugins={MARKDOWN_PLUGINS}
+      components={MARKDOWN_INLINE_COMPONENTS}
+      urlTransform={markdownUrlTransform}
     >
       {text}
     </ReactMarkdown>

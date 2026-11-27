@@ -757,7 +757,10 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
     }),
     makeEvent(202, "assistant", "2026-04-15T15:16:40Z", {
       content_text:
-        "I am going to add a session-detail capture fixture first. That gives us a stable layout lab before we start changing the real page.",
+        "I am going to add a session-detail capture fixture first. That gives us a stable layout lab before we start changing the real page.\n\n" +
+        // Agents link local files in several spellings; none open from a browser.
+        "The plan is in [capture_plan.md](file:///Users/alice/.gemini/antigravity-cli/brain/0f1e2d3c-4b5a-4968-8778-a6b5c4d3e2f1/capture_plan.md), " +
+        "the entry is [ui-capture.ts](/Users/alice/git/longhouse/scripts/ui-capture.ts:42), and see [docs/QA.md](docs/QA.md#L10-L20) or https://example.com/qa.",
     }),
     makeEvent(203, "assistant", "2026-04-15T15:17:02Z", {
       tool_name: "exec_command",

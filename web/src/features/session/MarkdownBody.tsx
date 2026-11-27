@@ -1,7 +1,12 @@
 import { Children, isValidElement, memo, useEffect, useRef, useState, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { CodeFence } from "./CodeFence";
+import {
+  classifyLinkTarget,
+  parseCodeCitation,
+  shortenHomeCodePath,
+} from "../../shared/session/model/linkTargets";
+import { CodeFence, detectLanguage } from "./CodeFence";
 
 function extractNodeText(node: ReactNode): string {
   if (typeof node === "string") return node;
@@ -24,6 +29,19 @@ function MarkdownFence({ children }: { children?: ReactNode }) {
 
   const rawText = codeProps ? extractNodeText(codeProps.children) : extractNodeText(children);
   const codeText = rawText.endsWith("\n") ? rawText.slice(0, -1) : rawText;
+  // Cursor cites code as ```12:15:app/components/Todo.tsx.
+  const citation = parseCodeCitation(rawLang);
+  if (citation) {
+    return (
+      <CodeFence
+        text={codeText}
+        language={detectLanguage(codeText, { filePath: citation.path })}
+        label={citation.display}
+        labelTitle={citation.title}
+        variant="prose"
+      />
+    );
+  }
 
   return <CodeFence text={codeText} language={rawLang} variant="prose" />;
 }
@@ -111,19 +129,63 @@ function MarkdownTable({ children }: { children?: ReactNode }) {
   );
 }
 
-const MARKDOWN_PLUGINS = [remarkGfm];
+export const MARKDOWN_PLUGINS = [remarkGfm];
+
+/**
+ * Hrefs reach the `a` component untouched so it can tell a local file from a
+ * web link (the default transform blanks `file:` to an empty href). The
+ * component never emits an href that is not http(s) or mailto.
+ */
+export const markdownUrlTransform: UrlTransform = (url, key) => (key === "href" ? url : defaultUrlTransform(url));
+
+/** Links and inline code, shared by every markdown surface in the timeline. */
+export const MARKDOWN_INLINE_COMPONENTS: Components = {
+  a: ({ node: _node, href, children, ...props }) => {
+    const target = classifyLinkTarget(href, extractNodeText(children));
+    if (target.kind === "web") {
+      return (
+        <a {...props} href={target.href} target="_blank" rel="noreferrer noopener">
+          {children}
+        </a>
+      );
+    }
+    // A file on the agent's machine opens from nowhere a viewer is; show its name.
+    if (target.kind === "file") {
+      return (
+        <span className="tl-file-ref" title={target.title}>
+          {target.display}
+        </span>
+      );
+    }
+    return <>{children}</>;
+  },
+  code: ({ node: _node, className, children, ...props }) => {
+    const short = !className && typeof children === "string" ? shortenHomeCodePath(children) : null;
+    return short ? (
+      <code {...props} title={children as string}>
+        {short}
+      </code>
+    ) : (
+      <code {...props} className={className}>
+        {children}
+      </code>
+    );
+  },
+};
 
 const MARKDOWN_COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => (
-    <a {...props} target="_blank" rel="noreferrer noopener" />
-  ),
+  ...MARKDOWN_INLINE_COMPONENTS,
   table: ({ node: _node, children }) => <MarkdownTable>{children}</MarkdownTable>,
   pre: ({ node: _node, children }) => <MarkdownFence>{children}</MarkdownFence>,
 };
 
 export const MarkdownBody = memo(function MarkdownBody({ content }: { content: string }) {
   return (
-    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_PLUGINS}
+      components={MARKDOWN_COMPONENTS}
+      urlTransform={markdownUrlTransform}
+    >
       {content}
     </ReactMarkdown>
   );

@@ -639,9 +639,23 @@ def extract_authored_tool_intent(tool_name: str | None, tool_input_json: Any) ->
     return None
 
 
+# A directory named by an id (a UUID or a long hash) says nothing about the
+# file, and as the leading half of a narrow row it pushes the file name past
+# the ellipsis.
+_OPAQUE_SEGMENT = re.compile(r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$", re.IGNORECASE)
+
+
 def _path_tail(path: str) -> str:
-    parts = [p for p in path.strip().replace("\\", "/").split("/") if p]
-    return "/".join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path.strip()[:_INTENT_CHARS])
+    """The file name and its parent directory, unless that parent is an opaque id."""
+    raw = path.strip()
+    if raw.lower().startswith("file://"):
+        raw = raw[len("file://") :]
+    parts = [p for p in raw.replace("\\", "/").split("/") if p]
+    if not parts:
+        return path.strip()[:_INTENT_CHARS]
+    if len(parts) >= 2 and not _OPAQUE_SEGMENT.match(parts[-2]):
+        return "/".join(parts[-2:])
+    return parts[-1]
 
 
 _PATH_KEYS = (

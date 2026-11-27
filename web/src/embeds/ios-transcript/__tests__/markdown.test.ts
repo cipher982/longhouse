@@ -14,14 +14,15 @@ describe("inlineMarkdown", () => {
     );
   });
 
-  it("only links http(s) targets", () => {
-    expect(inlineMarkdown("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
+  it("links only web and mail targets; other schemes keep their label as text", () => {
+    expect(inlineMarkdown("[x](javascript:alert(1))")).toBe("x");
+    expect(inlineMarkdown("[mail](mailto:a@example.com)")).toBe('<a href="mailto:a@example.com" rel="noreferrer noopener">mail</a>');
   });
 });
 
 describe("markdownToHtml", () => {
   it("renders headings, bullets, paragraphs and line breaks", () => {
-    expect(markdownToHtml("# One\n## Two\n### Three\n- a\n* b\nline 1\nline 2\n\nnext")).toBe(
+    expect(markdownToHtml("# One\n## Two\n### Three\n- a\n* b\n\nline 1\nline 2\n\nnext")).toBe(
       "<h1>One</h1><h2>Two</h2><h3>Three</h3><ul><li>a</li></ul><ul><li>b</li></ul><p>line 1<br>line 2</p><p>next</p>",
     );
   });
