@@ -21,7 +21,7 @@ finally one more message. For each case:
 the harness sent.
 
 Cursor has no scripted model (its CLI talks only to Cursor's servers), so its cell runs a fake cursor-agent
-(fake_cursor_agent.py) that records the keystrokes Longhouse typed and acts on them as Cursor's prompt does; "the model
+(fake_cursor/cursor-agent) that records the keystrokes Longhouse typed and acts on them as Cursor's prompt does; "the model
 received" is its prompt log. That proves Longhouse's half (the exact command typed at an idle prompt, the session freed
 after), not Cursor's own handling of the command.
 """
@@ -66,7 +66,7 @@ NOT_MEASURABLE = {
     "cursor": "Cursor's CLI talks only to Cursor's own servers, so no scripted model can stand in for it",
 }
 # Cursor's CLI talks only to Cursor's servers, so no scripted model can stand in for its model. Its cell runs a fake
-# cursor-agent (fake_cursor_agent.py) that records the keystrokes it was typed; "the model received" is its prompt log.
+# cursor-agent (fake_cursor/cursor-agent) that records the keystrokes it was typed; "the model received" is its prompt log.
 FAKE_MODEL_PROVIDERS = frozenset({"cursor"})
 CONTROL_WAIT_S = 90.0  # launch to the Runtime Host offering send_input
 REPLY_WAIT_S = 60.0  # a message to its scripted reply in the model receipt

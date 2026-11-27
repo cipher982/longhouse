@@ -72,7 +72,7 @@ TT_SCENARIOS = ("long_reply", "two_message", "thinking", "tool", "subagent", "qu
 KIND_SCENARIOS = ("thinking", "tool", "subagent")
 TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity", "cursor")
 # Providers whose cells run a fake CLI from the repo (nothing to install), and the scenarios that have such a cell.
-# Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for it (fake_cursor_agent.py).
+# Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for it (fake_cursor/cursor-agent).
 TT_FAKE_PROVIDERS = {"cursor": ("slash_command",)}
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")
 ASSERTION_CELL = re.compile(r"^[a-z][a-z0-9_]+$")

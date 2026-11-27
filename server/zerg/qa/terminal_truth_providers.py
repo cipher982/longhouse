@@ -261,7 +261,9 @@ CODEX_HELM_FLAGS: tuple[str, ...] = () if CODEX_SANDBOX_WORKS else ("--dangerous
 # as the user would type it after `--`.
 ANTIGRAVITY_HELM_USER_ARGS: tuple[str, ...] = ("--", "--dangerously-skip-permissions")
 
-FAKE_CURSOR_AGENT = Path(__file__).resolve().parent / "fake_cursor_agent.py"
+# Named cursor-agent: the Machine Agent counts a Cursor Helm session as live only when its provider process's command
+# line contains "cursor-agent" (managed_cursor_helm_scan.rs), as a real one does.
+FAKE_CURSOR_AGENT = Path(__file__).resolve().parent / "fake_cursor" / "cursor-agent"
 
 PROVIDERS: dict[str, ProviderDriver] = {
     "claude": ProviderDriver(
@@ -304,7 +306,7 @@ PROVIDERS: dict[str, ProviderDriver] = {
 }
 
 # Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for its model. The slash_command scenario
-# runs a fake cursor-agent that records what it was typed (fake_cursor_agent.py). Kept out of PROVIDERS: every other
+# runs a fake cursor-agent that records what it was typed (fake_cursor/cursor-agent). Kept out of PROVIDERS: every other
 # scenario reads "not in PROVIDERS" as "no scripted model", which is still true.
 FAKE_PROVIDERS: dict[str, ProviderDriver] = {
     "cursor": ProviderDriver("cursor", str(FAKE_CURSOR_AGENT), "Fake Cursor ready", lambda b, w: [str(b), "--resume", "fake"]),
