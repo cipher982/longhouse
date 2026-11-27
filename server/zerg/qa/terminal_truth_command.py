@@ -170,6 +170,22 @@ def _launched_session(api: RuntimeApi) -> str | None:
     return next((sid for sid in ids if sid in api.launched_sessions), None)
 
 
+def _bound_cursor_session(pas: Any, workspace: Path) -> str | None:
+    """The session the Cursor launcher bound in ``workspace``.
+
+    The host lists a session under its working directory once a transcript ties the two; real Cursor writes one during
+    ``create-chat``, the fake does not. The launcher's binding claim names the session and the workspace directly.
+    """
+
+    probes = Path(pas.environment["LONGHOUSE_HOME"]) / "managed-local" / "cursor-helm" / "binding-probes"
+    for path in sorted(probes.glob("*.json")) if probes.is_dir() else []:
+        with contextlib.suppress(OSError, ValueError):
+            claim = json.loads(path.read_text())
+            if Path(str(claim.get("cwd") or "")).resolve() == workspace.resolve() and claim.get("hook_observed_at"):
+                return str(claim["session_id"])
+    return None
+
+
 def _send_action(api: RuntimeApi, sid: str) -> dict[str, Any] | None:
     status, body = api.get(f"/api/agents/sessions/{sid}/state-diagnostics")
     if status != 200:
@@ -345,7 +361,7 @@ def run_command_cell_in(
         action: dict[str, Any] | None = None
         waited = time.monotonic()
         while time.monotonic() < waited + CONTROL_WAIT_S and session.alive():
-            sid = sid or _launched_session(api)
+            sid = sid or (_bound_cursor_session(pas, workspace) if fake_model else _launched_session(api))
             if sid is not None:
                 action = _send_action(api, sid)
                 if (action or {}).get("state") == "available":
