@@ -98,6 +98,8 @@ class PlanTests(unittest.TestCase):
         globs = rp.runtime_image_globs()
         self.assertIn("server/**", globs)
         self.assertIn("scripts/ops/release-artifacts.py", globs)
+        # docker/runtime.dockerfile copies it beside the shape catalog for the shape canary.
+        self.assertIn("scripts/qa/transcript_census.py", globs)
         self.assertNotIn("docs/**", globs)
 
 
