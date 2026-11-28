@@ -1744,10 +1744,23 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             conversation.clone(),
             launch_id.clone(),
         );
+        let longhouse_home = home(config.config_dir.as_deref()).ok();
+        let cwd = cwd.clone();
         thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 if screen.lock().prompt_drawn(std::time::Instant::now()) {
-                    let _ = seed_launch_idle(&dir, &session_id, &conversation, &launch_id);
+                    // The Runtime Host also holds queued input while it has no runtime phase for the session; a
+                    // hook's presence is what tells it, so the seed sends the one sessionStart would have.
+                    if seed_launch_idle(&dir, &session_id, &conversation, &launch_id)
+                        .unwrap_or(false)
+                    {
+                        if let Some(longhouse_home) = longhouse_home.as_deref() {
+                            let _ = crate::hook_outbox::enqueue_presence(
+                                longhouse_home,
+                                &json!({"session_id":session_id,"state":"idle","cwd":cwd,"provider":"cursor","control_path":"managed"}),
+                            );
+                        }
+                    }
                     return;
                 }
                 thread::sleep(std::time::Duration::from_millis(100));
