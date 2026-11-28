@@ -2,9 +2,8 @@
   "fact_count": 1,
   "facts": [
     {
+      "at": "2026-11-28T16:20:00Z",
       "kind": "session.checklist",
-      "at": "2026-11-28T16:20:05Z",
-      "source_offset": 112,
       "payload": {
         "items": [
           {
@@ -21,7 +20,8 @@
         "op": "replace",
         "provider_tool": "TodoWrite",
         "tool_call_id": "tc_1"
-      }
+      },
+      "source_offset": 77
     }
   ]
 }

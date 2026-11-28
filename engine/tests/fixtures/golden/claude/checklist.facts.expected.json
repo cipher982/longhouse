@@ -1,6 +1,16 @@
 {
-  "fact_count": 3,
+  "fact_count": 4,
   "facts": [
+    {
+      "kind": "turn.usage",
+      "at": "2026-11-28T16:20:05Z",
+      "source_offset": 121,
+      "payload": {
+        "context_tokens": 12,
+        "input_tokens": 12,
+        "output_tokens": 8
+      }
+    },
     {
       "kind": "session.checklist",
       "at": "2026-11-28T16:20:05Z",
@@ -26,7 +36,7 @@
     {
       "kind": "session.checklist",
       "at": "2026-11-28T16:20:10Z",
-      "source_offset": 477,
+      "source_offset": 523,
       "payload": {
         "items": [
           {
@@ -44,7 +54,7 @@
     {
       "kind": "session.checklist",
       "at": "2026-11-28T16:20:15Z",
-      "source_offset": 763,
+      "source_offset": 809,
       "payload": {
         "items": [
           {

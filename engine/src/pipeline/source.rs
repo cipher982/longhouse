@@ -844,6 +844,49 @@ mod equivalence {
         );
     }
 
+    /// Cursor's checklist facts, from the golden fixture the provider contract
+    /// names. Real Cursor lines carry no clock, so the facts order from the
+    /// store's session anchor; the CLI golden harness has no store to give one.
+    /// UPDATE_GOLDENS=1 rewrites the snapshot.
+    #[test]
+    fn cursor_checklist_facts_order_from_the_store_anchor() {
+        let root = fixtures_root().join("golden/cursor");
+        let path = root.join("checklist.jsonl");
+        let expected_path = root.join("checklist.facts.expected.json");
+        let bytes = std::fs::read(&path).unwrap();
+        let anchor = "2026-11-28T16:20:00Z".parse().unwrap();
+        let parsed = parse_source(
+            &MemorySource::new(SourceIdentity::from_path(&path), bytes),
+            &CursorAnchor(anchor),
+            0,
+            None,
+            Some("cursor"),
+        )
+        .unwrap();
+        let facts: Vec<serde_json::Value> = parsed
+            .provider_facts
+            .iter()
+            .map(|fact| {
+                serde_json::json!({
+                    "kind": fact.kind,
+                    "at": fact.at,
+                    "source_offset": fact.source_offset,
+                    "payload": fact.payload,
+                })
+            })
+            .collect();
+        assert!(
+            facts.iter().any(|fact| fact["kind"] == "session.checklist"),
+            "a Cursor TodoWrite yields a session.checklist fact"
+        );
+        let actual = serde_json::json!({"fact_count": facts.len(), "facts": facts});
+        let rendered = serde_json::to_string_pretty(&actual).unwrap() + "\n";
+        if std::env::var("UPDATE_GOLDENS").is_ok() {
+            std::fs::write(&expected_path, &rendered).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&expected_path).unwrap(), rendered);
+    }
+
     fn second_line_offset(bytes: &[u8]) -> Option<u64> {
         let first = bytes.iter().position(|&b| b == b'\n')? as u64 + 1;
         (first < bytes.len() as u64).then_some(first)

@@ -733,14 +733,9 @@ fn golden_codex_checklist_facts() {
     );
 }
 
-#[test]
-fn golden_cursor_checklist_facts() {
-    let base = fixtures_dir().join("golden").join("cursor");
-    run_golden_facts_test(
-        &base.join("checklist.jsonl"),
-        &base.join("checklist.facts.expected.json"),
-    );
-}
+// Cursor's checklist facts need the store's session anchor, which this CLI
+// harness cannot supply: src/pipeline/source.rs
+// cursor_checklist_facts_order_from_the_store_anchor.
 
 #[test]
 fn golden_omp_checklist_facts() {
