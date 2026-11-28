@@ -14,12 +14,15 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  # actions: write lets a failed main run cancel itself for a newer waiting commit.
+  actions: write
   contents: read
   packages: read
   pull-requests: read
 
 concurrency:
-  # Pushes to main share one group. A running main CI always finishes, but a
+  # Pushes to main share one group. A running main CI finishes unless a job fails
+  # while a newer main push waits behind it (then it yields to that push), and a
   # queued one is dropped when a newer main push arrives: only the newest
   # verified main commit deploys, and it contains the older ones. (Per-SHA
   # groups queued every commit; on 2026-09-24 that was 15 runs for commits
@@ -80,6 +83,7 @@ jobs:
       terminal_truth_harness: ${{ steps.filter.outputs.terminal_truth_harness }}
       image_tag: ${{ steps.image.outputs.tag }}
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       packages: write
@@ -87,6 +91,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+      # A main push diffs from the newest main commit CI proved green, not the push
+      # before it: a queued run dropped for a newer push left its commits untested
+      # by every path-gated lane (scripts/ci/last_green_main.py).
+      - name: Newest green main commit
+        id: green
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(python3 scripts/ci/last_green_main.py)" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -95,7 +108,7 @@ jobs:
           predicate-quantifier: some-with-excludes
           # A branch push qualifies that push, not every commit since main.
           # PRs still use GitHub's changed-file API against their base branch.
-          base: ${{ github.ref_name }}
+          base: ${{ steps.green.outputs.sha || github.ref_name }}
       - name: Fixture image key
         id: image
         run: echo "tag=$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')" >> "$GITHUB_OUTPUT"
@@ -242,6 +255,13 @@ jobs:
             LONGHOUSE_GIT_SHA="$GITHUB_SHA" \
             PROVIDER_VERSION=hermetic-fixture \
             PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   lifecycle:
     # Split out of Validation, where it ran serially after `make validate` and
@@ -284,6 +304,13 @@ jobs:
           else
             echo "No isolation receipts were written; nothing to record."
           fi
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   backend-shards:
     timeout-minutes: 30
@@ -317,6 +344,13 @@ jobs:
       - name: Run iOS simulator helper tests
         if: ${{ matrix.shard == 0 }}
         run: make test-ios-helper
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   backend-tests:
     name: "Backend tests"
@@ -352,6 +386,13 @@ jobs:
         env:
           PYTEST_ADDOPTS: "--durations=40"
         run: make test-provider-contract
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   engine-tests:
     timeout-minutes: 45
@@ -402,6 +443,13 @@ jobs:
           else
             echo "No isolation receipts were written; nothing to record."
           fi
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   frontend-tests:
     timeout-minutes: 20
@@ -417,6 +465,13 @@ jobs:
 
       - name: Run Frontend and Runner Tests in one isolated container
         run: make test-frontend-runner
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   ui-sweep:
     timeout-minutes: 15
@@ -456,6 +511,13 @@ jobs:
 
       - name: Open every menu at this size
         run: make test-ui-sweep ARGS=--viewports=${{ matrix.viewport }}
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   ios-tests:
     needs: changes
@@ -505,6 +567,13 @@ jobs:
           NATIVE_OPTIONS_JSON: >-
             {"IOS_TEST_SCHEMES": "${{ matrix.schemes }}", "IOS_TEST_FILTER": "${{ matrix.filter }}"}
         run: python3 scripts/qa/native-test-bootstrap.py --target test-ios
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   e2e-core:
     timeout-minutes: 30
@@ -537,6 +606,13 @@ jobs:
           else
             echo "No isolation receipts were written; nothing to record."
           fi
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   # The stock provider CLIs in Console and Helm against the scripted model: live text, thinking, tool and subagent
   # rows, terminal to client (.github/actions/terminal-truth). Path-filtered at the job, so CI always concludes and the
@@ -554,6 +630,7 @@ jobs:
     # A push that changes the engine also rebuilds it. With the mutation checks: about 11 minutes.
     timeout-minutes: 45
     permissions:
+      actions: write
       contents: read
       statuses: write
     steps:
@@ -562,6 +639,13 @@ jobs:
         with:
           mutations: ${{ (needs.changes.outputs.terminal_truth_harness == 'true' || github.event_name == 'workflow_dispatch') && 'true' || 'false' }}
           publish_status: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   # Bundle size and oversized images: a minute of work, only when the web app changed. Lighthouse stays in the nightly.
   web-quality:
@@ -595,6 +679,13 @@ jobs:
       - run: cd web && bun run build
       - name: Check bundle size
         run: cd web && node ./scripts/check-bundle-size.mjs
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   model-smoke:
     timeout-minutes: 20
@@ -620,6 +711,13 @@ jobs:
 
       - name: Smoke test all models
         run: uv run --with openai python scripts/qa/smoke_models.py --ci
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py
 
   small-checks:
     # Four checks that each take under a minute, in one job. As four jobs they
@@ -678,3 +776,10 @@ jobs:
         if: ${{ !cancelled() && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') }}
         timeout-minutes: 10
         run: make test-web-send-handoff
+      # A failed run cannot release; if a newer main commit waits behind it,
+      # let that one start now (scripts/ci/yield_failed_main_run.py).
+      - name: Yield a failed main run to the newer commit waiting behind it
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/yield_failed_main_run.py

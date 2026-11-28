@@ -889,6 +889,8 @@ validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
 
 validate-ship-monitor: ## @internal Ship monitor regression tests
 	@python3 scripts/tests/ship-monitor.test.py
+	@python3 scripts/tests/yield-failed-main-run.test.py
+	@python3 scripts/tests/last-green-main.test.py
 
 validate-ship-register: ## @internal make ship pushes, registers the watch ref, lands in memory and returns
 	@python3 scripts/tests/ship-register.test.py
