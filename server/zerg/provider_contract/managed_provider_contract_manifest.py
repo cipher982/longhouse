@@ -556,6 +556,10 @@ TRANSCRIPT_SIGNAL_IDS = frozenset(
         "delegation.workflow",
         "delegation.scheduled",
         "delegation.peer_message",
+        # Agent-maintained work checklist / plan steps (`update_steps`,
+        # `TodoWrite`, `TaskCreate`/`TaskUpdate`, `update_plan`, `todowrite`,
+        # OMP `todo`).
+        "session.checklist",
     }
 )
 _TRANSCRIPT_SIGNAL_TRIGGERS = frozenset(
@@ -572,6 +576,7 @@ _TRANSCRIPT_SIGNAL_TRIGGERS = frozenset(
         "workflow_run",
         "cron_create",
         "peer_send",
+        "plan_update",
     }
 )
 _TRANSCRIPT_SIGNAL_KEYS = frozenset(
