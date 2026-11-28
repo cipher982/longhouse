@@ -410,7 +410,9 @@ def run_command_cell_in(
             raise RuntimeError(f"the Runtime Host never offered send_input within {CONTROL_WAIT_S:.0f}s (session {sid})")
         out["session_id"] = sid
 
-        warm = send_input(api, sid, plan.warm)
+        # A real model takes a bare marker as a task and starts running tools, which stop at Cursor's approval prompt.
+        ask = " Reply with the single word OK. Do not use any tools." if real_cursor else ""
+        warm = send_input(api, sid, plan.warm + ask)
         sends.append(warm)
         deadline = time.monotonic() + REPLY_WAIT_S
         while time.monotonic() < deadline and not model_got("warm", f"TTRUTH{plan.nonce}"):
@@ -440,7 +442,7 @@ def run_command_cell_in(
             checks.append((f"{text} ({case.get('expect')})", ok, detail))
             time.sleep(2)
 
-        end = send_input(api, sid, plan.end)
+        end = send_input(api, sid, plan.end + ask)
         sends.append(end)
         deadline = time.monotonic() + REPLY_WAIT_S
         while time.monotonic() < deadline and not model_got("end", f"TTEND{plan.nonce}"):
