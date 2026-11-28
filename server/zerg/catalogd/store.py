@@ -4785,6 +4785,115 @@ def adopt_orphan_subagents_once(engine) -> int:
     return bound
 
 
+def release_human_roots_from_worker_flag_once(engine) -> int:
+    """Once per catalog, clear the worker flag a merged worker left on a root.
+
+    A worker inherits its parent's managed session id. Until the engine refused
+    that id, a worker transcript (an OMP task file, an Antigravity
+    ``invoke_subagent`` child) could ship under its parent's session, and its
+    ``is_subagent`` fact then marked the parent a worker and hid it. The rows it
+    left are exact: a session a person launched from a shell or the UI, flagged
+    a worker, with no parent edge of any kind. A real worker carries at least
+    the native pointer to its parent; a person's launch is a root. Visibility is
+    recomputed through the one policy, so any other hiding reason still holds.
+    """
+
+    from zerg.catalogd.schema import HUMAN_ROOT_WORKER_FLAG_GENERATION
+    from zerg.catalogd.schema import catalog_meta
+    from zerg.provider_contract.session_visibility_policy import HUMAN_LAUNCH_ACTORS
+
+    session_table = StorageSession.__table__
+    catalog = LiveSessionCatalog.__table__
+    card = LiveTimelineCard.__table__
+    thread = LiveSessionThread.__table__
+    projector_table = ProjectorState.__table__
+    released = 0
+    with engine.begin() as connection:
+        marker = connection.execute(
+            select(catalog_meta.c.human_root_worker_flag_generation).where(catalog_meta.c.singleton == 1)
+        ).scalar_one_or_none()
+        if marker == HUMAN_ROOT_WORKER_FLAG_GENERATION:
+            return 0
+        rows = (
+            connection.execute(
+                select(session_table).where(
+                    session_table.c.is_subagent == 1,
+                    session_table.c.launch_actor.in_(sorted(HUMAN_LAUNCH_ACTORS)),
+                    session_table.c.subagent_parent_session_id.is_(None),
+                    session_table.c.subagent_parent_provider_session_id.is_(None),
+                    session_table.c.subagent_parent_source_id.is_(None),
+                )
+            )
+            .mappings()
+            .all()
+        )
+        now = datetime.now(UTC)
+        commit_seq = _advance_commit_seq(connection, now) if rows else None
+        for row in rows:
+            session_id = str(row["session_id"])
+            primary_branch_kind = connection.execute(
+                select(thread.c.branch_kind).where(thread.c.session_id == session_id, thread.c.is_primary == 1)
+            ).scalar_one_or_none()
+            hidden = int(
+                evaluate_origin_visibility(
+                    SessionVisibilityFacts(
+                        provider=row["provider"],
+                        project=row["project"],
+                        environment=row["environment"],
+                        origin_kind=row["origin_kind"],
+                        launch_actor=row["launch_actor"],
+                        launch_surface=row["launch_surface"],
+                        cwd=row["cwd"],
+                        machine_id=row["machine_id"],
+                        primary_thread_is_worker_only=primary_branch_kind == "subagent",
+                        is_subagent=False,
+                    )
+                ).system_hidden
+            )
+            released += int(
+                connection.execute(
+                    update(session_table)
+                    .where(session_table.c.session_id == session_id, session_table.c.is_subagent == 1)
+                    .values(is_subagent=0, hidden_from_default_timeline=hidden, commit_seq=commit_seq, updated_at=now)
+                ).rowcount
+                or 0
+            )
+            for policy_table in (catalog, card):
+                connection.execute(
+                    update(policy_table)
+                    .where(policy_table.c.session_id == session_id)
+                    .values(hidden_from_default_timeline=hidden, updated_at=now)
+                )
+            connection.execute(
+                update(thread)
+                .where(thread.c.session_id == session_id, thread.c.is_primary == 1)
+                .values(hidden_from_default_timeline=hidden, updated_at=now)
+            )
+            # Search carries its own copy of the visibility; re-project it.
+            connection.execute(
+                update(projector_table)
+                .where(projector_table.c.session_id == session_id)
+                .values(
+                    desired_revision=commit_seq,
+                    desired_at=now,
+                    claimed_revision=None,
+                    claim_token=None,
+                    worker_id=None,
+                    claim_expires_at=None,
+                    status="idle",
+                    retry_at=None,
+                    commit_seq=commit_seq,
+                    updated_at=now,
+                )
+            )
+        connection.execute(
+            catalog_meta.update()
+            .where(catalog_meta.c.singleton == 1)
+            .values(human_root_worker_flag_generation=HUMAN_ROOT_WORKER_FLAG_GENERATION)
+        )
+    return released
+
+
 def _active_session_ids(connection, *, limit: int, days_back: int, observed_at: datetime) -> list[str]:
     live = LiveSession.__table__
     catalog = LiveSessionCatalog.__table__

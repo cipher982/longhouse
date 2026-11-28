@@ -897,6 +897,26 @@ class IngestMixin:
                         replaced_sessions=len(replaced_session_ids),
                     )
                     timer.mark("retire_predecessor")
+                    # The source moved to another session, and its native id
+                    # routes with it. Left behind, the alias keeps resolving the
+                    # source to the session it was wrongly merged into, and the
+                    # routing index refuses the alias write below that would
+                    # point it at its own session.
+                    moved_native_id = str(session_facts.get("provider_session_id") or "").strip()
+                    if moved_native_id and replaced_session_ids:
+                        alias_table = LiveSessionThreadAlias.__table__
+                        connection.execute(
+                            delete(alias_table).where(
+                                alias_table.c.provider == provider,
+                                alias_table.c.alias_kind == "provider_session_id",
+                                alias_table.c.alias_value == moved_native_id,
+                                alias_table.c.thread_id.in_(
+                                    select(live_session_thread.c.id).where(
+                                        live_session_thread.c.session_id.in_(sorted(replaced_session_ids))
+                                    )
+                                ),
+                            )
+                        )
                     for replaced_session_id in replaced_session_ids:
                         has_active_raw = connection.execute(
                             select(raw.c.envelope_id)

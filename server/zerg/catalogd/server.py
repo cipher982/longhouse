@@ -44,6 +44,7 @@ from zerg.catalogd.schema import read_deployment_activation
 from zerg.catalogd.store import SOURCE_RESUME_MAX_SOURCES
 from zerg.catalogd.store import CatalogStore
 from zerg.catalogd.store import adopt_orphan_subagents_once
+from zerg.catalogd.store import release_human_roots_from_worker_flag_once
 from zerg.catalogd.writer_lanes import DERIVED
 from zerg.catalogd.writer_lanes import PRIMARY
 from zerg.catalogd.writer_lanes import WriterLanes
@@ -384,6 +385,12 @@ class CatalogDaemon:
             _log_startup_stage("adopt_orphan_subagents", stage_started)
             if adopted:
                 logger.info("catalogd adopted %d orphan subagent(s) whose parent now resolves", adopted)
+
+            stage_started = time.perf_counter()
+            released = release_human_roots_from_worker_flag_once(self._engine)
+            _log_startup_stage("release_human_roots_from_worker_flag", stage_started)
+            if released:
+                logger.info("catalogd cleared a merged worker's flag from %d human-launched session(s)", released)
 
             stage_started = time.perf_counter()
             self._executor = WriterLanes()

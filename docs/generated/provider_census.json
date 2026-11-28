@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 352,
+  "file_count": 353,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1277,6 +1277,13 @@
         "claude",
         "codex",
         "pi"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_catalogd_human_root_worker_flag.py",
+      "providers": [
+        "antigravity",
+        "omp"
       ]
     },
     {

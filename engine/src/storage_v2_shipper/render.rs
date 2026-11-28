@@ -388,7 +388,14 @@ pub(super) fn resolve_session_id(
     let Some(override_id) = override_id else {
         return canonical_session_id(parsed);
     };
-    let resolved = if provider.eq_ignore_ascii_case("codex")
+    // A Codex or Antigravity worker transcript names its own session; a managed
+    // id handed to it was inherited from the parent that spawned it, and
+    // honoring it merges the worker into the parent and hides the parent behind
+    // the worker's flag. OMP is left out on purpose: its `parentSession` also
+    // marks a fork the managed session itself continues in.
+    let refuses_inherited_id =
+        provider.eq_ignore_ascii_case("codex") || provider.eq_ignore_ascii_case("antigravity");
+    let resolved = if refuses_inherited_id
         && !parse_result.metadata.honors_managed_binding()
         && override_id != parsed
     {

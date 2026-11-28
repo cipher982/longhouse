@@ -447,3 +447,120 @@ def test_router_extracts_rotation_ids_from_reset_records():
     _spec, parsed = envelope_wire.parse_envelope(degraded, tenant_id=tenant, machine_id="cinder", lane="live")
     assert storage_router._conversation_resets(parsed["render_spec"]) == []
     assert storage_router._conversation_resets(None) == []
+
+
+def _worker_envelope(*, session_id: str, native_id: str, epoch, generation, predecessor=None) -> dict:
+    """A worker transcript's envelope: its own source, its own native id."""
+
+    payload = _reset_envelope(
+        tenant_id=get_settings().archive_primary_tenant_id,
+        machine_id="cinder",
+        session_id=session_id,
+        previous_native_id=native_id,
+        new_native_id=native_id,
+    )
+    # One render generation per session, as the engine derives it.
+    payload["render"]["generation_id"] = str(generation)
+    payload["render"]["records"] = [_render_record(event_id=str(uuid4()))]
+    payload["session"].update(launch_actor=None, launch_surface=None, origin_kind=None)
+    payload["source_epoch"] = str(epoch)
+    payload["predecessor_source_epoch"] = str(predecessor) if predecessor is not None else None
+    data = base64.b64decode(payload["records"][0]["data_b64"])
+    payload["expected_envelope_id"] = envelope_id(
+        EnvelopeIdentity(
+            tenant_id=payload["tenant_id"],
+            machine_id="cinder",
+            provider="claude",
+            opaque_source_id=payload["opaque_source_id"],
+            source_epoch=epoch,
+            range_kind="byte_offset",
+            range_start=0,
+            range_end=len(data),
+            record_hashes=hash_records((data,)),
+        )
+    )
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_a_worker_source_rebound_to_its_own_session_takes_its_native_id_along(monkeypatch):
+    """A worker that shipped under its parent's managed id left its native id on
+    the parent's thread. When the source rebinds to its own session, the alias
+    must leave the parent, or the worker's id keeps resolving to the parent."""
+
+    tempdir = TemporaryDirectory(prefix="lh2-rebind-", dir="/tmp")
+    root = Path(tempdir.name)
+    parent_session = str(uuid4())
+    parent_native_id = str(uuid4())
+    worker_native_id = str(uuid4())
+    _seed_helm_session(root / "catalog.db", session_id=parent_session, previous_native_id=parent_native_id)
+
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _InlineRenderPool(root / "objects"))
+    monkeypatch.setattr(storage_titles, "schedule_storage_session_title", lambda candidate: None)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+
+    def worker_alias_sessions() -> set[str]:
+        engine = create_catalog_engine(root / "catalog.db")
+        try:
+            with engine.begin() as connection:
+                alias = LiveSessionThreadAlias.__table__
+                thread = LiveSessionThread.__table__
+                return {
+                    str(row[0])
+                    for row in connection.execute(
+                        thread.select()
+                        .with_only_columns(thread.c.session_id)
+                        .where(
+                            thread.c.id.in_(
+                                alias.select().with_only_columns(alias.c.thread_id).where(alias.c.alias_value == worker_native_id)
+                            )
+                        )
+                    )
+                }
+        finally:
+            engine.dispose()
+
+    try:
+        # The parent's own transcript, so it outlives losing the worker's rows.
+        parent_generation = uuid4()
+        await _ingest(
+            app,
+            _worker_envelope(session_id=parent_session, native_id=parent_native_id, epoch=uuid4(), generation=parent_generation),
+        )
+        merged_epoch = uuid4()
+        await _ingest(
+            app,
+            _worker_envelope(session_id=parent_session, native_id=worker_native_id, epoch=merged_epoch, generation=parent_generation),
+        )
+        assert worker_alias_sessions() == {parent_session}
+
+        await _ingest(
+            app,
+            _worker_envelope(
+                session_id=worker_native_id,
+                native_id=worker_native_id,
+                epoch=uuid4(),
+                generation=uuid4(),
+                predecessor=merged_epoch,
+            ),
+        )
+        assert parent_session not in worker_alias_sessions()
+        parent = await catalog.call("session.alias.resolve.v2", {"provider_session_id": parent_native_id, "owner_id": 1})
+        assert parent["found"] is True
+        assert parent["session_id"] == parent_session
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()

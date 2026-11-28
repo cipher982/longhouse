@@ -49,6 +49,7 @@ DEFAULT_BUSY_TIMEOUT_MS = 5_000
 STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
 SESSION_RENDER_STATE_GENERATION = "session-render-state-v1"
 SUBAGENT_PARENT_GENERATION = "subagent-parent-retired-v1"
+HUMAN_ROOT_WORKER_FLAG_GENERATION = "human-root-worker-flag-v1"
 
 
 class CatalogSchemaError(RuntimeError):
@@ -109,6 +110,8 @@ catalog_meta = Table(
     Column("render_state_generation", Text, nullable=True),
     # One-shot orphan-subagent adoption marker; additive like the one above.
     Column("subagent_parent_generation", Text, nullable=True),
+    # One-shot release of human-launched roots a merged worker flagged; additive.
+    Column("human_root_worker_flag_generation", Text, nullable=True),
     # JSON {table: ISO time} of each table's last statistics refresh.
     # Additive; startup refreshes only tables whose entry is old (server.py).
     Column("planner_statistics_json", Text, nullable=True),

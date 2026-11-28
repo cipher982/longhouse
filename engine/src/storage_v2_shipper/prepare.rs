@@ -379,6 +379,46 @@ fn prepare_file_envelope(
     if durable_session_id.is_none() {
         durable_session_id = binding.map(|(session_id, _)| session_id);
     }
+    // A worker another Antigravity conversation recorded spawning is its own
+    // session, named by its own conversation id, whatever a hook or binding
+    // says. A worker runs inside its parent's process and inherits the parent's
+    // managed session id, so a hook that trusts the environment hands the
+    // child's transcript to the parent; shipped that way, the child's events
+    // land in the parent's transcript and its worker flag hides the parent.
+    // Naming the child's own id here also moves a source that already shipped
+    // under the parent: the epoch rotates as a session rebind and the host
+    // retires the predecessor's rows from the parent.
+    let antigravity_child = if provider.eq_ignore_ascii_case("antigravity") {
+        crate::antigravity_subagents::child_of(&canonical_path)
+    } else {
+        None
+    };
+    if let Some(own_session_id) = antigravity_child
+        .as_ref()
+        .and_then(|_| crate::pipeline::parser::antigravity_session_id_from_path(&canonical_path))
+    {
+        if let Some(inherited) = durable_session_id
+            .as_deref()
+            .filter(|session_id| *session_id != own_session_id)
+        {
+            tracing::warn!(
+                path = %canonical_path.display(),
+                inherited_session_id = inherited,
+                own_session_id = %own_session_id,
+                "Antigravity worker transcript carried its parent's session id; shipping it as its own session"
+            );
+            // A binding that names the parent is the inherited claim itself;
+            // drop it so the path stops reading as the parent's transcript.
+            let bindings = crate::state::session_binding::SessionBinding::new(conn);
+            if bindings
+                .get_for_provider(&path_text, provider)?
+                .is_some_and(|bound| bound != own_session_id)
+            {
+                bindings.unbind(&path_text)?;
+            }
+            durable_session_id = Some(own_session_id);
+        }
+    }
     if let Some(pending) =
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
     {
@@ -471,7 +511,7 @@ fn prepare_file_envelope(
     // parent's record lands before the child's transcript exists.
     let antigravity_unclaimed_root = provider.eq_ignore_ascii_case("antigravity")
         && durable_session_id.is_none()
-        && crate::antigravity_subagents::child_of(&canonical_path).is_none();
+        && antigravity_child.is_none();
     if antigravity_unclaimed_root {
         match crate::antigravity_acp::bind_discovered_source(
             conn,

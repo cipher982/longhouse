@@ -540,6 +540,7 @@ fn collect_outbox_impl(
             Ok(b) => b,
             Err(_) => continue, // file disappeared between read_dir and read
         };
+        let bytes = reattribute_inherited_antigravity_worker(bytes);
         let payload: PresenceOutboxPayload = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => {
@@ -2177,6 +2178,56 @@ fn unmanaged_binding_signal_for_payload(
         cwd: payload.cwd.clone(),
         observed_at,
     })
+}
+
+/// An Antigravity worker (`invoke_subagent`, a swarm member) runs inside its
+/// parent's process and inherits the parent's `LONGHOUSE_MANAGED_SESSION_ID`.
+/// A hook installed before it learned to notice reports the worker's events as
+/// the parent's managed session, which binds the worker's transcript to the
+/// parent and drives the parent's phase from the worker's tools. The parent's
+/// own record of the spawn is the authority: the event is rewritten to what the
+/// current hook reports, the worker's own conversation, unmanaged.
+fn reattribute_inherited_antigravity_worker(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(&bytes) else {
+        return bytes;
+    };
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string()
+    };
+    if !text("provider").eq_ignore_ascii_case("antigravity") || text("control_path") != "managed" {
+        return bytes;
+    }
+    let transcript = text("transcript_path");
+    if transcript.is_empty() {
+        return bytes;
+    }
+    let transcript = Path::new(&transcript);
+    let Some(own_session_id) =
+        crate::pipeline::parser::antigravity_session_id_from_path(transcript)
+    else {
+        return bytes;
+    };
+    let inherited_session_id = text("session_id");
+    if inherited_session_id == own_session_id
+        || crate::antigravity_subagents::child_of(transcript).is_none()
+    {
+        return bytes;
+    }
+    warn!(
+        inherited_session_id,
+        own_session_id, "Antigravity worker hook event carried its parent's session id; attributing it to the worker"
+    );
+    object.insert("session_id".to_string(), Value::String(own_session_id));
+    object.insert(
+        "control_path".to_string(),
+        Value::String("unmanaged".to_string()),
+    );
+    serde_json::to_vec(&Value::Object(object)).unwrap_or(bytes)
 }
 
 /// Persist the managed transcript identity after the hook has handed the event
@@ -4077,6 +4128,58 @@ mod tests {
         assert_eq!(PathBuf::from(row.0), fs::canonicalize(&transcript).unwrap());
         assert_eq!(row.1, "antigravity-session");
         assert_eq!(row.2, "antigravity");
+    }
+
+    #[test]
+    fn test_collect_outbox_attributes_an_inherited_antigravity_worker_event_to_the_worker() {
+        // A worker runs inside its parent's process with the parent's managed
+        // session id. A hook that trusts that id must not bind the worker's
+        // transcript to the parent or post the worker's tools as its phase.
+        let parent = "0b7e6a3c-1d2f-4e5a-9b8c-7d6e5f4a3b2c";
+        let child = "1c8f7b4d-2e3a-4f6b-8c9d-0e1f2a3b4c5d";
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        drop(crate::state::db::open_db(Some(db.path())).unwrap());
+        let brain = dir.path().join("brain");
+        let sidecars = brain.join(parent).join(".system_generated/subagents");
+        fs::create_dir_all(&sidecars).unwrap();
+        fs::write(
+            sidecars.join(format!("{child}.json")),
+            format!(r#"{{"conversationId":"{child}","subagentDescriptor":{{"typeName":"self"}},"state":"SUBAGENT_STATE_ALIVE"}}"#),
+        )
+        .unwrap();
+        let transcript = brain
+            .join(child)
+            .join(".system_generated/logs/transcript_full.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(&transcript, b"{}\n").unwrap();
+        let outbox = dir.path().join("outbox");
+        fs::create_dir_all(&outbox).unwrap();
+        fs::write(
+            outbox.join("prs.WORKER.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "session_id": "managed-parent-session",
+                "state": "running",
+                "tool_name": "run_command",
+                "provider": "antigravity",
+                "control_path": "managed",
+                "transcript_path": transcript,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let result = collect_outbox_with_local_state_result(&outbox, Some(db.path()));
+
+        assert_eq!(result.posts.len(), 1);
+        let posted: Value = serde_json::from_slice(&result.posts[0].bytes).unwrap();
+        assert_eq!(posted["session_id"], child);
+        assert_eq!(posted["control_path"], "unmanaged");
+        let conn = crate::state::db::open_db(Some(db.path())).unwrap();
+        let bindings: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_binding", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(bindings, 0);
     }
 
     #[test]

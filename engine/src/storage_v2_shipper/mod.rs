@@ -4014,6 +4014,96 @@ mod tests {
     }
 
     #[test]
+    fn an_antigravity_worker_bound_to_its_parents_managed_session_ships_as_itself() {
+        // A worker inherits its parent's LONGHOUSE_MANAGED_SESSION_ID, and a
+        // hook that trusts the environment binds the worker's transcript to the
+        // parent's managed session. The parent's spawn record outranks that.
+        let parent_session = "5f0e1d2c-3b4a-4c5d-8e6f-7a8b9c0d1e2f";
+        let dir = tempfile::tempdir().unwrap();
+        let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_ALIVE");
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &stable_source_path(&path).to_string_lossy(),
+                parent_session,
+                "antigravity",
+            )
+            .unwrap();
+
+        let prepared =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(prepared.envelope.session_id, AGY_CHILD);
+        assert!(prepared.envelope.session.is_subagent);
+        assert_eq!(
+            crate::state::session_binding::SessionBinding::new(&conn)
+                .get_for_provider(&stable_source_path(&path).to_string_lossy(), "antigravity")
+                .unwrap(),
+            None,
+            "the inherited binding is dropped"
+        );
+
+        // The same inherited id arriving as a wake's override is refused too.
+        let dir = tempfile::tempdir().unwrap();
+        let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_ALIVE");
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(parent_session),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(prepared.envelope.session_id, AGY_CHILD);
+    }
+
+    #[test]
+    fn an_antigravity_worker_already_shipped_under_its_parent_moves_to_its_own_session() {
+        // History: before the worker was recognized, its transcript shipped
+        // under the parent's session. The next observation rebinds the source,
+        // and the new epoch names its predecessor so the host retires the rows
+        // it left in the parent.
+        let parent_session = "5f0e1d2c-3b4a-4c5d-8e6f-7a8b9c0d1e2f";
+        let dir = tempfile::tempdir().unwrap();
+        let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_ALIVE");
+        let sidecar = dir
+            .path()
+            .join("brain")
+            .join(AGY_PARENT)
+            .join(".system_generated/subagents")
+            .join(format!("{AGY_CHILD}.json"));
+        let sidecar_bytes = fs::read(&sidecar).unwrap();
+        fs::remove_file(&sidecar).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &stable_source_path(&path).to_string_lossy(),
+                parent_session,
+                "antigravity",
+            )
+            .unwrap();
+        let merged = prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(merged.envelope.session_id, parent_session);
+        acknowledge_prepared(&mut conn, &merged);
+
+        fs::write(&sidecar, sidecar_bytes).unwrap();
+        let moved = prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+            .unwrap()
+            .expect("the rebound source ships again from the start");
+        assert_eq!(moved.envelope.session_id, AGY_CHILD);
+        assert_ne!(moved.envelope.source_epoch, merged.envelope.source_epoch);
+        assert_eq!(
+            moved.envelope.predecessor_source_epoch.as_deref(),
+            Some(merged.envelope.source_epoch.as_str())
+        );
+    }
+
+    #[test]
     fn a_killed_swarm_worker_reads_finished_whatever_its_last_record() {
         let dir = tempfile::tempdir().unwrap();
         let path = antigravity_child_store(dir.path(), AGY_CHILD_WORKING, "SUBAGENT_STATE_KILLED");

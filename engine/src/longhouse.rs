@@ -1629,29 +1629,85 @@ fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
 
 /// The Antigravity hook is what Longhouse controls the session through, so a
 /// launch without it is a plain `agy` run wearing a managed session id.
-fn antigravity_hook_script_path() -> anyhow::Result<PathBuf> {
-    Ok(longhouse_home()?
-        .join("managed-local")
-        .join("antigravity")
-        .join("plugins")
+/// The hook body, the one file `longhouse-server onboard` installs from too.
+const ANTIGRAVITY_HOOK_TEMPLATE: &str =
+    include_str!("../../server/zerg/provider_contract/longhouse-antigravity-hook.sh");
+
+/// `shlex.quote`, so the launcher and the Python installer render identical
+/// bytes and never rewrite each other's copy.
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || "_@%+=:,./-".contains(ch));
+    if safe {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn antigravity_hook_content(longhouse_home: &Path) -> String {
+    ANTIGRAVITY_HOOK_TEMPLATE.replace(
+        "__LONGHOUSE_HOME__",
+        &shell_quote(&longhouse_home.to_string_lossy()),
+    )
+}
+
+/// Every place a Longhouse Antigravity hook script has been installed: the
+/// copy the global hooks file runs, and the plugin copies agy keeps.
+fn antigravity_hook_script_copies(home: &Path, longhouse_home: &Path) -> Vec<PathBuf> {
+    let plugin = Path::new("plugins")
         .join("longhouse-runtime")
-        .join("longhouse-antigravity-hook.sh"))
+        .join("longhouse-antigravity-hook.sh");
+    vec![
+        longhouse_home
+            .join("managed-local")
+            .join("antigravity")
+            .join(&plugin),
+        home.join(".gemini").join("config").join(&plugin),
+        home.join(".gemini").join("antigravity-cli").join(&plugin),
+    ]
+}
+
+/// Bring every installed hook copy to this binary's hook body. A hook only
+/// changes when Longhouse is updated, and nothing else rewrites the installed
+/// copies, so a launch that merely checked the file existed kept running
+/// whatever version onboarding last wrote.
+fn refresh_antigravity_hook_copies(home: &Path, longhouse_home: &Path) -> anyhow::Result<()> {
+    let content = antigravity_hook_content(longhouse_home);
+    let copies = antigravity_hook_script_copies(home, longhouse_home);
+    for (index, script) in copies.iter().enumerate() {
+        // The first copy is the one the global hooks file runs; it is created
+        // when missing. The plugin copies are refreshed only where agy has one.
+        if index > 0 && !script.is_file() {
+            continue;
+        }
+        if std::fs::read_to_string(script).ok().as_deref() == Some(content.as_str()) {
+            continue;
+        }
+        let dir = script
+            .parent()
+            .context("Antigravity hook path has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let staged = dir.join(".longhouse-antigravity-hook.sh.tmp");
+        std::fs::write(&staged, &content).with_context(|| format!("write {}", staged.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&staged, script)
+            .with_context(|| format!("install {}", script.display()))?;
+    }
+    Ok(())
 }
 
 fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
-    let script = antigravity_hook_script_path()?;
-    if !script.is_file() {
-        anyhow::bail!(
-            "Antigravity hook is not installed at {}. Run `longhouse-server onboard` to install \
-             it before launching a managed Antigravity session.",
-            script.display()
-        );
-    }
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    let hooks = PathBuf::from(home)
-        .join(".gemini")
-        .join("config")
-        .join("hooks.json");
+    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
+    let hooks = home.join(".gemini").join("config").join("hooks.json");
     let registered = std::fs::read_to_string(&hooks)
         .ok()
         .is_some_and(|raw| raw.contains("longhouse-runtime"));
@@ -1662,7 +1718,7 @@ fn ensure_antigravity_hook_installed() -> anyhow::Result<()> {
             hooks.display()
         );
     }
-    Ok(())
+    refresh_antigravity_hook_copies(&home, &longhouse_home()?)
 }
 
 fn push_str_opt(out: &mut Vec<String>, flag: &str, value: &Option<String>) {
@@ -5782,11 +5838,44 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_hook_script_lives_under_the_managed_local_plugin_root() {
-        let path = antigravity_hook_script_path().unwrap();
-        assert!(path.ends_with(
+    fn antigravity_launch_refreshes_every_drifted_hook_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = home.join(".longhouse");
+        let copies = antigravity_hook_script_copies(&home, &longhouse_home);
+        assert!(copies[0].ends_with(
             "managed-local/antigravity/plugins/longhouse-runtime/longhouse-antigravity-hook.sh"
         ));
+        // An old copy agy still keeps in its plugin store; the config plugin
+        // copy does not exist and must not be created.
+        std::fs::create_dir_all(copies[2].parent().unwrap()).unwrap();
+        std::fs::write(&copies[2], "#!/bin/bash\n# old hook\n").unwrap();
+
+        refresh_antigravity_hook_copies(&home, &longhouse_home).unwrap();
+
+        let expected = antigravity_hook_content(&longhouse_home);
+        assert!(expected.contains(&format!("LONGHOUSE_HOME={}", longhouse_home.display())));
+        assert!(expected.contains("inherited_child_conversation"));
+        assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), expected);
+        assert_eq!(std::fs::read_to_string(&copies[2]).unwrap(), expected);
+        assert!(!copies[1].exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&copies[0]).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+    }
+
+    #[test]
+    fn antigravity_hook_home_quoting_matches_python_shlex_quote() {
+        assert_eq!(shell_quote("/Users/me/.longhouse"), "/Users/me/.longhouse");
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(
+            shell_quote("/Users/a b/.longhouse"),
+            "'/Users/a b/.longhouse'"
+        );
+        assert_eq!(shell_quote("/tmp/it's"), "'/tmp/it'\"'\"'s'");
     }
 
     #[test]
