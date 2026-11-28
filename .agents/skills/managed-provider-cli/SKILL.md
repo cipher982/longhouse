@@ -304,4 +304,14 @@ the terminal. A command that opens no model turn is marked `turn_started: false`
 session is freed at once. A slash command sent as a steer is queued for idle. Proof:
 the Terminal Truth `slash_command` scenario (`make prove
 CELLS="claude/helm:slash_command"`), cases in each provider's
-`slash_commands.cases`.
+`slash_commands.cases`. The Cursor cell runs a fake `cursor-agent`
+(`server/zerg/qa/fake_cursor/cursor-agent`), which proves only the keystrokes
+Longhouse types. `make prove CELLS="cursor/helm:slash_command" ARGS=--real-cursor`
+runs it against the real CLI signed in under
+`~/.cache/longhouse-prove/real-cursor-home` on cube-proof (`HOME=<it>
+cursor-agent login` once). It bills that Cursor account, so it is never in CI.
+
+Real Cursor fires no hook until a prompt is submitted, so the launcher seeds the
+first idle phase (and idle presence) itself once Cursor's prompt is drawn
+(`LaunchScreen` in `engine/src/cursor_helm_launcher.rs`). Without it, app input to
+a fresh Cursor session waited until someone typed in its terminal.
