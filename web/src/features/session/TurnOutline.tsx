@@ -25,16 +25,14 @@ export function turnKeyForEventId(eventId: AgentEventId | string): string {
 }
 
 /**
- * "8:39" rather than "08:39 AM": an outline row spends its width on the ask.
- * The day period is dropped; the row's tooltip carries the full time.
+ * "13:39" (24-hour, zero-padded): an outline row spends its width on the ask,
+ * and a 12-hour clock without a day period would be ambiguous.
  */
 export function formatTurnTime(dateStr: string): string {
-  const parts = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).formatToParts(
-    parseUTC(dateStr),
-  );
-  const hour = parts.find((part) => part.type === "hour")?.value;
-  const minute = parts.find((part) => part.type === "minute")?.value;
-  return hour && minute ? `${hour}:${minute}` : formatTime(dateStr);
+  const date = parseUTC(dateStr);
+  if (Number.isNaN(date.getTime())) return formatTime(dateStr);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** How much of the user's ask is kept for outline rows (CSS ellipsis trims to fit). */

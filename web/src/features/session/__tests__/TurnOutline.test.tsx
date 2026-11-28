@@ -48,10 +48,13 @@ function assistantMessageItem(id: number, timestamp: string, text: string): Time
 }
 
 describe("formatTurnTime", () => {
-  it("prints hour and minute without a day period", () => {
-    const text = formatTurnTime("2026-10-06T13:39:00Z");
-    expect(text).toMatch(/^\d{1,2}:\d{2}$/);
-    expect(text.endsWith(":39")).toBe(true);
+  it("prints a zero-padded 24-hour clock in local time", () => {
+    for (const iso of ["2026-10-06T13:39:00Z", "2026-10-06T04:05:00Z", "2026-10-06T23:59:00Z"]) {
+      const local = new Date(iso);
+      const expected = `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
+      expect(formatTurnTime(iso)).toBe(expected);
+      expect(formatTurnTime(iso)).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+    }
   });
 });
 
