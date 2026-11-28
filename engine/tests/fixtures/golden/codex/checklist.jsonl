@@ -1,0 +1,2 @@
+{"type":"response_item","timestamp":"2026-11-28T16:20:05Z","payload":{"type":"function_call","name":"update_plan","arguments":"{\"explanation\":\"Starting implementation\",\"plan\":[{\"step\":\"Add schema\",\"status\":\"completed\"},{\"step\":\"Run tests\",\"status\":\"in_progress\"}]}","call_id":"call_plan_1"}}
+{"type":"response_item","timestamp":"2026-11-28T16:20:06Z","payload":{"type":"function_call_output","call_id":"call_plan_1","output":"Plan updated"}}

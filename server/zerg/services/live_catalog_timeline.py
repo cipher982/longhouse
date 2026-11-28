@@ -36,6 +36,7 @@ from zerg.services.console_control_projection import project_console_control
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.session_provider_facts import checklist as project_checklist
 from zerg.services.session_provider_facts import last_turn as project_last_turn
 from zerg.services.session_provider_facts import project_session_hud
 from zerg.services.session_provider_facts import provider_facts_from_rows
@@ -499,6 +500,17 @@ def _pending_response_from_catalog(
             "selected_model": selected_model,
             "last_turn": project_last_turn(norm_provider_facts, {}) if norm_provider_facts else None,
             "recap": project_recap(norm_provider_facts) if norm_provider_facts else None,
+            "checklist": (
+                project_checklist(
+                    norm_provider_facts,
+                    last_user_input_at=(
+                        session_state.last_user_input_at or (session_state.turn.started_at if session_state.turn is not None else None)
+                    ),
+                    activity_state=session_state.activity.state,
+                )
+                if norm_provider_facts
+                else None
+            ),
             "usage_latest": hud["usage_latest"],
             "permission_mode": hud["permission_mode"],
             "provider_title": hud["provider_title"],
@@ -649,6 +661,17 @@ def _response_from_catalog(
         selected_model=selected_model,
         last_turn=project_last_turn(norm_provider_facts, {}) if norm_provider_facts else None,
         recap=project_recap(norm_provider_facts) if norm_provider_facts else None,
+        checklist=(
+            project_checklist(
+                norm_provider_facts,
+                last_user_input_at=(
+                    session_state.last_user_input_at or (session_state.turn.started_at if session_state.turn is not None else None)
+                ),
+                activity_state=session_state.activity.state,
+            )
+            if norm_provider_facts
+            else None
+        ),
         usage_latest=hud["usage_latest"],
         permission_mode=hud["permission_mode"],
         provider_title=hud["provider_title"],

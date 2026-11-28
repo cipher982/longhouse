@@ -30,6 +30,7 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.session_input_links import input_origins_by_event
 from zerg.services.session_input_links import input_receipts_from_rows
 from zerg.services.session_input_links import session_input_receipts
+from zerg.services.session_provider_facts import checklist as project_checklist
 from zerg.services.session_provider_facts import last_turn
 from zerg.services.session_provider_facts import project_session_hud
 from zerg.services.session_provider_facts import provider_facts_from_rows
@@ -552,6 +553,28 @@ def _workspace_envelope(
     session_json["input_receipts"] = receipts
     session_json["last_turn"] = last_turn(facts, turn_ends)
     session_json["recap"] = recap(facts)
+    session_state_obj = getattr(session, "session_state", None)
+    last_user_ts = getattr(session_state_obj, "last_user_input_at", None)
+    if last_user_ts is None:
+        turn_obj = getattr(session_state_obj, "turn", None)
+        last_user_ts = getattr(turn_obj, "started_at", None)
+    for event in reversed(events):
+        if event.get("role") == "user" and event.get("interaction_kind") not in {
+            "compaction_boundary",
+            "provider_notification",
+            "provider_reasoning",
+        }:
+            ev_ts = event.get("timestamp")
+            if ev_ts:
+                if last_user_ts is None or str(ev_ts) > str(last_user_ts):
+                    last_user_ts = ev_ts
+            break
+    activity_obj = getattr(session_state_obj, "activity", None)
+    session_json["checklist"] = project_checklist(
+        facts,
+        last_user_input_at=last_user_ts,
+        activity_state=getattr(activity_obj, "state", None),
+    )
     session_json["selected_model"] = getattr(session, "selected_model", None)
     hud = project_session_hud(
         facts,

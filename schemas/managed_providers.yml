@@ -61,6 +61,9 @@ transcript_signal_surfaces:
   delegation.peer_message:
     disposition: not_implemented
     owner_action: "Surface peer message delegation signal once ingest is implemented"
+  session.checklist:
+    disposition: implemented
+    surface_proof: server/tests_lite/test_storage_v2_provider_facts.py
 # requires_longhouse_cli means the Machine Agent still needs the
 # Python-packaged longhouse CLI for remote-control shellouts. It does not mean
 # all device Python has been removed; the no-Python device inventory separately
@@ -648,6 +651,13 @@ providers:
       canary: codex_orchestration_signals
       trigger: peer_send
       owner_action: "project author/recipient agent messages and inter_agent_communication_metadata as a delegation edge"
+    session.checklist:
+      disposition: implemented
+      raw_source: response_item/function_call.update_plan
+      entrypoints: [cli]
+      fixture: engine/tests/fixtures/golden/codex/checklist.jsonl
+      canary: codex_transcript_signals
+      trigger: plan_update
     turn.duration:
       disposition: implemented
       raw_source: event_msg/task_complete + event_msg/turn_aborted
@@ -1298,6 +1308,13 @@ providers:
       canary: claude_orchestration_signals
       trigger: peer_send
       owner_action: "model the SendMessage call and its pin/resume result as a delegation edge"
+    session.checklist:
+      disposition: implemented
+      raw_source: "assistant/tool_use.TodoWrite + user/toolUseResult.(TaskCreate|TaskUpdate)"
+      entrypoints: [cli]
+      fixture: engine/tests/fixtures/golden/claude/checklist.jsonl
+      canary: claude_transcript_signals
+      trigger: plan_update
     turn.duration:
       disposition: implemented
       raw_source: system/turn_duration
@@ -1750,6 +1767,12 @@ providers:
       canary: opencode_orchestration_signals
       trigger: census
       owner_action: "no agent-to-agent message record observed"
+    session.checklist:
+      disposition: implemented
+      raw_source: sidecar:opencode.db/part.tool.todowrite
+      fixture: engine/tests/fixtures/golden/opencode/checklist.json
+      canary: opencode_transcript_signals
+      trigger: plan_update
     turn.duration:
       disposition: not_implemented
       raw_source: sidecar:opencode.db/message.data.time
@@ -2298,6 +2321,12 @@ providers:
       canary: antigravity_orchestration_signals
       trigger: census
       owner_action: "SYSTEM_MESSAGE sender=<childId> carries child returns, not peer messages"
+    session.checklist:
+      disposition: implemented
+      raw_source: MODEL/PLANNER_RESPONSE.tool_calls[].update_steps
+      fixture: engine/tests/fixtures/golden/antigravity/checklist.jsonl
+      canary: antigravity_transcript_signals
+      trigger: plan_update
     turn.duration:
       disposition: upstream_absent
       raw_source: "none in transcript_full.jsonl (records carry created_at only); duration_seconds exists on the print result and step_update stream, not the transcript"
@@ -2767,6 +2796,12 @@ providers:
       canary: cursor_orchestration_signals
       trigger: census
       owner_action: "no agent-to-agent message record observed"
+    session.checklist:
+      disposition: implemented
+      raw_source: assistant/tool_use.TodoWrite
+      fixture: engine/tests/fixtures/golden/cursor/checklist.jsonl
+      canary: cursor_transcript_signals
+      trigger: plan_update
     turn.duration:
       disposition: upstream_absent
       raw_source: "none: no turn timing in store JSON blobs or meta across 260 stores (2026-11-15); durationMs exists only on tool results"
@@ -3218,6 +3253,12 @@ providers:
       canary: pi_orchestration_signals
       trigger: census
       owner_action: "no agent-to-agent message record observed"
+    session.checklist:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "Pi has no built-in todo or plan checklist tool"
     turn.duration:
       disposition: upstream_absent
       raw_source: none
@@ -3683,6 +3724,12 @@ providers:
       canary: omp_orchestration_signals
       trigger: census
       owner_action: "no agent-to-agent message record observed"
+    session.checklist:
+      disposition: implemented
+      raw_source: message/toolResult.todo.details.phases
+      fixture: engine/tests/fixtures/golden/omp/checklist.jsonl
+      canary: omp_transcript_signals
+      trigger: plan_update
     turn.duration: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: turn_end, owner_action: "Survey OMP turn duration in Phase 2"}
     session.recap: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: idle_after_turn, owner_action: "Survey OMP recaps in Phase 2"}
     session.title: {disposition: implemented, raw_source: title/title_change, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}

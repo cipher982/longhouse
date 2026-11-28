@@ -4829,6 +4829,14 @@ summary:has(> .run-dot) {
 		"request_approval",
 		"approval_request"
 	]);
+	var CHECKLIST_WRITE_TOOLS = /* @__PURE__ */ new Set([
+		"update_steps",
+		"todowrite",
+		"update_plan",
+		"todo",
+		"taskcreate",
+		"taskupdate"
+	]);
 	function normalizedInteractionIdentity(interaction) {
 		const presentation = interaction.presentation;
 		return [
@@ -4914,7 +4922,9 @@ summary:has(> .run-dot) {
 		if (isToolInteractionFailed(interaction)) return false;
 		if (interaction.callEvent?.turn_end || interaction.resultEvent?.turn_end) return false;
 		const identity = normalizedInteractionIdentity(interaction);
-		if ([interaction.toolName, interaction.presentation?.tool_name].filter(Boolean).map((name) => String(name).toLowerCase()).some((name) => HUMAN_INTERACTION_TOOLS.has(name))) return false;
+		const exactNames = [interaction.toolName, interaction.presentation?.tool_name].filter(Boolean).map((name) => String(name).toLowerCase());
+		if (exactNames.some((name) => HUMAN_INTERACTION_TOOLS.has(name))) return false;
+		if (!(Boolean(interaction.presentation?.mcp_namespace) || interaction.toolName.startsWith("mcp__")) && exactNames.some((name) => CHECKLIST_WRITE_TOOLS.has(name))) return false;
 		if (/\b(question|approval|permission)\b/.test(identity)) return false;
 		return true;
 	}

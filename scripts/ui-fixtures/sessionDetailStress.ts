@@ -669,6 +669,20 @@ export function buildSessionDetailStressFixture(): SessionDetailFixture {
       text: "Workshopped a denser session layout and pinned the QA fixture. Next: capture the timeline pane and compare against the phone.",
       at: "2026-04-15T15:30:00Z",
     },
+    checklist: {
+      items: [
+        { id: "1", title: "Kill livelocked git fetch and re-measure watts", status: "completed" },
+        { id: "2", title: "Sample Warp and check if upstream bug", status: "in_progress" },
+        { id: "3", title: "Profile Zeta VPN Native CPU drain", status: "completed" },
+        { id: "4", title: "Gate Kopia broad backup on battery power", status: "in_progress" },
+        { id: "5", title: "Check Low Power Mode setting on battery", status: "pending" },
+      ],
+      counts: { total: 5, done: 2, in_progress: 2 },
+      current_title: "Sample Warp and check if upstream bug",
+      updated_at: "2026-04-15T15:30:00Z",
+      provider_tool: "update_steps",
+      state: "active",
+    },
     usage_latest: {
       model: "gpt-5.6-luna",
       effort: "xhigh",

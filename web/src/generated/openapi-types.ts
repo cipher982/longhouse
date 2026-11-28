@@ -7462,6 +7462,94 @@ export interface components {
             attach_images: boolean;
         };
         /**
+         * SessionChecklistCountsResponse
+         * @description Compact progress counts for a session checklist.
+         */
+        SessionChecklistCountsResponse: {
+            /** Total */
+            total: number;
+            /** Done */
+            done: number;
+            /**
+             * In Progress
+             * @default 0
+             */
+            in_progress: number;
+        };
+        /**
+         * SessionChecklistItemResponse
+         * @description One item in an agent-maintained work checklist.
+         */
+        SessionChecklistItemResponse: {
+            /**
+             * Id
+             * @description Provider-local item id when supplied
+             */
+            id?: string | null;
+            /**
+             * Title
+             * @description Short step title
+             */
+            title: string;
+            /**
+             * Status
+             * @description Canonical item status: pending|in_progress|completed|skipped|failed
+             */
+            status: string;
+            /**
+             * Active Title
+             * @description Present-continuous label shown while this item is in progress
+             */
+            active_title?: string | null;
+            /**
+             * Group
+             * @description Optional phase or group heading
+             */
+            group?: string | null;
+        };
+        /**
+         * SessionChecklistResponse
+         * @description Current agent-maintained task checklist projected from session.checklist provider facts.
+         */
+        SessionChecklistResponse: {
+            /** Items */
+            items?: components["schemas"]["SessionChecklistItemResponse"][];
+            counts: components["schemas"]["SessionChecklistCountsResponse"];
+            /**
+             * Current Title
+             * @description Active or next pending item title for collapsed chrome
+             */
+            current_title?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When the latest checklist update was recorded
+             */
+            updated_at: string;
+            /**
+             * Provider Tool
+             * @description Provider tool that authored the latest update
+             */
+            provider_tool?: string | null;
+            /**
+             * Explanation
+             * @description Optional short plan summary (e.g. Codex update_plan)
+             */
+            explanation?: string | null;
+            /**
+             * Truncated
+             * @description True when the source checklist exceeded the bounded fact cap
+             * @default false
+             */
+            truncated: boolean;
+            /**
+             * State
+             * @description Lifecycle state: active|complete|stale
+             * @default active
+             */
+            state: string;
+        };
+        /**
          * SessionChildReferenceResponse
          * @description One source-authored child relationship, resolved or historical.
          */
@@ -8731,6 +8819,8 @@ export interface components {
             last_turn?: components["schemas"]["LastTurnResponse"] | null;
             /** @description The provider's latest away recap for this session, when it wrote one. */
             recap?: components["schemas"]["SessionRecapResponse"] | null;
+            /** @description Current agent-maintained task checklist (steps/todos/plan) projected from transcript facts. */
+            checklist?: components["schemas"]["SessionChecklistResponse"] | null;
             /**
              * Selected Model
              * @description Model selected for future Console turns from the session's provider configuration. Distinct from usage_latest.model, which is the model the provider observed on the last completed turn.

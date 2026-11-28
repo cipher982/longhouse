@@ -1,0 +1,26 @@
+{
+  "fact_count": 1,
+  "facts": [
+    {
+      "kind": "session.checklist",
+      "at": "2026-11-28T16:20:05Z",
+      "source_offset": 0,
+      "payload": {
+        "explanation": "Starting implementation",
+        "items": [
+          {
+            "status": "completed",
+            "title": "Add schema"
+          },
+          {
+            "status": "in_progress",
+            "title": "Run tests"
+          }
+        ],
+        "op": "replace",
+        "provider_tool": "update_plan",
+        "tool_call_id": "call_plan_1"
+      }
+    }
+  ]
+}

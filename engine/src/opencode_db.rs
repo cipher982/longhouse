@@ -730,6 +730,35 @@ fn parse_rows_with_context(
                 );
             }
         }
+        if part_data.get("type").and_then(Value::as_str) == Some("tool")
+            && part_data
+                .get("tool")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.eq_ignore_ascii_case("todowrite"))
+        {
+            if let Some(todos) = part_data.pointer("/state/input/todos") {
+                let drafts = crate::pipeline::parser::extract_checklist_from_array(
+                    todos,
+                    &["content", "title", "subject"],
+                );
+                let call_id = part_data.get("callID").and_then(Value::as_str);
+                if let Some(payload) = crate::pipeline::parser::build_checklist_fact_payload(
+                    "replace",
+                    "todowrite",
+                    drafts,
+                    None,
+                    call_id,
+                ) {
+                    push_opencode_fact(
+                        &mut provider_facts,
+                        "session.checklist",
+                        timestamp_from_ms(part.time_updated.max(message.time_created)),
+                        source_offset,
+                        payload,
+                    );
+                }
+            }
+        }
         if let Some(activity) = opencode_task_activity_evidence(&part_data) {
             let parent_claim = activity
                 .metadata
@@ -4220,5 +4249,78 @@ mod tests {
             std::slice::from_ref(&state_root),
             now
         ));
+    }
+
+    #[test]
+    fn parse_opencode_todowrite_emits_session_checklist_fact() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, vcs TEXT, name TEXT, time_created INTEGER, time_updated INTEGER);
+             CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, slug TEXT, directory TEXT, path TEXT, title TEXT, version TEXT, time_created INTEGER, time_updated INTEGER);
+             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project VALUES ('p1', '/tmp/proj', 'git', 'proj', 1779200000000, 1779200000000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session VALUES ('ses_chk_1', 'p1', NULL, 'chk', '/tmp/proj', '/tmp/proj', 'Checklist', '1.0', 1779200000000, 1779200002000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message VALUES ('msg_c1', 'ses_chk_1', 1779200000000, 1779200002000, ?)",
+            [serde_json::json!({"role": "assistant"}).to_string()],
+        )
+        .unwrap();
+        let part_json = serde_json::json!({
+            "type": "tool",
+            "tool": "todowrite",
+            "callID": "tooluse_todo_1",
+            "state": {
+                "status": "completed",
+                "input": {
+                    "todos": [
+                        { "content": "Inspect schema", "status": "completed", "priority": "high" },
+                        { "content": "Ship UI", "status": "in_progress", "priority": "high" }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO part VALUES ('prt_c1', 'msg_c1', 'ses_chk_1', 1779200001000, 1779200001000, ?)",
+            [part_json],
+        )
+        .unwrap();
+        drop(conn);
+
+        let parsed = parse_opencode_session(&db_path, "ses_chk_1").unwrap();
+        let checklist_facts: Vec<_> = parsed
+            .provider_facts
+            .iter()
+            .filter(|f| f.kind == "session.checklist")
+            .collect();
+        assert_eq!(checklist_facts.len(), 1);
+        assert_eq!(checklist_facts[0].payload["op"], "replace");
+        assert_eq!(checklist_facts[0].payload["provider_tool"], "todowrite");
+        assert_eq!(
+            checklist_facts[0].payload["items"][0]["title"],
+            "Inspect schema"
+        );
+        assert_eq!(
+            checklist_facts[0].payload["items"][0]["status"],
+            "completed"
+        );
+        assert_eq!(checklist_facts[0].payload["items"][1]["title"], "Ship UI");
+        assert_eq!(
+            checklist_facts[0].payload["items"][1]["status"],
+            "in_progress"
+        );
     }
 }

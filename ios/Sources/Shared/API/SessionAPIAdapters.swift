@@ -279,6 +279,7 @@ extension APISessionResponse {
             inputReceipts: inputReceipts?.map(\.sessionInputReceipt),
             lastTurn: lastTurn?.sessionLastTurn,
             recap: recap.map { SessionRecap(text: $0.text, at: $0.at) },
+            checklist: checklist?.sessionChecklist,
             usageLatest: usageLatest.map { $0.sessionUsageLatest },
             selectedModel: selectedModel,
             permissionMode: permissionMode,
@@ -286,6 +287,33 @@ extension APISessionResponse {
             worktree: worktree?.sessionWorktree,
             sessionCrons: sessionCrons?.map(\.sessionCron),
             pendingBackgroundAgentCount: pendingBackgroundAgentCount
+        )
+    }
+}
+
+private extension APISessionChecklistResponse {
+    var sessionChecklist: SessionChecklist {
+        SessionChecklist(
+            items: (items ?? []).map {
+                SessionChecklistItem(
+                    id: $0.id,
+                    title: $0.title,
+                    status: $0.status,
+                    activeTitle: $0.activeTitle,
+                    group: $0.group
+                )
+            },
+            counts: SessionChecklistCounts(
+                total: counts.total,
+                done: counts.done,
+                inProgress: counts.inProgress ?? 0
+            ),
+            currentTitle: currentTitle,
+            updatedAt: updatedAt,
+            providerTool: providerTool,
+            explanation: explanation,
+            truncated: truncated ?? false,
+            state: state ?? "active"
         )
     }
 }

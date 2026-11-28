@@ -1811,6 +1811,7 @@ def _provider_fact_dto(row: Any) -> dict[str, Any]:
 
 _DELEGATION_FACT_KINDS = ("delegation.metadata", "delegation.spawn", "delegation.activity")
 _SESSION_READ_DELEGATION_FACT_LIMIT = 256
+_SESSION_READ_CHECKLIST_FACT_LIMIT = 256
 # One row each: the newest recap, provider title, usage, cost, permission mode,
 # worktree and waiting summary are what the session chrome shows, and a long
 # session's turn facts must never evict them.
@@ -1909,6 +1910,16 @@ def _session_read_provider_facts(connection: Connection, *, session_id: str) -> 
         .mappings()
         .all()
     )
+    rows.extend(
+        connection.execute(
+            select(table)
+            .where(table.c.session_id == session_id, table.c.kind == "session.checklist")
+            .order_by(*newest_first)
+            .limit(_SESSION_READ_CHECKLIST_FACT_LIMIT)
+        )
+        .mappings()
+        .all()
+    )
     return [_provider_fact_dto(row) for row in rows]
 
 
@@ -1917,7 +1928,7 @@ def _latest_provider_facts_by_session(connection: Connection, *, session_ids: li
     if not session_ids:
         return {}
     table = SessionProviderFact.__table__
-    kinds = (*_SESSION_READ_LATEST_FACT_KINDS, "turn.duration", "turn.end", "delegation.scheduled")
+    kinds = (*_SESSION_READ_LATEST_FACT_KINDS, "turn.duration", "turn.end", "delegation.scheduled", "session.checklist")
     ranked = (
         select(
             table,
@@ -1932,7 +1943,14 @@ def _latest_provider_facts_by_session(connection: Connection, *, session_ids: li
         .subquery()
     )
     rows = connection.execute(
-        select(ranked).where(ranked.c.fact_rank <= case((ranked.c.kind == "delegation.scheduled", 32), else_=1))
+        select(ranked).where(
+            ranked.c.fact_rank
+            <= case(
+                (ranked.c.kind == "delegation.scheduled", 32),
+                (ranked.c.kind == "session.checklist", 64),
+                else_=1,
+            )
+        )
     ).mappings()
     by_session: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

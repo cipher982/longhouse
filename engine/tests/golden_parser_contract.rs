@@ -302,9 +302,21 @@ fn parse_to_facts_snapshot(input_path: &Path) -> FactsSnapshot {
 }
 
 fn parse_to_facts_snapshot_from(input_path: &Path, offset: u64) -> FactsSnapshot {
+    parse_to_facts_snapshot_with_provider(input_path, offset, None)
+}
+
+fn parse_to_facts_snapshot_with_provider(
+    input_path: &Path,
+    offset: u64,
+    provider: Option<&str>,
+) -> FactsSnapshot {
     let bin = engine_bin();
-    let output = Command::new(&bin)
-        .args(["parse", "--dump-facts", "--offset", &offset.to_string()])
+    let mut cmd = Command::new(&bin);
+    cmd.args(["parse", "--dump-facts", "--offset", &offset.to_string()]);
+    if let Some(provider) = provider {
+        cmd.args(["--provider", provider]);
+    }
+    let output = cmd
         .arg(input_path)
         .output()
         .unwrap_or_else(|e| panic!("Failed to run engine: {}", e));
@@ -692,4 +704,57 @@ fn golden_claude_fidelity_signals_facts() {
         &base.join("claude_fidelity_signals.jsonl"),
         &base.join("claude_fidelity_signals.facts.expected.json"),
     );
+}
+
+#[test]
+fn golden_antigravity_checklist_facts() {
+    let base = fixtures_dir().join("golden").join("antigravity");
+    run_golden_facts_test(
+        &base.join("checklist.jsonl"),
+        &base.join("checklist.facts.expected.json"),
+    );
+}
+
+#[test]
+fn golden_claude_checklist_facts() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_facts_test(
+        &base.join("checklist.jsonl"),
+        &base.join("checklist.facts.expected.json"),
+    );
+}
+
+#[test]
+fn golden_codex_checklist_facts() {
+    let base = fixtures_dir().join("golden").join("codex");
+    run_golden_facts_test(
+        &base.join("checklist.jsonl"),
+        &base.join("checklist.facts.expected.json"),
+    );
+}
+
+#[test]
+fn golden_cursor_checklist_facts() {
+    let base = fixtures_dir().join("golden").join("cursor");
+    run_golden_facts_test(
+        &base.join("checklist.jsonl"),
+        &base.join("checklist.facts.expected.json"),
+    );
+}
+
+#[test]
+fn golden_omp_checklist_facts() {
+    let base = fixtures_dir().join("golden").join("omp");
+    let input_path = base.join("checklist.jsonl");
+    let expected_path = base.join("checklist.facts.expected.json");
+    let actual = parse_to_facts_snapshot_with_provider(&input_path, 0, Some("omp"));
+    if std::env::var("UPDATE_GOLDENS").is_ok() {
+        let json = serde_json::to_string_pretty(&actual).expect("serialize facts snapshot");
+        std::fs::write(&expected_path, json + "\n").expect("write golden facts file");
+        return;
+    }
+    let expected_json = std::fs::read_to_string(&expected_path).expect("read golden facts file");
+    let expected: FactsSnapshot =
+        serde_json::from_str(&expected_json).expect("parse golden facts file");
+    assert_eq!(expected, actual);
 }

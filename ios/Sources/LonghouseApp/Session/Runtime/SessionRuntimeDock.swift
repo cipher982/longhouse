@@ -396,6 +396,7 @@ struct SessionRuntimeDock: View {
             delegationSummaryLabel ?? "",
             delegationRosterPreview ?? "",
             "\(detail.pendingBackgroundAgentCount ?? 0)",
+            detail.checklist.map { "\($0.state):\($0.counts.done)/\($0.counts.total):\($0.currentTitle ?? "")" } ?? "",
             exceptionReason(state) ?? ""
         ]
         return parts.joined(separator: "|")
@@ -563,6 +564,9 @@ struct SessionRuntimeDock: View {
                 .accessibilityLabel(summary)
                 .accessibilityHint("Show named background work")
                 .accessibilityIdentifier("session-runtime-background-summary")
+            }
+            if detail.checklist?.isVisibleInDock == true {
+                SessionChecklistDockView(checklist: detail.checklist, sessionId: detail.id)
             }
             if shouldExpand || evidenceDisclosure || noticeIsVisible {
                 evidenceContext(state: state)

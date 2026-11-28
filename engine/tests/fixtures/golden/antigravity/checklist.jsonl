@@ -1,0 +1,3 @@
+{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-11-28T16:20:00Z","content":"<USER_REQUEST>\nFix battery drain\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-28T16:20:07Z","model":"gemini-4-neon-high","tool_calls":[{"name":"update_steps","args":{"steps":[{"status":"done","title":"Kill livelocked git fetch"},{"status":"in_progress","title":"Gate Kopia backup on battery"},{"status":"pending","title":"Check Low Power Mode"}]}}]}
+{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-11-28T16:20:08Z","content":"OK"}

@@ -34,6 +34,10 @@ SESSION_PERMISSION_MODE = "session.permission_mode"
 SESSION_WORKTREE = "session.worktree"
 DELEGATION_WAITING = "delegation.waiting"
 DELEGATION_SCHEDULED = "delegation.scheduled"
+SESSION_CHECKLIST = "session.checklist"
+
+_CHECKLIST_TERMINAL_STATUSES = frozenset({"completed", "skipped", "failed"})
+_CHECKLIST_LIVE_ACTIVITY_STATES = frozenset({"thinking", "executing", "waiting_approval", "waiting_user"})
 
 
 def _as_float(value: object) -> float | None:
@@ -255,6 +259,191 @@ def recap(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if latest is None:
         return None
     return {"text": latest["payload"]["text"], "at": latest["at"].isoformat()}
+
+
+def _normalize_checklist_status(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip().lower()
+    if not cleaned:
+        return None
+    if cleaned in {"done", "completed", "complete"}:
+        return "completed"
+    if cleaned in {"in_progress", "in-progress", "inprogress", "running", "active"}:
+        return "in_progress"
+    if cleaned in {"pending", "todo", "not_started", "queued"}:
+        return "pending"
+    if cleaned in {"skipped", "cancelled", "canceled", "abandoned"}:
+        return "skipped"
+    if cleaned in {"failed", "error"}:
+        return "failed"
+    if cleaned in {"deleted", "removed"}:
+        return "deleted"
+    return cleaned[:32]
+
+
+def checklist(
+    facts: list[dict[str, Any]],
+    *,
+    last_user_input_at: datetime | str | None = None,
+    activity_state: str | None = None,
+) -> dict[str, Any] | None:
+    """Fold provider-authored checklist facts into the current session checklist.
+
+    Supports both full-replacement checklists (Antigravity `update_steps`,
+    Claude/Cursor `TodoWrite`, Codex `update_plan`, OpenCode `todowrite`, OMP
+    `todo`) and incremental task updates (Claude `TaskCreate`/`TaskUpdate`).
+    """
+    relevant = sorted(
+        (fact for fact in facts if fact.get("kind") == SESSION_CHECKLIST),
+        key=lambda fact: (fact["at"], int(fact.get("source_position") or 0)),
+    )
+    if not relevant:
+        return None
+
+    items: list[dict[str, Any]] = []
+    latest_fact: dict[str, Any] | None = None
+    explanation: str | None = None
+    truncated = False
+
+    for fact in relevant:
+        payload = fact["payload"]
+        op = str(payload.get("op") or "").strip().lower()
+        raw_items = payload.get("items")
+        if op not in {"replace", "upsert"} or not isinstance(raw_items, list):
+            continue
+
+        if op == "replace":
+            replaced: list[dict[str, Any]] = []
+            for entry in raw_items:
+                if not isinstance(entry, Mapping):
+                    continue
+                title = str(entry.get("title") or "").strip()
+                if not title:
+                    continue
+                status = _normalize_checklist_status(entry.get("status")) or "pending"
+                if status == "deleted":
+                    continue
+                item: dict[str, Any] = {"title": title, "status": status}
+                item_id = entry.get("id")
+                if isinstance(item_id, str) and item_id.strip():
+                    item["id"] = item_id.strip()
+                active_title = entry.get("active_title")
+                if isinstance(active_title, str) and active_title.strip():
+                    item["active_title"] = active_title.strip()
+                group = entry.get("group")
+                if isinstance(group, str) and group.strip():
+                    item["group"] = group.strip()
+                replaced.append(item)
+            if not replaced:
+                continue
+            items = replaced
+            latest_fact = fact
+            raw_expl = payload.get("explanation")
+            explanation = raw_expl.strip() if isinstance(raw_expl, str) and raw_expl.strip() else None
+            truncated = bool(payload.get("truncated"))
+            continue
+
+        # Incremental upsert (e.g. Claude TaskCreate / TaskUpdate)
+        applied_any = False
+        for entry in raw_items:
+            if not isinstance(entry, Mapping):
+                continue
+            item_id = entry.get("id")
+            clean_id = item_id.strip() if isinstance(item_id, str) and item_id.strip() else None
+            raw_title = entry.get("title")
+            clean_title = raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else None
+            status = _normalize_checklist_status(entry.get("status"))
+            raw_active = entry.get("active_title")
+            clean_active = raw_active.strip() if isinstance(raw_active, str) and raw_active.strip() else None
+            raw_group = entry.get("group")
+            clean_group = raw_group.strip() if isinstance(raw_group, str) and raw_group.strip() else None
+
+            match_idx: int | None = None
+            if clean_id is not None:
+                match_idx = next((idx for idx, existing in enumerate(items) if existing.get("id") == clean_id), None)
+            if match_idx is None and clean_title is not None:
+                match_idx = next((idx for idx, existing in enumerate(items) if existing.get("title") == clean_title), None)
+
+            if status == "deleted":
+                if match_idx is not None:
+                    items.pop(match_idx)
+                    applied_any = True
+                continue
+
+            if match_idx is not None:
+                existing = items[match_idx]
+                if clean_title is not None:
+                    existing["title"] = clean_title
+                if status is not None:
+                    existing["status"] = status
+                if clean_active is not None:
+                    existing["active_title"] = clean_active
+                if clean_group is not None:
+                    existing["group"] = clean_group
+                applied_any = True
+            elif clean_title is not None:
+                new_item: dict[str, Any] = {
+                    "title": clean_title,
+                    "status": status or "pending",
+                }
+                if clean_id is not None:
+                    new_item["id"] = clean_id
+                if clean_active is not None:
+                    new_item["active_title"] = clean_active
+                if clean_group is not None:
+                    new_item["group"] = clean_group
+                items.append(new_item)
+                applied_any = True
+
+        if applied_any:
+            latest_fact = fact
+            if payload.get("truncated"):
+                truncated = True
+
+    if not items or latest_fact is None:
+        return None
+
+    done_count = sum(1 for item in items if item["status"] == "completed")
+    in_progress_count = sum(1 for item in items if item["status"] == "in_progress")
+    total_count = len(items)
+
+    current_item = next((item for item in items if item["status"] == "in_progress"), None) or next(
+        (item for item in items if item["status"] == "pending"),
+        None,
+    )
+    current_title = (current_item.get("active_title") or current_item.get("title")) if current_item is not None else None
+
+    updated_at_dt: datetime = latest_fact["at"]
+    last_user_dt = _parse_at(last_user_input_at)
+    newer_user_turn = last_user_dt is not None and last_user_dt > updated_at_dt
+    all_terminal = all(item["status"] in _CHECKLIST_TERMINAL_STATUSES for item in items)
+
+    if all_terminal:
+        state = "stale" if newer_user_turn else "complete"
+    elif newer_user_turn:
+        newer_turn_ended = any(fact.get("kind") in {TURN_END, TURN_DURATION} and fact["at"] > last_user_dt for fact in facts)
+        normalized_activity = (activity_state or "").strip().lower()
+        is_live = normalized_activity in _CHECKLIST_LIVE_ACTIVITY_STATES
+        state = "stale" if (newer_turn_ended or not is_live) else "active"
+    else:
+        state = "active"
+
+    provider_tool = str(latest_fact["payload"].get("provider_tool") or "").strip() or None
+    return {
+        "items": items,
+        "counts": {
+            "total": total_count,
+            "done": done_count,
+            "in_progress": in_progress_count,
+        },
+        "current_title": current_title,
+        "updated_at": updated_at_dt.isoformat(),
+        "provider_tool": provider_tool,
+        "explanation": explanation,
+        "truncated": truncated,
+        "state": state,
+    }
 
 
 def usage_latest(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -652,6 +841,7 @@ def project_session_hud(
 
 __all__ = [
     "DELEGATION_WAITING",
+    "SESSION_CHECKLIST",
     "SESSION_COST",
     "SESSION_PERMISSION_MODE",
     "SESSION_RECAP",
@@ -659,6 +849,7 @@ __all__ = [
     "SESSION_WORKTREE",
     "TURN_DURATION",
     "TURN_USAGE",
+    "checklist",
     "last_turn",
     "project_session_hud",
     "provider_facts_from_rows",

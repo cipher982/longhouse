@@ -448,6 +448,7 @@ function SessionDetailWorkspaceRoute({
     origin_kind: branchSourceSession.origin_kind,
     session_state: branchSourceSession.session_state,
     pending_background_agent_count: branchSourceSession.pending_background_agent_count,
+    checklist: branchSourceSession.checklist,
   };
   const runtimeHostLabel =
     displaySession.control?.source_runner_name?.trim() ||

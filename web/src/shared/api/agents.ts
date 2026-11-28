@@ -22,6 +22,29 @@ const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
 // Types
 // ---------------------------------------------------------------------------
 
+export interface SessionChecklistItem {
+  id?: string | null;
+  title: string;
+  status: string;
+  active_title?: string | null;
+  group?: string | null;
+}
+
+export interface SessionChecklist {
+  items: SessionChecklistItem[];
+  counts: {
+    total: number;
+    done: number;
+    in_progress?: number;
+  };
+  current_title?: string | null;
+  updated_at: string;
+  provider_tool?: string | null;
+  explanation?: string | null;
+  truncated?: boolean;
+  state: "active" | "complete" | "stale" | (string & {});
+}
+
 export interface AgentSession {
   /** Canonical source classification when the ingest path supplied one. */
   origin_kind?: string | null;
@@ -64,6 +87,8 @@ export interface AgentSession {
   anchor_title?: string | null;
   /** The provider's latest away recap, when it wrote one. */
   recap?: { text: string; at: string } | null;
+  /** Current agent-maintained task checklist projected from transcript facts. */
+  checklist?: SessionChecklist | null;
   /** The most recent turn the provider reported as finished. */
   last_turn?: AgentSessionLastTurn | null;
   /** Model, effort and context size from the provider's last turn-ending response. */

@@ -1,0 +1,61 @@
+{
+  "fact_count": 3,
+  "facts": [
+    {
+      "kind": "session.checklist",
+      "at": "2026-11-28T16:20:05Z",
+      "source_offset": 121,
+      "payload": {
+        "items": [
+          {
+            "active_title": "Adding parser fact",
+            "status": "completed",
+            "title": "Add parser fact"
+          },
+          {
+            "active_title": "Wiring catalogd",
+            "status": "in_progress",
+            "title": "Wire catalogd"
+          }
+        ],
+        "op": "replace",
+        "provider_tool": "TodoWrite",
+        "tool_call_id": "toolu_todo1"
+      }
+    },
+    {
+      "kind": "session.checklist",
+      "at": "2026-11-28T16:20:10Z",
+      "source_offset": 477,
+      "payload": {
+        "items": [
+          {
+            "active_title": "Shipping web dock",
+            "id": "1",
+            "status": "pending",
+            "title": "Ship web dock"
+          }
+        ],
+        "op": "upsert",
+        "provider_tool": "TaskCreate",
+        "tool_call_id": "toolu_tc1"
+      }
+    },
+    {
+      "kind": "session.checklist",
+      "at": "2026-11-28T16:20:15Z",
+      "source_offset": 763,
+      "payload": {
+        "items": [
+          {
+            "id": "1",
+            "status": "in_progress"
+          }
+        ],
+        "op": "upsert",
+        "provider_tool": "TaskUpdate",
+        "tool_call_id": "toolu_tu1"
+      }
+    }
+  ]
+}

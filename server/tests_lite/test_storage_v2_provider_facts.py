@@ -1317,3 +1317,217 @@ def test_a_user_interrupted_claude_turn_is_servable_as_last_turn():
     turn = last_turn(facts, {})
     assert turn is not None and turn["outcome"] == "interrupted"
     assert LastTurnResponse.model_validate(turn).outcome == "interrupted"
+
+
+def test_session_checklist_projection_replace_upsert_and_retirement():
+    """session.checklist folds replace/upsert facts, tracks counts, and retires stale plans."""
+    from zerg.catalogd.server import _validate_provider_fact
+    from zerg.services.session_provider_facts import checklist as project_checklist
+    from zerg.services.session_views import SessionChecklistResponse
+
+    t0 = datetime(2026, 11, 28, 16, 20, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(seconds=5)
+    t2 = t0 + timedelta(seconds=10)
+    t3 = t0 + timedelta(seconds=15)
+    t4 = t0 + timedelta(seconds=20)
+    t5 = t0 + timedelta(seconds=30)
+
+    # Validate catalogd accepts both replace and upsert shapes.
+    _validate_provider_fact(
+        {
+            "kind": "session.checklist",
+            "at": t0.isoformat(),
+            "source_position": 10,
+            "payload": {
+                "op": "replace",
+                "provider_tool": "update_steps",
+                "items": [
+                    {"title": "Kill livelocked git fetch", "status": "completed"},
+                    {"title": "Gate Kopia backup", "status": "in_progress"},
+                    {"title": "Check Low Power Mode", "status": "pending"},
+                ],
+            },
+        },
+        range_start=0,
+        range_end=100,
+    )
+
+    # Full-replace projection + incremental TaskCreate / TaskUpdate / delete fold.
+    facts = [
+        {
+            "kind": "session.checklist",
+            "at": t0,
+            "source_position": 10,
+            "payload": {
+                "op": "replace",
+                "provider_tool": "TodoWrite",
+                "items": [
+                    {"id": "a", "title": "Add parser fact", "status": "completed"},
+                    {"id": "b", "title": "Wire catalogd", "status": "pending"},
+                ],
+            },
+        },
+        {
+            "kind": "session.checklist",
+            "at": t1,
+            "source_position": 20,
+            "payload": {
+                "op": "upsert",
+                "provider_tool": "TaskCreate",
+                "items": [{"id": "3", "title": "Ship web dock", "active_title": "Shipping web dock", "status": "pending"}],
+            },
+        },
+        {
+            "kind": "session.checklist",
+            "at": t2,
+            "source_position": 30,
+            "payload": {
+                "op": "upsert",
+                "provider_tool": "TaskUpdate",
+                "items": [{"id": "3", "status": "in_progress"}],
+            },
+        },
+        {
+            "kind": "session.checklist",
+            "at": t3,
+            "source_position": 40,
+            "payload": {
+                "op": "upsert",
+                "provider_tool": "TaskUpdate",
+                "items": [{"id": "b", "status": "deleted"}],
+            },
+        },
+    ]
+    projected = project_checklist(facts)
+    assert projected is not None
+    validated = SessionChecklistResponse.model_validate(projected)
+    assert validated.counts.total == 2
+    assert validated.counts.done == 1
+    assert validated.counts.in_progress == 1
+    assert validated.current_title == "Shipping web dock"
+    assert validated.state == "active"
+    assert [item.title for item in validated.items] == ["Add parser fact", "Ship web dock"]
+
+    # Incomplete checklist becomes stale once a newer user turn ended without updating it.
+    stale_incomplete = project_checklist(
+        facts + [{"kind": "turn.end", "at": t5, "source_position": 60, "payload": {"outcome": "completed"}}],
+        last_user_input_at=t4,
+        activity_state="idle",
+    )
+    assert stale_incomplete is not None and stale_incomplete["state"] == "stale"
+
+    # Complete checklist stays `complete` until a newer user message arrives, then becomes `stale`.
+    done_facts = [
+        {
+            "kind": "session.checklist",
+            "at": t0,
+            "source_position": 10,
+            "payload": {
+                "op": "replace",
+                "provider_tool": "update_steps",
+                "items": [
+                    {"title": "Step 1", "status": "completed"},
+                    {"title": "Step 2", "status": "skipped"},
+                ],
+            },
+        }
+    ]
+    completed = project_checklist(done_facts, last_user_input_at=t0 - timedelta(seconds=5), activity_state="idle")
+    assert completed is not None and completed["state"] == "complete"
+    assert completed["counts"] == {"total": 2, "done": 1, "in_progress": 0}
+    retired = project_checklist(done_facts, last_user_input_at=t1, activity_state="thinking")
+    assert retired is not None and retired["state"] == "stale"
+
+
+def test_workspace_envelope_surfaces_projected_checklist():
+    """The workspace envelope carries session.checklist from provider facts."""
+    session_id = uuid4()
+    t0 = datetime(2026, 11, 28, 16, 20, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(seconds=7)
+    session = SimpleNamespace(
+        provider="antigravity",
+        origin_kind=None,
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True, can_start_turn=True),
+        session_state=SimpleNamespace(
+            last_user_input_at=t0,
+            turn=None,
+            activity=SimpleNamespace(state="thinking"),
+            delegation=None,
+        ),
+        model_dump=lambda mode: {"id": str(session_id)},
+    )
+    envelope = _workspace_envelope(
+        owner_id=7,
+        session_id=session_id,
+        session=session,
+        session_commit_seq="3",
+        branch_mode="head",
+        anchor="tail",
+        cursor=None,
+        storage={"commit_seq": "3", "session": {"updated_at": t1.isoformat()}},
+        page={"events": [], "total": 0, "generation_id": "g1", "next_cursor": None},
+        receipts=[],
+        facts=[
+            {
+                "kind": "session.checklist",
+                "at": t1,
+                "source_position": 177,
+                "payload": {
+                    "op": "replace",
+                    "provider_tool": "update_steps",
+                    "items": [
+                        {"title": "Kill livelocked git fetch", "status": "completed"},
+                        {"title": "Gate Kopia backup", "status": "in_progress"},
+                    ],
+                },
+            }
+        ],
+    )
+    cl = envelope["session"]["checklist"]
+    assert cl is not None
+    assert cl["counts"] == {"total": 2, "done": 1, "in_progress": 1}
+    assert cl["current_title"] == "Gate Kopia backup"
+    assert cl["state"] == "active"
+    assert cl["provider_tool"] == "update_steps"
+
+
+def test_tool_presentation_formats_checklist_tool_summaries():
+    """Checklist tools get compact served summaries instead of falling back to 'OK'."""
+    from zerg.services.tool_presentation import extract_derived_tool_intent
+
+    assert (
+        extract_derived_tool_intent(
+            "update_steps",
+            {
+                "steps": [
+                    {"status": "done", "title": "Kill git fetch"},
+                    {"status": "in_progress", "title": "Gate Kopia backup"},
+                    {"status": "pending", "title": "Check Low Power Mode"},
+                ]
+            },
+        )
+        == "1/3 · Gate Kopia backup"
+    )
+    assert (
+        extract_derived_tool_intent(
+            "TodoWrite",
+            {
+                "todos": [
+                    {"content": "Step 1", "status": "completed"},
+                    {"content": "Step 2", "status": "completed"},
+                ]
+            },
+        )
+        == "2/2 done"
+    )
+    assert (
+        extract_derived_tool_intent(
+            "update_plan",
+            {"explanation": "Running checks", "plan": [{"step": "Run pytest", "status": "in_progress"}]},
+        )
+        == "0/1 · Run pytest"
+    )
+    assert extract_derived_tool_intent("TaskCreate", {"subject": "Ship web dock"}) == "Add: Ship web dock"
+    assert extract_derived_tool_intent("TaskUpdate", {"taskId": "2", "status": "in_progress"}) == "#2 → in_progress"
+    assert extract_derived_tool_intent("todo", {"op": "done", "task": "Read code"}) == "✓ Read code"

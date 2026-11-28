@@ -10,6 +10,7 @@ pub fn cmd_parse(
     offset: u64,
     dump_events: bool,
     dump_facts: bool,
+    provider: Option<&str>,
     compress: bool,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
@@ -23,7 +24,7 @@ pub fn cmd_parse(
     );
 
     let parse_start = Instant::now();
-    let result = crate::pipeline::parser::parse_session_file(path, offset)?;
+    let result = crate::pipeline::parser::parse_session_file_with_provider(path, offset, provider)?;
     let parse_elapsed = parse_start.elapsed();
 
     eprintln!(

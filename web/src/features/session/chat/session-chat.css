@@ -706,6 +706,182 @@
   background: rgba(255, 255, 255, 0.028);
 }
 
+.session-checklist-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.session-checklist-strip__summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-family: var(--font-family-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-checklist-strip__summary:hover .session-checklist-strip__count,
+.session-checklist-strip__summary:hover .session-checklist-strip__current {
+  color: var(--color-text-primary);
+}
+
+.session-checklist-strip__summary:focus {
+  outline: none;
+}
+
+.session-checklist-strip__summary:focus-visible {
+  outline: 1px solid rgba(240, 168, 84, 0.45);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.session-checklist-strip__chev {
+  display: inline-flex;
+  font-family: var(--font-family-mono);
+  font-size: 13px;
+  color: var(--color-text-muted);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.session-checklist-strip__chev.is-open {
+  transform: rotate(90deg);
+}
+
+.session-checklist-strip__dot {
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.session-checklist-strip__dot--active {
+  color: var(--color-brand-accent, #f0a854);
+}
+
+.session-checklist-strip__dot--complete {
+  color: var(--color-intent-success, #52c48c);
+}
+
+.session-checklist-strip__count {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.session-checklist-strip__current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+.session-checklist-strip__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--color-border-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(32dvh, 210px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-checklist-strip__entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-checklist-strip__group {
+  padding: 4px 2px 1px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.session-checklist-strip__row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 1px 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.session-checklist-strip__row--in_progress {
+  color: var(--color-text-primary);
+}
+
+.session-checklist-strip__row--completed,
+.session-checklist-strip__row--skipped {
+  color: var(--color-text-muted);
+}
+
+.session-checklist-strip__row--completed .session-checklist-strip__title,
+.session-checklist-strip__row--skipped .session-checklist-strip__title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.22);
+}
+
+.session-checklist-strip__row--failed {
+  color: var(--color-intent-danger, #e56b6f);
+}
+
+.session-checklist-strip__glyph {
+  width: 12px;
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.session-checklist-strip__glyph--completed {
+  color: var(--color-intent-success, #52c48c);
+}
+
+.session-checklist-strip__glyph--in_progress {
+  color: var(--color-brand-accent, #f0a854);
+}
+
+.session-checklist-strip__glyph--failed {
+  color: var(--color-intent-danger, #e56b6f);
+}
+
+.session-checklist-strip__glyph--pending,
+.session-checklist-strip__glyph--skipped {
+  color: var(--color-text-muted);
+}
+
+.session-checklist-strip__title {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.session-checklist-strip__note {
+  padding: 2px 2px 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 .session-background-roster__summary {
   display: flex;
   align-items: center;

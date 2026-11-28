@@ -50,6 +50,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var lastTurn: SessionLastTurn? = nil
     /// The provider's latest away recap, when it wrote one.
     var recap: SessionRecap? = nil
+    /// Current agent-maintained task checklist projected from transcript facts.
+    var checklist: SessionChecklist? = nil
     /// The model/context line from the provider's last turn-ending response.
     var usageLatest: SessionUsageLatest? = nil
     /// Selected model for new per-turn inputs. This is distinct from
@@ -349,6 +351,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         copy.inputReceipts = inputReceipts ?? previous.inputReceipts
         copy.lastTurn = lastTurn ?? previous.lastTurn
         copy.recap = recap ?? previous.recap
+        copy.checklist = checklist ?? previous.checklist
         copy.usageLatest = usageLatest ?? previous.usageLatest
         copy.selectedModel = selectedModel ?? previous.selectedModel
         copy.permissionMode = permissionMode ?? previous.permissionMode
@@ -396,6 +399,66 @@ extension SessionDetail {
 struct SessionRecap: Codable, Hashable, Sendable {
     let text: String
     let at: String
+}
+
+struct SessionChecklistCounts: Codable, Hashable, Sendable {
+    let total: Int
+    let done: Int
+    let inProgress: Int
+}
+
+struct SessionChecklistItem: Codable, Hashable, Sendable {
+    enum NormalizedStatus: Sendable {
+        case pending
+        case inProgress
+        case completed
+        case skipped
+        case failed
+        case unknown
+    }
+
+    let id: String?
+    let title: String
+    let status: String
+    let activeTitle: String?
+    let group: String?
+
+    var normalizedStatus: NormalizedStatus {
+        switch status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "completed", "done", "complete": return .completed
+        case "in_progress", "in-progress", "running", "active": return .inProgress
+        case "pending", "todo", "not_started", "queued": return .pending
+        case "skipped", "cancelled", "canceled", "abandoned": return .skipped
+        case "failed", "error": return .failed
+        default: return .unknown
+        }
+    }
+}
+
+struct SessionChecklist: Codable, Hashable, Sendable {
+    let items: [SessionChecklistItem]
+    let counts: SessionChecklistCounts
+    let currentTitle: String?
+    let updatedAt: String
+    let providerTool: String?
+    let explanation: String?
+    let truncated: Bool
+    let state: String
+
+    var isComplete: Bool { state == "complete" }
+    var isStale: Bool { state == "stale" }
+    var isVisibleInDock: Bool { !isStale && !items.isEmpty }
+
+    var countLabel: String {
+        let total = counts.total > 0 ? counts.total : items.count
+        return "\(counts.done)/\(total) \(total == 1 ? "step" : "steps")"
+    }
+
+    var summaryDetail: String? {
+        if isComplete { return "done" }
+        let trimmed = currentTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 /// The provider's last turn-ending response as the server words it:

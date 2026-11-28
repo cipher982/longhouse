@@ -171,6 +171,15 @@ const HUMAN_INTERACTION_TOOLS = new Set([
   "approval_request",
 ]);
 
+const CHECKLIST_WRITE_TOOLS = new Set([
+  "update_steps",
+  "todowrite",
+  "update_plan",
+  "todo",
+  "taskcreate",
+  "taskupdate",
+]);
+
 function normalizedInteractionIdentity(interaction: ToolInteraction): string {
   const presentation = interaction.presentation;
   return [interaction.toolName, presentation?.tool_name, presentation?.label]
@@ -343,6 +352,8 @@ export function isActivityEligible(interaction: ToolInteraction): boolean {
     .filter(Boolean)
     .map((name) => String(name).toLowerCase());
   if (exactNames.some((name) => HUMAN_INTERACTION_TOOLS.has(name))) return false;
+  const hasMcpNamespace = Boolean(interaction.presentation?.mcp_namespace) || interaction.toolName.startsWith("mcp__");
+  if (!hasMcpNamespace && exactNames.some((name) => CHECKLIST_WRITE_TOOLS.has(name))) return false;
   if (/\b(question|approval|permission)\b/.test(identity)) return false;
   return true;
 }

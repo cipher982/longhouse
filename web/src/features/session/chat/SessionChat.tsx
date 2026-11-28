@@ -59,6 +59,7 @@ import {
 } from "../sessionHeaderState";
 import type { SessionActivityFeed } from "../sessionActivityFeed";
 import { BackgroundTaskRoster } from "../BackgroundTaskRoster";
+import { SessionChecklistStrip } from "../SessionChecklistStrip";
 import { delegatedWorkDetailFromFacts } from "../SessionRuntimeStrip";
 import ModelPicker from "@/features/launch/ModelPicker";
 import { useMediaQuery } from "@/shared/hooks/useMediaQuery";
@@ -236,6 +237,7 @@ export type SessionChatTarget = Pick<
   | "session_state"
   | "origin_kind"
   | "pending_background_agent_count"
+  | "checklist"
 >;
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -3308,6 +3310,10 @@ export function SessionChat({
             ) : null}
           </div>
         ) : null}
+        <SessionChecklistStrip
+          checklist={session.checklist}
+          sessionId={session.id}
+        />
         <BackgroundTaskRoster
           delegation={session.session_state?.delegation}
           pendingBackgroundAgentCount={session.pending_background_agent_count}

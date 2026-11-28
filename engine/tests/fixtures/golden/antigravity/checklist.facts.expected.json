@@ -1,0 +1,29 @@
+{
+  "fact_count": 1,
+  "facts": [
+    {
+      "kind": "session.checklist",
+      "at": "2026-11-28T16:20:07Z",
+      "source_offset": 177,
+      "payload": {
+        "items": [
+          {
+            "status": "completed",
+            "title": "Kill livelocked git fetch"
+          },
+          {
+            "status": "in_progress",
+            "title": "Gate Kopia backup on battery"
+          },
+          {
+            "status": "pending",
+            "title": "Check Low Power Mode"
+          }
+        ],
+        "op": "replace",
+        "provider_tool": "update_steps",
+        "tool_call_id": "antigravity-1-0"
+      }
+    }
+  ]
+}

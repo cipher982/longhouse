@@ -365,6 +365,8 @@ struct RawMessage {
     tool_name: Option<String>,
     #[serde(rename = "isError")]
     is_error: Option<bool>,
+    /// OMP toolResult structured details (e.g. `todo` phases snapshot).
+    details: Option<Box<RawValue>>,
     /// Claude assistant lines: the provider's own model/usage accounting.
     /// Kept raw; only turn-ending lines are turned into a usage fact.
     usage: Option<Box<RawValue>>,
@@ -2745,6 +2747,253 @@ fn push_bounded_provider_fact(
     });
 }
 
+const MAX_CHECKLIST_ITEMS: usize = 64;
+const MAX_CHECKLIST_TITLE_CHARS: usize = 200;
+const MAX_CHECKLIST_GROUP_CHARS: usize = 120;
+const MAX_CHECKLIST_ID_CHARS: usize = 64;
+const MAX_CHECKLIST_EXPLANATION_CHARS: usize = 240;
+const MAX_CHECKLIST_PAYLOAD_CHARS: usize = 7_800;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChecklistItemDraft {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub active_title: Option<String>,
+    pub group: Option<String>,
+}
+
+pub(crate) fn normalize_checklist_status(raw: &str) -> String {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    match trimmed.as_str() {
+        "done" | "completed" | "complete" => "completed".to_string(),
+        "in_progress" | "in-progress" | "inprogress" | "running" | "active" => {
+            "in_progress".to_string()
+        }
+        "pending" | "todo" | "not_started" | "queued" | "" => "pending".to_string(),
+        "skipped" | "cancelled" | "canceled" | "abandoned" => "skipped".to_string(),
+        "failed" | "error" => "failed".to_string(),
+        "deleted" | "removed" => "deleted".to_string(),
+        other => bounded_text(other, 32),
+    }
+}
+
+fn json_string_or_number(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+pub(crate) fn extract_checklist_from_array(
+    raw: &Value,
+    title_keys: &[&str],
+) -> Vec<ChecklistItemDraft> {
+    let parsed_owned: Value;
+    let array = match raw {
+        Value::Array(items) => items,
+        Value::String(text) => {
+            let Ok(val) = serde_json::from_str::<Value>(text.trim()) else {
+                return Vec::new();
+            };
+            parsed_owned = val;
+            let Some(items) = parsed_owned.as_array() else {
+                return Vec::new();
+            };
+            items
+        }
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::with_capacity(array.len().min(MAX_CHECKLIST_ITEMS + 1));
+    for entry in array {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        let id = obj.get("id").and_then(json_string_or_number);
+        let title = title_keys.iter().find_map(|key| {
+            obj.get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        });
+        let status = obj
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let active_title = obj
+            .get("activeForm")
+            .or_else(|| obj.get("active_title"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let group = obj
+            .get("group")
+            .or_else(|| obj.get("phase"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        out.push(ChecklistItemDraft {
+            id,
+            title,
+            status,
+            active_title,
+            group,
+        });
+    }
+    out
+}
+
+pub(crate) fn build_checklist_fact_payload(
+    op: &str,
+    provider_tool: &str,
+    items: Vec<ChecklistItemDraft>,
+    explanation: Option<&str>,
+    tool_call_id: Option<&str>,
+) -> Option<Value> {
+    let is_upsert = op == "upsert";
+    let mut truncated = items.len() > MAX_CHECKLIST_ITEMS;
+    let mut built: Vec<Value> = Vec::new();
+    for draft in items.into_iter().take(MAX_CHECKLIST_ITEMS) {
+        let id = draft
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| bounded_text(s, MAX_CHECKLIST_ID_CHARS));
+        let title = draft
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| bounded_text(s, MAX_CHECKLIST_TITLE_CHARS));
+        let status = draft
+            .status
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(normalize_checklist_status);
+        let active_title = draft
+            .active_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| bounded_text(s, MAX_CHECKLIST_TITLE_CHARS));
+        let group = draft
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| bounded_text(s, MAX_CHECKLIST_GROUP_CHARS));
+
+        if is_upsert {
+            if id.is_none() && title.is_none() {
+                continue;
+            }
+            if title.is_none() && status.is_none() && active_title.is_none() && group.is_none() {
+                continue;
+            }
+        } else if title.is_none() {
+            continue;
+        }
+
+        let mut item_map = serde_json::Map::new();
+        if let Some(id) = id {
+            item_map.insert("id".to_string(), Value::from(id));
+        }
+        if let Some(title) = title {
+            item_map.insert("title".to_string(), Value::from(title));
+        }
+        if let Some(status) = status {
+            item_map.insert("status".to_string(), Value::from(status));
+        } else if !is_upsert {
+            item_map.insert("status".to_string(), Value::from("pending"));
+        }
+        if let Some(active_title) = active_title {
+            item_map.insert("active_title".to_string(), Value::from(active_title));
+        }
+        if let Some(group) = group {
+            item_map.insert("group".to_string(), Value::from(group));
+        }
+        built.push(Value::Object(item_map));
+    }
+
+    if built.is_empty() {
+        return None;
+    }
+
+    let mut clean_explanation = explanation
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| bounded_text(s, MAX_CHECKLIST_EXPLANATION_CHARS));
+    let clean_call_id = tool_call_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| bounded_text(s, 128));
+
+    let assemble = |items_vec: &[Value], expl: &Option<String>, is_trunc: bool| -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert("op".to_string(), Value::from(op));
+        map.insert(
+            "provider_tool".to_string(),
+            Value::from(bounded_text(provider_tool, 64)),
+        );
+        map.insert("items".to_string(), Value::Array(items_vec.to_vec()));
+        if let Some(text) = expl {
+            map.insert("explanation".to_string(), Value::from(text.clone()));
+        }
+        if is_trunc {
+            map.insert("truncated".to_string(), Value::from(true));
+        }
+        if let Some(call_id) = &clean_call_id {
+            map.insert("tool_call_id".to_string(), Value::from(call_id.clone()));
+        }
+        Value::Object(map)
+    };
+
+    loop {
+        let candidate = assemble(&built, &clean_explanation, truncated);
+        let Ok(encoded) = serde_json::to_string(&candidate) else {
+            return None;
+        };
+        if encoded.chars().count() <= MAX_CHECKLIST_PAYLOAD_CHARS {
+            return Some(candidate);
+        }
+        if built.len() > 1 {
+            built.pop();
+            truncated = true;
+            continue;
+        }
+        if clean_explanation.is_some() {
+            clean_explanation = None;
+            truncated = true;
+            continue;
+        }
+        return None;
+    }
+}
+
+fn emit_checklist_fact(
+    facts: &mut Vec<ParsedProviderFact>,
+    at: DateTime<Utc>,
+    source_offset: u64,
+    payload: Value,
+) {
+    push_bounded_provider_fact(facts, "session.checklist", at, source_offset, payload);
+}
+
 /// Provider text bounded by characters, never splitting a UTF-8 scalar.
 fn bounded_text(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
@@ -3250,6 +3499,7 @@ fn extract_claude_assistant_facts(
     let mut visible_thinking_blocks = 0usize;
     let mut withheld_thinking_blocks = 0usize;
     let mut tool_intents: Vec<serde_json::Value> = Vec::new();
+    let mut last_checklist: Option<Value> = None;
 
     for item in &items {
         match item.r#type.as_deref() {
@@ -3276,6 +3526,31 @@ fn extract_claude_assistant_facts(
                 withheld_thinking_blocks += 1;
             }
             Some("tool_use") => {
+                if item
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("TodoWrite"))
+                {
+                    if let Some(raw_input) = item.input.as_deref() {
+                        if let Ok(parsed) = serde_json::from_str::<Value>(raw_input.get()) {
+                            if let Some(todos) = parsed.get("todos") {
+                                let drafts = extract_checklist_from_array(
+                                    todos,
+                                    &["content", "title", "subject"],
+                                );
+                                if let Some(payload) = build_checklist_fact_payload(
+                                    "replace",
+                                    "TodoWrite",
+                                    drafts,
+                                    None,
+                                    item.id.as_deref(),
+                                ) {
+                                    last_checklist = Some(payload);
+                                }
+                            }
+                        }
+                    }
+                }
                 if tool_intents.len() < 32 {
                     if let Some(raw_input) = item.input.as_deref() {
                         if let Ok(parsed_input) =
@@ -3362,6 +3637,10 @@ fn extract_claude_assistant_facts(
             line_offset,
             Value::Object(payload),
         );
+    }
+
+    if let Some(payload) = last_checklist {
+        emit_checklist_fact(facts, at, line_offset, payload);
     }
 }
 
@@ -3972,6 +4251,93 @@ fn extract_claude_provider_facts(
                             line_offset,
                             serde_json::json!({ "children": [Value::Object(child)] }),
                         );
+                    }
+                }
+                if let Ok(result_val) = serde_json::from_str::<Value>(raw_result.get()) {
+                    let parent_tool_call_id = obj
+                        .message
+                        .as_ref()
+                        .and_then(|msg| {
+                            serde_json::from_str::<Vec<ContentItem>>(msg.content.get()).ok()
+                        })
+                        .and_then(|items| {
+                            items.into_iter().find_map(|item| {
+                                (item.r#type.as_deref() == Some("tool_result"))
+                                    .then_some(item.tool_use_id)
+                                    .flatten()
+                                    .filter(|id| !id.trim().is_empty())
+                            })
+                        });
+                    if let Some(task) = result_val.get("task").and_then(Value::as_object) {
+                        let id = task.get("id").and_then(json_string_or_number);
+                        let title = task
+                            .get("subject")
+                            .or_else(|| task.get("title"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string);
+                        if id.is_some() && title.is_some() {
+                            let status = task
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| Some("pending".to_string()));
+                            let active_title = task
+                                .get("activeForm")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            if let Some(payload) = build_checklist_fact_payload(
+                                "upsert",
+                                "TaskCreate",
+                                vec![ChecklistItemDraft {
+                                    id,
+                                    title,
+                                    status,
+                                    active_title,
+                                    group: None,
+                                }],
+                                None,
+                                parent_tool_call_id.as_deref(),
+                            ) {
+                                emit_checklist_fact(facts, at, line_offset, payload);
+                            }
+                        }
+                    } else if result_val.get("success").and_then(Value::as_bool) != Some(false) {
+                        if let Some(task_id) =
+                            result_val.get("taskId").and_then(json_string_or_number)
+                        {
+                            let status = result_val
+                                .get("statusChange")
+                                .and_then(|sc| sc.get("to"))
+                                .or_else(|| result_val.get("status"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            let title = result_val
+                                .get("subject")
+                                .or_else(|| result_val.get("title"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            let active_title = result_val
+                                .get("activeForm")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            if let Some(payload) = build_checklist_fact_payload(
+                                "upsert",
+                                "TaskUpdate",
+                                vec![ChecklistItemDraft {
+                                    id: Some(task_id),
+                                    title,
+                                    status,
+                                    active_title,
+                                    group: None,
+                                }],
+                                None,
+                                parent_tool_call_id.as_deref(),
+                            ) {
+                                emit_checklist_fact(facts, at, line_offset, payload);
+                            }
+                        }
                     }
                 }
             }
@@ -5043,11 +5409,77 @@ fn extract_omp_provider_facts(
         }
         return;
     }
+    if obj.r#type.as_deref() == Some("message") {
+        if let Some(message) = obj.message.as_ref() {
+            if message.role.as_deref() == Some("toolResult")
+                && message
+                    .tool_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("todo"))
+            {
+                if let Some(raw_details) = message.details.as_deref() {
+                    if let Ok(details) = serde_json::from_str::<Value>(raw_details.get()) {
+                        if let Some(phases) = details.get("phases").and_then(Value::as_array) {
+                            let mut drafts = Vec::new();
+                            for phase in phases {
+                                let group = phase
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string);
+                                let Some(tasks) = phase.get("tasks").and_then(Value::as_array)
+                                else {
+                                    continue;
+                                };
+                                for task in tasks {
+                                    let Some(obj) = task.as_object() else {
+                                        continue;
+                                    };
+                                    let id = obj.get("id").and_then(json_string_or_number);
+                                    let title = obj
+                                        .get("content")
+                                        .or_else(|| obj.get("title"))
+                                        .and_then(Value::as_str)
+                                        .map(str::trim)
+                                        .filter(|s| !s.is_empty())
+                                        .map(str::to_string);
+                                    let status = obj
+                                        .get("status")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string);
+                                    drafts.push(ChecklistItemDraft {
+                                        id,
+                                        title,
+                                        status,
+                                        active_title: None,
+                                        group: group.clone(),
+                                    });
+                                }
+                            }
+                            if let Some(payload) = build_checklist_fact_payload(
+                                "replace",
+                                "todo",
+                                drafts,
+                                None,
+                                message.tool_call_id.as_deref(),
+                            ) {
+                                emit_checklist_fact(facts, pi_timestamp(obj), line_offset, payload);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     extract_pi_provider_facts(obj, line_offset, facts);
     for fact in &mut facts[start..] {
         if matches!(
             fact.kind.as_str(),
-            "delegation.metadata" | "delegation.spawn" | "delegation.activity"
+            "delegation.metadata"
+                | "delegation.spawn"
+                | "delegation.activity"
+                | "session.checklist"
         ) {
             continue;
         }
@@ -5163,6 +5595,7 @@ fn extract_events(
             line_offset,
             raw_line,
             events,
+            facts,
         );
         return;
     }
@@ -5345,6 +5778,7 @@ fn extract_events(
                 line_offset,
                 raw_line,
                 events,
+                facts,
                 codex_pending,
             );
         }
@@ -5613,6 +6047,7 @@ fn extract_cursor_events(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    facts: &mut Vec<ParsedProviderFact>,
 ) {
     let Some(message) = obj.message.as_ref() else {
         return;
@@ -5627,6 +6062,7 @@ fn extract_cursor_events(
     };
     let source_role = obj.role.as_deref().unwrap_or("assistant");
     let mut emitted = false;
+    let mut last_checklist: Option<Value> = None;
     for (index, block) in blocks.iter().enumerate() {
         let kind = block.get("type").and_then(Value::as_str).unwrap_or("text");
         let event_uuid = format!("{msg_uuid}-cursor-{index}");
@@ -5712,6 +6148,24 @@ fn extract_cursor_events(
                     .get("args")
                     .or_else(|| block.get("input"))
                     .or_else(|| block.get("arguments"));
+                if tool_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("TodoWrite"))
+                {
+                    if let Some(todos) = args.and_then(|value| value.get("todos")) {
+                        let drafts =
+                            extract_checklist_from_array(todos, &["content", "title", "subject"]);
+                        if let Some(payload) = build_checklist_fact_payload(
+                            "replace",
+                            "TodoWrite",
+                            drafts,
+                            None,
+                            tool_call_id.as_deref(),
+                        ) {
+                            last_checklist = Some(payload);
+                        }
+                    }
+                }
                 let intent = description_intent(tool_name.as_deref(), args);
                 let input = args.and_then(|value| RawValue::from_string(value.to_string()).ok());
                 let mut event = cursor_event(
@@ -5767,6 +6221,9 @@ fn extract_cursor_events(
             }
             _ => {}
         }
+    }
+    if let Some(payload) = last_checklist {
+        emit_checklist_fact(facts, timestamp, line_offset, payload);
     }
     if !emitted && source_role == "user" {
         if let Some(text) = cursor_value_text(&content) {
@@ -6324,6 +6781,7 @@ fn extract_antigravity_events(
     if let Some(tool_calls) = obj.tool_calls.as_ref() {
         // A new planner supersedes any prior unconsumed call.
         let mut fresh: VecDeque<PendingAntigravityCall> = VecDeque::new();
+        let mut last_checklist: Option<Value> = None;
         for (idx, call) in tool_calls.iter().enumerate() {
             let Some(tool_name) = call.name.as_ref().filter(|name| !name.trim().is_empty()) else {
                 continue;
@@ -6336,6 +6794,20 @@ fn extract_antigravity_events(
                 .args
                 .as_ref()
                 .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok());
+            if tool_name.eq_ignore_ascii_case("update_steps") {
+                if let Some(steps) = parsed_args.as_ref().and_then(|args| args.get("steps")) {
+                    let drafts = extract_checklist_from_array(steps, &["title", "content", "step"]);
+                    if let Some(payload) = build_checklist_fact_payload(
+                        "replace",
+                        "update_steps",
+                        drafts,
+                        None,
+                        Some(&call_id),
+                    ) {
+                        last_checklist = Some(payload);
+                    }
+                }
+            }
             let action = parsed_args
                 .as_ref()
                 .and_then(|args| args.get("action").and_then(Value::as_str))
@@ -6372,6 +6844,9 @@ fn extract_antigravity_events(
                     Some(raw_line.to_string())
                 },
             });
+        }
+        if let Some(payload) = last_checklist {
+            emit_checklist_fact(facts, timestamp, line_offset, payload);
         }
         emitted_calls_this_record = true;
         *pending = AntigravityPending {
@@ -7549,6 +8024,7 @@ fn extract_codex_events(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    facts: &mut Vec<ParsedProviderFact>,
     pending: &mut CodexPending,
 ) {
     let payload_type = payload.r#type.as_deref().unwrap_or("");
@@ -7710,6 +8186,27 @@ fn extract_codex_events(
                     .as_deref()
                     .and_then(codex_arguments_object)
             };
+            if tool_name.eq_ignore_ascii_case("update_plan") {
+                if let Some(parsed) = tool_input
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                {
+                    if let Some(plan) = parsed.get("plan") {
+                        let drafts =
+                            extract_checklist_from_array(plan, &["step", "title", "content"]);
+                        let explanation = parsed.get("explanation").and_then(Value::as_str);
+                        if let Some(checklist_payload) = build_checklist_fact_payload(
+                            "replace",
+                            "update_plan",
+                            drafts,
+                            explanation,
+                            (!call_id.is_empty()).then_some(call_id),
+                        ) {
+                            emit_checklist_fact(facts, timestamp, line_offset, checklist_payload);
+                        }
+                    }
+                }
+            }
 
             events.push(ParsedEvent {
                 item: Default::default(),

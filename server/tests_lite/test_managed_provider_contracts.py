@@ -1189,6 +1189,7 @@ def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
         "delegation.spawn",
         "input.queue",
         "message.phase",
+        "session.checklist",
         "session.recap",
         "session.title",
         "tool.intent",

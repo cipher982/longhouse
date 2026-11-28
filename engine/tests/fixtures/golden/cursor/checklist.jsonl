@@ -1,0 +1,2 @@
+{"role":"user","timestamp":"2026-11-28T16:20:00Z","message":{"content":[{"type":"text","text":"Track steps"}]}}
+{"role":"assistant","timestamp":"2026-11-28T16:20:05Z","message":{"content":[{"type":"tool_use","id":"tc_1","name":"TodoWrite","input":{"todos":[{"id":"1","content":"Audit parser","status":"completed"},{"id":"2","content":"Wire UI","status":"in_progress"}]}}]}}

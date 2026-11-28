@@ -4948,6 +4948,7 @@ PROVIDER_FACT_KINDS = frozenset(
         "delegation.waiting",
         "delegation.scheduled",
         "delegation.task_notification",
+        "session.checklist",
         # What the laptop parser read from outside the shipped bytes (git
         # resolution, sidecars, source identity), so the host can rebuild the
         # render from raw. Source-tier: never served, never dropped by a rebuild.
@@ -5078,6 +5079,23 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
         payload = _validate_delegation_payload(kind, payload)
     if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
         raise ValueError("turn.duration facts need an integer duration_ms")
+    if kind == "session.checklist":
+        op = payload.get("op")
+        items = payload.get("items")
+        if op not in {"replace", "upsert"}:
+            raise ValueError("session.checklist facts need op 'replace' or 'upsert'")
+        if not isinstance(items, list) or not items or len(items) > 64:
+            raise ValueError("session.checklist facts need 1..64 items")
+        for entry in items:
+            if not isinstance(entry, dict):
+                raise ValueError("session.checklist items must be JSON objects")
+            if op == "replace" and not (isinstance(entry.get("title"), str) and entry["title"].strip()):
+                raise ValueError("session.checklist replace items need non-empty title")
+            if op == "upsert" and not (
+                (isinstance(entry.get("id"), str) and entry["id"].strip())
+                or (isinstance(entry.get("title"), str) and entry["title"].strip())
+            ):
+                raise ValueError("session.checklist upsert items need id or title")
     if kind == "session.recap" and not (isinstance(payload.get("text"), str) and payload["text"].strip()):
         raise ValueError("session.recap facts need non-empty text")
     if kind == "session.title" and not (isinstance(payload.get("title"), str) and payload["title"].strip()):

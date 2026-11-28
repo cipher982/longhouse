@@ -428,6 +428,10 @@ enum Commands {
         #[arg(long)]
         dump_facts: bool,
 
+        /// Explicit provider name (e.g. omp, pi, claude, codex, antigravity)
+        #[arg(long)]
+        provider: Option<String>,
+
         /// Also build + gzip-compress the ingest payload
         #[arg(long)]
         compress: bool,
@@ -1928,9 +1932,17 @@ fn main() -> anyhow::Result<()> {
             offset,
             dump_events,
             dump_facts,
+            provider,
             compress,
         } => {
-            commands::cmd_parse::cmd_parse(&path, offset, dump_events, dump_facts, compress)?;
+            commands::cmd_parse::cmd_parse(
+                &path,
+                offset,
+                dump_events,
+                dump_facts,
+                provider.as_deref(),
+                compress,
+            )?;
         }
         Commands::NormalizeWorker => {
             let stdin = std::io::stdin();

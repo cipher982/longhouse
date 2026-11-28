@@ -629,6 +629,7 @@
         "antigravity",
         "claude",
         "codex",
+        "cursor",
         "omp",
         "pi"
       ]
@@ -2179,6 +2180,7 @@
     {
       "path": "server/tests_lite/test_storage_v2_provider_facts.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor"

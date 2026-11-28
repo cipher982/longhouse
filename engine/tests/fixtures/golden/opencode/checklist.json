@@ -1,0 +1,27 @@
+{
+  "comment": "OpenCode todowrite tool part for session.checklist provider fact.",
+  "messages": [
+    { "id": "msg_c1", "time": 1779200000000, "data": { "role": "assistant" } }
+  ],
+  "parts": [
+    {
+      "id": "prt_c1",
+      "message": "msg_c1",
+      "time": 1779200001000,
+      "data": {
+        "type": "tool",
+        "tool": "todowrite",
+        "callID": "tooluse_todo_1",
+        "state": {
+          "status": "completed",
+          "input": {
+            "todos": [
+              { "content": "Inspect schema", "status": "completed", "priority": "high" },
+              { "content": "Ship UI", "status": "in_progress", "priority": "high" }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

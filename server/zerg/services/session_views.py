@@ -725,6 +725,37 @@ class SessionRecapResponse(BaseModel):
     at: datetime = Field(..., description="When the provider wrote the recap")
 
 
+class SessionChecklistItemResponse(BaseModel):
+    """One item in an agent-maintained work checklist."""
+
+    id: Optional[str] = Field(None, description="Provider-local item id when supplied")
+    title: str = Field(..., description="Short step title")
+    status: str = Field(..., description="Canonical item status: pending|in_progress|completed|skipped|failed")
+    active_title: Optional[str] = Field(None, description="Present-continuous label shown while this item is in progress")
+    group: Optional[str] = Field(None, description="Optional phase or group heading")
+
+
+class SessionChecklistCountsResponse(BaseModel):
+    """Compact progress counts for a session checklist."""
+
+    total: int = Field(..., ge=0)
+    done: int = Field(..., ge=0)
+    in_progress: int = Field(0, ge=0)
+
+
+class SessionChecklistResponse(BaseModel):
+    """Current agent-maintained task checklist projected from session.checklist provider facts."""
+
+    items: list[SessionChecklistItemResponse] = Field(default_factory=list)
+    counts: SessionChecklistCountsResponse
+    current_title: Optional[str] = Field(None, description="Active or next pending item title for collapsed chrome")
+    updated_at: datetime = Field(..., description="When the latest checklist update was recorded")
+    provider_tool: Optional[str] = Field(None, description="Provider tool that authored the latest update")
+    explanation: Optional[str] = Field(None, description="Optional short plan summary (e.g. Codex update_plan)")
+    truncated: bool = Field(False, description="True when the source checklist exceeded the bounded fact cap")
+    state: str = Field("active", description="Lifecycle state: active|complete|stale")
+
+
 class SessionRateLimitResponse(BaseModel):
     """Latest quota bucket snapshot reported by the provider."""
 
@@ -917,6 +948,10 @@ class SessionResponse(UTCBaseModel):
     recap: Optional[SessionRecapResponse] = Field(
         None,
         description="The provider's latest away recap for this session, when it wrote one.",
+    )
+    checklist: Optional[SessionChecklistResponse] = Field(
+        None,
+        description="Current agent-maintained task checklist (steps/todos/plan) projected from transcript facts.",
     )
     selected_model: Optional[str] = Field(
         None,

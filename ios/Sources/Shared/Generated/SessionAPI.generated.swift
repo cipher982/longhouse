@@ -124,6 +124,31 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let attachImages: Bool?
 }
 
+struct APISessionChecklistCountsResponse: Codable, Hashable, Sendable {
+    let total: Int
+    let done: Int
+    let inProgress: Int?
+}
+
+struct APISessionChecklistItemResponse: Codable, Hashable, Sendable {
+    let id: String?
+    let title: String
+    let status: String
+    let activeTitle: String?
+    let group: String?
+}
+
+struct APISessionChecklistResponse: Codable, Hashable, Sendable {
+    let items: [APISessionChecklistItemResponse]?
+    let counts: APISessionChecklistCountsResponse
+    let currentTitle: String?
+    let updatedAt: String
+    let providerTool: String?
+    let explanation: String?
+    let truncated: Bool?
+    let state: String?
+}
+
 struct APISessionControlResponse: Codable, Hashable, Sendable {
     let sourceRunnerId: Int?
     let sourceRunnerName: String?
@@ -600,6 +625,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let inputReceipts: [APISessionInputReceiptResponse]?
     let lastTurn: APILastTurnResponse?
     let recap: APISessionRecapResponse?
+    let checklist: APISessionChecklistResponse?
     let selectedModel: String?
     let usageLatest: APIUsageLatestResponse?
     let permissionMode: String?

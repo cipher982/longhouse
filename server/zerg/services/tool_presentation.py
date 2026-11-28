@@ -813,6 +813,84 @@ def _shell_headline(command: str) -> str | None:
     return line.rstrip(" \t\\").strip() or first
 
 
+def _checklist_items_summary(raw: Any, title_keys: tuple[str, ...]) -> str | None:
+    items: list[Any] | None = None
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, str):
+        try:
+            parsed = json.loads(raw.strip())
+            if isinstance(parsed, list):
+                items = parsed
+        except ValueError:
+            return None
+    if not items:
+        return None
+    done = 0
+    active_title: str | None = None
+    first_title: str | None = None
+    for entry in items:
+        if not isinstance(entry, Mapping):
+            continue
+        status = str(entry.get("status") or "").strip().lower()
+        title = next(
+            (str(entry[k]).strip() for k in title_keys if isinstance(entry.get(k), str) and str(entry[k]).strip()),
+            None,
+        )
+        active_form = str(entry.get("activeForm") or "").strip() or None
+        if not first_title and title:
+            first_title = title
+        if status in {"done", "completed", "complete"}:
+            done += 1
+        elif not active_title and status in {"in_progress", "in-progress", "running", "active"}:
+            active_title = active_form or title
+    total = len(items)
+    if done == total:
+        return f"{done}/{total} done"
+    lead = active_title or first_title
+    return _compact(f"{done}/{total} · {lead}") if lead else f"{done}/{total} steps"
+
+
+def _checklist_summary(lowered: str, parsed: Mapping[str, Any]) -> str | None:
+    if lowered == "update_steps":
+        return _checklist_items_summary(parsed.get("steps"), ("title", "content", "step"))
+    if lowered == "todowrite":
+        return _checklist_items_summary(parsed.get("todos"), ("content", "title", "subject"))
+    if lowered == "update_plan":
+        summary = _checklist_items_summary(parsed.get("plan"), ("step", "title", "content"))
+        if summary:
+            return summary
+        explanation = _first_text(parsed, ("explanation",))
+        return _compact(explanation) if explanation else None
+    if lowered == "taskcreate":
+        subject = _first_text(parsed, ("subject", "title"))
+        return _compact(f"Add: {subject}") if subject else None
+    if lowered == "taskupdate":
+        task_id = str(parsed.get("taskId") or "").strip()
+        status = _first_text(parsed, ("status",))
+        subject = _first_text(parsed, ("subject", "title"))
+        if task_id and status:
+            return _compact(f"#{task_id} → {status}")
+        if task_id and subject:
+            return _compact(f"#{task_id} · {subject}")
+        return _compact(status or subject)
+    if lowered == "todo":
+        op = str(parsed.get("op") or "").strip().lower()
+        task = _first_text(parsed, ("task",))
+        if op == "done" and task:
+            return _compact(f"✓ {task}")
+        if task:
+            return _compact(f"{op}: {task}" if op else task)
+        raw_list = parsed.get("list")
+        if isinstance(raw_list, list):
+            count = sum(
+                len(phase.get("items") or []) for phase in raw_list if isinstance(phase, Mapping) and isinstance(phase.get("items"), list)
+            )
+            if count > 0:
+                return f"{count} {'step' if count == 1 else 'steps'}"
+    return None
+
+
 def extract_derived_tool_intent(
     tool_name: str | None,
     tool_input_json: Any,
@@ -865,7 +943,9 @@ def extract_derived_tool_intent(
         prompt = _first_text(parsed, ("prompt", "Prompt", "message", "task"))
         line = _first_line(prompt) if prompt else None
         return line[:_INTENT_CHARS] if line else None
-    if label in {"Plan", "Wait", "Ask"}:
+    if label == "Plan":
+        return _checklist_summary(lowered, parsed)
+    if label in {"Wait", "Ask"}:
         return None
     # No canonical rule: the first argument a reader would recognize.
     path = _first_text(parsed, _PATH_KEYS)
