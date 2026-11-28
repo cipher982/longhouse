@@ -1630,8 +1630,7 @@ fn configure_cursor_hooks(cursor_dir: Option<PathBuf>) -> anyhow::Result<()> {
 /// The Antigravity hook is what Longhouse controls the session through, so a
 /// launch without it is a plain `agy` run wearing a managed session id.
 /// The hook body, the one file `longhouse-server onboard` installs from too.
-const ANTIGRAVITY_HOOK_TEMPLATE: &str =
-    include_str!("../../server/zerg/provider_contract/longhouse-antigravity-hook.sh");
+const ANTIGRAVITY_HOOK_TEMPLATE: &str = include_str!("../../config/longhouse-antigravity-hook.sh");
 
 /// `shlex.quote`, so the launcher and the Python installer render identical
 /// bytes and never rewrite each other's copy.

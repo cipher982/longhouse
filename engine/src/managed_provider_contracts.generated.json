@@ -2888,7 +2888,7 @@
         "engine/src/console_sink.rs",
         "engine/src/antigravity_channel_control.rs",
         "server/zerg/provider_contract/antigravity_hook_inbox.py",
-        "server/zerg/provider_contract/longhouse-antigravity-hook.sh",
+        "config/longhouse-antigravity-hook.sh",
         "engine/src/discovery.rs",
         "engine/src/daemon/mod.rs",
         "engine/src/daemon/archive_repair.rs",

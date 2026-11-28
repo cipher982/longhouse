@@ -103,6 +103,9 @@ exclude = [
 # without requiring a sibling monorepo checkout.
 "../config/models.json" = "zerg/_config/models.json"
 "../config/tool-tiers.json" = "zerg/_config/tool-tiers.json"
+# The Antigravity hook body; `longhouse-server onboard` installs it and the
+# native launcher embeds the same file.
+"../config/longhouse-antigravity-hook.sh" = "zerg/_config/longhouse-antigravity-hook.sh"
 # NOTE: build identity is NOT force-included. The generator
 # (scripts/build/generate_build_identity.py) stages it directly at
 # server/zerg/build_identity.json, so hatch picks it up as a regular
