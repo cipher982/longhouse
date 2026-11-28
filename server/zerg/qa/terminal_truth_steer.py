@@ -165,28 +165,49 @@ def send_steer(api: RuntimeApi, sid: str, text: str) -> dict[str, Any]:
         time.sleep(0.3)
 
 
+#: What the browser detail route says about the session's turn: the runtime columns and the state facts that decide
+#: whether a parked send may drain. The machine route (``/api/agents/sessions/{id}``) drops all of these.
+HOST_VIEW_SESSION_KEYS = (
+    "status",
+    "runtime_phase",
+    "display_phase",
+    "phase_started_at",
+    "last_progress_at",
+    "last_activity_at",
+    "runtime_source",
+    "terminal_state",
+    "presence_state",
+    "presence_tool",
+    "presence_updated_at",
+    "active_tool",
+    "confidence",
+)
+HOST_VIEW_STATE_KEYS = ("run", "activity", "turn", "control", "host", "presentation")
+HOST_VIEW_INPUT_KEYS = ("text", "intent", "status", "disposition", "delivery_status", "turn", "last_error", "created_at")
+
+
 def host_view(api: RuntimeApi, sid: str) -> dict[str, Any]:
-    """What the host believed when a send stayed queued: its served activity and every input receipt.
+    """What the host believed when a send stayed queued: its served runtime state and every input receipt.
 
     A CI failure keeps no host log, so this is the only record of whether the host still saw the turn running (the
     send is parked until a turn boundary) or saw it end and never drained the queue.
     """
 
     view: dict[str, Any] = {}
-    status, body = api.get(f"/api/agents/sessions/{sid}")
+    status, body = api.get(f"/api/timeline/sessions/{sid}", browser=True)
+    view["session_http_status"] = status
     with contextlib.suppress(ValueError):
         detail = json.loads(body) if status == 200 else {}
-        view["session"] = {
-            k: v for k, v in detail.items() if any(w in k for w in ("activity", "presentation", "phase", "status", "pending"))
-        }
+        if isinstance(detail, dict):
+            view["session"] = {k: detail.get(k) for k in HOST_VIEW_SESSION_KEYS}
+            state = detail.get("session_state")
+            if isinstance(state, dict):
+                view["session_state"] = {k: state.get(k) for k in HOST_VIEW_STATE_KEYS}
     status, body = api.get(f"/api/sessions/{sid}/inputs", browser=True)
+    view["inputs_http_status"] = status
     with contextlib.suppress(ValueError):
         rows = json.loads(body) if status == 200 else []
-        view["inputs"] = [
-            {k: r.get(k) for k in ("text", "intent", "status", "delivery_status", "last_error", "created_at", "updated_at")}
-            for r in rows
-            if isinstance(r, dict)
-        ]
+        view["inputs"] = [{k: r.get(k) for k in HOST_VIEW_INPUT_KEYS} for r in rows if isinstance(r, dict)]
     return view
 
 
