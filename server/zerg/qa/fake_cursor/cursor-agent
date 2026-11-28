@@ -90,7 +90,9 @@ def submit(line: str, conversation: str) -> bool:
 
 
 def tui(conversation: str) -> int:
-    fire("sessionStart", conversation)
+    # As real Cursor (2026.11.22): a banner, and no hook until a prompt is submitted. A sessionStart here hid that the
+    # launcher refused every app send to a fresh session (no hook had written an idle phase).
+    say("Cursor Agent (fake)")
     say(READY)
     sys.stdout.write("> ")
     sys.stdout.flush()
