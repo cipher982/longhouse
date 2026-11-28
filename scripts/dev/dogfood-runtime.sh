@@ -61,13 +61,13 @@ Usage:
 
 Purpose:
   Refresh installs the real local Longhouse runtime from one exact commit: the
-  newest main commit whose CI passed, unless --sha names another. It refuses a
+  one this Mac's Runtime Host serves (its /api/health build commit; Release only
+  deploys commits whose CI passed), unless --sha names another. It refuses a
   --sha whose CI has not passed, and does nothing when this Mac already runs
-  that commit; --force does both anyway (with no --sha it takes origin/main's
-  tip). It builds from a disposable worktree of that commit under /tmp/agents,
-  removed on exit, under the machine-wide heavy-build lock, reusing the primary
-  checkout's Cargo target. --here builds this working tree as it is instead
-  (uncommitted edits included).
+  that commit; --force does both anyway. It builds from a disposable worktree
+  of that commit under /tmp/agents, removed on exit, under the machine-wide
+  heavy-build lock, reusing the primary checkout's Cargo target. --here builds
+  this working tree as it is instead (uncommitted edits included).
   The refresh runs detached and kept awake, so a dropped SSH session, a closed
   terminal or Ctrl-C stops only the log you are following; it ends by waiting
   (LONGHOUSE_DOGFOOD_READY_TIMEOUT_SECS, default 120) for the new Machine Agent
@@ -343,11 +343,11 @@ installed_mismatch() {
   return 0
 }
 
-# CI on main drops a queued run when a newer push lands, so many commits have no
-# run at all; the newest green one is the safe default.
-newest_green_main() {
-  gh run list -R "$GH_REPO" --workflow "$CI_WORKFLOW" --branch main --status success --limit 1 \
-    --json headSha -q '.[0].headSha // empty' 2>/dev/null
+# The commit the Runtime Host serves: green by construction (Release deploys only
+# green CI), and a local engine never runs ahead of the server it reports to.
+served_commit() {
+  curl -fsS -m 15 "$1/api/health" 2>/dev/null \
+    | python3 -c 'import json, sys; print(((json.load(sys.stdin).get("build") or {}).get("commit") or "").strip())' 2>/dev/null
 }
 
 ci_verdict() {
@@ -361,14 +361,13 @@ run_refresh_exact() {
   . "$ROOT_DIR/scripts/lib/exact-checkout.sh"
   # shellcheck source=../lib/heavy-build-lock.sh
   . "$ROOT_DIR/scripts/lib/heavy-build-lock.sh"
-  local rev="$SHA_REQUEST" sha verdict common owner mismatch status=0
-  git -C "$ROOT_DIR" fetch --quiet origin main || [[ -n "$rev" ]] || fail "Could not fetch origin main; pass --sha <rev> or --here."
-  if [[ -z "$rev" ]] && (( FORCE == 1 )); then
-    rev=origin/main
-  elif [[ -z "$rev" ]]; then
-    rev="$(newest_green_main)" || true
-    [[ -n "$rev" ]] || fail "Could not find a green $CI_WORKFLOW run on main (gh run list). Pass --sha <rev> --force to install without one."
-    log "==> Newest main commit with green CI: ${rev:0:10} (origin/main is $(git -C "$ROOT_DIR" rev-parse --short=10 origin/main))"
+  local rev="$SHA_REQUEST" sha verdict url common owner mismatch status=0
+  git -C "$ROOT_DIR" fetch --quiet origin main || log "WARN: could not fetch origin main"
+  if [[ -z "$rev" ]]; then
+    url="$(resolve_url)"
+    rev="$(served_commit "$url")" || true
+    [[ -n "$rev" ]] || fail "Could not read the build commit from $url/api/health. Pass --sha <rev>."
+    log "==> $url serves ${rev:0:10} (origin/main is $(git -C "$ROOT_DIR" rev-parse --short=10 origin/main))"
   fi
   sha="$(git -C "$ROOT_DIR" rev-parse --verify --quiet "${rev}^{commit}")" || fail "$rev is not a commit in $ROOT_DIR (fetch it first)."
   if [[ -n "$SHA_REQUEST" ]] && (( FORCE == 0 )); then

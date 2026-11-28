@@ -3,8 +3,8 @@
 
 The real dogfood-runtime.sh runs against a fixture clone whose committed copy of the script (the one
 the disposable checkout runs) is a stub that records where and what it was asked to build and "installs"
-a longhouse-server that reports its commit, so nothing here builds or installs anything. A fake `gh`
-answers the CI questions.
+a longhouse-server that reports its commit, so nothing here builds or installs anything. Fake `gh` and
+`curl` answer the CI and Runtime Host questions.
 """
 
 from __future__ import annotations
@@ -36,8 +36,12 @@ chmod +x "$HOME/.local/bin/longhouse-server"
 """
 
 FAKE_GH = """#!/usr/bin/env bash
-echo "gh $*" >> "$FIXTURE_ROOT/gh.log"
-if [[ " $* " == *" --commit "* ]]; then echo "${FIXTURE_CI_STATE:-success}"; else echo "${FIXTURE_GREEN_SHA:-}"; fi
+echo "${FIXTURE_CI_STATE:-success}"
+"""
+
+FAKE_CURL = """#!/usr/bin/env bash
+[[ "${@: -1}" == https://runtime.test/api/health ]] || exit 22
+echo '{"build": {"commit": "'"$FIXTURE_SERVED_SHA"'"}}'
 """
 
 
@@ -73,8 +77,9 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         self.write_server_cli("00000000")  # nothing installed yet
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        (self.bin / "gh").write_text(FAKE_GH)
-        (self.bin / "gh").chmod(0o755)
+        for name, body in (("gh", FAKE_GH), ("curl", FAKE_CURL)):
+            (self.bin / name).write_text(body)
+            (self.bin / name).chmod(0o755)
 
     def write_server_cli(self, sha: str) -> None:
         cli = self.home / ".local" / "bin" / "longhouse-server"
@@ -151,11 +156,22 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         self.assertIn("not " + self.first[:8], result.output)
         self.assert_cleaned_up()
 
-    def test_by_default_it_installs_the_newest_commit_with_green_ci_not_the_tip(self):
-        result = self.refresh("--skip-engine", "--no-menubar", FIXTURE_GREEN_SHA=self.first)
+    def test_by_default_it_installs_the_commit_its_runtime_host_serves_not_the_tip(self):
+        machine = self.home / ".longhouse" / "machine"
+        machine.mkdir(parents=True)
+        (machine / "state.json").write_text('{"runtime_url": "https://runtime.test"}')
+        # The served commit is not re-checked against CI: Release deployed it.
+        result = self.refresh("--skip-engine", "--no-menubar", FIXTURE_SERVED_SHA=self.first, FIXTURE_CI_STATE="failure")
         self.assertEqual(result.returncode, 0, result.output)
         self.assertEqual(self.inner()["head"], self.first)
-        self.assertIn("Newest main commit with green CI: " + self.first[:10], result.output)
+        self.assertIn("serves " + self.first[:10], result.output)
+        self.assert_cleaned_up()
+
+    def test_with_no_runtime_host_answer_it_asks_for_a_sha(self):
+        result = self.refresh("--skip-engine", "--no-menubar")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No canonical machine state", result.output)
+        self.assertFalse((self.root / "inner").exists())
         self.assert_cleaned_up()
 
     def test_a_commit_whose_ci_did_not_pass_is_refused_unless_forced(self):

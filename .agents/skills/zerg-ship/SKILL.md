@@ -226,7 +226,7 @@ A hosted ship does not update this Mac. After a successful ship that changed the
 CLI, engine, Desktop App, installer, or hooks:
 
 ```bash
-make dogfood-refresh            # newest main commit with green CI (SHA=<rev> for another)
+make dogfood-refresh            # the commit dogfood serves (SHA=<rev> for another)
 ```
 
 It refuses a SHA whose CI has not passed and does nothing when this Mac already
