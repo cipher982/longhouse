@@ -81,6 +81,12 @@ pub(super) fn prepare_next_envelope_with_limit(
 /// launcher's binding can claim it first (see the hold below).
 const ANTIGRAVITY_CLAIM_WINDOW: Duration = Duration::from_secs(5);
 
+/// How soon a Cursor agent transcript held for its launch claim is looked at
+/// again. The claim has no window of its own to wait out (a reservation lasts
+/// while its launcher lives), so the hold polls; each look reads only the
+/// claim and reservation directories.
+pub(super) const CURSOR_CLAIM_RETRY: Duration = Duration::from_secs(1);
+
 /// [`prepare_next_envelope_with_limit`], also saying when it held the source
 /// back for a bounded claim window rather than finding nothing to ship. A held
 /// source sets `hold` to how long until the window closes, so the caller can
@@ -432,6 +438,7 @@ fn prepare_file_envelope(
                     durable_session_id = Some(binding.session_id);
                 }
                 crate::cursor_launch_binding::CursorLaunchBindingState::Pending => {
+                    *hold = Some(CURSOR_CLAIM_RETRY);
                     return Ok(None);
                 }
                 crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed
@@ -448,6 +455,10 @@ fn prepare_file_envelope(
                     // launch probe or completion wake can persist the managed
                     // owner. Hold only that bounded claim window so the first
                     // envelope cannot freeze a duplicate Shadow identity.
+                    // The claim lands in a file this source's watcher never
+                    // sees, so the caller must come back on its own: a quiet
+                    // transcript otherwise waits for the reconciliation scan.
+                    *hold = Some(CURSOR_CLAIM_RETRY);
                     return Ok(None);
                 }
                 crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed => {}

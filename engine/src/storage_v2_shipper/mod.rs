@@ -930,14 +930,45 @@ mod tests {
             std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
         }
 
-        assert!(
-            prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
-                .unwrap()
-                .is_none()
-        );
+        // Held, not current: the claim lands where this transcript's watcher
+        // never looks, so the hold must name its own retry or a quiet file
+        // waits for the reconciliation scan.
+        let held = |conn: &mut Connection| {
+            let mut hold = None;
+            let prepared = prepare_next_envelope_or_hold(
+                conn,
+                &capabilities(),
+                &path,
+                "cursor",
+                None,
+                MAX_RAW_BATCH_BYTES,
+                &mut hold,
+            )
+            .unwrap();
+            assert!(prepared.is_none());
+            hold
+        };
+        assert_eq!(held(&mut conn), Some(super::prepare::CURSOR_CLAIM_RETRY));
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
 
+        // A pending claim for this conversation holds the same way.
         let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+        fs::write(
+            claim_dir.join("claim.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": managed_session_id,
+                "conversation_uuid": conversation_id,
+                "expires_at": "2099-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(held(&mut conn), Some(super::prepare::CURSOR_CLAIM_RETRY));
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+
         fs::write(
             claim_dir.join("claim.json"),
             serde_json::to_vec(&serde_json::json!({
