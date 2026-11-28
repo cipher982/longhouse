@@ -504,21 +504,12 @@ def _install_antigravity_hook(home: Path, environment: dict[str, str]) -> None:
     a no-op stub does not, and that changes the measured ship lag by seconds.
     """
 
-    import ast
-
     from zerg.qa.provider_live_canary import _antigravity_hook_config
 
     if Path(environment["HOME"]).resolve() != home.resolve():
         raise RuntimeError("refusing to install the Antigravity hook outside the isolated HOME")
-    source = (SERVER_ROOT / "zerg" / "provider_contract" / "antigravity_hook_inbox.py").read_text()
-    template = next(
-        (
-            ast.literal_eval(node.value)
-            for node in ast.parse(source).body
-            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "_ANTIGRAVITY_HOOK_SCRIPT" for t in node.targets)
-        ),
-        None,
-    )
+    hook_file = SERVER_ROOT.parent / "config" / "longhouse-antigravity-hook.sh"
+    template = hook_file.read_text() if hook_file.is_file() else None
     if not isinstance(template, str) or "__LONGHOUSE_HOME__" not in template:
         raise RuntimeError("the Antigravity hook script template moved; update _install_antigravity_hook")
     plugin = home / ".longhouse" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"

@@ -30,9 +30,24 @@ class _AntigravityLaunchError(Exception):
     """Raised when native Antigravity launch preparation fails."""
 
 
-# The hook body is one file shared with the native launcher, which embeds the
-# same bytes and rewrites an installed copy that has drifted from them.
-_ANTIGRAVITY_HOOK_SCRIPT = (Path(__file__).with_name(_ANTIGRAVITY_HOOK_SCRIPT_NAME)).read_text(encoding="utf-8")
+def _read_antigravity_hook_script() -> str | None:
+    """The hook body, one file shared with the native launcher.
+
+    The launcher embeds the same bytes and rewrites an installed copy that has
+    drifted from them. A Runtime Host never installs the hook and ships no copy.
+    """
+
+    package_root = Path(__file__).resolve().parents[1]
+    for candidate in (
+        package_root.parents[1] / "config" / _ANTIGRAVITY_HOOK_SCRIPT_NAME,  # repo / CI checkout
+        package_root / "_config" / _ANTIGRAVITY_HOOK_SCRIPT_NAME,  # pip wheel
+    ):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    return None
+
+
+_ANTIGRAVITY_HOOK_SCRIPT = _read_antigravity_hook_script()
 
 
 def _now_iso() -> str:
@@ -262,6 +277,8 @@ def _ensure_antigravity_runtime_plugin(
     plugin_root = _antigravity_plugin_source_root(config_dir) if antigravity_bin else staged_root
     hook_script = plugin_root / _ANTIGRAVITY_HOOK_SCRIPT_NAME
     longhouse_home = resolve_longhouse_home(config_dir)
+    if _ANTIGRAVITY_HOOK_SCRIPT is None:
+        raise _AntigravityLaunchError(f"The Antigravity hook body {_ANTIGRAVITY_HOOK_SCRIPT_NAME} is not installed with Longhouse.")
     hook_content = _ANTIGRAVITY_HOOK_SCRIPT.replace(
         "__LONGHOUSE_HOME__",
         shlex.quote(str(longhouse_home)),
