@@ -134,6 +134,19 @@ fn seed_launch_idle(
     }
 }
 
+/// Remove `{session}.phase.json` when an older launch wrote it. Call only with
+/// the session lock held, before this launch's provider runs.
+fn clear_stale_phase(dir: &Path, session_id: &str, launch_id: &str) {
+    let path = dir.join(format!("{session_id}.phase.json"));
+    let owner = fs::read(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .and_then(|value| value.get("launch_id")?.as_str().map(str::to_owned));
+    if path.exists() && owner.as_deref() != Some(launch_id) {
+        let _ = fs::remove_file(&path);
+    }
+}
+
 fn process_start_time(pid: libc::pid_t) -> Option<String> {
     match crate::process_identity::inspect_process_fact(pid as u32) {
         crate::process_identity::ProcessFactLookup::Present(fact)
@@ -1428,6 +1441,11 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         anyhow::bail!("Cursor Helm session {session_id} is already attached");
     }
     let launch_id = Uuid::new_v4().to_string();
+    // A resumed session keeps its id, and a launcher that crashed left its
+    // phase behind: that file would stop the idle seed's hard link while the
+    // send gate rejects its old launch id. Nothing of this launch has written
+    // one yet, and the lock keeps any other launch out.
+    clear_stale_phase(&dir, &session_id, &launch_id);
     // Creation and cold Resume use the same server transaction. A failed
     // registration must stop before cursor-agent owns the provider thread.
     let (registered, registration_payload) = register(
@@ -2004,6 +2022,30 @@ mod tests {
             trusted.prompt_drawn(quiet),
             "an already trusted folder shows no dialog"
         );
+    }
+
+    #[test]
+    fn a_phase_left_by_a_crashed_launch_does_not_block_the_next_launchs_idle_seed() {
+        let temp = tempfile::tempdir().unwrap();
+        write_json(
+            &temp.path().join("sid.phase.json"),
+            &json!({"session_id":"sid","conversation_id":"conv","launch_id":"crashed","phase":"active"}),
+        )
+        .unwrap();
+        assert!(phase(temp.path(), "sid", "conv", "launch").is_none());
+        clear_stale_phase(temp.path(), "sid", "launch");
+        assert!(seed_launch_idle(temp.path(), "sid", "conv", "launch").unwrap());
+        assert_eq!(
+            phase(temp.path(), "sid", "conv", "launch").unwrap()["phase"],
+            "idle"
+        );
+        // This launch's own phase stays.
+        clear_stale_phase(temp.path(), "sid", "launch");
+        assert!(phase(temp.path(), "sid", "conv", "launch").is_some());
+        // Unreadable leftovers go too.
+        fs::write(temp.path().join("sid.phase.json"), b"{torn").unwrap();
+        clear_stale_phase(temp.path(), "sid", "launch");
+        assert!(!temp.path().join("sid.phase.json").exists());
     }
 
     #[test]
