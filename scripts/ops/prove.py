@@ -74,6 +74,9 @@ TT_PROVIDERS = ("claude", "codex", "opencode", "pi", "omp", "antigravity", "curs
 # Providers whose cells run a fake CLI from the repo (nothing to install), and the scenarios that have such a cell.
 # Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for it (fake_cursor/cursor-agent).
 TT_FAKE_PROVIDERS = {"cursor": ("slash_command",)}
+# --real-cursor runs that Cursor cell against the real cursor-agent signed in under this home on the proof host (installed
+# and logged in once by hand: HOME=<it> cursor-agent login). It bills that Cursor account, so it is never the default.
+REAL_CURSOR_HOME = "real-cursor-home"  # under PROOF_BASE
 TT_CELL = re.compile(r"^(?P<provider>[a-z]+)/(?P<mode>helm|console|shadow)(?::(?P<scenario>[a-z_]+))?$")
 ASSERTION_CELL = re.compile(r"^[a-z][a-z0-9_]+$")
 
@@ -237,6 +240,7 @@ def orchestrate(args: argparse.Namespace) -> int:
             f"timeout -k 30 {int(args.deadline)} python3 $HOME/{tools} --on-host --run-id {run_id} --sha {sha} "
             f"--cells {shlex.quote(' '.join(cells))} --deadline {int(args.deadline)}"
             + (" --keep" if args.keep else "")
+            + (" --real-cursor" if args.real_cursor else "")
             + (f" --fault {shlex.quote(args.fault)}" if args.fault else "")
             + (f" --cell-timeout {int(args.cell_timeout)}" if args.cell_timeout else "")
         )
@@ -334,7 +338,7 @@ def control_verdict(result: dict, receipts: Path, target: str, fault: str, secon
 
 
 class ProofRun:
-    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0, fault: str = "") -> None:
+    def __init__(self, run_id: str, sha: str, keep: bool, deadline: int, cell_timeout: int = 0, fault: str = "", real_cursor: bool = False) -> None:
         self.run_id, self.sha, self.keep = run_id, sha, keep
         self.fault = fault
         self.base = Path.home() / PROOF_BASE
@@ -358,6 +362,11 @@ class ProofRun:
             "LANG": "C.UTF-8",
             MARKER_ENV: run_id,
         }
+        if real_cursor:
+            signed_in = self.base / REAL_CURSOR_HOME
+            if not (signed_in / ".config" / "cursor" / "auth.json").is_file():
+                raise SystemExit(f"prove: --real-cursor needs a signed-in Cursor under {signed_in} (HOME={signed_in} cursor-agent login)")
+            self.env_base["LONGHOUSE_TT_REAL_CURSOR_HOME"] = str(signed_in)
 
     # -- plumbing
     def phase(self, name: str):
@@ -816,7 +825,7 @@ def sweep_old_runs(base: Path, keep_id: str) -> None:
 
 
 def on_host(args: argparse.Namespace) -> int:
-    run = ProofRun(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout, args.fault)
+    run = ProofRun(args.run_id, args.sha, args.keep, args.deadline, args.cell_timeout, args.fault, args.real_cursor)
     run.run_dir.mkdir(parents=True, exist_ok=True)
     sweep_old_runs(run.base, args.run_id)
 
@@ -940,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline", type=int, default=DEFAULT_DEADLINE_S, help="seconds the whole run may take, teardown included")
     parser.add_argument("--cell-timeout", type=int, default=0, help="seconds one cell (or producer run) may take; default %d for a Terminal Truth cell, %d for a producer" % (CELL_TIMEOUT_S, PRODUCER_TIMEOUT_S))
     parser.add_argument("--fault", default=os.environ.get("FAULT") or "", help="run ONE producer cell as a negative control: the QA engine is told this fault through the engine-only channel (the producer is not), and PASS means the oracle caught it")
+    parser.add_argument("--real-cursor", action="store_true", help="run the Cursor slash_command cell against the real cursor-agent signed in on the proof host (bills that Cursor account)")
     parser.add_argument("--keep", action="store_true", help="leave the proof host's scratch, venv and worktree for debugging (swept after 6 h)")
     parser.add_argument("--on-host", action="store_true", help="internal: the proof host half")
     parser.add_argument("--run-id")

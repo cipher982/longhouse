@@ -34,6 +34,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import tempfile
 import time
 from collections.abc import Callable
@@ -51,6 +52,7 @@ from zerg.qa.terminal_truth_providers import FAKE_PROVIDERS
 from zerg.qa.terminal_truth_providers import PROVIDERS
 from zerg.qa.terminal_truth_providers import ProviderDriver
 from zerg.qa.terminal_truth_providers import _version
+from zerg.qa.terminal_truth_providers import real_cursor_home
 from zerg.qa.terminal_truth_pty import COLUMNS
 from zerg.qa.terminal_truth_pty import ROWS
 from zerg.qa.terminal_truth_pty import _tail_text
@@ -168,6 +170,33 @@ def _helm_argv(pas: Any, provider: str, workspace: Path, binary: str) -> list[st
 def _launched_session(api: RuntimeApi) -> str | None:
     ids = api.session_ids(fresh=True)
     return next((sid for sid in ids if sid in api.launched_sessions), None)
+
+
+def cursor_store_messages(home: Path) -> list[tuple[int, str, str]]:
+    """(row, role, text) for every message real Cursor stored under ``home``: what its model was sent and answered.
+
+    Cursor keeps each chat in ``~/.cursor/chats/<workspace>/<chat>/store.db``; a message is a JSON blob with a role.
+    """
+
+    messages: list[tuple[int, str, str]] = []
+    for db in sorted((home / ".cursor" / "chats").glob("*/*/store.db")):
+        with contextlib.suppress(sqlite3.Error), contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
+            for row, data in conn.execute("SELECT rowid, data FROM blobs ORDER BY rowid"):
+                with contextlib.suppress(ValueError, TypeError, AttributeError):
+                    blob = json.loads(bytes(data))
+                    content = blob.get("content")
+                    if isinstance(content, list):
+                        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+                    messages.append((row, str(blob.get("role") or ""), str(content or "")))
+    return messages
+
+
+def cursor_turn_answered(home: Path, marker: str) -> bool:
+    """Real Cursor sent a user message carrying ``marker`` to its model and stored the model's answer after it."""
+
+    messages = cursor_store_messages(home)
+    asked = [row for row, role, text in messages if role == "user" and marker in text]
+    return bool(asked) and any(role == "assistant" and row > asked[0] for row, role, _ in messages)
 
 
 def _bound_cursor_session(pas: Any, workspace: Path) -> str | None:
@@ -325,9 +354,12 @@ def run_command_cell_in(
     checks: list[tuple[str, bool, str]] = []
     started = time.monotonic()
     sends: list[dict[str, Any]] = []
-    fake_model = provider in FAKE_MODEL_PROVIDERS
+    real_cursor = provider == "cursor" and real_cursor_home() is not None
+    fake_model = provider in FAKE_MODEL_PROVIDERS and not real_cursor
     model_log = pas.root / f"{provider}-model.jsonl"
-    if fake_model:
+    if real_cursor:
+        out["provider_note"] = "real cursor-agent against Cursor's servers: proves Cursor's own command handling"
+    elif fake_model:
         out["provider_note"] = "fake cursor-agent: proves the keystrokes Longhouse types, not Cursor's own command handling"
         pas.provider_environments[provider]["FAKE_CURSOR_MODEL_LOG"] = str(model_log)
         pas.provider_environments[provider]["FAKE_CURSOR_INPUT_LOG"] = str(pas.root / f"{provider}-input.jsonl")
@@ -338,11 +370,15 @@ def run_command_cell_in(
         return [str(json.loads(row).get("prompt") or "") for row in model_log.read_text().splitlines() if row.strip()]
 
     def model_got(turn: str, marker: str) -> bool:
+        if real_cursor:
+            return cursor_turn_answered(pas.home, marker)
         if fake_model:
             return any(marker in prompt for prompt in fake_prompts())
         return pas.model.served_requests([f"{spec.key}:{turn}"]) >= 1
 
     def user_texts() -> list[str]:
+        if real_cursor:
+            return [text for _, role, text in cursor_store_messages(pas.home) if role == "user"]
         return fake_prompts() if fake_model else _request_user_texts(dump_dir)
 
     try:
@@ -361,7 +397,7 @@ def run_command_cell_in(
         action: dict[str, Any] | None = None
         waited = time.monotonic()
         while time.monotonic() < waited + CONTROL_WAIT_S and session.alive():
-            sid = sid or (_bound_cursor_session(pas, workspace) if fake_model else _launched_session(api))
+            sid = sid or (_bound_cursor_session(pas, workspace) if provider == "cursor" else _launched_session(api))
             if sid is not None:
                 action = _send_action(api, sid)
                 if (action or {}).get("state") == "available":

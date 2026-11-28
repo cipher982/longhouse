@@ -308,9 +308,32 @@ PROVIDERS: dict[str, ProviderDriver] = {
 # Cursor's CLI reaches only Cursor's servers, so no scripted model can stand in for its model. The slash_command scenario
 # runs a fake cursor-agent that records what it was typed (fake_cursor/cursor-agent). Kept out of PROVIDERS: every other
 # scenario reads "not in PROVIDERS" as "no scripted model", which is still true.
-FAKE_PROVIDERS: dict[str, ProviderDriver] = {
-    "cursor": ProviderDriver("cursor", str(FAKE_CURSOR_AGENT), "Fake Cursor ready", lambda b, w: [str(b), "--resume", "fake"]),
-}
+#
+# With LONGHOUSE_TT_REAL_CURSOR_HOME set (make prove ARGS=--real-cursor) the cell runs the real cursor-agent installed in
+# that home instead, signed in by its .config/cursor/auth.json: it bills that Cursor account, so it is opt-in and never
+# part of the CI gate. It answers the workspace trust prompt as a person does.
+REAL_CURSOR_HOME_ENV = "LONGHOUSE_TT_REAL_CURSOR_HOME"
+
+
+def real_cursor_home() -> Path | None:
+    value = os.environ.get(REAL_CURSOR_HOME_ENV, "").strip()
+    return Path(value) if value else None
+
+
+def _cursor_driver() -> ProviderDriver:
+    home = real_cursor_home()
+    if home is None:
+        return ProviderDriver("cursor", str(FAKE_CURSOR_AGENT), "Fake Cursor ready", lambda b, w: [str(b), "--resume", "fake"])
+    return ProviderDriver(
+        "cursor",
+        str(home / ".local" / "bin" / "cursor-agent"),
+        "Cursor Agent",
+        lambda b, w: [str(b), "--resume", "fake"],
+        answers=(("Trust this workspace", b"a"),),
+    )
+
+
+FAKE_PROVIDERS: dict[str, ProviderDriver] = {"cursor": _cursor_driver()}
 
 
 def provider_environment(provider: str, endpoint: str, script: Path, home: Path) -> dict[str, str]:
@@ -344,6 +367,11 @@ def provider_environment(provider: str, endpoint: str, script: Path, home: Path)
     environment[profiles.SCRIPTED_MODEL_BASE_URL_ENV] = endpoint
     if provider in FAKE_PROVIDERS:  # no model to point at the scripted endpoint; the profile would also set HOME
         environment["HOME"] = str(home)
+        if provider == "cursor" and (signed_in := real_cursor_home()) is not None:
+            auth = home / ".config" / "cursor" / "auth.json"
+            auth.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(signed_in / ".config" / "cursor" / "auth.json", auth)
+            auth.chmod(0o600)
     else:
         profiles.configure_scripted_model_profile(provider, home, environment)
     if provider == "opencode":
