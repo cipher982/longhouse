@@ -56,7 +56,7 @@ python3 -c "from PIL import Image; i=Image.open('desktop/LonghouseMenuBarHarness
 ```
 
 4. Run the harness for the affected surface (dispatched to the wisp runner, so commit and push first): `make menubar-harness MODE=test`.
-5. For the installed macOS app, refresh and restart it: `make dogfood-refresh HERE=1` (this working tree, before it lands), then `launchctl kickstart -k gui/$(id -u)/ai.longhouse.app`.
+5. For the installed macOS app, refresh it: `make dogfood-refresh HERE=1` (this working tree, before it lands). The refresh restarts the app.
 
 ## Guardrails
 

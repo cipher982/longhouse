@@ -2,8 +2,9 @@
 """make dogfood-refresh builds one exact commit in a disposable checkout and removes it after.
 
 The real dogfood-runtime.sh runs against a fixture clone whose committed copy of the script (the one
-the disposable checkout runs) is a stub that records where and what it was asked to build, so nothing
-here builds or installs anything.
+the disposable checkout runs) is a stub that records where and what it was asked to build and "installs"
+a longhouse-server that reports its commit, so nothing here builds or installs anything. A fake `gh`
+answers the CI questions.
 """
 
 from __future__ import annotations
@@ -29,6 +30,14 @@ set -euo pipefail
   echo "args=$*"
 } >> "$FIXTURE_ROOT/inner"
 [[ "${FIXTURE_INNER_FAIL:-0}" != 1 ]]
+sha="$(git -C "$here" rev-parse HEAD)"
+printf '#!/usr/bin/env bash\necho longhouse 0.1.0-dev+%s\n' "${FIXTURE_SERVER_SHA:-${sha:0:8}}" > "$HOME/.local/bin/longhouse-server"
+chmod +x "$HOME/.local/bin/longhouse-server"
+"""
+
+FAKE_GH = """#!/usr/bin/env bash
+echo "gh $*" >> "$FIXTURE_ROOT/gh.log"
+if [[ " $* " == *" --commit "* ]]; then echo "${FIXTURE_CI_STATE:-success}"; else echo "${FIXTURE_GREEN_SHA:-}"; fi
 """
 
 
@@ -51,6 +60,8 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         (self.repo / "later.txt").write_text("x")
         self.git("add", "later.txt")
         self.git("commit", "-q", "-m", "second")
+        self.second = self.git("rev-parse", "HEAD")
+        self.git("remote", "add", "origin", str(self.repo))
         # The outer run is the real script, in the working tree only (uncommitted, like an agent's edit).
         shutil.copyfile(ROOT / "scripts" / "dev" / "dogfood-runtime.sh", script)
         lib = self.repo / "scripts" / "lib"
@@ -59,13 +70,20 @@ class DogfoodRefreshExactTests(unittest.TestCase):
             shutil.copyfile(ROOT / "scripts" / "lib" / name, lib / name)
         self.home = self.root / "home"
         (self.home / ".local" / "bin").mkdir(parents=True)
-        # The inner run installs longhouse-server from the exact checkout; the
-        # stub stands in for that install and reports the requested commit.
-        self.write_server_cli(self.first)
+        self.write_server_cli("00000000")  # nothing installed yet
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        (self.bin / "gh").write_text(FAKE_GH)
+        (self.bin / "gh").chmod(0o755)
 
     def write_server_cli(self, sha: str) -> None:
         cli = self.home / ".local" / "bin" / "longhouse-server"
         cli.write_text(f"#!/usr/bin/env bash\necho longhouse 0.1.0-dev+{sha[:8]}\n")
+        cli.chmod(0o755)
+
+    def write_engine_cli(self, sha: str) -> None:
+        cli = self.home / ".local" / "bin" / "longhouse"
+        cli.write_text(f"#!/usr/bin/env bash\n[[ $1 == local-health ]] && {{ echo '{{}}'; exit; }}\necho 0.1.0-dev+{sha[:8]}\n")
         cli.chmod(0o755)
 
     def tearDown(self):
@@ -77,9 +95,13 @@ class DogfoodRefreshExactTests(unittest.TestCase):
     def refresh(self, *args, **env) -> subprocess.CompletedProcess:
         environment = {k: v for k, v in os.environ.items() if k not in ("LONGHOUSE_DOGFOOD_CHECKOUT", "LONGHOUSE_CARGO_TARGET_OWNER")}
         environment.update(FIXTURE_ROOT=str(self.root), HOME=str(self.home), LONGHOUSE_EXACT_CHECKOUT_PARENT=str(self.lanes),
-                           LONGHOUSE_HEAVY_BUILD_LOCK=str(self.root / "heavy.lock"), **env)
-        return subprocess.run(["bash", str(self.repo / "scripts" / "dev" / "dogfood-runtime.sh"), "refresh", *args],
-                              cwd=self.repo, env=environment, capture_output=True, text=True, timeout=60)
+                           LONGHOUSE_HEAVY_BUILD_LOCK=str(self.root / "heavy.lock"), TMPDIR=str(self.root),
+                           PATH=f"{self.bin}:{os.environ['PATH']}", **env)
+        result = subprocess.run(["bash", str(self.repo / "scripts" / "dev" / "dogfood-runtime.sh"), "refresh", *args],
+                                cwd=self.repo, env=environment, capture_output=True, text=True, timeout=60)
+        # The refresh runs detached; its stdout and stderr reach the caller through one log.
+        result.output = result.stdout + result.stderr
+        return result
 
     def inner(self) -> dict:
         lines = (self.root / "inner").read_text().splitlines()
@@ -102,35 +124,61 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         self.assert_cleaned_up()
 
     def test_a_failed_refresh_still_removes_its_checkout(self):
-        result = self.refresh("--sha", self.first, "--skip-engine", FIXTURE_INNER_FAIL="1")
+        result = self.refresh("--sha", self.first, "--skip-engine", "--no-menubar", FIXTURE_INNER_FAIL="1")
         self.assertNotEqual(result.returncode, 0)
         self.assert_cleaned_up()
 
     def test_the_installed_binary_must_report_the_requested_commit(self):
-        binary = self.home / ".local" / "bin" / "longhouse"
-        binary.write_text(f"#!/usr/bin/env bash\necho 0.1.0-dev+{self.first[:8]}\n")
-        binary.chmod(0o755)
-        self.assertEqual(self.refresh("--sha", self.first).returncode, 0)
-        binary.write_text("#!/usr/bin/env bash\necho 0.1.0-dev+deadbeef\n")
-        result = self.refresh("--sha", self.first)
+        self.write_engine_cli(self.first)
+        self.assertEqual(self.refresh("--sha", self.first, "--no-menubar", "--force").returncode, 0)
+        self.write_engine_cli("deadbeef")
+        result = self.refresh("--sha", self.first, "--no-menubar", "--force")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not " + self.first[:8], result.stderr)
+        self.assertIn("not " + self.first[:8], result.output)
         self.assert_cleaned_up()
 
     def test_here_builds_this_working_tree_in_place(self):
-        # --here is the old path: no disposable checkout. It needs a real runtime, so only its routing is checked.
-        result = self.refresh("--here", "--skip-engine", "--url", "", CLAUDE_CONFIG_DIR=str(self.root / "claude"))
+        # --here builds without a disposable checkout. It needs a real runtime, so only its routing is checked.
+        result = self.refresh("--here", "--skip-engine", CLAUDE_CONFIG_DIR=str(self.root / "claude"))
         self.assertFalse((self.root / "inner").exists())
         self.assertFalse(self.lanes.exists())
-        self.assertIn("No canonical machine state", result.stderr + result.stdout)
+        self.assertIn("No canonical machine state", result.output)
 
     def test_longhouse_server_must_report_the_requested_commit(self):
-        self.write_server_cli("deadbeefcafe")
-        result = self.refresh("--sha", self.first, "--skip-engine", "--no-menubar")
+        result = self.refresh("--sha", self.first, "--skip-engine", "--no-menubar", FIXTURE_SERVER_SHA="deadbeefcafe")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("longhouse-server reports", result.stderr)
-        self.assertIn("not " + self.first[:8], result.stderr)
+        self.assertIn("longhouse-server reports", result.output)
+        self.assertIn("not " + self.first[:8], result.output)
         self.assert_cleaned_up()
+
+    def test_by_default_it_installs_the_newest_commit_with_green_ci_not_the_tip(self):
+        result = self.refresh("--skip-engine", "--no-menubar", FIXTURE_GREEN_SHA=self.first)
+        self.assertEqual(result.returncode, 0, result.output)
+        self.assertEqual(self.inner()["head"], self.first)
+        self.assertIn("Newest main commit with green CI: " + self.first[:10], result.output)
+        self.assert_cleaned_up()
+
+    def test_a_commit_whose_ci_did_not_pass_is_refused_unless_forced(self):
+        result = self.refresh("--sha", self.second, "--skip-engine", "--no-menubar", FIXTURE_CI_STATE="failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is 'failure', not success", result.output)
+        self.assertFalse((self.root / "inner").exists())
+        self.assert_cleaned_up()
+        result = self.refresh("--sha", self.second, "--skip-engine", "--no-menubar", "--force", FIXTURE_CI_STATE="failure")
+        self.assertEqual(result.returncode, 0, result.output)
+        self.assertEqual(self.inner()["head"], self.second)
+
+    def test_a_commit_already_installed_is_not_rebuilt(self):
+        self.write_engine_cli(self.first)
+        self.write_server_cli(self.first)
+        result = self.refresh("--sha", self.first, "--no-menubar")
+        self.assertEqual(result.returncode, 0, result.output)
+        self.assertIn("already runs " + self.first[:8], result.output)
+        self.assertIn("Runtime readiness summary", result.output)
+        self.assertFalse((self.root / "inner").exists())
+        self.assert_cleaned_up()
+        self.assertEqual(self.refresh("--sha", self.first, "--no-menubar", "--force").returncode, 0)
+        self.assertEqual(self.inner()["head"], self.first)
 
 
 if __name__ == "__main__":

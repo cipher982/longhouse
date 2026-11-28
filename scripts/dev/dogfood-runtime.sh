@@ -3,21 +3,26 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER_PROJECT="$ROOT_DIR/server"
-ENGINE_DIR="$ROOT_DIR/engine"
 DESKTOP_PACKAGE_PATH="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
 ARTIFACT_DIR="$ROOT_DIR/artifacts/dogfood-runtime"
+LH="$HOME/.local/bin/longhouse"
+LH_SERVER="$HOME/.local/bin/longhouse-server"
+APP_IDENTITY=/Applications/Longhouse.app/Contents/Resources/build-identity.json
+GH_REPO=cipher982/longhouse
+CI_WORKFLOW=contract-first-ci.yml
 
 COMMAND="${1:-}"
 if [[ -n "${COMMAND}" ]]; then
   shift
 fi
+ARGS=("$@")
 
 ENGINE_PROFILE="${LONGHOUSE_DOGFOOD_ENGINE_PROFILE:-ci}"
+READY_TIMEOUT="${LONGHOUSE_DOGFOOD_READY_TIMEOUT_SECS:-120}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
-MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
 MENUBAR=1
 SKIP_ENGINE=0
+FORCE=0
 FULL_HEALTH="${LONGHOUSE_DOGFOOD_FULL_HEALTH:-0}"
 SWIFT_BUILD_DIR=""
 BUILT_APP_BUNDLE=""
@@ -51,23 +56,29 @@ resolve_longhouse_home() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev/dogfood-runtime.sh refresh [--sha <rev>] [--here] [--url <url>] [--machine-name <name>] [--no-menubar] [--skip-engine]
+  scripts/dev/dogfood-runtime.sh refresh [--sha <rev>] [--force] [--here] [--no-menubar] [--skip-engine] [--claude-dir <path>]
   scripts/dev/dogfood-runtime.sh check [--claude-dir <path>]
 
 Purpose:
-  Refresh installs the real local Longhouse runtime from one exact commit:
-  origin/main (fetched) unless --sha names another. It builds from a disposable
-  worktree of that commit under /tmp/agents, removed on exit, under the
-  machine-wide heavy-build lock, reusing the primary checkout's Cargo target; no
-  checkout's working tree matters. --here builds this working tree as it is
-  instead (uncommitted edits included), the old behavior.
+  Refresh installs the real local Longhouse runtime from one exact commit: the
+  newest main commit whose CI passed, unless --sha names another. It refuses a
+  --sha whose CI has not passed, and does nothing when this Mac already runs
+  that commit; --force does both anyway (with no --sha it takes origin/main's
+  tip). It builds from a disposable worktree of that commit under /tmp/agents,
+  removed on exit, under the machine-wide heavy-build lock, reusing the primary
+  checkout's Cargo target. --here builds this working tree as it is instead
+  (uncommitted edits included).
+  The refresh runs detached and kept awake, so a dropped SSH session, a closed
+  terminal or Ctrl-C stops only the log you are following; it ends by waiting
+  (LONGHOUSE_DOGFOOD_READY_TIMEOUT_SECS, default 120) for the new Machine Agent
+  to connect and get a heartbeat verdict before it prints the readiness summary.
   Check shows the installed runtime state and local health.
 
 Notes:
-  - This is the dogfood loop for repo work. It installs into the actual local runtime.
   - DMG/drag-install is release transport only. Daily dogfooding should use this script.
   - Engine builds use LONGHOUSE_DOGFOOD_ENGINE_PROFILE=ci by default. Set it to release to force the slower release-LTO profile.
-  - Check prints one local-health JSON-derived launch summary by default. Set LONGHOUSE_DOGFOOD_FULL_HEALTH=1 to also print the full human local-health report.
+  - Set LONGHOUSE_DOGFOOD_FULL_HEALTH=1 to also print the full human local-health report.
+  - To point this Mac at another Runtime Host, run `longhouse auth --url <url>` first.
 EOF
 }
 
@@ -84,32 +95,6 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
-read_trimmed_file() {
-  local path="$1"
-  if [[ -f "$path" ]]; then
-    tr -d '\n' < "$path"
-  fi
-}
-
-read_machine_state_field() {
-  local field="$1"
-  local state_path="$LONGHOUSE_HOME/machine/state.json"
-  [[ -f "$state_path" ]] || return 0
-
-  python3 - "$state_path" "$field" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-field = sys.argv[2]
-payload = json.loads(path.read_text(encoding="utf-8"))
-value = payload.get(field)
-if isinstance(value, str):
-    print(value.strip())
-PY
-}
-
 current_version() {
   python3 - "$SERVER_PROJECT/pyproject.toml" <<'PY'
 import sys
@@ -122,35 +107,10 @@ PY
 }
 
 resolve_url() {
-  if [[ -n "$URL_OVERRIDE" ]]; then
-    printf '%s\n' "$URL_OVERRIDE"
-    return
-  fi
-
-  local configured_url
-  configured_url="$(read_machine_state_field runtime_url)"
-  if [[ -n "$configured_url" ]]; then
-    printf '%s\n' "$configured_url"
-    return
-  fi
-
-  fail "No canonical machine state found at $LONGHOUSE_HOME/machine/state.json. Pass --url or run longhouse auth --url <runtime-url> once."
-}
-
-resolve_machine_name() {
-  if [[ -n "$MACHINE_NAME_OVERRIDE" ]]; then
-    printf '%s\n' "$MACHINE_NAME_OVERRIDE"
-    return
-  fi
-
-  local configured_name
-  configured_name="$(read_machine_state_field machine_name)"
-  if [[ -n "$configured_name" ]]; then
-    printf '%s\n' "$configured_name"
-    return
-  fi
-
-  hostname -s 2>/dev/null || hostname
+  local state_path="$LONGHOUSE_HOME/machine/state.json" url=""
+  [[ -f "$state_path" ]] && url="$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("runtime_url") or "").strip())' "$state_path")"
+  [[ -n "$url" ]] || fail "No canonical machine state found at $state_path. Run longhouse auth --url <runtime-url> once."
+  printf '%s\n' "$url"
 }
 
 install_engine_from_source() {
@@ -182,11 +142,11 @@ install_engine_from_source() {
     codesign -s - "$facade_binary" "$engine_binary" >/dev/null
   fi
 
-  rm -f "$HOME/.local/bin/longhouse" "$HOME/.local/bin/longhouse-engine"
-  install -m 755 "$facade_binary" "$HOME/.local/bin/longhouse"
+  rm -f "$LH" "$HOME/.local/bin/longhouse-engine"
+  install -m 755 "$facade_binary" "$LH"
   install -m 755 "$engine_binary" "$HOME/.local/bin/longhouse-engine"
-  "$HOME/.local/bin/longhouse" verify-pair >/dev/null
-  log "Native pair ready: $($HOME/.local/bin/longhouse build-identity)"
+  "$LH" verify-pair >/dev/null
+  log "Native pair ready: $("$LH" build-identity)"
 }
 
 install_server_cli_from_source() {
@@ -203,8 +163,10 @@ install_server_cli_from_source() {
   # gitignored and absent from a fresh exact checkout; build it first so the
   # installed `longhouse-server serve` carries the UI.
   ensure_frontend_dist
-  uv tool install --force --reinstall --quiet "$SERVER_PROJECT"
-  log "longhouse-server ready: $("$HOME/.local/bin/longhouse-server" --version 2>/dev/null || echo unknown)"
+  # Rebuild only longhouse itself: a bare --reinstall implies --refresh and
+  # revalidates every cached dependency.
+  uv tool install --force --reinstall-package longhouse --quiet "$SERVER_PROJECT"
+  log "longhouse-server ready: $("$LH_SERVER" --version 2>/dev/null || echo unknown)"
 }
 
 ensure_frontend_dist() {
@@ -245,9 +207,6 @@ ensure_frontend_dist() {
 }
 
 build_desktop_app_bundle() {
-  [[ "$(uname -s)" == "Darwin" ]] || return 0
-  (( MENUBAR == 1 )) || return 0
-
   require_cmd swift
   mkdir -p "$ARTIFACT_DIR"
 
@@ -263,6 +222,7 @@ build_desktop_app_bundle() {
     --configuration release \
     --scratch-path "$scratch_path")"
 
+  # The bundled build identity is how the next refresh knows the app already runs this commit.
   "$ROOT_DIR/scripts/release/macos-package-app.sh" \
     --binary "$menubar_binary" \
     --app-name Longhouse \
@@ -272,13 +232,10 @@ build_desktop_app_bundle() {
     --short-version "${bundle_version}-local" \
     --output-dir "$ARTIFACT_DIR" \
     --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
+    --build-identity "$ROOT_DIR/.build/build-identity.json" \
     --lsuielement true >/dev/null
 
   BUILT_APP_BUNDLE="$ARTIFACT_DIR/Longhouse.app"
-}
-
-run_repo_longhouse() {
-  "$HOME/.local/bin/longhouse" "$@"
 }
 
 print_runtime_readiness_summary() {
@@ -312,6 +269,37 @@ print(f"  heartbeat.evidence_state: {evidence}" + (f" ({refusal})" if refusal el
 PY
 }
 
+# Exit 0 once a local-health snapshot shows the control channel connected and a
+# heartbeat verdict (applied, partial or rejected): the Machine Agent has reported.
+machine_agent_reported() {
+  python3 - "$1" 2>/dev/null <<'PY'
+import json
+import sys
+
+snapshot = json.load(open(sys.argv[1], encoding="utf-8"))
+connected = (snapshot.get("control_channel") or {}).get("status") == "connected"
+verdict = (snapshot.get("heartbeat_transport") or {}).get("evidence_state") not in (None, "", "unknown")
+sys.exit(0 if connected and verdict else 1)
+PY
+}
+
+# `machine repair` returns once the restarted agent writes fresh local status; the
+# control channel and the first heartbeat verdict come later. Summarizing at that
+# point printed disconnected/unknown after good refreshes (2026-11-28).
+wait_for_machine_agent() {
+  local snapshot deadline=$((SECONDS + READY_TIMEOUT))
+  snapshot="$(mktemp -t longhouse-dogfood-ready.XXXXXX)"
+  log "==> Waiting up to ${READY_TIMEOUT}s for the new Machine Agent to connect and report"
+  until "$LH" local-health --json >"$snapshot" 2>/dev/null && machine_agent_reported "$snapshot"; do
+    if (( SECONDS >= deadline )); then
+      log "WARN: the Machine Agent did not connect and report within ${READY_TIMEOUT}s; the summary below is its current state."
+      break
+    fi
+    sleep 2
+  done
+  rm -f "$snapshot"
+}
+
 run_check() {
   local snapshot_file=""
   log "==> Installed runtime status"
@@ -320,21 +308,52 @@ run_check() {
   else
     log "CLI: not found on PATH"
   fi
-  snapshot_file="$(mktemp -t longhouse-dogfood-health.XXXXXX.json)"
-  if run_repo_longhouse local-health --json >"$snapshot_file"; then
+  snapshot_file="$(mktemp -t longhouse-dogfood-health.XXXXXX)"
+  if "$LH" local-health --json >"$snapshot_file"; then
     print_runtime_readiness_summary "$snapshot_file"
     if [[ "$FULL_HEALTH" == "1" || "$FULL_HEALTH" == "true" || "$FULL_HEALTH" == "yes" ]]; then
       log ""
       log "==> Local health"
-      run_repo_longhouse local-health
+      "$LH" local-health
     fi
   else
     log "WARN: local-health --json failed; falling back to human local-health output"
     log ""
     log "==> Local health"
-    run_repo_longhouse local-health
+    "$LH" local-health
   fi
   rm -f "$snapshot_file"
+}
+
+# Prints the first installed piece that does not run commit $1, or nothing. With
+# "app" it also reads Longhouse.app's bundled identity, which only apps built by
+# this script since 2026-11-28 carry, so the post-install check leaves it out.
+installed_mismatch() {
+  local sha="$1" short="${1:0:8}" got
+  if (( SKIP_ENGINE == 0 )); then
+    got="$("$LH" build-identity 2>/dev/null || true)"
+    [[ "$got" == *"+$short"* ]] || { echo "Installed longhouse reports '$got', not $short."; return; }
+  fi
+  got="$("$LH_SERVER" --version 2>/dev/null || true)"
+  [[ "$got" == *"+$short"* ]] || { echo "Installed longhouse-server reports '$got', not $short."; return; }
+  if [[ "${2:-}" == app && "$(uname -s)" == "Darwin" ]] && (( MENUBAR == 1 )); then
+    got="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["commit"])' "$APP_IDENTITY" 2>/dev/null || true)"
+    [[ "$got" == "$sha" ]] || echo "Longhouse.app reports '${got:-no build identity}', not $short."
+  fi
+  return 0
+}
+
+# CI on main drops a queued run when a newer push lands, so many commits have no
+# run at all; the newest green one is the safe default.
+newest_green_main() {
+  gh run list -R "$GH_REPO" --workflow "$CI_WORKFLOW" --branch main --status success --limit 1 \
+    --json headSha -q '.[0].headSha // empty' 2>/dev/null
+}
+
+ci_verdict() {
+  gh run list -R "$GH_REPO" --workflow "$CI_WORKFLOW" --commit "$1" --json status,conclusion \
+    -q '[.[] | if (.conclusion // "") == "" then .status else .conclusion end] | if index("success") then "success" else (first // "no CI run") end' \
+    2>/dev/null || echo "unknown (gh run list failed)"
 }
 
 run_refresh_exact() {
@@ -342,13 +361,27 @@ run_refresh_exact() {
   . "$ROOT_DIR/scripts/lib/exact-checkout.sh"
   # shellcheck source=../lib/heavy-build-lock.sh
   . "$ROOT_DIR/scripts/lib/heavy-build-lock.sh"
-  local rev="$SHA_REQUEST" common owner identity status=0
-  if [[ -z "$rev" ]]; then
-    git -C "$ROOT_DIR" fetch --quiet origin main || fail "Could not fetch origin main; pass --sha <rev> or --here."
+  local rev="$SHA_REQUEST" sha verdict common owner mismatch status=0
+  git -C "$ROOT_DIR" fetch --quiet origin main || [[ -n "$rev" ]] || fail "Could not fetch origin main; pass --sha <rev> or --here."
+  if [[ -z "$rev" ]] && (( FORCE == 1 )); then
     rev=origin/main
+  elif [[ -z "$rev" ]]; then
+    rev="$(newest_green_main)" || true
+    [[ -n "$rev" ]] || fail "Could not find a green $CI_WORKFLOW run on main (gh run list). Pass --sha <rev> --force to install without one."
+    log "==> Newest main commit with green CI: ${rev:0:10} (origin/main is $(git -C "$ROOT_DIR" rev-parse --short=10 origin/main))"
+  fi
+  sha="$(git -C "$ROOT_DIR" rev-parse --verify --quiet "${rev}^{commit}")" || fail "$rev is not a commit in $ROOT_DIR (fetch it first)."
+  if [[ -n "$SHA_REQUEST" ]] && (( FORCE == 0 )); then
+    verdict="$(ci_verdict "$sha")"
+    [[ "$verdict" == success ]] || fail "CI for ${sha:0:10} is '$verdict', not success. Pick a green commit, or pass --force (FORCE=1) to install it anyway."
+  fi
+  if (( FORCE == 0 )) && [[ -z "$(installed_mismatch "$sha" app)" ]]; then
+    log "==> This Mac already runs ${sha:0:8}; nothing to install (--force reinstalls)"
+    run_check
+    return
   fi
   trap 'cleanup_dogfood_scratch; lh_exact_checkout_cleanup' EXIT
-  lh_exact_checkout "$ROOT_DIR" dogfood-refresh "$rev" || fail "Cannot check out $rev."
+  lh_exact_checkout "$ROOT_DIR" dogfood-refresh "$sha" || fail "Cannot check out $sha."
   # Build into the clone's primary checkout's Cargo target (scripts/build/cargo.py
   # LONGHOUSE_CARGO_TARGET_OWNER): one warm build output, not a cold one per refresh.
   common="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir)"
@@ -361,25 +394,20 @@ run_refresh_exact() {
       lh_run_heavy bash "$LH_EXACT_CHECKOUT/scripts/dev/dogfood-runtime.sh" refresh ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}
   ) || status=$?
   (( status == 0 )) || exit "$status"
-  if (( SKIP_ENGINE == 0 )); then
-    identity="$("$HOME/.local/bin/longhouse" build-identity 2>/dev/null || true)"
-    [[ "$identity" == *"+${LH_EXACT_SHA:0:8}"* ]] || fail "Installed longhouse reports '$identity', not ${LH_EXACT_SHA:0:8}."
-    log "Installed exactly ${LH_EXACT_SHA:0:8}: $identity"
-  fi
-  identity="$("$HOME/.local/bin/longhouse-server" --version 2>/dev/null || true)"
-  [[ "$identity" == *"+${LH_EXACT_SHA:0:8}"* ]] || fail "Installed longhouse-server reports '$identity', not ${LH_EXACT_SHA:0:8}."
-  log "longhouse-server exactly ${LH_EXACT_SHA:0:8}: $identity"
+  mismatch="$(installed_mismatch "$sha")"
+  [[ -z "$mismatch" ]] || fail "$mismatch"
+  (( SKIP_ENGINE == 1 )) || log "Installed exactly ${sha:0:8}: $("$LH" build-identity)"
+  log "longhouse-server exactly ${sha:0:8}: $("$LH_SERVER" --version)"
 }
 
 run_refresh() {
   local url
-  local machine_name
   local app_bundle=""
+  local tool_python
 
   require_cmd uv
   require_cmd python3
   url="$(resolve_url)"
-  machine_name="$(resolve_machine_name)"
 
   if (( SKIP_ENGINE == 0 )); then
     install_engine_from_source
@@ -396,14 +424,6 @@ run_refresh() {
 
   log "==> Refreshing installed local runtime from repo source"
   log "URL: $url"
-  log "Machine: $machine_name"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    if (( MENUBAR == 1 )); then
-      log "Desktop App: enabled"
-    else
-      log "Desktop App: disabled"
-    fi
-  fi
 
   if [[ -n "$app_bundle" ]]; then
     log "==> Installing Longhouse.app"
@@ -414,22 +434,42 @@ run_refresh() {
     # plist untouched, so a --health-exec recorded against a binary that has
     # since been removed survives every refresh -- which is how the panel sat on
     # an 11-day-old cache. `longhouse machine repair` does not cover this: it
-    # repairs the Machine Agent service and never reads this plist.
+    # repairs the Machine Agent service and never reads this plist. It runs on
+    # the longhouse-server tool just installed from this commit; `uv run` here
+    # built a whole dev environment in the throwaway checkout every refresh.
     log "==> Reinstalling Longhouse.app launch agent"
-    (cd "$SERVER_PROJECT" && uv run python -c '
+    tool_python="$(uv tool dir)/longhouse/bin/python"
+    "$tool_python" -c '
 import sys
 from zerg.services.desktop_app import install_desktop_app_service
 
 install_desktop_app_service(ui_url=sys.argv[1], claude_dir=sys.argv[2])
-' "$url" "$CLAUDE_DIR")
+' "$url" "$CLAUDE_DIR"
   fi
-  local device_token
-  device_token="$(read_trimmed_file "$LONGHOUSE_HOME/machine/device-token")"
-  [[ -n "$device_token" ]] || fail "No device token found at $LONGHOUSE_HOME/machine/device-token"
-  LONGHOUSE_DEVICE_TOKEN="$device_token" run_repo_longhouse auth --url "$url" --device "$machine_name"
-  run_repo_longhouse machine repair --repair-service --json >/dev/null
+  "$LH" machine repair --repair-service --json >/dev/null
+  wait_for_machine_agent
 
   run_check
+}
+
+# Replacing the runtime must not stop halfway because the SSH session dropped, the
+# terminal closed or the Mac slept: run the refresh in the background, immune to
+# hangup and Ctrl-C, kept awake by caffeinate, and follow its log. The exit code
+# is the refresh's.
+run_detached() {
+  local log_path pid rc=0 awake=()
+  ! command -v caffeinate >/dev/null 2>&1 || awake=(caffeinate -is)
+  log_path="$(mktemp "${TMPDIR:-/tmp}/longhouse-dogfood-refresh.XXXXXX")"
+  LONGHOUSE_DOGFOOD_DETACHED=1 nohup ${awake[@]+"${awake[@]}"} bash "$ROOT_DIR/scripts/dev/dogfood-runtime.sh" refresh \
+    ${ARGS[@]+"${ARGS[@]}"} >"$log_path" 2>&1 </dev/null &
+  pid=$!
+  log "==> Refresh runs detached as pid $pid, so a dropped session does not interrupt it. Log: $log_path"
+  tail -n +1 -f "$log_path" &
+  FOLLOWER=$!  # global: the EXIT trap runs after this function's locals are gone
+  trap 'kill "$FOLLOWER" 2>/dev/null || true' EXIT
+  wait "$pid" || rc=$?
+  sleep 1  # let the follower print the last lines
+  return "$rc"
 }
 
 if [[ "${LONGHOUSE_DOGFOOD_RUNTIME_SOURCE_ONLY:-0}" == "1" ]]; then
@@ -438,16 +478,6 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --url)
-      URL_OVERRIDE="${2:-}"
-      FORWARD_ARGS+=("$1" "${2:-}")
-      shift 2
-      ;;
-    --machine-name)
-      MACHINE_NAME_OVERRIDE="${2:-}"
-      FORWARD_ARGS+=("$1" "${2:-}")
-      shift 2
-      ;;
     --claude-dir)
       CLAUDE_DIR="${2:-}"
       FORWARD_ARGS+=("$1" "${2:-}")
@@ -468,6 +498,10 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$SHA_REQUEST" ]] || fail "--sha needs a revision"
       shift 2
       ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
     --here)
       HERE=1
       shift
@@ -486,14 +520,17 @@ LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
 
 case "$COMMAND" in
   refresh)
-    if (( HERE == 1 )) || [[ "${LONGHOUSE_DOGFOOD_CHECKOUT:-0}" == "1" ]]; then
+    if [[ "${LONGHOUSE_DOGFOOD_CHECKOUT:-0}" == "1" ]]; then
+      run_refresh
+    elif [[ "${LONGHOUSE_DOGFOOD_DETACHED:-0}" != "1" ]]; then
+      run_detached
+    elif (( HERE == 1 )); then
       run_refresh
     else
       run_refresh_exact
     fi
     ;;
   check)
-    require_cmd uv
     run_check
     ;;
   ""|-h|--help|help)

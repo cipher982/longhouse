@@ -72,6 +72,12 @@ class ServerCliInstallTests(unittest.TestCase):
         self.assertNotIn("--editable", install)
         self.assertTrue(install.endswith(str(self.repo / "server")), install)
 
+    def test_only_longhouse_is_rebuilt_not_every_dependency(self):
+        # A bare --reinstall implies --refresh: every dependency revalidated on each refresh.
+        install = next(call for call in self.install() if call.startswith("uv tool install"))
+        self.assertIn("--reinstall-package longhouse", install)
+        self.assertNotIn(" --reinstall ", f" {install} ")
+
     def test_a_current_dist_is_reused(self):
         (self.repo / "web" / "dist").mkdir()
         (self.repo / "web" / "dist" / "index.html").write_text("built")

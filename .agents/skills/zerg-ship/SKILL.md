@@ -226,9 +226,13 @@ A hosted ship does not update this Mac. After a successful ship that changed the
 CLI, engine, Desktop App, installer, or hooks:
 
 ```bash
-make dogfood-refresh            # installs exactly origin/main (SHA=<rev> for another)
-launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
+make dogfood-refresh            # newest main commit with green CI (SHA=<rev> for another)
 ```
+
+It refuses a SHA whose CI has not passed and does nothing when this Mac already
+runs that commit (`FORCE=1` overrides both). It restarts the Desktop App and the
+Machine Agent, runs detached and kept awake (a dropped SSH session only stops the
+log you follow), and waits for the new agent to connect before it prints readiness.
 
 Then confirm the machine still ships (`longhouse-server sessions list --limit 1`
 shows fresh activity). Skip it for web-only, docs-only, test-only and

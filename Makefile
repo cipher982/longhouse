@@ -757,8 +757,8 @@ install-cli: ## Reinstall the longhouse CLI from current repo source (no engine/
 
 dogfood: dogfood-refresh ## Refresh the real local runtime (see dogfood-refresh)
 
-dogfood-refresh: ## Reinstall this Mac's Longhouse runtime from one exact commit (SHA=<rev>, default origin/main), built in a disposable checkout; HERE=1 builds this working tree as it is
-	@./scripts/dev/dogfood-runtime.sh refresh $(if $(SHA),--sha $(SHA),) $(if $(HERE),--here,)
+dogfood-refresh: ## Reinstall this Mac's Longhouse runtime from one exact commit (SHA=<rev>, default the newest main commit with green CI), built in a disposable checkout; no-op if already installed; FORCE=1 reinstalls or takes a red SHA; HERE=1 builds this working tree as it is
+	@./scripts/dev/dogfood-runtime.sh refresh $(if $(SHA),--sha $(SHA),) $(if $(HERE),--here,) $(if $(FORCE),--force,)
 
 dogfood-check: ## Show installed local runtime status + local health
 	@./scripts/dev/dogfood-runtime.sh check
