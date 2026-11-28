@@ -551,6 +551,19 @@ pub fn relay(
     stop: &AtomicBool,
     resized: &AtomicBool,
 ) -> Option<libc::c_int> {
+    relay_observed(child, writer, input, output, stop, resized, &mut |_| {})
+}
+
+/// [`relay`], showing every chunk the child wrote to `on_output` after it reached `output`.
+pub fn relay_observed(
+    child: &PtyChild,
+    writer: &PtyWriter,
+    input: RawFd,
+    output: RawFd,
+    stop: &AtomicBool,
+    resized: &AtomicBool,
+    on_output: &mut dyn FnMut(&[u8]),
+) -> Option<libc::c_int> {
     let master = child.master;
     let mut input_buffer = [0u8; 8192];
     let mut output_buffer = [0u8; 65536];
@@ -602,6 +615,7 @@ pub fn relay(
                 if write_all(output, &output_buffer[..count as usize]).is_err() {
                     return None;
                 }
+                on_output(&output_buffer[..count as usize]);
             } else {
                 return None;
             }

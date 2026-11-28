@@ -76,6 +76,64 @@ fn write_json(path: &Path, value: &Value) -> anyhow::Result<()> {
     fs::rename(tmp, path)?;
     Ok(())
 }
+/// Real Cursor fires no hook until a prompt is submitted, so a fresh session had no phase and the launcher refused
+/// every send from the app (`provider_not_idle`) until someone typed in the terminal. The launcher seeds the first
+/// idle phase itself once Cursor has drawn its prompt: its banner redrawn after any workspace-trust dialog (keys
+/// typed into that dialog would answer it), then this long without output.
+const LAUNCH_PROMPT_QUIET: std::time::Duration = std::time::Duration::from_millis(500);
+const LAUNCH_SCREEN_TAIL: usize = 64 * 1024;
+
+#[derive(Default)]
+struct LaunchScreen {
+    tail: Vec<u8>,
+    last_output: Option<std::time::Instant>,
+}
+
+impl LaunchScreen {
+    fn observe(&mut self, bytes: &[u8], now: std::time::Instant) {
+        self.tail.extend_from_slice(bytes);
+        if self.tail.len() > LAUNCH_SCREEN_TAIL {
+            let excess = self.tail.len() - LAUNCH_SCREEN_TAIL;
+            self.tail.drain(..excess);
+        }
+        self.last_output = Some(now);
+    }
+
+    fn prompt_drawn(&self, now: std::time::Instant) -> bool {
+        let last = |needle: &[u8]| self.tail.windows(needle.len()).rposition(|w| w == needle);
+        let banner = last(b"Cursor Agent");
+        let trust = last(b"Trust this workspace");
+        banner.is_some_and(|b| trust.is_none_or(|t| b > t))
+            && self
+                .last_output
+                .is_some_and(|at| now.duration_since(at) >= LAUNCH_PROMPT_QUIET)
+    }
+}
+
+/// Write the first idle phase unless a hook already wrote one (a hard link never replaces a file).
+fn seed_launch_idle(
+    dir: &Path,
+    session_id: &str,
+    conversation: &str,
+    launch_id: &str,
+) -> std::io::Result<bool> {
+    let path = dir.join(format!("{session_id}.phase.json"));
+    let tmp = path.with_extension(format!("json.seed.{}", std::process::id()));
+    fs::write(
+        &tmp,
+        serde_json::to_vec(
+            &json!({"session_id":session_id,"conversation_id":conversation,"launch_id":launch_id,"phase":"idle","generation_id":null,"observed_at":Utc::now().to_rfc3339(),"seeded":"launch_prompt"}),
+        )?,
+    )?;
+    let linked = fs::hard_link(&tmp, &path);
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn process_start_time(pid: libc::pid_t) -> Option<String> {
     match crate::process_identity::inspect_process_fact(pid as u32) {
         crate::process_identity::ProcessFactLookup::Present(fact)
@@ -1676,8 +1734,35 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             }
         }
     });
+    let launch_screen = Arc::new(parking_lot::Mutex::new(LaunchScreen::default()));
+    let seeder = {
+        let screen = Arc::clone(&launch_screen);
+        let stop = stop.clone();
+        let (dir, session_id, conversation, launch_id) = (
+            dir.clone(),
+            session_id.clone(),
+            conversation.clone(),
+            launch_id.clone(),
+        );
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if screen.lock().prompt_drawn(std::time::Instant::now()) {
+                    let _ = seed_launch_idle(&dir, &session_id, &conversation, &launch_id);
+                    return;
+                }
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })
+    };
     let run_started = std::time::Instant::now();
-    let reaped_status = pty_relay::relay(&child, &writer, 0, 1, &stop, &resized);
+    let reaped_status =
+        pty_relay::relay_observed(&child, &writer, 0, 1, &stop, &resized, &mut |bytes| {
+            if !seeder.is_finished() {
+                launch_screen
+                    .lock()
+                    .observe(bytes, std::time::Instant::now());
+            }
+        });
     let run_elapsed = run_started.elapsed();
     let launcher_requested_stop = stop.load(Ordering::Relaxed);
     if let Some(registration) = &degraded_registration {
@@ -1878,6 +1963,62 @@ mod tests {
 
     use super::*;
     use std::os::fd::FromRawFd;
+
+    #[test]
+    fn the_launch_prompt_counts_as_drawn_only_after_the_trust_dialog_and_a_quiet_moment() {
+        let start = std::time::Instant::now();
+        let quiet = start + LAUNCH_PROMPT_QUIET;
+        let mut screen = LaunchScreen::default();
+        assert!(!screen.prompt_drawn(quiet), "nothing drawn yet");
+        screen.observe(
+            b"\x1b[1m Cursor Agent \x1b[0m [a] Trust this workspace [q] Quit",
+            start,
+        );
+        assert!(
+            !screen.prompt_drawn(quiet),
+            "keys typed now would answer the trust dialog"
+        );
+        screen.observe(
+            b"\x1b[2J Cursor Agent v2026 \x1b[7mP\x1b[27mlan, search",
+            start,
+        );
+        assert!(!screen.prompt_drawn(start), "still drawing");
+        assert!(screen.prompt_drawn(quiet));
+
+        let mut trusted = LaunchScreen::default();
+        trusted.observe(b"Cursor Agent v2026", start);
+        assert!(
+            trusted.prompt_drawn(quiet),
+            "an already trusted folder shows no dialog"
+        );
+    }
+
+    #[test]
+    fn the_launch_seeds_an_idle_phase_the_send_gate_accepts_but_never_replaces_a_hooks_phase() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(seed_launch_idle(temp.path(), "sid", "conv", "launch").unwrap());
+        let seeded =
+            phase(temp.path(), "sid", "conv", "launch").expect("send gate reads the seeded phase");
+        assert_eq!(seeded["phase"], "idle");
+        assert!(!seed_launch_idle(temp.path(), "sid", "conv", "launch").unwrap());
+
+        let hooked = tempfile::tempdir().unwrap();
+        write_json(
+            &hooked.path().join("sid.phase.json"),
+            &json!({"session_id":"sid","conversation_id":"conv","launch_id":"launch","phase":"active"}),
+        )
+        .unwrap();
+        assert!(!seed_launch_idle(hooked.path(), "sid", "conv", "launch").unwrap());
+        assert_eq!(
+            phase(hooked.path(), "sid", "conv", "launch").unwrap()["phase"],
+            "active"
+        );
+        assert_eq!(
+            fs::read_dir(hooked.path()).unwrap().count(),
+            1,
+            "no seed file left behind"
+        );
+    }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
