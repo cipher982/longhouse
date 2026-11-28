@@ -2955,6 +2955,50 @@ async fn trigger_codex_wake(
     }
 }
 
+/// How long a Codex command that may open a model turn (a goal Codex starts
+/// working, a compaction) has for that turn to start once its request is
+/// answered. The app-server starts one at once when it does.
+const CODEX_COMMAND_TURN_GRACE: Duration = Duration::from_secs(3);
+
+/// Send a command's app-server request. `Some(turn id)` when a model turn
+/// followed (the response names it, or a `turn/started` came within the
+/// grace), `None` when the command ran without one.
+async fn run_codex_command(
+    rpc: &mut AppServerRpc,
+    sink: &CodexExecRuntimeSink,
+    projection: &mut AppServerProjection,
+    method: &str,
+    params: Value,
+    turn: Option<bool>,
+) -> Result<Option<String>> {
+    let response = rpc.request(method, params, sink, projection).await?;
+    if let Some(turn_id) = json_string(&response, &["turn", "id"]) {
+        return Ok(Some(turn_id));
+    }
+    if turn == Some(false) {
+        return Ok(None);
+    }
+    let started = tokio::time::timeout(CODEX_COMMAND_TURN_GRACE, async {
+        loop {
+            let value = rpc.next_value().await?;
+            if jsonrpc::is_server_request(&value) {
+                rpc.respond_to_server_request(&value).await?;
+                rpc.checkpoint();
+                continue;
+            }
+            rpc.seq += 1;
+            sink.post_app_server_event(rpc.seq, &value, projection)
+                .await;
+            rpc.checkpoint();
+            if value.get("method").and_then(Value::as_str) == Some("turn/started") {
+                return Ok::<_, anyhow::Error>(json_string(&value, &["params", "turn", "id"]));
+            }
+        }
+    })
+    .await;
+    started.unwrap_or(Ok(None))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_app_server_turn(
     rpc: &mut AppServerRpc,
@@ -2973,8 +3017,55 @@ async fn run_app_server_turn(
 ) -> Result<()> {
     let starting_new_turn = existing_turn_id.is_none();
     rpc.checkpoint_for(&sink.run_id);
+    // A Codex command runs through the app-server request its TUI sends for it
+    // (codex_slash), never as `turn/start` text; anything else is a message, a
+    // `//` literal minus one slash.
+    let command_request = if starting_new_turn {
+        match crate::slash_input::command(prompt)
+            .map(|command| crate::codex_slash::route(provider_thread_id, &command))
+        {
+            Some(crate::codex_slash::CodexSlash::Request {
+                method,
+                params,
+                turn,
+            }) => Some((method, params, turn)),
+            Some(crate::codex_slash::CodexSlash::Refuse(reason)) => {
+                // The turn start refuses these before the claim; never send
+                // one to the model as text.
+                if let Some(reply) = start_reply.take() {
+                    let _ = reply.send(Err(reason.clone()));
+                }
+                anyhow::bail!("{reason}");
+            }
+            Some(crate::codex_slash::CodexSlash::Message) | None => None,
+        }
+    } else {
+        None
+    };
+    let ran_command = command_request.is_some();
+    let message = crate::slash_input::message_text(prompt);
     let expected_turn_id = if let Some(turn_id) = existing_turn_id {
         turn_id
+    } else if let Some((method, params, turn)) = command_request {
+        sink.post_provider_binding(provider_thread_id, thread_path)
+            .await;
+        match run_codex_command(rpc, sink, projection, method, params, turn).await {
+            Ok(Some(turn_id)) => turn_id,
+            Ok(None) => {
+                // The command opened no model turn: the run ends here.
+                if let Some(reply) = start_reply.take() {
+                    let _ = reply.send(Ok(()));
+                }
+                drop(starting);
+                return Ok(());
+            }
+            Err(error) => {
+                if let Some(reply) = start_reply.take() {
+                    let _ = reply.send(Err(error.to_string()));
+                }
+                return Err(error);
+            }
+        }
     } else {
         sink.post_provider_binding(provider_thread_id, thread_path)
             .await;
@@ -2989,7 +3080,7 @@ async fn run_app_server_turn(
         let turn_write_started = std::time::Instant::now();
         let mut turn_params = json!({
             "threadId": provider_thread_id,
-            "input": crate::codex_attachments::build_user_input_items_from_paths(prompt, image_paths),
+            "input": crate::codex_attachments::build_user_input_items_from_paths(&message, image_paths),
         });
         if let Some(model) = model {
             turn_params["model"] = Value::String(model.to_string());
@@ -3027,7 +3118,9 @@ async fn run_app_server_turn(
     };
     if starting_new_turn {
         sink.post_phase("thinking", None).await;
-        sink.post_live_user_item(prompt).await;
+        if !ran_command {
+            sink.post_live_user_item(&message).await;
+        }
     }
     let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<ConsoleControl>();
     let mut interrupt_requested = false;
@@ -7484,5 +7577,90 @@ elif method == "golden/bye":
             "console_worker",
             &json!({"steps": steps, "wire": recorded_lines(&raw_log, &scratch)}),
         );
+    }
+
+    const SLASH_CONSOLE_FAKE: &str = r#"
+if "turns" not in globals():
+    turns = 0
+if method == "initialize":
+    emit({"id": msg["id"], "result": {"userAgent": "fake/1"}})
+elif method == "thread/name/set":
+    emit({"id": msg["id"], "result": {}})
+elif method == "thread/compact/start":
+    emit({"id": msg["id"], "result": {}})
+    emit({"method": "turn/started", "params": {"turn": {"id": "turn-compact", "status": "inProgress"}}})
+    emit({"method": "turn/completed", "params": {"turn": {"id": "turn-compact", "status": "completed"}}})
+elif method == "turn/start":
+    turns += 1
+    turn_id = "turn-" + str(turns)
+    emit({"id": msg["id"], "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
+    emit({"method": "turn/completed", "params": {"turn": {"id": turn_id, "status": "completed"}}})
+"#;
+
+    #[tokio::test]
+    async fn a_console_slash_command_runs_its_app_server_request_and_a_literal_is_a_message() {
+        use crate::codex_rpc_golden::write_recording_fake;
+        let temp = tempfile::tempdir().unwrap();
+        let (bin, raw_log) = write_recording_fake(temp.path(), SLASH_CONSOLE_FAKE);
+        let mut worker = spawn_initialized_codex_worker(
+            &bin.display().to_string(),
+            Some("never"),
+            Some("read-only"),
+            temp.path(),
+            None,
+            None,
+            None,
+            None,
+            Duration::from_secs(20),
+        )
+        .await
+        .unwrap();
+        // A run id of its own: the steer registry is keyed by run id, and the
+        // golden worker test steers the shared fixture's.
+        let mut sink = runtime_sink(None);
+        sink.run_id = uuid::Uuid::new_v4().to_string();
+        let mut projection = AppServerProjection::default();
+        let sent = |since: usize| -> Vec<Value> {
+            std::fs::read_to_string(&raw_log)
+                .unwrap()
+                .lines()
+                .skip(since)
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        };
+        let mut seen = sent(0).len();
+        for (prompt, method) in [
+            ("/rename Proof run", "thread/name/set"),
+            ("/compact", "thread/compact/start"),
+            ("//rename is a word", "turn/start"),
+        ] {
+            run_app_server_turn(
+                &mut worker.rpc,
+                "thr-1",
+                None,
+                &sink,
+                prompt,
+                &[],
+                None,
+                &mut projection,
+                false,
+                std::time::Instant::now(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{prompt}: {error:#}"));
+            let lines = sent(seen);
+            seen += lines.len();
+            let methods: Vec<&str> = lines.iter().filter_map(|l| l["method"].as_str()).collect();
+            assert_eq!(methods, vec![method], "{prompt}");
+            if method == "turn/start" {
+                assert_eq!(lines[0]["params"]["input"][0]["text"], "/rename is a word");
+            } else {
+                assert_eq!(lines[0]["params"]["threadId"], "thr-1");
+            }
+        }
+        let _ = shutdown_worker_process_group(&mut worker.child, worker.pgid).await;
     }
 }

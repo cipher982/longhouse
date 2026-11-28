@@ -172,6 +172,13 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "//ttlit reaches the model as /ttlit, one slash dropped"
           }
         ]
       },
@@ -1140,6 +1147,13 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "//ttlit reaches the model as /ttlit, one slash dropped"
           }
         ]
       },
@@ -2284,6 +2298,13 @@
             "command": "models",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "//ttlit reaches the model as /ttlit, one slash dropped"
           }
         ]
       },
@@ -3086,6 +3107,10 @@
       "slash_commands": {
         "helm": "run",
         "console": "run",
+        "reads_leading_slash": [
+          "helm",
+          "console"
+        ],
         "pickers": [
           "model",
           "config",
@@ -3118,6 +3143,20 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "refused",
+            "note": "the terminal would run /ttlit as a command"
+          },
+          {
+            "command": "ttlit/x",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "/ttlit/x is no command name, so it is typed as text with one slash dropped"
           }
         ]
       },
@@ -3876,6 +3915,9 @@
         "helm": "run",
         "console": "refuse",
         "refuse_reason": "Cursor's headless mode (cursor-agent --print), which Longhouse Console sessions run, has no slash commands",
+        "reads_leading_slash": [
+          "helm"
+        ],
         "pickers": [
           "model",
           "resume",
@@ -3898,6 +3940,20 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "refused",
+            "note": "the terminal would run /ttlit as a command"
+          },
+          {
+            "command": "ttlit/x",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "/ttlit/x is no command name, so it is typed as text with one slash dropped"
           }
         ]
       },
@@ -4656,6 +4712,9 @@
       "slash_commands": {
         "helm": "run",
         "console": "run",
+        "reads_leading_slash": [
+          "console"
+        ],
         "pickers": [
           "settings",
           "scoped-models",
@@ -4682,6 +4741,13 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "//ttlit reaches the model as /ttlit, one slash dropped"
           }
         ]
       },
@@ -5565,6 +5631,9 @@
       "slash_commands": {
         "helm": "run",
         "console": "run",
+        "reads_leading_slash": [
+          "console"
+        ],
         "pickers": [
           "settings",
           "resume",
@@ -5601,6 +5670,13 @@
             "command": "model",
             "expect": "refused",
             "note": "bare picker"
+          },
+          {
+            "command": "ttlit",
+            "args": "TTLIT",
+            "literal": true,
+            "expect": "text",
+            "note": "//ttlit reaches the model as /ttlit, one slash dropped"
           }
         ]
       },

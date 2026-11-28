@@ -81,3 +81,48 @@ def test_the_contract_validator_rejects_bad_sections(change, message: str) -> No
     change(item["slash_commands"])
     with pytest.raises(ValueError, match=message):
         _validate_slash_commands(item)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda s: s.update(reads_leading_slash=["shadow"]), "reads_leading_slash"),
+        (lambda s: s.update(cases=[{"command": "x", "expect": "text"}]), "literal"),
+        (lambda s: s.update(cases=[{"command": "x", "literal": True, "expect": "ran"}]), "literal never runs"),
+    ],
+)
+def test_the_validator_checks_literal_cases_and_slash_reading_modes(change, message: str) -> None:
+    item = copy.deepcopy(_contract("cursor"))
+    change(item["slash_commands"])
+    with pytest.raises(ValueError, match=message):
+        _validate_slash_commands(item)
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex", "opencode", "antigravity", "cursor", "pi", "omp"])
+def test_every_provider_proves_a_double_slash_message(provider: str) -> None:
+    """The shared cases send ``//...`` on every provider: one slash dropped, or refused where the terminal would run it."""
+
+    literal = [case for case in _contract(provider)["slash_commands"]["cases"] if case.get("literal")]
+    assert any(case["expect"] == "text" for case in literal)
+    reads = _contract(provider)["slash_commands"].get("reads_leading_slash", [])
+    if "helm" in reads:
+        assert any(case["expect"] == "refused" for case in literal)
+
+
+def test_the_slash_command_scenario_sends_a_literal_and_wants_one_slash_dropped() -> None:
+    from zerg.qa.terminal_truth_command import CommandPlan
+    from zerg.qa.terminal_truth_command import judge_case
+    from zerg.qa.terminal_truth_command import plan_command_cell
+    from zerg.qa.terminal_truth_verdicts import CellSpec
+
+    plan = CommandPlan(CellSpec("codex", "helm", "slash_command"), "abc123")
+    case = {"command": "ttlit", "args": "TTLIT", "literal": True, "expect": "text"}
+    assert plan.text_for(case) == "//ttlit TTLITabc123"
+    assert plan.model_text_for(case) == "/ttlit TTLITabc123"
+    sent = {"text": plan.text_for(case), "status": "delivered"}
+    assert judge_case(plan, case, sent, None, ["/ttlit TTLITabc123"])[0]
+    assert not judge_case(plan, case, sent, None, ["//ttlit TTLITabc123"])[0], "both slashes reached the model"
+    assert not judge_case(plan, case, sent, None, [])[0], "nothing reached the model"
+
+    assert not plan_command_cell(CellSpec("codex", "console", "slash_command")).not_measured
+    assert plan_command_cell(CellSpec("pi", "console", "slash_command")).not_measured

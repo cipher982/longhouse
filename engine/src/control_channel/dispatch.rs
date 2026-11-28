@@ -157,6 +157,8 @@ pub(super) async fn execute_command(
                     ),
                 });
             }
+            // A `//` literal the provider would run as a command is refused.
+            let text = admit_owner_text(&provider, "console", &text, 0)?;
             let text = crate::slash_input::message_text(&text);
             let delivery = crate::input_attachments::attachment_delivery(&provider, "console");
             if !attachments.is_empty() && delivery.is_none() {
@@ -500,9 +502,10 @@ pub(super) async fn execute_command(
                         code: "invalid_command".to_string(),
                         message: error.to_string(),
                     })?;
-            // A slash command runs as if typed; a bare picker, or a mode that
-            // cannot run commands, is refused before any provider sees it.
-            let text = admit_owner_text(&provider, "helm", &text)?;
+            // A slash command runs as if typed; a bare picker, a command with
+            // attachments, or a mode that cannot run commands, is refused
+            // before any provider sees it.
+            let text = admit_owner_text(&provider, "helm", &text, attachments.len())?;
             let staged = stage_helm_attachments(
                 config,
                 &session_id,
@@ -560,8 +563,14 @@ pub(super) async fn execute_command(
             }
             if provider == "antigravity" {
                 // Images arrive as staged file paths inside the injected
-                // message (the model opens them with read_file).
+                // message (the model opens them with read_file). A `//`
+                // literal loses its slash here: the hook injects the text and
+                // the launcher types it, and neither reads `//`.
                 let wait_claimed_secs = payload.get("wait_claimed_secs").and_then(Value::as_f64);
+                let path_text = crate::input_attachments::prompt_with_attachments(
+                    &crate::slash_input::message_text(&text),
+                    &staged,
+                );
                 let outcome = crate::antigravity_channel_control::send_text_with_wait(
                     &session_id,
                     &path_text,
@@ -599,6 +608,11 @@ pub(super) async fn execute_command(
                         ),
                     });
                 }
+                // Typed into Cursor's terminal: a `//` literal loses its slash.
+                let path_text = crate::input_attachments::prompt_with_attachments(
+                    &crate::slash_input::message_text(&text),
+                    &staged,
+                );
                 let summary = crate::cursor_helm_control::send_text(&session_id, &path_text, None)
                     .await
                     .map_err(|err| CommandError {
@@ -678,19 +692,12 @@ pub(super) async fn execute_command(
                 .map_err(CommandError::session_not_attached)?;
             // Codex runs slash commands only in its TUI: the ones with an
             // app-server request go to the bridge, the rest are refused here.
+            // The bridge gets the text as typed and drops a `//` literal's
+            // slash itself (stripping here would make it a command there).
             let command = crate::slash_input::command(&text);
-            let text = match &command {
-                Some(command) => match crate::codex_slash::route("", command) {
-                    crate::codex_slash::CodexSlash::Refuse(reason) => {
-                        return Err(CommandError {
-                            code: crate::slash_input::REFUSED_CODE.to_string(),
-                            message: format!("/{} was not sent: {reason}.", command.name),
-                        })
-                    }
-                    _ => text,
-                },
-                None => crate::slash_input::message_text(&text),
-            };
+            if let Some(command) = &command {
+                refuse_codex_terminal_command(command)?;
+            }
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
                 session_id: session_id.clone(),
                 text,
@@ -976,6 +983,8 @@ pub(super) async fn execute_command(
                     ),
                 });
             }
+            // A `//` literal the provider would run as a command is refused.
+            let text = admit_owner_text(&provider, "helm", &text, 0)?;
             let text = crate::slash_input::message_text(&text);
             let staged = stage_helm_attachments(
                 config,
@@ -1593,17 +1602,34 @@ fn mark_helm_command(
     }
 }
 
+/// Refuse a Codex command that only its terminal can run (see
+/// [`crate::codex_slash::route`]).
+pub(super) fn refuse_codex_terminal_command(
+    command: &crate::slash_input::SlashCommand,
+) -> Result<(), CommandError> {
+    match crate::codex_slash::route("", command) {
+        crate::codex_slash::CodexSlash::Refuse(reason) => Err(CommandError {
+            code: crate::slash_input::REFUSED_CODE.to_string(),
+            message: format!("/{} was not sent: {reason}.", command.name),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// The owner's text as the provider should receive it in `mode`, or the
 /// refusal the app shows (see [`crate::slash_input`]).
 pub(super) fn admit_owner_text(
     provider: &str,
     mode: &str,
     text: &str,
+    attachments: usize,
 ) -> Result<String, CommandError> {
     let policy = super::capabilities::slash_policy(provider);
-    crate::slash_input::admit(provider, mode, &policy, text).map_err(|refusal| CommandError {
-        code: refusal.code.to_string(),
-        message: refusal.message,
+    crate::slash_input::admit(provider, mode, &policy, text, attachments).map_err(|refusal| {
+        CommandError {
+            code: refusal.code.to_string(),
+            message: refusal.message,
+        }
     })
 }
 

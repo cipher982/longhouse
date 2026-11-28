@@ -2519,7 +2519,10 @@ async fn handle_ipc_turn_start(
     )
     .await?;
     let had_attachments = !fetched.is_empty();
-    let input = crate::codex_attachments::build_user_input_items(text, &fetched);
+    // Not a command Codex runs: the text is a message, a `//` literal minus
+    // one slash.
+    let text = crate::slash_input::message_text(text);
+    let input = crate::codex_attachments::build_user_input_items(&text, &fetched);
     let response = match send_request_with_runtime(
         client,
         "turn/start",
@@ -12083,6 +12086,52 @@ mod tests {
             payload["file_len_hint"].as_u64(),
             Some(fs::metadata(&rollout_path).unwrap().len())
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ipc_turn_start_sends_a_literal_as_a_message_with_one_slash_dropped() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let temp = tempfile::tempdir().unwrap();
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            ids: RequestIds::starting_at(1),
+            ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        let config = make_test_run_config(&temp);
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {"turn": {"id": "turn-live", "status": "inProgress"}}
+            })))
+            .unwrap();
+
+        let summary = handle_ipc_turn_start(
+            &config,
+            &mut client,
+            &mut context,
+            "//goal is a word",
+            "thr_test",
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.command, None);
+        let request: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(request["method"], "turn/start", "a literal is not /goal");
+        assert_eq!(request["params"]["input"][0]["text"], "/goal is a word");
     }
 
     #[test]

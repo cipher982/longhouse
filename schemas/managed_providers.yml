@@ -137,6 +137,7 @@ providers:
     - {command: rename, args: TTNAME, expect: ran}
     - {command: goal, args: clear, expect: ran, note: "setting a goal starts Codex working it turn after turn; clear takes the same app-server route without that"}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: text, note: "//ttlit reaches the model as /ttlit, one slash dropped"}
   interaction_probes:
   - probe_id: codex_model_picker
     surface: helm_tui
@@ -769,6 +770,7 @@ providers:
     - {command: rename, args: TTNAME, expect: ran}
     - {command: effort, args: high, expect: ran}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: text, note: "//ttlit reaches the model as /ttlit, one slash dropped"}
   interaction_probes:
   - probe_id: claude_effort_command
     surface: helm_tui
@@ -1409,6 +1411,7 @@ providers:
     - {command: ttcheck, expect: ran, note: a custom command the harness writes}
     - {command: rename, args: TTNAME, expect: ran}
     - {command: models, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: text, note: "//ttlit reaches the model as /ttlit, one slash dropped"}
   interaction_probes:
   - probe_id: opencode_new_boundary
     surface: helm_tui
@@ -1845,11 +1848,14 @@ providers:
     # person would. Console: the command is the ACP prompt text.
     helm: run
     console: run
+    reads_leading_slash: [helm, console]
     pickers: [model, config, settings, resume, permissions, mcp, plugin, agents, artifact, diff, tasks, keybindings, statusline, feedback, voice]
     cases:
     - {command: ttcheck, expect: ran, note: a custom command the harness writes}
     - {command: rename, args: TTNAME, expect: ran}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: refused, note: "the terminal would run /ttlit as a command"}
+    - {command: ttlit/x, args: TTLIT, literal: true, expect: text, note: "/ttlit/x is no command name, so it is typed as text with one slash dropped"}
   interaction_probes:
   - probe_id: antigravity_shadow_control_absence
     surface: shadow
@@ -2399,10 +2405,13 @@ providers:
     helm: run
     console: refuse
     refuse_reason: Cursor's headless mode (cursor-agent --print), which Longhouse Console sessions run, has no slash commands
+    reads_leading_slash: [helm]
     pickers: [model, resume, config, rewind, copy, sandbox, mcp, plugin, help, feedback]
     cases:
     - {command: rename, args: TTNAME, expect: ran}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: refused, note: "the terminal would run /ttlit as a command"}
+    - {command: ttlit/x, args: TTLIT, literal: true, expect: text, note: "/ttlit/x is no command name, so it is typed as text with one slash dropped"}
   interaction_probes:
   - probe_id: cursor_model_launch_option
     surface: console
@@ -2848,11 +2857,13 @@ providers:
     # extension, skill and template commands; built-ins map to RPC commands.
     helm: run
     console: run
+    reads_leading_slash: [console]
     pickers: [settings, scoped-models, model, thinking, resume, tree, fork, trust, login]
     cases:
     - {command: ttcheck, expect: ran, note: a custom command the harness writes}
     - {command: name, args: TTNAME, expect: ran}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: text, note: "//ttlit reaches the model as /ttlit, one slash dropped"}
   interaction_probes:
   - probe_id: pi_shadow_archive
     surface: shadow
@@ -3336,11 +3347,13 @@ providers:
     # commands with a text-mode handler.
     helm: run
     console: run
+    reads_leading_slash: [console]
     pickers: [settings, resume, model, tree, hub, agents, extensions, debug, copy, open, git, local, hotkeys, plan-review, guided-goal, stats, trace, context, record]
     cases:
     - {command: ttcheck, expect: ran, note: a custom command the harness writes}
     - {command: rename, args: TTNAME, expect: ran}
     - {command: model, expect: refused, note: bare picker}
+    - {command: ttlit, args: TTLIT, literal: true, expect: text, note: "//ttlit reaches the model as /ttlit, one slash dropped"}
   interaction_probes:
   - probe_id: omp_shadow_archive
     surface: shadow

@@ -293,18 +293,24 @@ Longhouse-owned runtime.
 A message from the Longhouse app that is a slash command (`/name args`) runs in the
 provider exactly as if typed in its terminal. `engine/src/slash_input.rs` decides
 for every provider: the contract's `slash_commands.pickers` sent bare are refused
-(a picker nobody can answer), a mode marked `refuse` is refused with its reason, and
-`//text` is a message that starts with a slash. Each adapter then runs it its own
+(a picker nobody can answer), a mode marked `refuse` is refused with its reason, a
+command with attachments is refused (they would become its arguments), and
+`//text` is a message that starts with a slash. The text crosses every boundary as
+typed; whatever finally hands it to the model drops exactly one slash
+(`message_text`). Where the provider reads a leading slash itself (the contract's
+`reads_leading_slash`: Cursor and Antigravity terminals, the Antigravity, Pi and OMP
+headless prompts), a `//` message that would run as a command after the dropped slash
+is refused. Each adapter then runs a command its own
 way: Claude through the mod's `$.command.run`, Pi and OMP through the editor's own
 submit handler (a swapped-in `CustomEditor`), OpenCode through `POST
-/session/{id}/command` or the TUI command bus, Codex through the app-server request
-the TUI sends (`engine/src/codex_slash.rs`), Antigravity and Cursor by typing into
-the terminal. A command that opens no model turn is marked `turn_started: false`
+/session/{id}/command` or the TUI command bus, Codex (Helm and Console) through the
+app-server request the TUI sends (`engine/src/codex_slash.rs`), Antigravity and
+Cursor by typing into the terminal. A command that opens no model turn is marked `turn_started: false`
 (or left unknown, which the server resolves after a short idle grace), so the
 session is freed at once. A slash command sent as a steer is queued for idle. Proof:
 the Terminal Truth `slash_command` scenario (`make prove
-CELLS="claude/helm:slash_command"`), cases in each provider's
-`slash_commands.cases`. The Cursor cell runs a fake `cursor-agent`
+CELLS="claude/helm:slash_command"`, and `codex/console:slash_command`), cases in
+each provider's `slash_commands.cases` (a `literal` case sends `//...`). The Cursor cell runs a fake `cursor-agent`
 (`server/zerg/qa/fake_cursor/cursor-agent`), which proves only the keystrokes
 Longhouse types. `make prove CELLS="cursor/helm:slash_command" ARGS=--real-cursor`
 runs it against the real CLI signed in under
@@ -313,5 +319,6 @@ cursor-agent login` once). It bills that Cursor account, so it is never in CI.
 
 Real Cursor fires no hook until a prompt is submitted, so the launcher seeds the
 first idle phase (and idle presence) itself once Cursor's prompt is drawn
-(`LaunchScreen` in `engine/src/cursor_helm_launcher.rs`). Without it, app input to
+(`LaunchScreen` in `engine/src/cursor_helm_launcher.rs`). A resumed session keeps its
+id, so the launcher first removes a phase file an older (crashed) launch left. Without it, app input to
 a fresh Cursor session waited until someone typed in its terminal.

@@ -119,8 +119,26 @@ pub(super) async fn execute_turn_start(
         )?
     };
     // Slash commands: refused where the provider's headless mode cannot run
-    // them, a bare picker refused everywhere, `//` sent as literal text.
-    let message = super::dispatch::admit_owner_text(&provider, "console", &message)?;
+    // them, a bare picker or a command with attachments refused everywhere,
+    // `//` sent as literal text.
+    let message =
+        super::dispatch::admit_owner_text(&provider, "console", &message, attachments.len())?;
+    let message = match provider.as_str() {
+        // These adapters run commands themselves and drop a `//` literal's
+        // slash where they hand the text to the model.
+        "claude" | "opencode" => message,
+        // Codex runs a command through the app-server request its TUI sends
+        // (codex_exec); one only the TUI has is refused before the claim.
+        "codex" => {
+            if let Some(command) = crate::slash_input::command(&message) {
+                super::dispatch::refuse_codex_terminal_command(&command)?;
+            }
+            message
+        }
+        // The prompt is the provider's own input: a command stays as typed,
+        // a `//` literal loses one slash.
+        _ => crate::slash_input::message_text(&message),
+    };
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     // A branch's first turn carries the parent thread to fork from. Only the
     // first: once the child owns a thread of its own, later turns resume it

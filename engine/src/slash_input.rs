@@ -10,8 +10,17 @@
 //!   next message.
 //! - Text that starts with `//` is the owner saying "this is a message, not a
 //!   command": one slash is dropped and the rest goes to the model as text.
+//!   Where the provider itself reads a leading slash (`reads_leading_slash`:
+//!   text typed into its terminal, or a headless prompt that expands
+//!   commands), a literal whose text after the dropped slash would run as a
+//!   command cannot reach the model as text there, and is refused.
+//! - A command with attachments is refused: the attachment would become the
+//!   command's arguments, or raw lines typed into the provider's terminal.
 //!
-//! How each provider runs a command is the provider adapter's business; it asks
+//! The text crosses every boundary as the owner typed it (`//` included), and
+//! whatever finally hands it to the model drops the slash with
+//! [`message_text`] (the Pi and OMP extensions have their own copy). How each
+//! provider runs a command is the provider adapter's business; it asks
 //! [`command`] whether the text is one.
 
 use serde_json::Value;
@@ -46,6 +55,8 @@ pub struct SlashPolicy {
     pub console: Option<String>,
     /// Why a mode refuses, shown to the owner.
     pub refuse_reason: Option<String>,
+    /// Modes whose input the provider reads for a leading slash itself.
+    pub reads_leading_slash: Vec<String>,
 }
 
 impl SlashPolicy {
@@ -57,9 +68,9 @@ impl SlashPolicy {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
-        Self {
-            pickers: section
-                .and_then(|s| s.get("pickers"))
+        let strings = |key: &str| {
+            section
+                .and_then(|s| s.get(key))
                 .and_then(Value::as_array)
                 .map(|items| {
                     items
@@ -68,10 +79,14 @@ impl SlashPolicy {
                         .map(str::to_owned)
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()
+        };
+        Self {
+            pickers: strings("pickers"),
             helm: string("helm"),
             console: string("console"),
             refuse_reason: string("refuse_reason"),
+            reads_leading_slash: strings("reads_leading_slash"),
         }
     }
 
@@ -128,20 +143,34 @@ pub struct Refusal {
 
 pub const REFUSED_CODE: &str = "slash_command_refused";
 
-/// Decide whether the owner's `text` may go to the provider in `mode`.
+/// Decide whether the owner's `text` may go to the provider in `mode`, with
+/// `attachments` files beside it.
 ///
-/// `Ok(text)` hands the text on unchanged, a `//` literal included: each
-/// adapter decides how to deliver one (most call [`message_text`]). `Err` is a
+/// `Ok(text)` hands the text on unchanged, a `//` literal included: whatever
+/// finally gives it to the model drops the slash ([`message_text`]). `Err` is a
 /// refusal to show the owner.
 pub fn admit(
     provider: &str,
     mode: &str,
     policy: &SlashPolicy,
     text: &str,
+    attachments: usize,
 ) -> Result<String, Refusal> {
     match classify(text) {
         OwnerText::Text => Ok(text.to_string()),
-        OwnerText::Literal(_) => Ok(text.to_string()),
+        OwnerText::Literal(literal) => {
+            let reads_slash = policy.reads_leading_slash.iter().any(|m| m == mode);
+            match command(&literal) {
+                Some(command) if reads_slash => Err(Refusal {
+                    code: REFUSED_CODE,
+                    message: format!(
+                        "//{name} was not sent: {provider} reads a message that starts with /{name} as that command, so it cannot reach the model as text here. Reword it so it does not start with a slash.",
+                        name = command.name
+                    ),
+                }),
+                _ => Ok(text.to_string()),
+            }
+        }
         OwnerText::Command(command) => {
             if policy.mode(mode) == Some("refuse") {
                 let why = policy.refuse_reason.clone().unwrap_or_else(|| {
@@ -161,6 +190,15 @@ pub fn admit(
                     message: format!(
                         "/{} was not sent: it opens a picker in the terminal, which nobody can answer from the app. Run it in the terminal, or add an argument (for example /{} <choice>).",
                         command.name, command.name
+                    ),
+                });
+            }
+            if attachments > 0 {
+                return Err(Refusal {
+                    code: REFUSED_CODE,
+                    message: format!(
+                        "/{} was not sent: a command cannot carry attachments (they would become its arguments). Send the command on its own, then the attachment in a message.",
+                        command.name
                     ),
                 });
             }
@@ -221,6 +259,7 @@ mod tests {
             helm: Some("run".into()),
             console: Some("refuse".into()),
             refuse_reason: Some("headless mode has no commands".into()),
+            reads_leading_slash: Vec::new(),
         }
     }
 
@@ -250,22 +289,68 @@ mod tests {
     fn refuses_bare_pickers_and_refusing_modes() {
         let p = policy();
         assert_eq!(
-            admit("x", "helm", &p, "/model opus").unwrap(),
+            admit("x", "helm", &p, "/model opus", 0).unwrap(),
             "/model opus"
         );
-        let bare = admit("x", "helm", &p, "/model").unwrap_err();
+        let bare = admit("x", "helm", &p, "/model", 0).unwrap_err();
         assert_eq!(bare.code, REFUSED_CODE);
         assert!(bare.message.contains("opens a picker"), "{}", bare.message);
-        let console = admit("x", "console", &p, "/goal x").unwrap_err();
+        let console = admit("x", "console", &p, "/goal x", 0).unwrap_err();
         assert!(
             console.message.contains("headless mode"),
             "{}",
             console.message
         );
-        assert_eq!(admit("x", "console", &p, "//goal x").unwrap(), "//goal x");
+        assert_eq!(
+            admit("x", "console", &p, "//goal x", 0).unwrap(),
+            "//goal x"
+        );
         assert_eq!(message_text("//goal x"), "/goal x");
+        assert_eq!(message_text("  //goal x"), "  /goal x");
+        assert_eq!(message_text("///x"), "//x", "exactly one slash is dropped");
         assert_eq!(message_text("plain"), "plain");
-        assert_eq!(admit("x", "helm", &p, "plain").unwrap(), "plain");
+        assert_eq!(admit("x", "helm", &p, "plain", 0).unwrap(), "plain");
+    }
+
+    #[test]
+    fn refuses_a_command_with_attachments_but_not_a_message() {
+        let p = policy();
+        let refused = admit("x", "helm", &p, "/rename x", 1).unwrap_err();
+        assert_eq!(refused.code, REFUSED_CODE);
+        assert!(
+            refused.message.contains("attachments"),
+            "{}",
+            refused.message
+        );
+        assert_eq!(
+            admit("x", "helm", &p, "look at this", 2).unwrap(),
+            "look at this"
+        );
+        assert_eq!(
+            admit("x", "helm", &p, "//rename x", 1).unwrap(),
+            "//rename x"
+        );
+    }
+
+    #[test]
+    fn a_literal_that_would_run_is_refused_only_where_the_provider_reads_slashes() {
+        let mut p = policy();
+        p.reads_leading_slash = vec!["helm".into()];
+        let refused = admit("cursor", "helm", &p, "//goal x", 0).unwrap_err();
+        assert_eq!(refused.code, REFUSED_CODE);
+        assert!(refused.message.contains("/goal"), "{}", refused.message);
+        // After the dropped slash this is not a command, so it goes as text.
+        assert_eq!(
+            admit("cursor", "helm", &p, "//tmp/x", 0).unwrap(),
+            "//tmp/x"
+        );
+        assert_eq!(message_text("//tmp/x"), "/tmp/x");
+        // A mode that does not read slashes takes any literal.
+        p.console = Some("run".into());
+        assert_eq!(
+            admit("cursor", "console", &p, "//goal x", 0).unwrap(),
+            "//goal x"
+        );
     }
 
     #[test]
