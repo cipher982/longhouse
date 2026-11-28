@@ -98,7 +98,9 @@ class DogfoodRefreshExactTests(unittest.TestCase):
         return subprocess.run(["git", *args], cwd=cwd or self.repo, check=True, capture_output=True, text=True).stdout.strip()
 
     def refresh(self, *args, **env) -> subprocess.CompletedProcess:
-        environment = {k: v for k, v in os.environ.items() if k not in ("LONGHOUSE_DOGFOOD_CHECKOUT", "LONGHOUSE_CARGO_TARGET_OWNER")}
+        # LONGHOUSE_HOME and CLAUDE_CONFIG_DIR (set by test isolation) would point the script past the fixture HOME.
+        dropped = ("LONGHOUSE_DOGFOOD_CHECKOUT", "LONGHOUSE_CARGO_TARGET_OWNER", "LONGHOUSE_HOME", "CLAUDE_CONFIG_DIR")
+        environment = {k: v for k, v in os.environ.items() if k not in dropped}
         environment.update(FIXTURE_ROOT=str(self.root), HOME=str(self.home), LONGHOUSE_EXACT_CHECKOUT_PARENT=str(self.lanes),
                            LONGHOUSE_HEAVY_BUILD_LOCK=str(self.root / "heavy.lock"), TMPDIR=str(self.root),
                            PATH=f"{self.bin}:{os.environ['PATH']}", **env)
