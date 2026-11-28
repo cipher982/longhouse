@@ -210,7 +210,9 @@ def _bound_cursor_session(pas: Any, workspace: Path) -> str | None:
     for path in sorted(probes.glob("*.json")) if probes.is_dir() else []:
         with contextlib.suppress(OSError, ValueError):
             claim = json.loads(path.read_text())
-            if Path(str(claim.get("cwd") or "")).resolve() == workspace.resolve() and claim.get("hook_observed_at"):
+            # Pending until a hook from the launched Cursor fires, which real Cursor does only at the first prompt: the
+            # session id is the launcher's either way, and the host judges send_input on its own.
+            if Path(str(claim.get("cwd") or "")).resolve() == workspace.resolve() and claim.get("session_id"):
                 return str(claim["session_id"])
     return None
 
