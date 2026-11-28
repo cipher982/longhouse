@@ -842,8 +842,8 @@ def _validate_factory_contract(item: dict[str, Any]) -> None:
 
 
 _SLASH_MODE_VALUES = frozenset({"run", "refuse"})
-_SLASH_CASE_KEYS = frozenset({"command", "args", "expect", "note"})
-_SLASH_CASE_EXPECTS = frozenset({"ran", "refused"})
+_SLASH_CASE_KEYS = frozenset({"command", "args", "literal", "expect", "note"})
+_SLASH_CASE_EXPECTS = frozenset({"ran", "refused", "text"})
 
 
 def _validate_slash_commands(item: dict[str, Any]) -> None:
@@ -851,8 +851,13 @@ def _validate_slash_commands(item: dict[str, Any]) -> None:
 
     ``helm`` / ``console`` are ``run`` (the command runs as if typed) or
     ``refuse`` (the app is told why, from ``refuse_reason``). ``pickers`` are
-    commands refused when sent with no argument. ``cases`` is the list the
-    Terminal Truth ``slash_command`` scenario sends through the app route.
+    commands refused when sent with no argument. ``reads_leading_slash`` lists
+    the modes whose input the provider reads for a leading slash itself (typed
+    into its terminal, or a headless prompt that expands commands): there a
+    ``//`` message whose text after the dropped slash is a command is refused.
+    ``cases`` is the list the Terminal Truth ``slash_command`` scenario sends
+    through the app route; a ``literal`` case is sent as ``//command args``,
+    and ``expect: text`` means the model receives it with one slash dropped.
     """
 
     provider = str(item.get("provider") or "<unknown>")
@@ -860,7 +865,7 @@ def _validate_slash_commands(item: dict[str, Any]) -> None:
     section = item.get("slash_commands")
     if not isinstance(section, dict):
         raise ValueError(f"{prefix} must be an object")
-    unknown = set(section) - {"helm", "console", "refuse_reason", "pickers", "cases"}
+    unknown = set(section) - {"helm", "console", "refuse_reason", "pickers", "reads_leading_slash", "cases"}
     if unknown:
         raise ValueError(f"{prefix} has unknown keys {', '.join(sorted(unknown))}")
     for mode in ("helm", "console"):
@@ -873,6 +878,9 @@ def _validate_slash_commands(item: dict[str, Any]) -> None:
     pickers = section.get("pickers")
     if not isinstance(pickers, list) or not all(isinstance(p, str) and p and not p.startswith("/") for p in pickers):
         raise ValueError(f"{prefix}.pickers must be a list of command names without the slash")
+    reads = section.get("reads_leading_slash", [])
+    if not isinstance(reads, list) or set(reads) - {"helm", "console"}:
+        raise ValueError(f"{prefix}.reads_leading_slash must list modes from ['console', 'helm']")
     cases = section.get("cases")
     if not isinstance(cases, list) or not cases:
         raise ValueError(f"{prefix}.cases must be a non-empty list")
@@ -883,6 +891,8 @@ def _validate_slash_commands(item: dict[str, Any]) -> None:
             raise ValueError(f"{prefix}.cases[{index}].command must be a command name without the slash")
         if case.get("expect") not in _SLASH_CASE_EXPECTS:
             raise ValueError(f"{prefix}.cases[{index}].expect must be one of {sorted(_SLASH_CASE_EXPECTS)}")
+        if (case.get("expect") == "text") != bool(case.get("literal")) and case.get("expect") != "refused":
+            raise ValueError(f"{prefix}.cases[{index}]: expect text is for a literal case, and a literal never runs")
 
 
 def _validate_interaction_probes(item: dict[str, Any]) -> None:

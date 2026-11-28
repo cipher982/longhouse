@@ -1,6 +1,6 @@
 """Slash commands sent from a Longhouse client run in the provider exactly as if typed in its terminal.
 
-``slash_command`` (Helm cells): the harness launches the provider through ``longhouse <provider>``, waits until the
+``slash_command`` (Helm cells, and Console for the providers in ``CONSOLE_PROVIDERS``): the harness launches the provider through ``longhouse <provider>``, waits until the
 Runtime Host offers ``send_input``, sends one warm-up message, then sends every case in the provider contract's
 ``slash_commands.cases`` (schemas/managed_providers.yml) through the app's own input route, one after the other, and
 finally one more message. For each case:
@@ -8,6 +8,8 @@ finally one more message. For each case:
 - ``expect: refused``: the input fails with Longhouse's refusal (``was not sent``), and nothing reached the provider.
 - ``expect: ran``: the input is delivered (not left queued: a command that opens no model turn must free the session at
   once, or the next case would wait), it took effect, and its text never reached the model as an ordinary message.
+- ``literal: true``: the case is sent as ``//command args``, a message that starts with a slash. ``expect: text``: it is
+  delivered and the model receives ``/command args``, exactly one slash dropped.
 
 "Took effect" is judged per case:
 
@@ -19,6 +21,9 @@ finally one more message. For each case:
 
 "Never reached the model as text": the scripted model dumps every request; no user message may contain the exact text
 the harness sent.
+
+A Console cell creates a Console session instead and sends each case as a Console turn (``POST .../turns``); a refusal
+is that request failing with Longhouse's reason.
 
 Cursor has no scripted model (its CLI talks only to Cursor's servers), so its cell runs a fake cursor-agent
 (fake_cursor/cursor-agent) that records the keystrokes Longhouse typed and acts on them as Cursor's prompt does; "the model
@@ -57,6 +62,7 @@ from zerg.qa.terminal_truth_pty import COLUMNS
 from zerg.qa.terminal_truth_pty import ROWS
 from zerg.qa.terminal_truth_pty import _tail_text
 from zerg.qa.terminal_truth_pty import _wait_ready
+from zerg.qa.terminal_truth_scenarios import _create_console_session
 from zerg.qa.terminal_truth_scenarios import build_pass
 from zerg.qa.terminal_truth_scenarios import stop_pass
 from zerg.qa.terminal_truth_verdicts import CellSpec
@@ -75,6 +81,9 @@ REPLY_WAIT_S = 60.0  # a message to its scripted reply in the model receipt
 CASE_WAIT_S = 45.0  # a command to a delivered or failed receipt
 EFFECT_WAIT_S = 30.0  # a delivered command to its effect
 CUSTOM_COMMAND = "ttcheck"
+# Console cells: Codex runs a command through the app-server request its TUI sends, as Helm does. The other providers'
+# contract cases are written for Helm (what their terminal reads), so their Console cells are not measured yet.
+CONSOLE_PROVIDERS = frozenset({"codex"})
 
 
 @dataclass
@@ -97,9 +106,20 @@ class CommandPlan:
     def custom_marker(self) -> str:
         return f"TTCMD{self.nonce}"
 
+    @property
+    def literal_marker(self) -> str:
+        return f"TTLIT{self.nonce}"
+
     def text_for(self, case: dict[str, Any]) -> str:
         args = str(case.get("args") or "").replace("TTNAME", f"TTNAME{self.nonce}").replace("TTGOAL", f"TTGOAL{self.nonce}")
-        return f"/{case['command']} {args}".rstrip()
+        args = args.replace("TTLIT", self.literal_marker)
+        slash = "//" if case.get("literal") else "/"
+        return f"{slash}{case['command']} {args}".rstrip()
+
+    def model_text_for(self, case: dict[str, Any]) -> str:
+        """What the model must receive for a ``literal`` case: the text with one slash dropped."""
+
+        return self.text_for(case)[1:]
 
 
 def contract_cases(provider: str) -> list[dict[str, Any]]:
@@ -114,14 +134,19 @@ def plan_command_cell(spec: CellSpec) -> CommandPlan:
     nonce = secrets.token_hex(3)
     if spec.provider in NOT_MEASURABLE and spec.provider not in FAKE_MODEL_PROVIDERS:
         return CommandPlan(spec, nonce, not_measured=NOT_MEASURABLE[spec.provider])
-    if spec.mode != "helm":
-        return CommandPlan(spec, nonce, not_measured="the slash_command scenario runs Helm cells (the terminal a command is typed in)")
+    if spec.mode == "console" and spec.provider not in CONSOLE_PROVIDERS:
+        return CommandPlan(
+            spec, nonce, not_measured=f"the slash_command scenario runs Console cells for {', '.join(sorted(CONSOLE_PROVIDERS))} only"
+        )
+    if spec.mode not in ("helm", "console"):
+        return CommandPlan(spec, nonce, not_measured="the slash_command scenario runs Helm and Console cells (Shadow has no input path)")
     plan = CommandPlan(spec, nonce, cases=contract_cases(spec.provider))
     scope = "any_user" if spec.provider == "antigravity" else "latest"
     # The scripted model takes the first turn that matches, and a later request carries the earlier markers in its
     # history, so the last message is listed first and the warm-up last.
     plan.turns = [
         {"id": f"{spec.key}:end", "match": f"TTEND{nonce}", "match_scope": scope, "reply": f"TTENDOK{nonce} bye"},
+        {"id": f"{spec.key}:lit", "match": plan.literal_marker, "match_scope": scope, "reply": f"TTLITOK{nonce} noted"},
         {"id": f"{spec.key}:cmd", "match": plan.custom_marker, "match_scope": "any_user", "reply": f"TTCMDOK{nonce} done"},
         {"id": f"{spec.key}:warm", "match": f"TTRUTH{nonce}", "match_scope": scope, "reply": f"TTWARMOK{nonce} ready"},
     ]
@@ -258,6 +283,18 @@ def send_input(api: RuntimeApi, sid: str, text: str) -> dict[str, Any]:
     return out
 
 
+def send_console_turn(api: RuntimeApi, sid: str, text: str) -> dict[str, Any]:
+    """Send ``text`` as a Console turn. Longhouse refuses a command before the turn starts, so a refusal is the request
+    failing with its reason; an accepted turn counts as delivered."""
+
+    status, body = api.post_raw(f"/api/agents/sessions/{sid}/turns", {"message": text, "client_request_id": f"tt-{secrets.token_hex(5)}"})
+    out: dict[str, Any] = {"text": text, "http_status": status, "response": body[:600]}
+    out["status"] = "delivered" if status < 300 else "rejected"
+    if status >= 300:
+        out["last_error"] = body[:600]
+    return out
+
+
 def _request_user_texts(dump_dir: Path) -> list[str]:
     from zerg.qa.scripted_model_server import _user_text
 
@@ -305,6 +342,15 @@ def judge_case(
 ) -> tuple[bool, str]:
     text = sent["text"]
     expect = case.get("expect")
+    if expect == "text":
+        wanted = plan.model_text_for(case)
+        got = any(wanted in t for t in user_texts)
+        doubled = [t for t in user_texts if text in t]
+        ok = sent.get("status") == "delivered" and got and not doubled
+        return (
+            ok,
+            f"status={sent.get('status')} error={(sent.get('last_error') or '')[:200]} model_got={got} kept_both_slashes={len(doubled)}",
+        )
     if expect == "refused":
         refused = sent.get("status") in ("failed", "rejected") and "was not sent" in json.dumps(sent)
         return refused, f"status={sent.get('status')} error={(sent.get('last_error') or sent.get('response') or '')[:240]}"
@@ -383,36 +429,47 @@ def run_command_cell_in(
             return [text for _, role, text in cursor_store_messages(pas.home) if role == "user"]
         return fake_prompts() if fake_model else _request_user_texts(dump_dir)
 
+    console = spec.mode == "console"
+
+    def send(sid: str, text: str) -> dict[str, Any]:
+        return send_console_turn(api, sid, text) if console else send_input(api, sid, text)
+
+    sid: str | None = None
     try:
         driver = drivers[provider]
-        session = ProviderPtySession.start(
-            argv=_helm_argv(pas, provider, workspace, binary),
-            cwd=workspace,
-            env=pas.provider_environments[provider],
-            terminal_path=recording,
-            timing_path=timing,
-            rows=ROWS,
-            columns=COLUMNS,
-        )
-        _wait_ready(session, recording, timing, driver.ready_text, ready_timeout, driver.answers)
-        sid = None
-        action: dict[str, Any] | None = None
-        waited = time.monotonic()
-        while time.monotonic() < waited + CONTROL_WAIT_S and session.alive():
-            sid = sid or (_bound_cursor_session(pas, workspace) if provider == "cursor" else _launched_session(api))
-            if sid is not None:
-                action = _send_action(api, sid)
-                if (action or {}).get("state") == "available":
-                    break
-            time.sleep(0.5)
-        checks.append(("the host offers send_input", (action or {}).get("state") == "available", json.dumps(action)[:240]))
-        if sid is None or (action or {}).get("state") != "available":
-            raise RuntimeError(f"the Runtime Host never offered send_input within {CONTROL_WAIT_S:.0f}s (session {sid})")
+        if console:
+            sid = str(_create_console_session(api, provider, pas.shipper.machine_name, workspace)["session_id"])
+            api.pinned_sessions = [sid]
+            checks.append(("a Console session is created", True, sid))
+        else:
+            session = ProviderPtySession.start(
+                argv=_helm_argv(pas, provider, workspace, binary),
+                cwd=workspace,
+                env=pas.provider_environments[provider],
+                terminal_path=recording,
+                timing_path=timing,
+                rows=ROWS,
+                columns=COLUMNS,
+            )
+            _wait_ready(session, recording, timing, driver.ready_text, ready_timeout, driver.answers)
+            action: dict[str, Any] | None = None
+            waited = time.monotonic()
+            while time.monotonic() < waited + CONTROL_WAIT_S and session.alive():
+                sid = sid or (_bound_cursor_session(pas, workspace) if provider == "cursor" else _launched_session(api))
+                if sid is not None:
+                    action = _send_action(api, sid)
+                    if (action or {}).get("state") == "available":
+                        break
+                time.sleep(0.5)
+            checks.append(("the host offers send_input", (action or {}).get("state") == "available", json.dumps(action)[:240]))
+            if sid is None or (action or {}).get("state") != "available":
+                raise RuntimeError(f"the Runtime Host never offered send_input within {CONTROL_WAIT_S:.0f}s (session {sid})")
+        assert sid is not None
         out["session_id"] = sid
 
         # A real model takes a bare marker as a task and starts running tools, which stop at Cursor's approval prompt.
         ask = " Reply with the single word OK. Do not use any tools." if real_cursor else ""
-        warm = send_input(api, sid, plan.warm + ask)
+        warm = send(sid, plan.warm + ask)
         sends.append(warm)
         deadline = time.monotonic() + REPLY_WAIT_S
         while time.monotonic() < deadline and not model_got("warm", f"TTRUTH{plan.nonce}"):
@@ -422,9 +479,14 @@ def run_command_cell_in(
 
         for case in plan.cases:
             text = plan.text_for(case)
-            sent = send_input(api, sid, text)
+            sent = send(sid, text)
             sends.append(sent)
             effect: str | None = None
+            if sent.get("status") == "delivered" and case.get("expect") == "text":
+                deadline = time.monotonic() + REPLY_WAIT_S
+                while time.monotonic() < deadline and not any(plan.model_text_for(case) in t for t in user_texts()):
+                    time.sleep(0.5)
+                time.sleep(3)  # let the literal's turn end so the next case starts at an idle session
             if sent.get("status") == "delivered" and case.get("expect") == "ran":
                 deadline = time.monotonic() + EFFECT_WAIT_S
                 while time.monotonic() < deadline:
@@ -442,7 +504,7 @@ def run_command_cell_in(
             checks.append((f"{text} ({case.get('expect')})", ok, detail))
             time.sleep(2)
 
-        end = send_input(api, sid, plan.end + ask)
+        end = send(sid, plan.end + ask)
         sends.append(end)
         deadline = time.monotonic() + REPLY_WAIT_S
         while time.monotonic() < deadline and not model_got("end", f"TTEND{plan.nonce}"):

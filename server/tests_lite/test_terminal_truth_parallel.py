@@ -48,10 +48,11 @@ def test_the_plan_runs_every_declared_reply_and_input_cell_and_every_cell_with_a
     declared = [spec.key for spec in declared_cells(load_expectations())]
     want = {f"{scenario}:{cell}" for scenario in parallel.REPLY_SCENARIOS for cell in declared}
     # An input scenario runs only the cells it can measure: steer every Helm and Console cell with a scripted model,
-    # slash_command every Helm cell (Cursor's against a fake cursor-agent), question and question_steer Claude Helm alone.
+    # slash_command every Helm cell (Cursor's against a fake cursor-agent) and Codex Console, question and question_steer
+    # Claude Helm alone.
     measured = [cell for cell in declared if not cell.startswith("cursor/")]
     want |= {f"steer:{cell}" for cell in measured}
-    want |= {f"slash_command:{cell}" for cell in declared if cell.endswith("/helm")}
+    want |= {f"slash_command:{cell}" for cell in declared if cell.endswith("/helm") or cell == "codex/console"}
     want |= {"question:claude/helm", "question_steer:claude/helm"}
     want |= {f"{scenario}:{cell}" for (cell, scenario) in KIND_EXPECTATIONS}
     assert set(plan.units) == want
