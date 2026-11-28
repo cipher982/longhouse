@@ -317,10 +317,11 @@ def test_swarm_tools_summarize_the_action():
     assert call_text_for("post_message", {"text": "\nhello board\nmore"})["tool_intent"] == "hello board"
 
 
-def test_plan_and_wait_tools_have_no_derived_text():
+def test_a_checklist_call_says_its_progress_and_a_wait_says_nothing():
     from zerg.services.tool_presentation import call_text_for
 
-    assert call_text_for("TodoWrite", {"todos": [{"content": "x"}]})["tool_intent"] is None
+    # A checklist write reads as its progress and current step (provider checklists).
+    assert call_text_for("TodoWrite", {"todos": [{"content": "x"}]})["tool_intent"] == "0/1 · x"
     assert call_text_for("wait", {"timeout_ms": 1000})["tool_intent"] is None
 
 

@@ -62,6 +62,12 @@
   "golden/omp/basic.jsonl@start": [
     "git_info"
   ],
+  "golden/omp/checklist.jsonl@resume": [
+    "git_info"
+  ],
+  "golden/omp/checklist.jsonl@start": [
+    "git_info"
+  ],
   "golden/omp/fork-child.jsonl@start": [
     "git_info"
   ],
